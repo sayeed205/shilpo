@@ -3,7 +3,7 @@ use std::{cell::Cell, rc::Rc};
 use gpui::{
     div, prelude::FluentBuilder as _, AnyElement, App, Corners, Edges, ElementId,
     InteractiveElement, IntoElement, ParentElement, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement, StyleRefinement, Styled, Toggled, Window,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, Hsla,
 };
 use smallvec::{smallvec, SmallVec};
 
@@ -11,9 +11,17 @@ use crate::{
     h_flex, tooltip::ComponentTooltip, ActiveTheme, Disableable, Icon, Sizable, Size, StyledExt,
 };
 
+use super::{
+    shared, button_shared_tokens, button_dimension_tokens,
+};
+
 #[derive(Default, Copy, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ToggleVariant {
     #[default]
+    Filled,
+    Elevated,
+    Tonal,
+    Outlined,
     Ghost,
     Outline,
 }
@@ -29,6 +37,147 @@ pub trait ToggleVariants: Sized {
     fn outline(self) -> Self {
         self.with_variant(ToggleVariant::Outline)
     }
+    /// Set the variant to filled.
+    fn filled(self) -> Self {
+        self.with_variant(ToggleVariant::Filled)
+    }
+    /// Set the variant to elevated.
+    fn elevated(self) -> Self {
+        self.with_variant(ToggleVariant::Elevated)
+    }
+    /// Set the variant to tonal.
+    fn tonal(self) -> Self {
+        self.with_variant(ToggleVariant::Tonal)
+    }
+    /// Set the variant to outlined.
+    fn outlined(self) -> Self {
+        self.with_variant(ToggleVariant::Outlined)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ButtonShape {
+    CornerFull,
+    Corner(gpui::Pixels),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToggleButtonShapes {
+    pub shape: ButtonShape,
+    pub pressed_shape: ButtonShape,
+    pub checked_shape: ButtonShape,
+}
+
+impl ToggleButtonShapes {
+    pub fn new(shape: ButtonShape, pressed_shape: ButtonShape, checked_shape: ButtonShape) -> Self {
+        Self {
+            shape,
+            pressed_shape,
+            checked_shape,
+        }
+    }
+}
+
+pub fn toggle_button_shapes(size: Size) -> ToggleButtonShapes {
+    match size {
+        Size::XSmall | Size::Small => ToggleButtonShapes {
+            shape: ButtonShape::CornerFull,
+            pressed_shape: ButtonShape::Corner(gpui::px(6.)),
+            checked_shape: ButtonShape::Corner(gpui::px(8.)),
+        },
+        Size::Medium => ToggleButtonShapes {
+            shape: ButtonShape::CornerFull,
+            pressed_shape: ButtonShape::Corner(gpui::px(6.)),
+            checked_shape: ButtonShape::Corner(gpui::px(12.)),
+        },
+        Size::Large | Size::Size(_) => ToggleButtonShapes {
+            shape: ButtonShape::CornerFull,
+            pressed_shape: ButtonShape::Corner(gpui::px(6.)),
+            checked_shape: ButtonShape::Corner(gpui::px(16.)),
+        },
+    }
+}
+
+pub fn resolve_corner_radius(shape: ButtonShape, height: gpui::Pixels) -> gpui::Pixels {
+    match shape {
+        ButtonShape::CornerFull => height * 0.5,
+        ButtonShape::Corner(value) => value,
+    }
+}
+
+pub struct ToggleButtonColors {
+    pub container: Hsla,
+    pub content: Hsla,
+    pub border: Hsla,
+}
+
+pub fn toggle_button_colors(
+    variant: ToggleVariant,
+    checked: bool,
+    cx: &gpui::App,
+) -> ToggleButtonColors {
+    match (variant, checked) {
+        (ToggleVariant::Filled, false) => ToggleButtonColors {
+            container: cx.theme().surface_container,
+            content: cx.theme().primary,
+            border: cx.theme().transparent,
+        },
+        (ToggleVariant::Filled, true) => ToggleButtonColors {
+            container: cx.theme().primary,
+            content: cx.theme().on_primary,
+            border: cx.theme().transparent,
+        },
+        (ToggleVariant::Elevated, false) => ToggleButtonColors {
+            container: cx.theme().surface_container_low,
+            content: cx.theme().primary,
+            border: cx.theme().transparent,
+        },
+        (ToggleVariant::Elevated, true) => ToggleButtonColors {
+            container: cx.theme().primary,
+            content: cx.theme().on_primary,
+            border: cx.theme().transparent,
+        },
+        (ToggleVariant::Tonal, false) => ToggleButtonColors {
+            container: cx.theme().surface_container,
+            content: cx.theme().primary,
+            border: cx.theme().transparent,
+        },
+        (ToggleVariant::Tonal, true) => ToggleButtonColors {
+            container: cx.theme().secondary_container,
+            content: cx.theme().on_secondary_container,
+            border: cx.theme().transparent,
+        },
+        (ToggleVariant::Outlined, false) => ToggleButtonColors {
+            container: cx.theme().transparent,
+            content: cx.theme().on_surface_variant,
+            border: cx.theme().outline_variant,
+        },
+        (ToggleVariant::Outlined, true) => ToggleButtonColors {
+            container: cx.theme().inverse_on_surface,
+            content: cx.theme().inverse_surface,
+            border: cx.theme().transparent,
+        },
+        (ToggleVariant::Ghost, false) => ToggleButtonColors {
+            container: cx.theme().transparent,
+            content: cx.theme().on_surface,
+            border: cx.theme().transparent,
+        },
+        (ToggleVariant::Ghost, true) => ToggleButtonColors {
+            container: cx.theme().secondary_container,
+            content: cx.theme().on_secondary_container,
+            border: cx.theme().transparent,
+        },
+        (ToggleVariant::Outline, false) => ToggleButtonColors {
+            container: cx.theme().surface,
+            content: cx.theme().on_surface,
+            border: cx.theme().outline_variant,
+        },
+        (ToggleVariant::Outline, true) => ToggleButtonColors {
+            container: cx.theme().secondary_container,
+            content: cx.theme().on_secondary_container,
+            border: cx.theme().outline_variant,
+        },
+    }
 }
 
 #[derive(IntoElement)]
@@ -38,11 +187,12 @@ pub struct Toggle {
     checked: bool,
     size: Size,
     variant: ToggleVariant,
+    shapes: Option<ToggleButtonShapes>,
     disabled: bool,
     border_corners: Corners<bool>,
     border_edges: Edges<bool>,
     children: SmallVec<[AnyElement; 1]>,
-    on_click: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
+    on_click: Option<Rc<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
     tooltip: ComponentTooltip,
 }
 
@@ -55,6 +205,7 @@ impl Toggle {
             checked: false,
             size: Size::default(),
             variant: ToggleVariant::default(),
+            shapes: None,
             disabled: false,
             border_corners: Corners {
                 top_left: true,
@@ -85,7 +236,13 @@ impl Toggle {
     /// Add icon to the toggle.
     pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
         let icon: Icon = icon.into();
-        self.children.push(icon.into());
+        self.children.push(icon.into_any_element());
+        self
+    }
+
+    /// Set custom ToggleButtonShapes static shapes.
+    pub fn shapes(mut self, shapes: ToggleButtonShapes) -> Self {
+        self.shapes = Some(shapes);
         self
     }
 
@@ -99,7 +256,7 @@ impl Toggle {
     ///
     /// The `&bool` parameter represents the new checked state of the toggle.
     pub fn on_click(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
-        self.on_click = Some(Box::new(handler));
+        self.on_click = Some(Rc::new(handler));
         self
     }
 
@@ -148,70 +305,139 @@ impl Styled for Toggle {
 }
 
 impl RenderOnce for Toggle {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let checked = self.checked;
-        let disabled = self.disabled;
-        let hoverable = !disabled && !checked;
-        let rounding = cx.theme().radius;
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let height = button_dimension_tokens::height(self.size);
+        let resolved_shapes = self.shapes.unwrap_or_else(|| toggle_button_shapes(self.size));
 
-        div()
-            .id(self.id)
-            .role(Role::Button)
-            .aria_toggled(if checked {
-                Toggled::True
+        let normal_radius = resolve_corner_radius(
+            if self.checked { resolved_shapes.checked_shape } else { resolved_shapes.shape },
+            height,
+        );
+        let pressed_radius = resolve_corner_radius(
+            if self.checked { resolved_shapes.checked_shape } else { resolved_shapes.pressed_shape },
+            height,
+        );
+
+        let colors = toggle_button_colors(self.variant, self.checked, cx);
+
+        let border_color = if self.disabled {
+            colors.border.opacity(button_shared_tokens::DISABLED_CONTAINER_OPACITY)
+        } else {
+            colors.border
+        };
+
+        let normal_bg = if self.disabled {
+            if colors.container.a == 0. {
+                colors.container
             } else {
-                Toggled::False
-            })
-            .when_some(
-                self.tooltip.text.as_ref().map(|(text, _)| text.clone()),
-                |this, label| this.aria_label(label),
-            )
+                colors.container.opacity(button_shared_tokens::DISABLED_CONTAINER_OPACITY)
+            }
+        } else {
+            colors.container
+        };
+
+        let content_color = if self.disabled {
+            colors.content.opacity(button_shared_tokens::DISABLED_CONTENT_OPACITY)
+        } else {
+            colors.content
+        };
+
+        let focus_handle = window
+            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let is_focused = focus_handle.is_focused(window);
+
+        let has_children = !self.children.is_empty();
+
+        let button_el = div()
+            .id(self.id.clone())
+            .role(Role::Button)
+            .aria_selected(self.checked)
             .flex()
             .flex_row()
             .items_center()
             .justify_center()
-            .map(|this| match self.size {
-                Size::XSmall => this.min_w_5().h_5().px_0p5().text_xs(),
-                Size::Small => this.min_w_6().h_6().px_1().text_sm(),
-                Size::Large => this.min_w_9().h_9().px_3().text_lg(),
-                _ => this.min_w_8().h_8().px_2(),
-            })
+            .h(height)
+            .min_w(button_dimension_tokens::resolve(self.size, false, false, !has_children).min_width)
+            .px(button_dimension_tokens::resolve(self.size, false, false, !has_children).horizontal_padding)
+            .py(button_dimension_tokens::resolve(self.size, false, false, !has_children).vertical_padding)
             .when(self.border_corners.top_left, |this| {
-                this.rounded_tl(rounding)
+                this.rounded_tl(normal_radius)
             })
             .when(self.border_corners.top_right, |this| {
-                this.rounded_tr(rounding)
+                this.rounded_tr(normal_radius)
             })
             .when(self.border_corners.bottom_left, |this| {
-                this.rounded_bl(rounding)
+                this.rounded_bl(normal_radius)
             })
             .when(self.border_corners.bottom_right, |this| {
-                this.rounded_br(rounding)
+                this.rounded_br(normal_radius)
             })
-            .when(self.variant == ToggleVariant::Outline, |this| {
+            .bg(normal_bg)
+            .border_color(border_color)
+            .when(self.variant == ToggleVariant::Outlined || self.variant == ToggleVariant::Outline, |this| {
                 this.when(self.border_edges.left, |this| this.border_l_1())
                     .when(self.border_edges.right, |this| this.border_r_1())
                     .when(self.border_edges.top, |this| this.border_t_1())
                     .when(self.border_edges.bottom, |this| this.border_b_1())
-                    .border_color(cx.theme().outline_variant)
-                    .bg(cx.theme().surface)
-                    .when(cx.theme().shadow, |this| this.shadow_xs())
             })
-            .when(hoverable, |this| {
-                this.hover(|this| {
-                    this.bg(cx.theme().secondary_container)
-                        .text_color(cx.theme().on_secondary)
-                })
+            .text_color(content_color)
+            .when(!self.disabled, |this| {
+                this.track_focus(&focus_handle)
+                    .cursor(shared::interaction::cursor(false, false, self.style.mouse_cursor))
+                    .hover(|this| {
+                        this.bg(shared::interaction::state_layer(
+                            colors.container,
+                            colors.content,
+                            button_shared_tokens::STATE_HOVER,
+                        ))
+                    })
+                    .active(|mut this| {
+                        if self.border_corners.top_left {
+                            this = this.rounded_tl(pressed_radius);
+                        }
+                        if self.border_corners.top_right {
+                            this = this.rounded_tr(pressed_radius);
+                        }
+                        if self.border_corners.bottom_left {
+                            this = this.rounded_bl(pressed_radius);
+                        }
+                        if self.border_corners.bottom_right {
+                            this = this.rounded_br(pressed_radius);
+                        }
+                        this.bg(shared::interaction::state_layer(
+                            colors.container,
+                            colors.content,
+                            button_shared_tokens::STATE_PRESSED,
+                        ))
+                    })
+                    .when(is_focused, |this| {
+                        this.bg(shared::interaction::state_layer(
+                            colors.container,
+                            colors.content,
+                            button_shared_tokens::STATE_FOCUS,
+                        ))
+                    })
             })
-            .when(checked, |this| {
-                this.bg(cx.theme().secondary_container)
-                    .text_color(cx.theme().on_secondary)
+            .when(self.disabled, |this| {
+                this.cursor(shared::interaction::cursor(true, false, self.style.mouse_cursor))
+            })
+            .when(cx.theme().shadow && self.variant == ToggleVariant::Elevated, |this| {
+                this.shadow_xs()
             })
             .refine_style(&self.style)
-            .children(self.children)
-            .when(!disabled, |this| {
-                this.when_some(self.on_click, |this, on_click| {
-                    this.on_click(move |_, window, cx| on_click(&!checked, window, cx))
+            .children(self.children);
+
+        let checked = self.checked;
+        let on_click = self.on_click.clone();
+
+        button_el
+            .when(!self.disabled, |this| {
+                this.on_click(move |_, window, cx| {
+                    if let Some(ref handler) = on_click {
+                        handler(&!checked, window, cx);
+                    }
                 })
             })
             .map(|this| self.tooltip.apply(this))

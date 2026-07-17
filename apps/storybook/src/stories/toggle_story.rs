@@ -29,7 +29,7 @@ impl ToggleStory {
 
 impl super::Story for ToggleStory {
     fn title() -> &'static str {
-        "ToggleButton"
+        "Toggle"
     }
 
     fn description() -> &'static str {

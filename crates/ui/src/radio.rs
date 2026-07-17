@@ -2,12 +2,12 @@ use std::rc::Rc;
 
 use crate::{
     ActiveTheme, AxisExt, FocusableExt as _, Sizable, Size, StyledExt,
-    checkbox::checkbox_check_icon, h_flex, text::Text, tooltip::ComponentTooltip, v_flex,
+    h_flex, text::Text, tooltip::ComponentTooltip, v_flex,
 };
 use gpui::{
     AnyElement, App, Axis, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
     RenderOnce, Role, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window,
-    div, prelude::FluentBuilder, px, relative, rems,
+    div, prelude::FluentBuilder, px, relative,
 };
 
 /// A Radio element.
@@ -146,19 +146,23 @@ impl RenderOnce for Radio {
         let is_focused = focus_handle.is_focused(window);
         let disabled = self.disabled;
 
-        let (border_color, bg) = if checked {
+        let (border_color, circle_color) = if disabled {
+            let color = cx.theme().on_surface.opacity(0.38);
+            (color, color)
+        } else if checked {
             (cx.theme().primary, cx.theme().primary)
         } else {
-            (
-                cx.theme().surface_container_highest,
-                cx.theme().surface_container_highest.opacity(0.5),
-            )
+            (cx.theme().on_surface_variant, cx.theme().transparent)
         };
-        let (border_color, bg) = if disabled {
-            (border_color.opacity(0.5), bg.opacity(0.5))
-        } else {
-            (border_color, bg)
+
+        let outer_size = match self.size {
+            Size::XSmall => gpui::px(12.),
+            Size::Small => gpui::px(14.),
+            Size::Medium => gpui::px(16.),
+            Size::Large => gpui::px(18.),
+            _ => gpui::px(16.),
         };
+        let inner_size = outer_size * 0.5;
 
         self.base
             .id(self.id.clone())
@@ -196,27 +200,23 @@ impl RenderOnce for Radio {
             .refine_style(&self.style)
             .child(
                 div()
-                    .relative()
-                    .map(|this| match self.size {
-                        Size::XSmall => this.size_3(),
-                        Size::Small => this.size_3p5(),
-                        Size::Medium => this.size_4(),
-                        Size::Large => this.size(rems(1.125)),
-                        _ => this.size_4(),
-                    })
+                    .size(outer_size)
                     .flex_shrink_0()
                     .rounded_full()
-                    .border_1()
+                    .border_2()
                     .border_color(border_color)
-                    .when(cx.theme().shadow && !disabled, |this| this.shadow_xs())
-                    .map(|this| match self.checked {
-                        false => this.bg(cx.theme().surface_container_highest),
-                        true if disabled => this.bg(bg),
-                        true => this.bg(cx.theme().primary),
+                    .bg(cx.theme().transparent)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(checked, |this| {
+                        this.child(
+                            div()
+                                .size(inner_size)
+                                .rounded_full()
+                                .bg(circle_color)
+                        )
                     })
-                    .child(checkbox_check_icon(
-                        self.id, self.size, checked, disabled, window, cx,
-                    )),
             )
             .when(!self.children.is_empty() || self.label.is_some(), |this| {
                 this.child(
