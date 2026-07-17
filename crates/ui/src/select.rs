@@ -226,7 +226,7 @@ where
                     h_flex()
                         .justify_center()
                         .py_6()
-                        .text_color(cx.theme().muted_foreground.opacity(0.6))
+                        .text_color(cx.theme().on_surface_variant.opacity(0.6))
                         .child(Icon::new(IconName::Inbox).size(px(28.)))
                         .into_any_element()
                 }
@@ -410,7 +410,7 @@ where
     }
 
     fn display_title(&mut self, _: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let default_title = div().text_color(cx.theme().muted_foreground).child(
+        let default_title = div().text_color(cx.theme().on_surface_variant).child(
             self.state
                 .placeholder
                 .clone()
@@ -443,7 +443,7 @@ where
 
         div()
             .when(self.state.disabled, |this| {
-                this.text_color(cx.theme().muted_foreground)
+                this.text_color(cx.theme().on_surface_variant)
             })
             .child(title)
     }
@@ -486,7 +486,7 @@ where
                         this.bg(bg)
                             .text_color(fg)
                             .when(self.state.disabled, |this| this.opacity(0.5))
-                            .border_color(cx.theme().input)
+                            .border_color(cx.theme().outline_variant)
                             .rounded(cx.theme().radius)
                             .when(cx.theme().shadow, |this| this.shadow_xs())
                     })
@@ -536,7 +536,7 @@ where
                                     None => Icon::new(IconName::ChevronDown),
                                 };
 
-                                this.child(icon.xsmall().text_color(cx.theme().muted_foreground))
+                                this.child(icon.xsmall().text_color(cx.theme().on_surface_variant))
                             }),
                     )
                     .on_prepaint({
@@ -558,9 +558,9 @@ where
                                     v_flex()
                                         .occlude()
                                         .mt_1p5()
-                                        .bg(cx.theme().tokens.background)
+                                        .bg(cx.theme().surface_container_high)
                                         .border_1()
-                                        .border_color(cx.theme().border)
+                                        .border_color(cx.theme().outline_variant)
                                         .rounded(popup_radius)
                                         .shadow_md()
                                         .child(

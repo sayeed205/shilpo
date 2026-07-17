@@ -43,7 +43,7 @@ impl RenderOnce for DialogDescription {
         div()
             .id("dialog-description")
             .text_sm()
-            .text_color(cx.theme().muted_foreground)
+            .text_color(cx.theme().on_surface_variant)
             .refine_style(&self.style)
             .children(self.children)
     }

@@ -28,10 +28,10 @@ impl TagVariant {
         match self {
             Self::Primary => cx.theme().primary,
             Self::Secondary => cx.theme().secondary,
-            Self::Danger => cx.theme().danger,
-            Self::Success => cx.theme().success,
-            Self::Warning => cx.theme().warning,
-            Self::Info => cx.theme().info,
+            Self::Danger => cx.theme().error,
+            Self::Success => cx.theme().tertiary,
+            Self::Warning => cx.theme().tertiary,
+            Self::Info => cx.theme().primary,
             Self::Color(color) => {
                 if cx.theme().is_dark() {
                     color.scale(950).opacity(0.5)
@@ -46,11 +46,11 @@ impl TagVariant {
     fn border(&self, cx: &App) -> Hsla {
         match self {
             Self::Primary => cx.theme().primary,
-            Self::Secondary => cx.theme().border,
-            Self::Danger => cx.theme().danger,
-            Self::Success => cx.theme().success,
-            Self::Warning => cx.theme().warning,
-            Self::Info => cx.theme().info,
+            Self::Secondary => cx.theme().outline_variant,
+            Self::Danger => cx.theme().error,
+            Self::Success => cx.theme().tertiary,
+            Self::Warning => cx.theme().tertiary,
+            Self::Info => cx.theme().primary,
             Self::Color(color) => {
                 if cx.theme().is_dark() {
                     color.scale(800).opacity(0.5)
@@ -68,42 +68,42 @@ impl TagVariant {
                 if outline {
                     cx.theme().primary
                 } else {
-                    cx.theme().primary_foreground
+                    cx.theme().on_primary
                 }
             }
             Self::Secondary => {
                 if outline {
-                    cx.theme().muted_foreground
+                    cx.theme().on_surface_variant
                 } else {
-                    cx.theme().secondary_foreground
+                    cx.theme().on_secondary
                 }
             }
             Self::Danger => {
                 if outline {
-                    cx.theme().danger
+                    cx.theme().error
                 } else {
-                    cx.theme().danger_foreground
+                    cx.theme().on_error
                 }
             }
             Self::Success => {
                 if outline {
-                    cx.theme().success
+                    cx.theme().tertiary
                 } else {
-                    cx.theme().success_foreground
+                    cx.theme().on_tertiary
                 }
             }
             Self::Warning => {
                 if outline {
-                    cx.theme().warning
+                    cx.theme().tertiary
                 } else {
-                    cx.theme().warning_foreground
+                    cx.theme().on_tertiary
                 }
             }
             Self::Info => {
                 if outline {
-                    cx.theme().info
+                    cx.theme().primary
                 } else {
-                    cx.theme().info_foreground
+                    cx.theme().on_primary
                 }
             }
             Self::Color(color) => {

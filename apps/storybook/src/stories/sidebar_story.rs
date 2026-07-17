@@ -343,7 +343,7 @@ impl Render for SidebarStory {
         h_flex()
             .rounded(cx.theme().radius)
             .border_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().outline)
             .h_full()
             .when(self.side.is_right(), |this| this.flex_row_reverse())
             .child(
@@ -361,8 +361,8 @@ impl Render for SidebarStory {
                                     .items_center()
                                     .justify_center()
                                     .rounded(cx.theme().radius)
-                                    .bg(cx.theme().success)
-                                    .text_color(cx.theme().success_foreground)
+                                    .bg(cx.theme().secondary)
+                                    .text_color(cx.theme().on_secondary)
                                     .size_8()
                                     .flex_shrink_0()
                                     .when(!icon_collapsed, |this| {
@@ -371,7 +371,7 @@ impl Render for SidebarStory {
                                     .when(icon_collapsed, |this| {
                                         this.size_4()
                                             .bg(cx.theme().transparent)
-                                            .text_color(cx.theme().foreground)
+                                            .text_color(cx.theme().on_surface)
                                             .child(Icon::new(IconName::GalleryVerticalEnd))
                                     }),
                             )

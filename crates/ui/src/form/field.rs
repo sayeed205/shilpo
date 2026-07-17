@@ -312,7 +312,7 @@ impl RenderOnce for Field {
                                             )
                                             .when(self.required, |this| {
                                                 this.child(
-                                                    div().text_color(cx.theme().danger).child("*"),
+                                                    div().text_color(cx.theme().error).child("*"),
                                                 )
                                             }),
                                     )
@@ -341,7 +341,7 @@ impl RenderOnce for Field {
                         this.child(
                             div()
                                 .text_xs()
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(cx.theme().on_surface_variant)
                                 .child(builder.render(window, cx)),
                         )
                     }),

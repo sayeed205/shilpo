@@ -167,10 +167,10 @@ impl Render for CollapsibleStory {
                                                     .w_16()
                                                     .justify_end()
                                                     .when(is_up, |this| {
-                                                        this.text_color(cx.theme().green)
+                                                        this.text_color(cx.theme().primary)
                                                     })
                                                     .when(!is_up, |this| {
-                                                        this.text_color(cx.theme().red)
+                                                        this.text_color(cx.theme().primary)
                                                     }),
                                             ),
                                     )

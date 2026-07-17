@@ -147,7 +147,7 @@ impl Render for ScrollbarStory {
                 div()
                     .relative()
                     .border_1()
-                    .border_color(cx.theme().border)
+                    .border_color(cx.theme().outline)
                     .flex_1()
                     .child(
                         uniform_list("list", self.items.len(), {

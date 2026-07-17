@@ -739,7 +739,7 @@ impl CodeBlock {
                     .id(("codeblock", options.ix))
                     .p_3()
                     .rounded(cx.theme().radius)
-                    .bg(cx.theme().tokens.muted)
+                    .bg(cx.theme().surface_container)
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(cx.theme().mono_font_size)
                     .relative()
@@ -757,7 +757,7 @@ impl CodeBlock {
                                 .absolute()
                                 .top_2()
                                 .right_2()
-                                .bg(cx.theme().tokens.muted)
+                                .bg(cx.theme().surface_container)
                                 .rounded(cx.theme().radius)
                                 .child(actions(&self, window, cx)),
                         )
@@ -883,14 +883,14 @@ impl Paragraph {
                         });
                     }
                     if style.code {
-                        highlight.background_color = Some(cx.theme().accent);
+                        highlight.background_color = Some(cx.theme().primary_container);
                     }
                     if let Some(color) = style.highlight {
                         highlight.background_color = Some(color);
                     }
 
                     if let Some(mut link_mark) = style.link.clone() {
-                        highlight.color = Some(cx.theme().link);
+                        highlight.color = Some(cx.theme().primary);
                         highlight.underline = Some(gpui::UnderlineStyle {
                             thickness: gpui::px(1.),
                             ..Default::default()
@@ -997,14 +997,14 @@ impl Paragraph {
                         });
                     }
                     if style.code {
-                        highlight.background_color = Some(cx.theme().accent);
+                        highlight.background_color = Some(cx.theme().primary_container);
                     }
                     if let Some(color) = style.highlight {
                         highlight.background_color = Some(color);
                     }
 
                     if let Some(mut link_mark) = style.link.clone() {
-                        highlight.color = Some(cx.theme().link);
+                        highlight.color = Some(cx.theme().primary);
                         highlight.underline = Some(gpui::UnderlineStyle {
                             thickness: gpui::px(1.),
                             ..Default::default()
@@ -1317,9 +1317,9 @@ impl BlockNode {
                                                     .rounded(cx.theme().radius.half())
                                                     .border_1()
                                                     .border_color(cx.theme().primary)
-                                                    .text_color(cx.theme().primary_foreground)
+                                                    .text_color(cx.theme().on_primary)
                                                     .when(checked, |this| {
-                                                        this.bg(cx.theme().tokens.primary).child(
+                                                        this.bg(cx.theme().primary).child(
                                                             Icon::new(IconName::Check)
                                                                 .size_2()
                                                                 .text_xs(),
@@ -1484,7 +1484,7 @@ impl BlockNode {
                         .px_2()
                         .py_1()
                         .when(!is_last_col, |this| {
-                            this.border_r_1().border_color(cx.theme().border)
+                            this.border_r_1().border_color(cx.theme().outline_variant)
                         })
                         .refine_style(&style.table_cell)
                         .child(cell.children.render(node_cx, window, cx)),
@@ -1495,7 +1495,7 @@ impl BlockNode {
                     .id("row")
                     .w_full()
                     .when(row_ix < row_count - 1, |this| this.border_b_1())
-                    .border_color(cx.theme().border)
+                    .border_color(cx.theme().outline_variant)
                     .flex()
                     .flex_row()
                     .children(cells),
@@ -1523,7 +1523,7 @@ impl BlockNode {
                         .min_w_full()
                         .w(px(total_w))
                         .border_1()
-                        .border_color(cx.theme().border)
+                        .border_color(cx.theme().outline_variant)
                         .rounded(cx.theme().radius)
                         .children(rows),
                 ),
@@ -1568,7 +1568,7 @@ impl BlockNode {
                         .px_2()
                         .py_1()
                         .when(!is_last_col, |this| {
-                            this.border_r_1().border_color(cx.theme().border)
+                            this.border_r_1().border_color(cx.theme().outline_variant)
                         })
                         .refine_style(&style.table_cell)
                         .child(cell.children.render(node_cx, window, cx)),
@@ -1580,7 +1580,7 @@ impl BlockNode {
                     .id("row")
                     .w_full()
                     .when(row_ix < row_count - 1, |this| this.border_b_1())
-                    .border_color(cx.theme().border)
+                    .border_color(cx.theme().outline_variant)
                     .flex()
                     .flex_row()
                     .children(cells),
@@ -1595,7 +1595,7 @@ impl BlockNode {
                     .id(("table", options.ix))
                     .w_full()
                     .border_1()
-                    .border_color(cx.theme().border)
+                    .border_color(cx.theme().outline_variant)
                     .rounded(cx.theme().radius)
                     .overflow_hidden()
                     .children(rows)
@@ -1664,9 +1664,9 @@ impl BlockNode {
                     div()
                         .id(("blockquote", ix))
                         .w_full()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(cx.theme().on_surface_variant)
                         .border_l_3()
-                        .border_color(cx.theme().secondary_active)
+                        .border_color(cx.theme().secondary_fixed)
                         .px_4()
                         .children({
                             let children_len = children.len();
@@ -1722,7 +1722,12 @@ impl BlockNode {
             }
             BlockNode::HorizontalRule { .. } => div()
                 .pb(mb)
-                .child(div().id("horizontal-rule").bg(cx.theme().border).h(px(2.)))
+                .child(
+                    div()
+                        .id("horizontal-rule")
+                        .bg(cx.theme().outline_variant)
+                        .h(px(2.)),
+                )
                 .into_any_element(),
             BlockNode::Break { .. } => div().id("break").into_any_element(),
             BlockNode::Unknown { .. } | BlockNode::Definition { .. } => div().into_any_element(),

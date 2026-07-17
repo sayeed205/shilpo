@@ -240,8 +240,8 @@ impl Render for SliderStory {
                     .child(
                         Slider::new(&self.slider2)
                             .disabled(self.disabled)
-                            .bg(cx.theme().success)
-                            .text_color(cx.theme().success_foreground),
+                            .bg(cx.theme().secondary)
+                            .text_color(cx.theme().on_secondary),
                     )
                     .child(format!("Value: {}", self.slider2_value)),
             )

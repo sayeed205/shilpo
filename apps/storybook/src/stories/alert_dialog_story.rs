@@ -80,8 +80,8 @@ impl Render for AlertDialogStory {
                                     .child(DialogFooter::new()
                                         .p_4()
                                         .border_t_1()
-                                        .border_color(cx.theme().border)
-                                        .bg(cx.theme().muted)
+                                        .border_color(cx.theme().outline)
+                                        .bg(cx.theme().surface_variant)
                                         .child(
                                             DialogClose::new().child(
                                                 Button::new("cancel").outline().label("Cancel")
@@ -103,7 +103,7 @@ impl Render for AlertDialogStory {
 
                             window.open_alert_dialog(cx, |alert, _, cx| {
                                 alert
-                                    .icon(Icon::new(IconName::Info).text_color(cx.theme().danger))
+                                    .icon(Icon::new(IconName::Info).text_color(cx.theme().error))
                                     .title("Delete File")
                                     .description(
                                         "Are you sure you want to delete this file? \
@@ -136,7 +136,7 @@ impl Render for AlertDialogStory {
                             .child(
                                 DialogHeader::new()
                                     .items_center()
-                                    .child(Icon::new(IconName::TriangleAlert).size_10().text_color(cx.theme().warning))
+                                    .child(Icon::new(IconName::TriangleAlert).size_10().text_color(cx.theme().tertiary))
                                     .child(
                                         DialogTitle::new().child("Network Permission Required"),
                                     ).child(
@@ -258,7 +258,7 @@ impl Render for AlertDialogStory {
                                 ))
                                 .child(
                                     DialogFooter::new()
-                                        .bg(cx.theme().muted)
+                                        .bg(cx.theme().surface_variant)
                                         .child(
                                             DialogClose::new().child(
                                                 Button::new("later").flex_1().outline().label("Later")

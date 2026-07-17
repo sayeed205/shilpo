@@ -148,7 +148,7 @@ impl Render for RatingStory {
                     Rating::new("rating-2")
                         .with_size(self.size)
                         .value(2)
-                        .color(cx.theme().green)
+                        .color(cx.theme().primary)
                         .max(5)
                         .disabled(true),
                 ),
@@ -158,7 +158,7 @@ impl Render for RatingStory {
                     Rating::new("rating-3")
                         .large()
                         .value(self.value)
-                        .color(cx.theme().green)
+                        .color(cx.theme().primary)
                         .max(5),
                 ),
             )

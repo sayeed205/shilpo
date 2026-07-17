@@ -245,7 +245,7 @@ impl Render for TextareaStory {
                                     .px_2()
                                     .py_1()
                                     .rounded(px(4.))
-                                    .bg(cx.theme().muted)
+                                    .bg(cx.theme().surface_variant)
                                     .child(msg.clone())
                             }),
                         ))

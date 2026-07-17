@@ -74,15 +74,15 @@ impl Selectable for CompanyListItem {
 impl RenderOnce for CompanyListItem {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let text_color = if self.selected {
-            cx.theme().accent_foreground
+            cx.theme().on_primary
         } else {
-            cx.theme().foreground
+            cx.theme().on_surface
         };
 
         let trend_color = match self.company.change_percent {
-            change if change > 0.0 => cx.theme().green,
-            change if change < 0.0 => cx.theme().red,
-            _ => cx.theme().foreground,
+            change if change > 0.0 => cx.theme().primary,
+            change if change < 0.0 => cx.theme().primary,
+            _ => cx.theme().on_surface,
         };
 
         self.base
@@ -254,7 +254,7 @@ impl ListDelegate for CompanyListDelegate {
                 .px_2()
                 .gap_2()
                 .text_sm()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(cx.theme().on_surface_variant)
                 .child(Icon::new(IconName::Folder))
                 .child(industry.clone())
                 .child(format!("(section: {})", section)),
@@ -277,7 +277,7 @@ impl ListDelegate for CompanyListDelegate {
                 .pb_5()
                 .px_2()
                 .text_xs()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(cx.theme().on_surface_variant)
                 .child(format!(
                     "Total {} items in section.",
                     self.matched_companies[section].len()
@@ -597,7 +597,7 @@ impl Render for ListStory {
                     .flex_1()
                     .w_full()
                     .border_1()
-                    .border_color(cx.theme().border)
+                    .border_color(cx.theme().outline)
                     .rounded(cx.theme().radius),
             )
     }

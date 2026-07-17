@@ -225,7 +225,7 @@ impl Render for NumberInputStory {
                     NumberInput::new(&self.number_input4)
                         .appearance(false)
                         .bg(cx.theme().secondary)
-                        .text_color(cx.theme().info),
+                        .text_color(cx.theme().primary),
                 ),
             )
     }

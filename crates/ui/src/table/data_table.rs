@@ -7,7 +7,7 @@ use crate::{
     table::{TableDelegate, TableState},
 };
 use gpui::{
-    App, Edges, Entity, Focusable, InteractiveElement, IntoElement, KeyBinding, ParentElement,
+    App, Background, Edges, Entity, Focusable, InteractiveElement, IntoElement, KeyBinding, ParentElement,
     RenderOnce, Styled, Window, div, prelude::FluentBuilder,
 };
 
@@ -162,11 +162,11 @@ where
             .on_action(window.listener_for(&self.state, TableState::action_select_last_column))
             .on_action(window.listener_for(&self.state, TableState::action_select_page_up))
             .on_action(window.listener_for(&self.state, TableState::action_select_page_down))
-            .bg(cx.theme().tokens.table)
+            .bg(Background::from(cx.theme().surface))
             .when(bordered, |this| {
                 this.rounded(cx.theme().radius)
                     .border_1()
-                    .border_color(cx.theme().border)
+                    .border_color(cx.theme().outline_variant)
             })
             .child(self.state)
     }

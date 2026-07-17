@@ -229,12 +229,12 @@ impl RenderOnce for AccordionItem {
         div().flex_1().child(
             v_flex()
                 .w_full()
-                .bg(cx.theme().tokens.accordion)
+                .bg(cx.theme().surface_container)
                 .overflow_hidden()
                 .when(self.bordered, |this| {
                     this.border_1()
                         .rounded(cx.theme().radius)
-                        .border_color(cx.theme().border)
+                        .border_color(cx.theme().outline_variant)
                 })
                 .text_size(text_size)
                 .child(
@@ -252,13 +252,13 @@ impl RenderOnce for AccordionItem {
                         })
                         .when(self.open, |this| {
                             this.when(self.bordered, |this| {
-                                this.text_color(cx.theme().foreground)
+                                this.text_color(cx.theme().on_surface)
                                     .border_b_1()
-                                    .border_color(cx.theme().border)
+                                    .border_color(cx.theme().outline_variant)
                             })
                         })
                         .when(!self.bordered, |this| {
-                            this.border_b_1().border_color(cx.theme().border)
+                            this.border_b_1().border_color(cx.theme().outline_variant)
                         })
                         .child(
                             h_flex()
@@ -271,13 +271,13 @@ impl RenderOnce for AccordionItem {
                                 .when_some(self.icon, |this, icon| {
                                     this.child(
                                         icon.with_size(self.size)
-                                            .text_color(cx.theme().muted_foreground),
+                                            .text_color(cx.theme().on_surface_variant),
                                     )
                                 })
                                 .child(self.title),
                         )
                         .when(!self.disabled, |this| {
-                            this.hover(|this| this.bg(cx.theme().tokens.accordion_hover))
+                            this.hover(|this| this.bg(cx.theme().surface_container_high))
                                 .child(
                                     Icon::new(if self.open {
                                         IconName::ChevronUp
@@ -285,7 +285,7 @@ impl RenderOnce for AccordionItem {
                                         IconName::ChevronDown
                                     })
                                     .xsmall()
-                                    .text_color(cx.theme().muted_foreground),
+                                    .text_color(cx.theme().on_surface_variant),
                                 )
                                 .when_some(self.on_toggle_click, |this, on_toggle_click| {
                                     this.on_click({

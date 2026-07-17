@@ -89,7 +89,7 @@ impl<D: SearchableListDelegate + 'static> ListDelegate for SearchableListAdapter
                 .px_2()
                 .list_size(self.size)
                 .text_sm()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(cx.theme().on_surface_variant)
                 .child(item)
                 .into_any_element(),
         )

@@ -73,15 +73,15 @@ impl RenderOnce for Link {
 
         div()
             .id(self.id)
-            .text_color(cx.theme().link)
+            .text_color(cx.theme().primary)
             .text_decoration_1()
-            .text_decoration_color(cx.theme().link)
+            .text_decoration_color(cx.theme().primary)
             .hover(|this| {
-                this.text_color(cx.theme().link.opacity(0.8))
+                this.text_color(cx.theme().primary.opacity(0.8))
                     .text_decoration_1()
             })
             .active(|this| {
-                this.text_color(cx.theme().link.opacity(0.6))
+                this.text_color(cx.theme().primary.opacity(0.6))
                     .text_decoration_1()
             })
             .cursor_pointer()

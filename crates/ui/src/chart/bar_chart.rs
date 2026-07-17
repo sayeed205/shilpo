@@ -336,7 +336,7 @@ where
         );
 
         // Draw band axis (with categorical labels).
-        let mut axis = PlotAxis::new().stroke(cx.theme().border);
+        let mut axis = PlotAxis::new().stroke(cx.theme().outline_variant);
         if self.label_axis {
             let labels = build_band_labels(
                 &self.data,
@@ -344,7 +344,7 @@ where
                 &band_scale,
                 band_width,
                 self.tick_margin,
-                cx.theme().muted_foreground,
+                cx.theme().on_surface_variant,
             );
             axis = match alignment {
                 BarAlignment::Bottom => axis.x(baseline).x_label(labels),
@@ -378,7 +378,7 @@ where
                 .map(|i| far + (baseline - far) * i as f32 / 4.0)
                 .collect();
             let grid = Grid::new()
-                .stroke(cx.theme().border)
+                .stroke(cx.theme().outline_variant)
                 .dash_array(&[px(4.), px(2.)]);
             let grid = if is_horizontal {
                 grid.x(grid_steps)
@@ -391,10 +391,10 @@ where
         // Draw bars.
         let band_fn_cloned = band_fn.clone();
         let value_fn_cloned = value_fn.clone();
-        let default_fill: Background = cx.theme().chart_2.into();
+        let default_fill: Background = Background::from(cx.theme().secondary);
         let fill = self.fill.clone();
         let fill_gradient = self.fill_gradient.clone();
-        let label_color = cx.theme().foreground;
+        let label_color = cx.theme().on_surface_variant;
 
         // Chart bounds in pixel space, with origin (0, 0) and size equal to
         // the full chart extent. Passed to user `fill` closures so they can
@@ -558,7 +558,7 @@ where
                 .gap(px(8.))
                 .cross_line(cross_line)
                 .title(title)
-                .row(cx.theme().chart_2, name, format!("{}", value))
+                .row(cx.theme().secondary, name, format!("{}", value))
                 .into_any_element(),
         )
     }

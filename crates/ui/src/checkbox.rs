@@ -150,9 +150,9 @@ pub(crate) fn checkbox_check_icon(
 ) -> impl IntoElement {
     let toggle_state = window.use_keyed_state(id, cx, |_, _| checked);
     let color = if disabled {
-        cx.theme().primary_foreground.opacity(0.5)
+        cx.theme().on_primary.opacity(0.5)
     } else {
-        cx.theme().primary_foreground
+        cx.theme().on_primary
     };
 
     svg()
@@ -210,7 +210,7 @@ impl RenderOnce for Checkbox {
         let border_color = if checked {
             cx.theme().primary
         } else {
-            cx.theme().input
+            cx.theme().surface_container_highest
         };
         let color = if self.disabled {
             border_color.opacity(0.5)
@@ -242,7 +242,7 @@ impl RenderOnce for Checkbox {
             .gap_2()
             .items_start()
             .line_height(relative(1.))
-            .text_color(cx.theme().foreground)
+            .text_color(cx.theme().on_surface)
             .map(|this| match self.size {
                 Size::XSmall => this.text_xs(),
                 Size::Small => this.text_sm(),
@@ -251,7 +251,7 @@ impl RenderOnce for Checkbox {
                 _ => this,
             })
             .when(self.disabled, |this| {
-                this.text_color(cx.theme().muted_foreground)
+                this.text_color(cx.theme().on_surface_variant)
             })
             .rounded(cx.theme().radius * 0.5)
             .focus_ring(is_focused, px(2.), window, cx)
@@ -272,9 +272,9 @@ impl RenderOnce for Checkbox {
                     .rounded(radius)
                     .when(cx.theme().shadow && !self.disabled, |this| this.shadow_xs())
                     .map(|this| match checked {
-                        false => this.bg(cx.theme().input_background()),
+                        false => this.bg(cx.theme().surface_container_highest),
                         true if self.disabled => this.bg(color),
-                        true => this.bg(cx.theme().tokens.primary),
+                        true => this.bg(cx.theme().primary),
                     })
                     .child(checkbox_check_icon(
                         self.id,
@@ -297,9 +297,9 @@ impl RenderOnce for Checkbox {
                                 this.child(
                                     div()
                                         .size_full()
-                                        .text_color(cx.theme().foreground)
+                                        .text_color(cx.theme().on_surface)
                                         .when(self.disabled, |this| {
-                                            this.text_color(cx.theme().muted_foreground)
+                                            this.text_color(cx.theme().on_surface_variant)
                                         })
                                         .line_height(relative(1.))
                                         .child(label),

@@ -319,7 +319,7 @@ impl Render for PopoverStory {
                         .py_1()
                         .px_2()
                         .bg(cx.theme().primary)
-                        .text_color(cx.theme().primary_foreground)
+                        .text_color(cx.theme().on_primary)
                         .max_w(px(600.))
                         .rounded(cx.theme().radius.half())
                         .text_sm()

@@ -98,10 +98,10 @@ impl RenderOnce for BreadcrumbItem {
                 Role::ListItem
             })
             .child(self.label)
-            .text_color(cx.theme().muted_foreground)
-            .when(self.is_last, |this| this.text_color(cx.theme().foreground))
+            .text_color(cx.theme().on_surface_variant)
+            .when(self.is_last, |this| this.text_color(cx.theme().on_surface))
             .when(self.disabled, |this| {
-                this.text_color(cx.theme().muted_foreground)
+                this.text_color(cx.theme().on_surface_variant)
             })
             .refine_style(&self.style)
             .when(!self.disabled, |this| {
@@ -141,7 +141,7 @@ struct BreadcrumbSeparator;
 impl RenderOnce for BreadcrumbSeparator {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         Icon::new(IconName::ChevronRight)
-            .text_color(cx.theme().muted_foreground)
+            .text_color(cx.theme().on_surface_variant)
             .size_3p5()
             .into_any_element()
     }
@@ -171,7 +171,7 @@ impl RenderOnce for Breadcrumb {
         h_flex()
             .gap_1p5()
             .text_sm()
-            .text_color(cx.theme().muted_foreground)
+            .text_color(cx.theme().on_surface_variant)
             .refine_style(&self.style)
             .children(children)
     }

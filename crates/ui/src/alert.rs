@@ -25,31 +25,31 @@ pub enum AlertVariant {
 impl AlertVariant {
     fn fg(&self, cx: &App) -> Hsla {
         match self {
-            Self::Default => cx.theme().foreground,
-            Self::Info => cx.theme().info,
-            Self::Success => cx.theme().success,
-            Self::Warning => cx.theme().warning,
-            Self::Error => cx.theme().danger,
+            Self::Default => cx.theme().on_surface,
+            Self::Info => cx.theme().primary,
+            Self::Success => cx.theme().tertiary,
+            Self::Warning => cx.theme().tertiary,
+            Self::Error => cx.theme().error,
         }
     }
 
     fn bg(&self, cx: &App) -> Hsla {
         match self {
-            Self::Default => cx.theme().background,
-            Self::Info => cx.theme().info.mix_oklab(transparent_white(), 0.04),
-            Self::Success => cx.theme().success.mix_oklab(transparent_white(), 0.04),
-            Self::Warning => cx.theme().warning.mix_oklab(transparent_white(), 0.04),
-            Self::Error => cx.theme().danger.mix_oklab(transparent_white(), 0.04),
+            Self::Default => cx.theme().surface,
+            Self::Info => cx.theme().primary.mix_oklab(transparent_white(), 0.04),
+            Self::Success => cx.theme().tertiary.mix_oklab(transparent_white(), 0.04),
+            Self::Warning => cx.theme().tertiary.mix_oklab(transparent_white(), 0.04),
+            Self::Error => cx.theme().error.mix_oklab(transparent_white(), 0.04),
         }
     }
 
     fn border_color(&self, cx: &App) -> Hsla {
         match self {
-            Self::Default => cx.theme().border,
-            Self::Info => cx.theme().info.mix_oklab(transparent_white(), 0.3),
-            Self::Success => cx.theme().success.mix_oklab(transparent_white(), 0.3),
-            Self::Warning => cx.theme().warning.mix_oklab(transparent_white(), 0.3),
-            Self::Error => cx.theme().danger.mix_oklab(transparent_white(), 0.3),
+            Self::Default => cx.theme().outline_variant,
+            Self::Info => cx.theme().primary.mix_oklab(transparent_white(), 0.3),
+            Self::Success => cx.theme().tertiary.mix_oklab(transparent_white(), 0.3),
+            Self::Warning => cx.theme().tertiary.mix_oklab(transparent_white(), 0.3),
+            Self::Error => cx.theme().error.mix_oklab(transparent_white(), 0.3),
         }
     }
 }

@@ -195,7 +195,7 @@ impl Render for Gallery {
                                                     .justify_center()
                                                     .rounded(cx.theme().radius_lg)
                                                     .bg(cx.theme().primary)
-                                                    .text_color(cx.theme().primary_foreground)
+                                                    .text_color(cx.theme().on_primary)
                                                     .size_8()
                                                     .flex_shrink_0()
                                                     .when(!self.collapsed, |this| {
@@ -206,7 +206,7 @@ impl Render for Gallery {
                                                     .when(self.collapsed, |this| {
                                                         this.size_4()
                                                             .bg(cx.theme().transparent)
-                                                            .text_color(cx.theme().foreground)
+                                                            .text_color(cx.theme().on_surface)
                                                             .child(Icon::new(
                                                                 IconName::GalleryVerticalEnd,
                                                             ))
@@ -225,7 +225,7 @@ impl Render for Gallery {
                                                         .child(
                                                             div()
                                                                 .text_color(
-                                                                    cx.theme().muted_foreground,
+                                                                    cx.theme().on_surface_variant,
                                                                 )
                                                                 .child("Gallery")
                                                                 .text_xs(),
@@ -235,7 +235,7 @@ impl Render for Gallery {
                                     )
                                     .child(
                                         div()
-                                            .bg(cx.theme().sidebar_accent)
+                                            .bg(cx.theme().primary_container)
                                             .rounded_full()
                                             .px_1()
                                             .when(cx.theme().radius.is_zero(), |this| {
@@ -285,7 +285,7 @@ impl Render for Gallery {
                             .id("header")
                             .p_4()
                             .border_b_1()
-                            .border_color(cx.theme().border)
+                            .border_color(cx.theme().outline)
                             .justify_between()
                             .items_start()
                             .child(
@@ -294,7 +294,7 @@ impl Render for Gallery {
                                     .child(div().text_xl().child(story_name))
                                     .child(
                                         div()
-                                            .text_color(cx.theme().muted_foreground)
+                                            .text_color(cx.theme().on_surface_variant)
                                             .child(description),
                                     ),
                             ),
@@ -322,7 +322,7 @@ impl Render for Gallery {
                     .when(!current_story.is_empty(), |this| {
                         this.child(current_story.clone())
                     })
-                    .right(cx.theme().theme_name().clone())
+                    .right(format!("Material source #{:08x}", cx.theme().source_argb))
                     .right(format!("v{}", env!("CARGO_PKG_VERSION")))
                     .right(
                         Button::new("assistant")

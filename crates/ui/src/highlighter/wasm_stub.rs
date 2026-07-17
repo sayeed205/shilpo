@@ -3,6 +3,7 @@
 //!
 //! Note: diagnostics.rs is available in WASM, only syntax highlighting requires stubs.
 
+use crate::ActiveTheme as _;
 use gpui::{HighlightStyle, SharedString};
 use std::ops::Range;
 use std::time::Duration;
@@ -337,64 +338,64 @@ pub struct StatusColors {
 }
 
 impl StatusColors {
-    pub fn error(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn error(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().error
     }
 
-    pub fn error_background(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn error_background(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().error_container.alpha(0.2)
     }
 
-    pub fn error_border(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn error_border(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().error
     }
 
-    pub fn warning(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn warning(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().tertiary
     }
 
-    pub fn warning_background(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn warning_background(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().tertiary_container.alpha(0.2)
     }
 
-    pub fn warning_border(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn warning_border(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().tertiary
     }
 
-    pub fn info(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn info(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().primary
     }
 
-    pub fn info_background(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn info_background(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().primary_container.alpha(0.2)
     }
 
-    pub fn info_border(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn info_border(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().primary
     }
 
-    pub fn success(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn success(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().primary
     }
 
-    pub fn success_background(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn success_background(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().primary_container.alpha(0.2)
     }
 
-    pub fn success_border(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn success_border(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().primary
     }
 
-    pub fn hint(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn hint(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().secondary
     }
 
-    pub fn hint_background(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn hint_background(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().secondary_container.alpha(0.2)
     }
 
-    pub fn hint_border(&self, _cx: &gpui::App) -> gpui::Hsla {
-        gpui::Hsla::default()
+    pub fn hint_border(&self, cx: &gpui::App) -> gpui::Hsla {
+        cx.theme().secondary
     }
 }
 
@@ -432,13 +433,11 @@ impl std::ops::Deref for HighlightTheme {
 
 impl HighlightTheme {
     pub fn default_dark() -> std::sync::Arc<Self> {
-        use crate::DEFAULT_THEME_COLORS;
-        DEFAULT_THEME_COLORS[&crate::ThemeMode::Dark].1.clone()
+        std::sync::Arc::new(Self { name: "Material Dark".into(), appearance: crate::ThemeMode::Dark, style: HighlightThemeStyle::default() })
     }
 
     pub fn default_light() -> std::sync::Arc<Self> {
-        use crate::DEFAULT_THEME_COLORS;
-        DEFAULT_THEME_COLORS[&crate::ThemeMode::Light].1.clone()
+        std::sync::Arc::new(Self { name: "Material Light".into(), appearance: crate::ThemeMode::Light, style: HighlightThemeStyle::default() })
     }
 }
 

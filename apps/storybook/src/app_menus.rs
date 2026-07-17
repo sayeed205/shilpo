@@ -1,11 +1,11 @@
 use gpui::{App, Entity, Menu, MenuItem, SharedString};
 use gpui_component::{
-    ActiveTheme as _, GlobalState, Theme, ThemeMode, ThemeRegistry, menu::AppMenuBar,
+    ActiveTheme as _, GlobalState, Theme, ThemeMode, menu::AppMenuBar,
 };
 
 use crate::{
     About, Open, Quit, SelectLocale, ToggleSearch,
-    themes::{SwitchTheme, SwitchThemeMode},
+    themes::SwitchThemeMode,
 };
 
 pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> {
@@ -63,13 +63,14 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
                     name: "Appearance".into(),
                     items: vec![
                         MenuItem::action("Light", SwitchThemeMode(ThemeMode::Light))
-                            .checked(!cx.theme().mode.is_dark()),
+                            .checked(cx.theme().selected_mode() == ThemeMode::Light),
                         MenuItem::action("Dark", SwitchThemeMode(ThemeMode::Dark))
-                            .checked(cx.theme().mode.is_dark()),
+                            .checked(cx.theme().selected_mode() == ThemeMode::Dark),
+                        MenuItem::action("System", SwitchThemeMode(ThemeMode::System))
+                            .checked(cx.theme().selected_mode() == ThemeMode::System),
                     ],
                     disabled: false,
                 }),
-                theme_menu(cx),
                 language_menu(cx),
                 MenuItem::Separator,
                 MenuItem::action("Quit", Quit),
@@ -128,23 +129,6 @@ fn language_menu(_: &App) -> MenuItem {
             MenuItem::action("简体中文", SelectLocale("zh-CN".into())).checked(locale == "zh-CN"),
             MenuItem::action("Français", SelectLocale("fr".into())).checked(locale == "fr"),
         ],
-        disabled: false,
-    })
-}
-
-fn theme_menu(cx: &App) -> MenuItem {
-    let themes = ThemeRegistry::global(cx).sorted_themes();
-    let current_name = cx.theme().theme_name();
-    MenuItem::Submenu(Menu {
-        name: "Theme".into(),
-        items: themes
-            .iter()
-            .map(|theme| {
-                let checked = current_name == &theme.name;
-                MenuItem::action(theme.name.clone(), SwitchTheme(theme.name.clone()))
-                    .checked(checked)
-            })
-            .collect(),
         disabled: false,
     })
 }

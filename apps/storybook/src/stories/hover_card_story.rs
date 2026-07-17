@@ -58,7 +58,7 @@ impl HoverCardStory {
                         .child(
                             div()
                                 .child("You can display rich content when hovering over a trigger element.")
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(cx.theme().on_surface_variant)
                                 .text_sm(),
                         ),
                 ),
@@ -75,7 +75,7 @@ impl HoverCardStory {
                             div()
                                 .child("@huacnlee")
                                 .cursor_pointer()
-                                .text_color(cx.theme().link),
+                                .text_color(cx.theme().primary),
                         )
                         .content(|_, _, cx| {
                             h_flex()
@@ -94,7 +94,7 @@ impl HoverCardStory {
                                         .child(
                                             div()
                                                 .child("@huacnlee")
-                                                .text_color(cx.theme().link)
+                                                .text_color(cx.theme().primary)
                                                 .text_sm(),
                                         )
                                         .child(div().mt_1().child("The author of GPUI Component.")),

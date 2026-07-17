@@ -35,30 +35,16 @@ pub enum ColorPickerEvent {
 }
 
 fn color_palettes() -> Vec<Vec<Hsla>> {
-    use crate::theme::DEFAULT_COLORS;
-    use itertools::Itertools as _;
-
-    macro_rules! c {
-        ($color:tt) => {
-            DEFAULT_COLORS
-                .$color
-                .keys()
-                .sorted()
-                .map(|k| DEFAULT_COLORS.$color.get(k).map(|c| c.hsla).unwrap())
-                .collect::<Vec<_>>()
-        };
-    }
-
     vec![
-        c!(stone),
-        c!(red),
-        c!(orange),
-        c!(yellow),
-        c!(green),
-        c!(cyan),
-        c!(blue),
-        c!(purple),
-        c!(pink),
+        vec![hsla(0., 0., 0.1, 1.), hsla(0., 0., 0.5, 1.), hsla(0., 0., 0.9, 1.)],
+        vec![hsla(0., 0.8, 0.5, 1.), hsla(0.02, 0.7, 0.4, 1.)],
+        vec![hsla(0.08, 0.8, 0.5, 1.), hsla(0.1, 0.7, 0.4, 1.)],
+        vec![hsla(0.16, 0.8, 0.5, 1.), hsla(0.18, 0.7, 0.4, 1.)],
+        vec![hsla(0.33, 0.7, 0.5, 1.), hsla(0.35, 0.6, 0.4, 1.)],
+        vec![hsla(0.5, 0.7, 0.5, 1.), hsla(0.52, 0.6, 0.4, 1.)],
+        vec![hsla(0.62, 0.8, 0.5, 1.), hsla(0.64, 0.7, 0.4, 1.)],
+        vec![hsla(0.75, 0.7, 0.5, 1.), hsla(0.77, 0.6, 0.4, 1.)],
+        vec![hsla(0.9, 0.7, 0.5, 1.), hsla(0.92, 0.6, 0.4, 1.)],
     ]
 }
 
@@ -490,18 +476,18 @@ impl ColorPicker {
 
     fn render_palette_panel(&self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let featured_colors = self.featured_colors.clone().unwrap_or(vec![
-            cx.theme().red,
-            cx.theme().red_light,
-            cx.theme().blue,
-            cx.theme().blue_light,
-            cx.theme().green,
-            cx.theme().green_light,
-            cx.theme().yellow,
-            cx.theme().yellow_light,
-            cx.theme().cyan,
-            cx.theme().cyan_light,
-            cx.theme().magenta,
-            cx.theme().magenta_light,
+            cx.theme().error,
+            cx.theme().error_container,
+            cx.theme().primary,
+            cx.theme().primary_container,
+            cx.theme().tertiary,
+            cx.theme().tertiary_container,
+            cx.theme().tertiary,
+            cx.theme().tertiary_container,
+            cx.theme().secondary,
+            cx.theme().secondary_container,
+            cx.theme().tertiary,
+            cx.theme().tertiary_container,
         ]);
 
         v_flex()
@@ -548,7 +534,7 @@ impl ColorPicker {
         let alpha_start = hsla(slider_color.h, slider_color.s, slider_color.l, 0.0);
         let alpha_end = hsla(slider_color.h, slider_color.s, slider_color.l, 1.0);
 
-        let label_color = cx.theme().foreground.opacity(0.7);
+        let label_color = cx.theme().on_surface.opacity(0.7);
 
         v_flex()
             .gap_2()
@@ -827,9 +813,9 @@ impl RenderOnce for ColorPickerButton {
                 this.child(
                     div()
                         .id("square")
-                        .bg(cx.theme().tokens.background)
+                        .bg(cx.theme().surface)
                         .border_1()
-                        .border_color(cx.theme().input)
+                        .border_color(cx.theme().surface_container_highest)
                         .when(cx.theme().shadow, |this| this.shadow_xs())
                         .rounded(cx.theme().radius)
                         .overflow_hidden()

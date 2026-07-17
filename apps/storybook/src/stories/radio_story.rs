@@ -92,7 +92,7 @@ impl Render for RadioStory {
                         .label("The long long label text.")
                         .child(
                             div()
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(cx.theme().on_surface_variant)
                                 .child("This line should wrap when the text is too long."),
                         )
                         .w(px(300.))
@@ -147,7 +147,7 @@ impl Render for RadioStory {
                                 .w(px(220.))
                                 .p_2()
                                 .border_1()
-                                .border_color(cx.theme().border)
+                                .border_color(cx.theme().outline)
                                 .rounded(cx.theme().radius)
                                 .disabled(true)
                                 .child(Radio::new("one1").label("United States"))

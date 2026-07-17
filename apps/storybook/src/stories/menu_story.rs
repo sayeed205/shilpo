@@ -164,7 +164,7 @@ impl Render for MenuStory {
                                             v_flex().child("Custom Element").child(
                                                 div()
                                                     .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
+                                                    .text_color(cx.theme().on_surface_variant)
                                                     .child("This is sub-title"),
                                             )
                                         })
@@ -183,7 +183,7 @@ impl Render for MenuStory {
                                             h_flex().gap_1().child("Custom Element").child(
                                                 div()
                                                     .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
+                                                    .text_color(cx.theme().on_surface_variant)
                                                     .child("checked"),
                                             )
                                         },
@@ -195,7 +195,7 @@ impl Render for MenuStory {
                                             h_flex().gap_1().child("Custom").child(
                                                 div()
                                                     .text_sm()
-                                                    .text_color(cx.theme().muted_foreground)
+                                                    .text_color(cx.theme().on_surface_variant)
                                                     .child("element"),
                                             )
                                         },
@@ -236,7 +236,7 @@ impl Render for MenuStory {
                             .rounded(cx.theme().radius_lg)
                             .border_2()
                             .border_dashed()
-                            .border_color(cx.theme().border)
+                            .border_color(cx.theme().outline)
                             .child("Right click to open ContextMenu")
                             .context_menu({
                                 move |this, window, cx| {
@@ -272,7 +272,7 @@ impl Render for MenuStory {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
+                                    .text_color(cx.theme().on_surface_variant)
                                     .child(
                                         "You can right click anywhere in \
                                          this area to open the context menu.",
@@ -291,7 +291,7 @@ impl Render for MenuStory {
                             .rounded(cx.theme().radius_lg)
                             .border_2()
                             .border_dashed()
-                            .border_color(cx.theme().border)
+                            .border_color(cx.theme().outline)
                             .child("Here is another area with context menu.")
                             .context_menu({
                                 move |this, _, _| {
@@ -316,7 +316,7 @@ impl Render for MenuStory {
                             .rounded(cx.theme().radius_lg)
                             .border_2()
                             .border_dashed()
-                            .border_color(cx.theme().border)
+                            .border_color(cx.theme().outline)
                             .child("ContextMenu area 1")
                             .context_menu({
                                 move |this, _, _| {

@@ -966,8 +966,8 @@ impl Example {
         )
         .text_sm()
         .p_1()
-        .bg(cx.theme().sidebar)
-        .text_color(cx.theme().sidebar_foreground)
+        .bg(cx.theme().surface_container)
+        .text_color(cx.theme().on_surface)
         .h_full()
     }
 

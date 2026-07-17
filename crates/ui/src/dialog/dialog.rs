@@ -223,7 +223,7 @@ pub(crate) fn overlay_color(overlay: bool, cx: &App) -> Hsla {
         return hsla(0., 0., 0., 0.);
     }
 
-    cx.theme().overlay
+    cx.theme().scrim
 }
 
 impl Dialog {
@@ -534,9 +534,9 @@ impl RenderOnce for Dialog {
                             .role(self.a11y_role)
                             .track_focus(&self.focus_handle)
                             .focus_trap(format!("dialog-{}", layer_ix), &self.focus_handle)
-                            .bg(cx.theme().tokens.background)
+                            .bg(cx.theme().surface)
                             .border_1()
-                            .border_color(cx.theme().border)
+                            .border_color(cx.theme().outline_variant)
                             .rounded(cx.theme().radius_lg)
                             .min_h_24()
                             .pt(paddings.top)

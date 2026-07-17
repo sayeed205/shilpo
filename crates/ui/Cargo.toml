@@ -100,6 +100,7 @@ gpui = { workspace = true }
 gpui_macros.workspace = true
 gpui-component-macros = { workspace = true }
 gpui-component-assets = { workspace = true }
+mcu-material-color = { version = "0.2.2", default-features = false }
 notify.workspace = true
 ropey.workspace = true
 rust-i18n.workspace = true

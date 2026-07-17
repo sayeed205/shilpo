@@ -177,14 +177,14 @@ where
         let height = bounds.size.height.as_f32() - axis_gap;
 
         // Draw X axis
-        let mut axis = PlotAxis::new().stroke(cx.theme().border);
+        let mut axis = PlotAxis::new().stroke(cx.theme().outline_variant);
         if self.x_axis {
             let labels = build_point_x_labels(
                 &self.data,
                 x_fn.as_ref(),
                 &x,
                 self.tick_margin,
-                cx.theme().muted_foreground,
+                cx.theme().on_surface_variant,
             );
             axis = axis.x(height).x_label(labels);
         }
@@ -194,7 +194,7 @@ where
         if self.grid {
             Grid::new()
                 .y((0..=3).map(|i| height * i as f32 / 4.0).collect())
-                .stroke(cx.theme().border)
+                .stroke(cx.theme().outline_variant)
                 .dash_array(&[px(4.), px(2.)])
                 .paint(&bounds, window);
         }
@@ -209,9 +209,9 @@ where
             let fill = *self
                 .fills
                 .get(i)
-                .unwrap_or(&cx.theme().chart_2.opacity(0.4).into());
+                .unwrap_or(&Background::from(cx.theme().secondary.opacity(0.4)));
 
-            let stroke = *self.strokes.get(i).unwrap_or(&cx.theme().chart_2);
+            let stroke = *self.strokes.get(i).unwrap_or(&cx.theme().secondary);
 
             let stroke_style = *self
                 .stroke_styles
@@ -279,8 +279,8 @@ where
         let d = self.data.get(state.index)?;
         let title: SharedString = x_fn(d).into();
 
-        let default_color = cx.theme().chart_2;
-        let dot_stroke = cx.theme().background;
+        let default_color = cx.theme().secondary;
+        let dot_stroke = cx.theme().surface;
         let color = |i: usize| *self.strokes.get(i).unwrap_or(&default_color);
 
         // Follow the cursor; the crosshair and dots stay snapped to the data point.

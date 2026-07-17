@@ -123,27 +123,27 @@ impl ControlIcon {
     #[inline]
     fn hover_fg(&self, cx: &App) -> Hsla {
         if self.is_close() {
-            cx.theme().danger_foreground
+            cx.theme().on_error
         } else {
-            cx.theme().secondary_foreground
+            cx.theme().on_secondary
         }
     }
 
     #[inline]
     fn hover_bg(&self, cx: &App) -> Hsla {
         if self.is_close() {
-            cx.theme().danger
+            cx.theme().error
         } else {
-            cx.theme().secondary_hover
+            cx.theme().secondary_container
         }
     }
 
     #[inline]
     fn active_bg(&self, cx: &mut App) -> Hsla {
         if self.is_close() {
-            cx.theme().danger_active
+            cx.theme().error_container
         } else {
-            cx.theme().secondary_active
+            cx.theme().secondary_container
         }
     }
 }
@@ -170,7 +170,7 @@ impl RenderOnce for ControlIcon {
             .justify_center()
             .content_center()
             .items_center()
-            .text_color(cx.theme().foreground)
+            .text_color(cx.theme().on_surface)
             .hover(|style| style.bg(hover_bg).text_color(hover_fg))
             .active(|style| style.bg(active_bg).text_color(hover_fg))
             .when(is_windows, |this| {
@@ -268,8 +268,8 @@ impl RenderOnce for TitleBar {
                 .h(TITLE_BAR_HEIGHT)
                 .pl(TITLE_BAR_LEFT_PADDING)
                 .border_b_1()
-                .border_color(cx.theme().title_bar_border)
-                .bg(cx.theme().tokens.title_bar)
+                .border_color(cx.theme().outline_variant)
+                .bg(cx.theme().surface_container)
                 .refine_style(&self.style)
                 .when(is_linux, |this| {
                     this.on_double_click(|_, window, _| window.zoom_window())

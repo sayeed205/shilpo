@@ -179,7 +179,7 @@ impl RenderOnce for ListItem {
             .py_1()
             .px_3()
             .text_base()
-            .text_color(cx.theme().foreground)
+            .text_color(cx.theme().on_surface)
             .relative()
             .items_center()
             .justify_between()
@@ -199,11 +199,11 @@ impl RenderOnce for ListItem {
                             })
                     })
                     .when(!is_active, |this| {
-                        this.hover(|this| this.bg(cx.theme().tokens.list_hover))
+                        this.hover(|this| this.bg(cx.theme().surface_container_high))
                     })
             })
             .when(!is_selectable, |this| {
-                this.text_color(cx.theme().muted_foreground)
+                this.text_color(cx.theme().on_surface_variant)
             })
             .child(
                 h_flex()
@@ -217,7 +217,7 @@ impl RenderOnce for ListItem {
                             div().w_5().items_center().justify_center().when(
                                 self.confirmed,
                                 |this| {
-                                    this.child(icon.small().text_color(cx.theme().muted_foreground))
+                                    this.child(icon.small().text_color(cx.theme().on_surface_variant))
                                 },
                             ),
                         )
@@ -227,9 +227,9 @@ impl RenderOnce for ListItem {
             .map(|this| {
                 if is_selectable && (self.selected || self.secondary_selected) {
                     let bg = if self.selected && cx.theme().list.active_highlight {
-                        cx.theme().list_active
+                        cx.theme().primary_container
                     } else {
-                        cx.theme().accent
+                        cx.theme().primary_container
                     };
 
                     this.when(!self.secondary_selected, |this| this.bg(bg))
@@ -242,7 +242,7 @@ impl RenderOnce for ListItem {
                                     .right_0()
                                     .bottom_0()
                                     .border_1()
-                                    .border_color(cx.theme().list_active_border)
+                                    .border_color(cx.theme().outline)
                                     .refine_style(&selected_style),
                             )
                         })

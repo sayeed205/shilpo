@@ -87,7 +87,7 @@ impl RenderOnce for Avatar {
         const COLOR_COUNT: u64 = 360 / 15;
         fn default_color(ix: u64, cx: &mut App) -> Hsla {
             let h = (ix * 15).clamp(0, 360) as f32;
-            cx.theme().blue.hue(h / 360.0)
+            cx.theme().primary.hue(h / 360.0)
         }
 
         const BG_OPACITY: f32 = 0.2;
@@ -100,10 +100,10 @@ impl RenderOnce for Avatar {
             .flex_shrink_0()
             .rounded_full()
             .overflow_hidden()
-            .bg(cx.theme().tokens.secondary)
-            .text_color(cx.theme().background)
+            .bg(cx.theme().secondary)
+            .text_color(cx.theme().surface)
             .border_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().outline_variant)
             .when(self.name.is_none() && self.src.is_none(), |this| {
                 this.text_size(avatar_size(self.size) * 0.6)
                     .child(self.placeholder)

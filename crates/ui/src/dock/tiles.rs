@@ -873,7 +873,7 @@ impl Tiles {
                         .absolute()
                         .right(px(1.))
                         .bottom(px(1.))
-                        .text_color(cx.theme().muted_foreground.opacity(0.5)),
+                        .text_color(cx.theme().on_surface.opacity(0.5)),
                 )
                 .child(
                     div()
@@ -1030,9 +1030,9 @@ impl Tiles {
 
         v_flex()
             .occlude()
-            .bg(cx.theme().tokens.background)
+            .bg(cx.theme().surface)
             .border_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().outline_variant)
             .absolute()
             .left(item.bounds.origin.x)
             .top(item.bounds.origin.y)
@@ -1272,7 +1272,7 @@ impl Render for Tiles {
 
         div()
             .relative()
-            .bg(cx.theme().tokens.tiles)
+            .bg(cx.theme().surface_container)
             .child(
                 div()
                     .id("tiles")

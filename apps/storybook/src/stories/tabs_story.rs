@@ -161,7 +161,7 @@ impl Render for TabsStory {
                             this.set_active_tab(*ix, window, cx);
                         }))
                         .border_t_1()
-                        .border_color(cx.theme().border)
+                        .border_color(cx.theme().outline)
                         .prefix(
                             h_flex()
                                 .mx_1()

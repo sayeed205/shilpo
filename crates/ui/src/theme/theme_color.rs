@@ -1,525 +1,163 @@
-use std::{ops::Deref, sync::Arc};
+use gpui::Hsla;
+use mcu_material_color::{Hct, MaterialDynamicColors, SchemeTonalSpot};
 
-use crate::{ThemeMode, theme::DEFAULT_THEME_COLORS};
-
-use gpui::{Background, Fill, Hsla};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
-/// A theme token that keeps a solid representative color and its renderable background.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ThemeToken {
-    pub color: Hsla,
-    pub background: Background,
-}
-
-impl ThemeToken {
-    pub fn new(color: Hsla, background: Background) -> Self {
-        Self { color, background }
-    }
-}
-
-impl Deref for ThemeToken {
-    type Target = Hsla;
-
-    fn deref(&self) -> &Self::Target {
-        &self.color
-    }
-}
-
-impl From<Hsla> for ThemeToken {
-    fn from(color: Hsla) -> Self {
-        Self {
-            color,
-            background: color.into(),
-        }
-    }
-}
-
-impl From<ThemeToken> for Hsla {
-    fn from(token: ThemeToken) -> Self {
-        token.color
-    }
-}
-
-impl From<ThemeToken> for Background {
-    fn from(token: ThemeToken) -> Self {
-        token.background
-    }
-}
-
-impl From<ThemeToken> for Fill {
-    fn from(token: ThemeToken) -> Self {
-        Fill::Color(token.background)
-    }
-}
-
-/// Theme colors used throughout the UI components.
-#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+/// Material 3 dynamic color roles.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ThemeColor {
-    /// Used for accents such as hover background on MenuItem, ListItem, etc.
-    pub accent: Hsla,
-    /// Used for accent text color.
-    pub accent_foreground: Hsla,
-    /// Accordion background color.
-    pub accordion: Hsla,
-    /// Accordion hover background color.
-    pub accordion_hover: Hsla,
-    /// Default background color.
-    pub background: Hsla,
-    /// Default border color
-    pub border: Hsla,
-    /// Default Button background color.
-    pub button: Hsla,
-    /// Default Button active background color.
-    pub button_active: Hsla,
-    /// Default Button text color.
-    pub button_foreground: Hsla,
-    /// Default Button hover background color.
-    pub button_hover: Hsla,
-    /// Button danger background color, fallback to `danger`.
-    pub button_danger: Hsla,
-    /// Button danger active background color, fallback to `danger_active`.
-    pub button_danger_active: Hsla,
-    /// Button danger text color, fallback to `danger_foreground`.
-    pub button_danger_foreground: Hsla,
-    /// Button danger hover background color, fallback to `danger_hover`.
-    pub button_danger_hover: Hsla,
-    /// Button info background color, fallback to `info`.
-    pub button_info: Hsla,
-    /// Button info active background color, fallback to `info_active`.
-    pub button_info_active: Hsla,
-    /// Button info text color, fallback to `info_foreground`.
-    pub button_info_foreground: Hsla,
-    /// Button info hover background color, fallback to `info_hover`.
-    pub button_info_hover: Hsla,
-    /// Button primary background color, fallback to `primary`.
-    pub button_primary: Hsla,
-    /// Button primary active background color, fallback to `primary_active`.
-    pub button_primary_active: Hsla,
-    /// Button primary text color, fallback to `primary_foreground`.
-    pub button_primary_foreground: Hsla,
-    /// Button primary hover background color, fallback to `primary_hover`.
-    pub button_primary_hover: Hsla,
-    /// Button secondary background color, fallback to `secondary`.
-    pub button_secondary: Hsla,
-    /// Button secondary active background color, fallback to `secondary_active`.
-    pub button_secondary_active: Hsla,
-    /// Button secondary text color, fallback to `secondary_foreground`.
-    pub button_secondary_foreground: Hsla,
-    /// Button secondary hover background color, fallback to `secondary_hover`.
-    pub button_secondary_hover: Hsla,
-    /// Button success background color, fallback to `success`.
-    pub button_success: Hsla,
-    /// Button success active background color, fallback to `success_active`.
-    pub button_success_active: Hsla,
-    /// Button success text color, fallback to `success_foreground`.
-    pub button_success_foreground: Hsla,
-    /// Button success hover background color, fallback to `success_hover`.
-    pub button_success_hover: Hsla,
-    /// Button warning background color, fallback to `warning`.
-    pub button_warning: Hsla,
-    /// Button warning active background color, fallback to `warning_active`.
-    pub button_warning_active: Hsla,
-    /// Button warning text color, fallback to `warning_foreground`.
-    pub button_warning_foreground: Hsla,
-    /// Button warning hover background color, fallback to `warning_hover`.
-    pub button_warning_hover: Hsla,
-    /// Background color for GroupBox.
-    pub group_box: Hsla,
-    /// Text color for GroupBox.
-    pub group_box_foreground: Hsla,
-    /// Input caret color (Blinking cursor).
-    pub caret: Hsla,
-    /// Chart 1 color.
-    pub chart_1: Hsla,
-    /// Chart 2 color.
-    pub chart_2: Hsla,
-    /// Chart 3 color.
-    pub chart_3: Hsla,
-    /// Chart 4 color.
-    pub chart_4: Hsla,
-    /// Chart 5 color.
-    pub chart_5: Hsla,
-    /// Bullish color for candlestick charts (upward price movement).
-    pub chart_bullish: Hsla,
-    /// Bearish color for candlestick charts (downward price movement).
-    pub chart_bearish: Hsla,
-    /// Danger background color.
-    pub danger: Hsla,
-    /// Danger active background color.
-    pub danger_active: Hsla,
-    /// Danger text color.
-    pub danger_foreground: Hsla,
-    /// Danger hover background color.
-    pub danger_hover: Hsla,
-    /// Description List label background color.
-    pub description_list_label: Hsla,
-    /// Description List label foreground color.
-    pub description_list_label_foreground: Hsla,
-    /// Drag border color.
-    pub drag_border: Hsla,
-    /// Drop target background color.
-    pub drop_target: Hsla,
-    /// Default text color.
-    pub foreground: Hsla,
-    /// Info background color.
-    pub info: Hsla,
-    /// Info active background color.
-    pub info_active: Hsla,
-    /// Info text color.
-    pub info_foreground: Hsla,
-    /// Info hover background color.
-    pub info_hover: Hsla,
-    /// Border color for inputs such as Input, Select, etc.
-    pub input: Hsla,
-    /// Link text color.
-    pub link: Hsla,
-    /// Active link text color.
-    pub link_active: Hsla,
-    /// Hover link text color.
-    pub link_hover: Hsla,
-    /// Background color for List and ListItem.
-    pub list: Hsla,
-    /// Background color for active ListItem.
-    pub list_active: Hsla,
-    /// Border color for active ListItem.
-    pub list_active_border: Hsla,
-    /// Stripe background color for even ListItem.
-    pub list_even: Hsla,
-    /// Background color for List header.
-    pub list_head: Hsla,
-    /// Hover background color for ListItem.
-    pub list_hover: Hsla,
-    /// Muted backgrounds such as Skeleton and Switch.
-    pub muted: Hsla,
-    /// Muted text color, as used in disabled text.
-    pub muted_foreground: Hsla,
-    /// Background color for Popover.
-    pub popover: Hsla,
-    /// Text color for Popover.
-    pub popover_foreground: Hsla,
-    /// Primary background color.
+    pub surface: Hsla,
+    pub on_surface: Hsla,
+    pub surface_dim: Hsla,
+    pub surface_bright: Hsla,
+    pub surface_container_lowest: Hsla,
+    pub surface_container_low: Hsla,
+    pub surface_container: Hsla,
+    pub surface_container_high: Hsla,
+    pub surface_container_highest: Hsla,
+    pub surface_variant: Hsla,
+    pub on_surface_variant: Hsla,
+    pub inverse_surface: Hsla,
+    pub inverse_on_surface: Hsla,
+    pub outline: Hsla,
+    pub outline_variant: Hsla,
+    pub shadow: Hsla,
+    pub scrim: Hsla,
+    pub surface_tint: Hsla,
     pub primary: Hsla,
-    /// Active primary background color.
-    pub primary_active: Hsla,
-    /// Primary text color.
-    pub primary_foreground: Hsla,
-    /// Hover primary background color.
-    pub primary_hover: Hsla,
-    /// Progress bar background color.
-    pub progress_bar: Hsla,
-    /// Used for focus ring.
-    pub ring: Hsla,
-    /// Scrollbar background color.
-    pub scrollbar: Hsla,
-    /// Scrollbar thumb background color.
-    pub scrollbar_thumb: Hsla,
-    /// Scrollbar thumb hover background color.
-    pub scrollbar_thumb_hover: Hsla,
-    /// Secondary background color.
+    pub on_primary: Hsla,
+    pub primary_container: Hsla,
+    pub on_primary_container: Hsla,
+    pub inverse_primary: Hsla,
+    pub primary_fixed: Hsla,
+    pub primary_fixed_dim: Hsla,
+    pub on_primary_fixed: Hsla,
+    pub on_primary_fixed_variant: Hsla,
     pub secondary: Hsla,
-    /// Active secondary background color.
-    pub secondary_active: Hsla,
-    /// Secondary text color, used for secondary Button text color or secondary text.
-    pub secondary_foreground: Hsla,
-    /// Hover secondary background color.
-    pub secondary_hover: Hsla,
-    /// Input selection background color.
-    pub selection: Hsla,
-    /// Sidebar background color.
-    pub sidebar: Hsla,
-    /// Sidebar accent background color.
-    pub sidebar_accent: Hsla,
-    /// Sidebar accent text color.
-    pub sidebar_accent_foreground: Hsla,
-    /// Sidebar border color.
-    pub sidebar_border: Hsla,
-    /// Sidebar text color.
-    pub sidebar_foreground: Hsla,
-    /// Sidebar primary background color.
-    pub sidebar_primary: Hsla,
-    /// Sidebar primary text color.
-    pub sidebar_primary_foreground: Hsla,
-    /// Skeleton background color.
-    pub skeleton: Hsla,
-    /// Slider bar background color.
-    pub slider_bar: Hsla,
-    /// Slider thumb background color.
-    pub slider_thumb: Hsla,
-    /// Success background color.
-    pub success: Hsla,
-    /// Success text color.
-    pub success_foreground: Hsla,
-    /// Success hover background color.
-    pub success_hover: Hsla,
-    /// Success active background color.
-    pub success_active: Hsla,
-    /// Switch background color.
-    pub switch: Hsla,
-    /// Switch thumb background color.
-    pub switch_thumb: Hsla,
-    /// Tab background color.
-    pub tab: Hsla,
-    /// Tab active background color.
-    pub tab_active: Hsla,
-    /// Tab active text color.
-    pub tab_active_foreground: Hsla,
-    /// TabBar background color.
-    pub tab_bar: Hsla,
-    /// TabBar segmented background color.
-    pub tab_bar_segmented: Hsla,
-    /// Tab text color.
-    pub tab_foreground: Hsla,
-    /// Table background color.
-    pub table: Hsla,
-    /// Table active item background color.
-    pub table_active: Hsla,
-    /// Table active item border color.
-    pub table_active_border: Hsla,
-    /// Stripe background color for even TableRow.
-    pub table_even: Hsla,
-    /// Table head background color.
-    pub table_head: Hsla,
-    /// Table head text color.
-    pub table_head_foreground: Hsla,
-    /// Table footer background color.
-    pub table_foot: Hsla,
-    /// Table footer text color.
-    pub table_foot_foreground: Hsla,
-    /// Table item hover background color.
-    pub table_hover: Hsla,
-    /// Table row border color.
-    pub table_row_border: Hsla,
-    /// TitleBar background color, use for Window title bar.
-    pub title_bar: Hsla,
-    /// TitleBar border color.
-    pub title_bar_border: Hsla,
-    /// StatusBar background color, use for the bottom status bar.
-    pub status_bar: Hsla,
-    /// StatusBar border color.
-    pub status_bar_border: Hsla,
-    /// Background color for Tiles.
-    pub tiles: Hsla,
-    /// Warning background color.
-    pub warning: Hsla,
-    /// Warning active background color.
-    pub warning_active: Hsla,
-    /// Warning hover background color.
-    pub warning_hover: Hsla,
-    /// Warning foreground color.
-    pub warning_foreground: Hsla,
-    /// Overlay background color.
-    pub overlay: Hsla,
-    /// Window border color.
-    ///
-    /// # Platform specific:
-    ///
-    /// This is only works on Linux, other platforms we can't change the window border color.
-    pub window_border: Hsla,
-
-    /// The base red color.
-    pub red: Hsla,
-    /// The base red light color.
-    pub red_light: Hsla,
-    /// The base green color.
-    pub green: Hsla,
-    /// The base green light color.
-    pub green_light: Hsla,
-    /// The base blue color.
-    pub blue: Hsla,
-    /// The base blue light color.
-    pub blue_light: Hsla,
-    /// The base yellow color.
-    pub yellow: Hsla,
-    /// The base yellow light color.
-    pub yellow_light: Hsla,
-    /// The base magenta color.
-    pub magenta: Hsla,
-    /// The base magenta light color.
-    pub magenta_light: Hsla,
-    /// The base cyan color.
-    pub cyan: Hsla,
-    /// The base cyan light color.
-    pub cyan_light: Hsla,
+    pub on_secondary: Hsla,
+    pub secondary_container: Hsla,
+    pub on_secondary_container: Hsla,
+    pub secondary_fixed: Hsla,
+    pub secondary_fixed_dim: Hsla,
+    pub on_secondary_fixed: Hsla,
+    pub on_secondary_fixed_variant: Hsla,
+    pub tertiary: Hsla,
+    pub on_tertiary: Hsla,
+    pub tertiary_container: Hsla,
+    pub on_tertiary_container: Hsla,
+    pub tertiary_fixed: Hsla,
+    pub tertiary_fixed_dim: Hsla,
+    pub on_tertiary_fixed: Hsla,
+    pub on_tertiary_fixed_variant: Hsla,
+    pub error: Hsla,
+    pub on_error: Hsla,
+    pub error_container: Hsla,
+    pub on_error_container: Hsla,
 }
 
-macro_rules! define_theme_tokens {
+macro_rules! roles {
     ($($field:ident),+ $(,)?) => {
-        /// Resolved theme tokens used when a value needs both a solid representative
-        /// color and the configured paint background.
-        #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, JsonSchema)]
-        pub struct ThemeTokens {
-            $(pub $field: ThemeToken,)+
-        }
-
-        impl From<ThemeColor> for ThemeTokens {
-            fn from(colors: ThemeColor) -> Self {
-                Self {
-                    $($field: colors.$field.into(),)+
-                }
-            }
-        }
-
-        impl From<&ThemeColor> for ThemeTokens {
-            fn from(colors: &ThemeColor) -> Self {
-                Self::from(*colors)
+        impl ThemeColor {
+            fn from_scheme(scheme: &SchemeTonalSpot) -> Self {
+                Self { $($field: argb_to_hsla(MaterialDynamicColors::$field().get_argb(scheme)),)+ }
             }
         }
     };
 }
 
-define_theme_tokens! {
-    accent,
-    accent_foreground,
-    accordion,
-    accordion_hover,
-    background,
-    border,
-    button,
-    button_active,
-    button_foreground,
-    button_hover,
-    button_danger,
-    button_danger_active,
-    button_danger_foreground,
-    button_danger_hover,
-    button_info,
-    button_info_active,
-    button_info_foreground,
-    button_info_hover,
-    button_primary,
-    button_primary_active,
-    button_primary_foreground,
-    button_primary_hover,
-    button_secondary,
-    button_secondary_active,
-    button_secondary_foreground,
-    button_secondary_hover,
-    button_success,
-    button_success_active,
-    button_success_foreground,
-    button_success_hover,
-    button_warning,
-    button_warning_active,
-    button_warning_foreground,
-    button_warning_hover,
-    group_box,
-    group_box_foreground,
-    caret,
-    chart_1,
-    chart_2,
-    chart_3,
-    chart_4,
-    chart_5,
-    chart_bullish,
-    chart_bearish,
-    danger,
-    danger_active,
-    danger_foreground,
-    danger_hover,
-    description_list_label,
-    description_list_label_foreground,
-    drag_border,
-    drop_target,
-    foreground,
-    info,
-    info_active,
-    info_foreground,
-    info_hover,
-    input,
-    link,
-    link_active,
-    link_hover,
-    list,
-    list_active,
-    list_active_border,
-    list_even,
-    list_head,
-    list_hover,
-    muted,
-    muted_foreground,
-    popover,
-    popover_foreground,
+roles!(
+    surface,
+    on_surface,
+    surface_dim,
+    surface_bright,
+    surface_container_lowest,
+    surface_container_low,
+    surface_container,
+    surface_container_high,
+    surface_container_highest,
+    surface_variant,
+    on_surface_variant,
+    inverse_surface,
+    inverse_on_surface,
+    outline,
+    outline_variant,
+    shadow,
+    scrim,
+    surface_tint,
     primary,
-    primary_active,
-    primary_foreground,
-    primary_hover,
-    progress_bar,
-    ring,
-    scrollbar,
-    scrollbar_thumb,
-    scrollbar_thumb_hover,
+    on_primary,
+    primary_container,
+    on_primary_container,
+    inverse_primary,
+    primary_fixed,
+    primary_fixed_dim,
+    on_primary_fixed,
+    on_primary_fixed_variant,
     secondary,
-    secondary_active,
-    secondary_foreground,
-    secondary_hover,
-    selection,
-    sidebar,
-    sidebar_accent,
-    sidebar_accent_foreground,
-    sidebar_border,
-    sidebar_foreground,
-    sidebar_primary,
-    sidebar_primary_foreground,
-    skeleton,
-    slider_bar,
-    slider_thumb,
-    success,
-    success_foreground,
-    success_hover,
-    success_active,
-    switch,
-    switch_thumb,
-    tab,
-    tab_active,
-    tab_active_foreground,
-    tab_bar,
-    tab_bar_segmented,
-    tab_foreground,
-    table,
-    table_active,
-    table_active_border,
-    table_even,
-    table_head,
-    table_head_foreground,
-    table_foot,
-    table_foot_foreground,
-    table_hover,
-    table_row_border,
-    title_bar,
-    title_bar_border,
-    status_bar,
-    status_bar_border,
-    tiles,
-    warning,
-    warning_active,
-    warning_hover,
-    warning_foreground,
-    overlay,
-    window_border,
-    red,
-    red_light,
-    green,
-    green_light,
-    blue,
-    blue_light,
-    yellow,
-    yellow_light,
-    magenta,
-    magenta_light,
-    cyan,
-    cyan_light,
+    on_secondary,
+    secondary_container,
+    on_secondary_container,
+    secondary_fixed,
+    secondary_fixed_dim,
+    on_secondary_fixed,
+    on_secondary_fixed_variant,
+    tertiary,
+    on_tertiary,
+    tertiary_container,
+    on_tertiary_container,
+    tertiary_fixed,
+    tertiary_fixed_dim,
+    on_tertiary_fixed,
+    on_tertiary_fixed_variant,
+    error,
+    on_error,
+    error_container,
+    on_error_container,
+);
+
+impl Default for ThemeColor {
+    fn default() -> Self {
+        material_theme(0xff6750a4, false)
+    }
 }
 
 impl ThemeColor {
-    /// Get the default light theme colors.
-    pub fn light() -> Arc<Self> {
-        DEFAULT_THEME_COLORS[&ThemeMode::Light].0.clone()
+    pub fn from_source(source_argb: u32, dark: bool) -> Self {
+        material_theme(source_argb, dark)
+    }
+}
+
+#[inline]
+pub fn argb_to_hsla(argb: u32) -> Hsla {
+    gpui::Rgba {
+        r: ((argb >> 16) & 0xff) as f32 / 255.0,
+        g: ((argb >> 8) & 0xff) as f32 / 255.0,
+        b: (argb & 0xff) as f32 / 255.0,
+        a: ((argb >> 24) & 0xff) as f32 / 255.0,
+    }
+    .into()
+}
+
+pub fn material_theme(source_argb: u32, dark: bool) -> ThemeColor {
+    ThemeColor::from_scheme(&SchemeTonalSpot::new(Hct::from_int(source_argb), dark, 0.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_builds_distinct_schemes() {
+        let light = material_theme(0xff6750a4, false);
+        let dark = material_theme(0xff6750a4, true);
+        assert_ne!(light.surface, dark.surface);
+        assert_ne!(light.primary, dark.primary);
     }
 
-    /// Get the default dark theme colors.
-    pub fn dark() -> Arc<Self> {
-        DEFAULT_THEME_COLORS[&ThemeMode::Dark].0.clone()
+    #[test]
+    fn argb_converts_channels() {
+        let color = argb_to_hsla(0x80402010).to_rgb();
+        assert!((color.r - 0x40 as f32 / 255.0).abs() < f32::EPSILON);
+        assert!((color.g - 0x20 as f32 / 255.0).abs() < f32::EPSILON);
+        assert!((color.b - 0x10 as f32 / 255.0).abs() < f32::EPSILON);
+        assert!((color.a - 0x80 as f32 / 255.0).abs() < f32::EPSILON);
     }
 }

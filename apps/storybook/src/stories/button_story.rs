@@ -87,10 +87,10 @@ impl Render for ButtonStory {
         let toggle_multiple = self.toggle_multiple;
 
         let custom_variant = ButtonCustomVariant::new(cx)
-            .color(cx.theme().magenta)
-            .foreground(cx.theme().magenta)
-            .hover(cx.theme().magenta.opacity(0.1))
-            .active(cx.theme().magenta);
+            .color(cx.theme().primary)
+            .foreground(cx.theme().primary)
+            .hover(cx.theme().primary.opacity(0.1))
+            .active(cx.theme().primary);
 
         v_flex()
             .on_action(
@@ -361,7 +361,7 @@ impl Render for ButtonStory {
                                 .large()
                                 .icon(
                                     ProgressCircle::new("circle-progress-1")
-                                        .color(cx.theme().primary_foreground)
+                                        .color(cx.theme().on_primary)
                                         .value(25.),
                                 )
                                 .label("Installing..."),

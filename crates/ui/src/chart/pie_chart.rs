@@ -129,13 +129,13 @@ impl<T> PieChart<T> {
         self
     }
 
-    /// Set the leader line color per slice (defaults to `cx.theme().border`).
+    /// Set the leader line color per slice (defaults to `cx.theme().outline_variant`).
     pub fn label_line_color(mut self, color: impl Fn(&T) -> Hsla + 'static) -> Self {
         self.label_line_color = Some(Rc::new(color));
         self
     }
 
-    /// Set the label text color (defaults to `cx.theme().foreground`).
+    /// Set the label text color (defaults to `cx.theme().on_surface_variant`).
     pub fn label_color(mut self, color: Hsla) -> Self {
         self.label_color = Some(color);
         self
@@ -177,7 +177,7 @@ impl<T> Plot for PieChart<T> {
                 if let Some(color_fn) = self.color.as_ref() {
                     color_fn(a.data)
                 } else {
-                    cx.theme().chart_2
+                    cx.theme().secondary
                 },
                 Some(inner_radius),
                 Some(outer_radius),
@@ -201,8 +201,8 @@ impl<T> Plot for PieChart<T> {
             .inner_radius(outer_radius)
             .outer_radius(outer_radius);
 
-        let label_color = self.label_color.unwrap_or(cx.theme().foreground);
-        let default_line_color = cx.theme().border;
+        let label_color = self.label_color.unwrap_or(cx.theme().on_surface_variant);
+        let default_line_color = cx.theme().outline_variant;
 
         // First pass: collect a layout candidate per visible slice, split by
         // side. `y` is the target vertical position relative to the center and

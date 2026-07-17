@@ -651,13 +651,13 @@ where
                             _ => this.px_2(),
                         })
                         .border_b_1()
-                        .border_color(cx.theme().border)
+                        .border_color(cx.theme().outline_variant)
                         .child(
                             Input::new(&input)
                                 .with_size(self.options.size)
                                 .prefix(
                                     Icon::new(IconName::Search)
-                                        .text_color(cx.theme().muted_foreground),
+                                        .text_color(cx.theme().on_surface_variant),
                                 )
                                 .cleanable(true)
                                 .p_0()

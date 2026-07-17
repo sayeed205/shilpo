@@ -246,7 +246,7 @@ impl Render for AvatarStory {
                         .src("https://avatars.githubusercontent.com/u/20092316?v=4")
                         .with_size(px(100.))
                         .border_3()
-                        .border_color(cx.theme().foreground)
+                        .border_color(cx.theme().on_surface)
                         .shadow_sm(),
                 ),
             )

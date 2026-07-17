@@ -79,7 +79,7 @@ pub trait ListDelegate: Sized + 'static {
         h_flex()
             .size_full()
             .justify_center()
-            .text_color(cx.theme().muted_foreground.opacity(0.6))
+            .text_color(cx.theme().on_surface_variant.opacity(0.6))
             .child(Icon::new(IconName::Inbox).size_12())
             .into_any_element()
     }

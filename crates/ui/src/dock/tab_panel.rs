@@ -55,10 +55,10 @@ impl Render for DragPanel {
             .overflow_hidden()
             .whitespace_nowrap()
             .border_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().outline_variant)
             .rounded(cx.theme().radius)
-            .text_color(cx.theme().tab_foreground)
-            .bg(cx.theme().tokens.tab_active)
+            .text_color(cx.theme().on_secondary_container)
+            .bg(cx.theme().secondary_container)
             .opacity(0.75)
             .child(self.panel.title(window, cx))
     }
@@ -723,8 +723,8 @@ impl TabPanel {
                         .border_r_1()
                         .border_b_1()
                         .h_full()
-                        .border_color(cx.theme().border)
-                        .bg(cx.theme().tokens.tab_bar)
+                        .border_color(cx.theme().outline_variant)
+                        .bg(cx.theme().surface_container)
                         .px_2()
                         .children(left_dock_button)
                         .children(bottom_dock_button),
@@ -784,7 +784,7 @@ impl TabPanel {
                                     this.rounded_l_none()
                                         .border_l_2()
                                         .border_r_0()
-                                        .border_color(cx.theme().drag_border)
+                                        .border_color(cx.theme().primary)
                                 })
                                 .on_drop(cx.listener(
                                     move |this, drag: &DragPanel, window, cx| {
@@ -805,7 +805,7 @@ impl TabPanel {
                     .min_w_16()
                     .when(state.droppable, |this| {
                         this.drag_over::<DragPanel>(|this, _, _, cx| {
-                            this.bg(cx.theme().tokens.drop_target)
+                            this.bg(cx.theme().primary)
                         })
                         .on_drop(cx.listener(
                             move |this, drag: &DragPanel, window, cx| {
@@ -831,8 +831,8 @@ impl TabPanel {
                         .border_l_1()
                         .border_b_1()
                         .h_full()
-                        .border_color(cx.theme().border)
-                        .bg(cx.theme().tokens.tab_bar)
+                        .border_color(cx.theme().outline_variant)
+                        .bg(cx.theme().surface_container)
                         .px_2()
                         .gap_1()
                         .children(
@@ -885,7 +885,7 @@ impl TabPanel {
                         div()
                             .invisible()
                             .absolute()
-                            .bg(cx.theme().tokens.drop_target)
+                            .bg(cx.theme().primary)
                             .map(|this| match self.will_split_placement {
                                 Some(placement) => {
                                     let size = relative(0.5);
@@ -1211,7 +1211,7 @@ impl Render for TabPanel {
             .tab_group()
             .size_full()
             .overflow_hidden()
-            .bg(cx.theme().tokens.background)
+            .bg(cx.theme().surface)
             .child(self.render_title_bar(&state, window, cx))
             .child(self.render_active_panel(&state, window, cx))
     }

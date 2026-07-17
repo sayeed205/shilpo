@@ -2,7 +2,8 @@ use gpui::{
     Action, AnyElement, AnyView, App, AppContext, Bounds, Context, Div, Entity, EventEmitter,
     FocusHandle, Focusable, Global, Hsla, InteractiveElement, IntoElement, KeyBinding,
     ParentElement, Pixels, Render, RenderOnce, SharedString, Size, StyleRefinement, Styled, Window,
-    WindowBounds, WindowKind, WindowOptions, actions, div, prelude::FluentBuilder as _, px, rems,
+    Subscription, WindowBounds, WindowKind, WindowOptions, actions, div,
+    prelude::FluentBuilder as _, px, rems,
     size,
 };
 use gpui_component::{
@@ -20,7 +21,6 @@ use gpui_component::{
 use serde::{Deserialize, Serialize};
 
 mod app_menus;
-mod embedded_themes;
 mod gallery;
 mod stories;
 mod themes;
@@ -131,6 +131,16 @@ pub fn create_new_window_with_size<F, E>(
                 let view = crate_view_fn(window, cx);
                 let story_root = cx.new(|cx| StoryRoot::new(title.clone(), view, window, cx));
 
+                story_root.update(cx, |story_root, cx| {
+                    story_root.appearance_subscription = Some(cx.observe_window_appearance(
+                        window,
+                        |_, window, cx| {
+                            gpui_component::Theme::sync_system_appearance(Some(window), cx);
+                            cx.refresh_windows();
+                        },
+                    ));
+                });
+
                 // Set focus to the StoryRoot to enable it's actions.
                 let focus_handle = story_root.focus_handle(cx);
                 window.defer(cx, move |window, cx| {
@@ -184,6 +194,7 @@ pub fn init(cx: &mut App) {
 
     rust_i18n::extend!(gpui_component);
     gpui_component::init(cx);
+    *gpui_component::Theme::global_mut(cx) = gpui_component::Theme::new(0xff6750a4);
     AppState::init(cx);
     themes::init(cx);
     stories::init(cx);
@@ -540,7 +551,7 @@ impl Panel for StoryContainer {
         if let Some(bg) = self.title_bg {
             Some(TitleStyle {
                 background: bg,
-                foreground: cx.theme().foreground,
+                foreground: cx.theme().on_surface,
             })
         } else {
             None
@@ -636,6 +647,7 @@ pub struct StoryRoot {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) title_bar: Entity<AppTitleBar>,
     pub(crate) view: AnyView,
+    appearance_subscription: Option<Subscription>,
 }
 
 impl StoryRoot {
@@ -650,6 +662,7 @@ impl StoryRoot {
             focus_handle: cx.focus_handle(),
             title_bar,
             view: view.into(),
+            appearance_subscription: None,
         }
     }
 

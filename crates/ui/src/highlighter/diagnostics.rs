@@ -4,13 +4,13 @@ use std::{
     usize,
 };
 
-use gpui::{px, App, HighlightStyle, Hsla, SharedString, UnderlineStyle};
+use gpui::{App, HighlightStyle, Hsla, SharedString, UnderlineStyle, px};
 use ropey::Rope;
 use sum_tree::{Bias, SeekTarget, SumTree};
 
 use crate::{
-    input::{Position, RopeExt as _},
     ActiveTheme,
+    input::{Position, RopeExt as _},
 };
 
 pub type DiagnosticRelatedInformation = lsp_types::DiagnosticRelatedInformation;
@@ -100,45 +100,38 @@ impl From<lsp_types::DiagnosticSeverity> for DiagnosticSeverity {
 
 impl DiagnosticSeverity {
     pub(crate) fn bg(&self, cx: &App) -> Hsla {
-        let theme = &cx.theme().highlight_theme;
-
         match self {
-            Self::Error => theme.style.status.error_background(cx),
-            Self::Warning => theme.style.status.warning_background(cx),
-            Self::Info => theme.style.status.info_background(cx),
-            Self::Hint => theme.style.status.hint_background(cx),
+            Self::Error => cx.theme().error_container.alpha(0.2),
+            Self::Warning => cx.theme().tertiary_container.alpha(0.2),
+            Self::Info => cx.theme().primary_container.alpha(0.2),
+            Self::Hint => cx.theme().secondary_container.alpha(0.2),
         }
     }
 
     pub(crate) fn fg(&self, cx: &App) -> Hsla {
-        let theme = &cx.theme().highlight_theme;
-
         match self {
-            Self::Error => theme.style.status.error(cx),
-            Self::Warning => theme.style.status.warning(cx),
-            Self::Info => theme.style.status.info(cx),
-            Self::Hint => theme.style.status.hint(cx),
+            Self::Error => cx.theme().error,
+            Self::Warning => cx.theme().tertiary,
+            Self::Info => cx.theme().primary,
+            Self::Hint => cx.theme().secondary,
         }
     }
 
     pub(crate) fn border(&self, cx: &App) -> Hsla {
-        let theme = &cx.theme().highlight_theme;
         match self {
-            Self::Error => theme.style.status.error_border(cx),
-            Self::Warning => theme.style.status.warning_border(cx),
-            Self::Info => theme.style.status.info_border(cx),
-            Self::Hint => theme.style.status.hint_border(cx),
+            Self::Error => cx.theme().error,
+            Self::Warning => cx.theme().tertiary,
+            Self::Info => cx.theme().primary,
+            Self::Hint => cx.theme().secondary,
         }
     }
 
     pub(crate) fn highlight_style(&self, cx: &App) -> HighlightStyle {
-        let theme = &cx.theme().highlight_theme;
-
         let color = match self {
-            Self::Error => Some(theme.style.status.error(cx)),
-            Self::Warning => Some(theme.style.status.warning(cx)),
-            Self::Info => Some(theme.style.status.info(cx)),
-            Self::Hint => Some(theme.style.status.hint(cx)),
+            Self::Error => Some(cx.theme().error),
+            Self::Warning => Some(cx.theme().tertiary),
+            Self::Info => Some(cx.theme().primary),
+            Self::Hint => Some(cx.theme().secondary),
         };
 
         let mut style = HighlightStyle::default();

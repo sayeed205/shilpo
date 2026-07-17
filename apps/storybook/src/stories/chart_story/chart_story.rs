@@ -202,7 +202,7 @@ fn chart_container<C: IntoElement>(
         .flex_1()
         .h(px(400.))
         .border_1()
-        .border_color(cx.theme().border)
+        .border_color(cx.theme().outline)
         .rounded(cx.theme().radius_lg)
         .p_4()
         .child(
@@ -214,7 +214,7 @@ fn chart_container<C: IntoElement>(
         .child(
             div()
                 .when(center, |this| this.text_center())
-                .text_color(cx.theme().muted_foreground)
+                .text_color(cx.theme().on_surface_variant)
                 .text_sm()
                 .child("January-June 2025"),
         )
@@ -229,7 +229,7 @@ fn chart_container<C: IntoElement>(
         .child(
             div()
                 .when(center, |this| this.text_center())
-                .text_color(cx.theme().muted_foreground)
+                .text_color(cx.theme().on_surface_variant)
                 .text_sm()
                 .child("Showing total visitors for the last 6 months"),
         )
@@ -237,30 +237,30 @@ fn chart_container<C: IntoElement>(
 
 impl Render for ChartStory {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let color = cx.theme().chart_3;
+        let color = cx.theme().tertiary;
         v_flex()
             .size_full()
             .gap_y_4()
-            .bg(cx.theme().background)
+            .bg(cx.theme().surface)
             .child(
                 div().child(chart_container(
                     "Area Chart - Stacked",
                     AreaChart::new(self.daily_devices.clone())
                         .x(|d| d.date.clone())
                         .y(|d| d.desktop)
-                        .stroke(cx.theme().chart_1)
+                        .stroke(cx.theme().primary)
                         .fill(linear_gradient(
                             0.,
-                            linear_color_stop(cx.theme().chart_1.opacity(0.4), 1.),
-                            linear_color_stop(cx.theme().background.opacity(0.3), 0.),
+                            linear_color_stop(cx.theme().primary.opacity(0.4), 1.),
+                            linear_color_stop(cx.theme().surface.opacity(0.3), 0.),
                         ))
                         .name("Desktop")
                         .y(|d| d.mobile)
-                        .stroke(cx.theme().chart_2)
+                        .stroke(cx.theme().secondary)
                         .fill(linear_gradient(
                             0.,
-                            linear_color_stop(cx.theme().chart_2.opacity(0.4), 1.),
-                            linear_color_stop(cx.theme().background.opacity(0.3), 0.),
+                            linear_color_stop(cx.theme().secondary.opacity(0.4), 1.),
+                            linear_color_stop(cx.theme().surface.opacity(0.3), 0.),
                         ))
                         .name("Mobile")
                         .tick_margin(8)
@@ -410,7 +410,7 @@ impl Render for ChartStory {
                         cx,
                     ))
                     .child({
-                        let c = cx.theme().chart_1;
+                        let c = cx.theme().primary;
                         chart_container(
                             "Bar Chart - Gradient (Bottom)",
                             BarChart::new(self.monthly_devices.clone())
@@ -433,7 +433,7 @@ impl Render for ChartStory {
                         )
                     })
                     .child({
-                        let c = cx.theme().chart_1;
+                        let c = cx.theme().primary;
                         chart_container(
                             "Bar Chart - Gradient (Top)",
                             BarChart::new(self.monthly_devices.clone())
@@ -457,7 +457,7 @@ impl Render for ChartStory {
                         )
                     })
                     .child({
-                        let c = cx.theme().chart_1;
+                        let c = cx.theme().primary;
                         chart_container(
                             "Bar Chart - Gradient (Left)",
                             BarChart::new(self.monthly_devices.clone())
@@ -481,7 +481,7 @@ impl Render for ChartStory {
                         )
                     })
                     .child({
-                        let c = cx.theme().chart_1;
+                        let c = cx.theme().primary;
                         chart_container(
                             "Bar Chart - Gradient (Right)",
                             BarChart::new(self.monthly_devices.clone())
@@ -505,7 +505,7 @@ impl Render for ChartStory {
                         )
                     })
                     .child({
-                        let c = cx.theme().chart_1;
+                        let c = cx.theme().primary;
                         chart_container(
                             "Bar Chart - Gradient (Per-bar)",
                             BarChart::new(self.monthly_devices.clone())
@@ -525,8 +525,8 @@ impl Render for ChartStory {
                         )
                     })
                     .child({
-                        let c1 = cx.theme().chart_1;
-                        let c2 = cx.theme().chart_5;
+                        let c1 = cx.theme().primary;
+                        let c2 = cx.theme().primary_fixed;
                         chart_container(
                             "Bar Chart - Gradient (Diagonal, across bars)",
                             BarChart::new(self.monthly_devices.clone())
@@ -605,7 +605,7 @@ impl Render for ChartStory {
                             .x(|d| d.month.clone())
                             .y(|d| d.desktop)
                             .dot()
-                            .stroke(cx.theme().chart_5)
+                            .stroke(cx.theme().primary_fixed)
                             .id("line-chart-dots"),
                         false,
                         cx,
@@ -652,8 +652,8 @@ impl Render for ChartStory {
                             .y(|d| d.desktop)
                             .fill(linear_gradient(
                                 0.,
-                                linear_color_stop(cx.theme().chart_1.opacity(0.4), 1.),
-                                linear_color_stop(cx.theme().background.opacity(0.3), 0.),
+                                linear_color_stop(cx.theme().primary.opacity(0.4), 1.),
+                                linear_color_stop(cx.theme().surface.opacity(0.3), 0.),
                             ))
                             .id("area-chart-gradient"),
                         false,
@@ -731,9 +731,9 @@ impl Render for ChartStory {
                             // labels with the year-over-year change; the other
                             // keeps the default value/name lines.
                             let chart = if index == 0 {
-                                let up = cx.theme().success;
-                                let down = cx.theme().danger;
-                                let muted = cx.theme().muted_foreground;
+                                let up = cx.theme().secondary;
+                                let down = cx.theme().error;
+                                let muted = cx.theme().on_surface_variant;
                                 chart.labels(move |d: &TslaNode, _| {
                                     let mut lines = vec![SankeyLabel::new(format!(
                                         "${:.2}B",

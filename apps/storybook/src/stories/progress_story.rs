@@ -174,9 +174,9 @@ impl Render for ProgressStory {
                         .loading(self.loading)
                         .h(px(16.))
                         .rounded(px(2.))
-                        .color(cx.theme().green_light)
+                        .color(cx.theme().primary)
                         .border_2()
-                        .border_color(cx.theme().green),
+                        .border_color(cx.theme().primary),
                 ),
             )
             .child(
@@ -195,7 +195,7 @@ impl Render for ProgressStory {
                                     .child(
                                         div()
                                             .child(format!("{}%", self.value))
-                                            .text_color(cx.theme().progress_bar),
+                                            .text_color(cx.theme().primary),
                                     )
                                     .child(div().child("Loading").text_xs()),
                             )
@@ -248,7 +248,7 @@ impl Render for ProgressStory {
             .child(
                 section("Circle with Color").max_w_md().child(
                     ProgressCircle::new("circle-progress-7")
-                        .color(cx.theme().yellow)
+                        .color(cx.theme().primary)
                         .value(self.value)
                         .loading(self.loading)
                         .size_12(),

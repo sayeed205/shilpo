@@ -582,7 +582,7 @@ impl Calendar {
             cx,
         )
         .when(is_today && !is_active, |this| {
-            this.border_1().border_color(cx.theme().border)
+            this.border_1().border_color(cx.theme().outline_variant)
         }) // Add border for today
         .when(!disabled, |this| {
             this.on_click(window.listener_for(
@@ -756,28 +756,28 @@ impl Calendar {
             .justify_center()
             .when(muted, |this| {
                 this.text_color(if disabled {
-                    cx.theme().muted_foreground.opacity(0.3)
+                    cx.theme().on_surface_variant.opacity(0.3)
                 } else {
-                    cx.theme().muted_foreground
+                    cx.theme().on_surface_variant
                 })
             })
             .when(secondary_active, |this| {
                 this.bg(if muted {
-                    cx.theme().accent.opacity(0.5).into()
+                    cx.theme().primary_container.opacity(0.5).into()
                 } else {
-                    cx.theme().accent
+                    cx.theme().primary_container
                 })
-                .text_color(cx.theme().accent_foreground)
+                .text_color(cx.theme().on_primary_container)
             })
             .when(!active && !disabled, |this| {
                 this.hover(|this| {
-                    this.bg(cx.theme().tokens.accent)
-                        .text_color(cx.theme().accent_foreground)
+                    this.bg(cx.theme().primary_container)
+                        .text_color(cx.theme().on_primary_container)
                 })
             })
             .when(active, |this| {
-                this.bg(cx.theme().tokens.primary)
-                    .text_color(cx.theme().primary_foreground)
+                this.bg(cx.theme().primary)
+                    .text_color(cx.theme().on_primary)
             })
             .child(label.into())
     }
@@ -834,7 +834,7 @@ impl Calendar {
                 _ => this.size_9().rounded(cx.theme().radius),
             })
             .justify_center()
-            .text_color(cx.theme().muted_foreground)
+            .text_color(cx.theme().on_surface_variant)
             .text_sm()
             .child(week.into())
     }
@@ -961,7 +961,7 @@ impl RenderOnce for Calendar {
             .id(self.id.clone())
             .track_focus(&self.state.read(cx).focus_handle)
             .border_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().outline_variant)
             .rounded(cx.theme().radius_lg)
             .p_3()
             .gap_0p5()

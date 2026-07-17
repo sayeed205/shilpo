@@ -73,7 +73,7 @@ impl Render for SeparatorStory {
                         .child(
                             v_flex().gap_y_2().child("Hello GPUI Component").child(
                                 Label::new(DESCRIPTION)
-                                    .text_color(cx.theme().muted_foreground)
+                                    .text_color(cx.theme().on_surface_variant)
                                     .text_sm(),
                             ),
                         )

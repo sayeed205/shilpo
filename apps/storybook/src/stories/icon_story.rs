@@ -5,7 +5,7 @@ use gpui::{
 use gpui_component::{
     button::{Button, ButtonVariant, ButtonVariants},
     dock::PanelControl,
-    h_flex, neutral_500, v_flex, ActiveTheme as _, Icon, IconName, Sizable,
+    h_flex, v_flex, ActiveTheme as _, Icon, IconName, Sizable,
 };
 
 use crate::section;
@@ -70,12 +70,12 @@ impl Render for IconStory {
                     .child(
                         Icon::new(IconName::Maximize)
                             .size_6()
-                            .text_color(cx.theme().green),
+                            .text_color(cx.theme().primary),
                     )
                     .child(
                         Icon::new(IconName::Minimize)
                             .size_6()
-                            .text_color(cx.theme().red),
+                            .text_color(cx.theme().primary),
                     ),
             )
             .child(
@@ -86,7 +86,7 @@ impl Render for IconStory {
                             Button::new("like1")
                                 .icon(
                                     Icon::new(IconName::Heart)
-                                        .text_color(neutral_500())
+                                        .text_color(cx.theme().on_surface_variant)
                                         .size_6(),
                                 )
                                 .with_variant(ButtonVariant::Ghost),
@@ -95,7 +95,7 @@ impl Render for IconStory {
                             Button::new("like2")
                                 .icon(
                                     Icon::new(IconName::HeartOff)
-                                        .text_color(cx.theme().red)
+                                        .text_color(cx.theme().primary)
                                         .size_6(),
                                 )
                                 .with_variant(ButtonVariant::Ghost),
@@ -104,7 +104,7 @@ impl Render for IconStory {
                             Button::new("like3")
                                 .icon(
                                     Icon::new(IconName::Heart)
-                                        .text_color(cx.theme().green)
+                                        .text_color(cx.theme().primary)
                                         .size_6(),
                                 )
                                 .with_variant(ButtonVariant::Ghost),

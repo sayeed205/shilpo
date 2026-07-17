@@ -298,7 +298,7 @@ impl SettingItem {
                                         div()
                                             .size_full()
                                             .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
+                                            .text_color(cx.theme().on_surface_variant)
                                             .child(description),
                                     )
                                 }),

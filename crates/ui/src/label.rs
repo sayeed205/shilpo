@@ -164,7 +164,7 @@ impl Label {
             highlights.push((
                 ranges[1].clone(),
                 HighlightStyle {
-                    color: Some(cx.theme().muted_foreground),
+                    color: Some(cx.theme().on_surface_variant),
                     ..Default::default()
                 },
             ));
@@ -175,7 +175,7 @@ impl Label {
             highlights.push((
                 range.clone(),
                 HighlightStyle {
-                    color: Some(cx.theme().blue),
+                    color: Some(cx.theme().primary),
                     ..Default::default()
                 },
             ));
@@ -204,7 +204,7 @@ impl RenderOnce for Label {
 
         div()
             .line_height(rems(1.25))
-            .text_color(cx.theme().foreground)
+            .text_color(cx.theme().on_surface)
             .refine_style(&self.style)
             .child(
                 StyledText::new(&text).when_some(highlights, |this, hl| this.with_highlights(hl)),

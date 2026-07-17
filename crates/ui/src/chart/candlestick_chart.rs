@@ -140,7 +140,7 @@ where
         let y = ScaleLinear::new(all_values, vec![height, 10.]);
 
         // Draw X axis
-        let mut axis = PlotAxis::new().stroke(cx.theme().border);
+        let mut axis = PlotAxis::new().stroke(cx.theme().outline_variant);
         if self.x_axis {
             let labels = build_band_labels(
                 &self.data,
@@ -148,7 +148,7 @@ where
                 &x,
                 band_width,
                 self.tick_margin,
-                cx.theme().muted_foreground,
+                cx.theme().on_surface_variant,
             );
             axis = axis.x(height).x_label(labels);
         }
@@ -158,7 +158,7 @@ where
         if self.grid {
             Grid::new()
                 .y((0..=3).map(|i| height * i as f32 / 4.0).collect())
-                .stroke(cx.theme().border)
+                .stroke(cx.theme().outline_variant)
                 .dash_array(&[px(4.), px(2.)])
                 .paint(&bounds, window);
         }
@@ -198,9 +198,9 @@ where
             // Determine if bullish (close > open) or bearish (close < open)
             let is_bullish = close > open;
             let color: Hsla = if is_bullish {
-                cx.theme().chart_bullish
+                cx.theme().primary
             } else {
-                cx.theme().chart_bearish
+                cx.theme().error
             };
 
             // Calculate candlestick body dimensions

@@ -69,7 +69,7 @@ impl Render for ResizableStory {
                 div()
                     .h(px(600.))
                     .border_1()
-                    .border_color(cx.theme().border)
+                    .border_color(cx.theme().outline)
                     .child(
                         v_resizable("resizable-1")
                             .on_resize(|state, _, cx| {
@@ -104,7 +104,7 @@ impl Render for ResizableStory {
                 div()
                     .h(px(400.))
                     .border_1()
-                    .border_color(cx.theme().border)
+                    .border_color(cx.theme().outline)
                     .child(
                         h_resizable("resizable-3")
                             .child(
@@ -165,7 +165,7 @@ impl Render for ResizableStory {
                         div()
                             .h(px(200.))
                             .border_1()
-                            .border_color(cx.theme().border)
+                            .border_color(cx.theme().outline)
                             .child(
                                 h_resizable("resizable-flex-none")
                                     .child({
@@ -248,7 +248,7 @@ impl Render for ResizableStory {
                         div()
                             .h(px(200.))
                             .border_1()
-                            .border_color(cx.theme().border)
+                            .border_color(cx.theme().outline)
                             .child(
                                 h_resizable("resizable-programmatic")
                                     .with_state(&self.programmatic_state)

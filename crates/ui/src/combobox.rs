@@ -236,7 +236,7 @@ where
                     h_flex()
                         .justify_center()
                         .py_6()
-                        .text_color(cx.theme().muted_foreground.opacity(0.6))
+                        .text_color(cx.theme().on_surface_variant.opacity(0.6))
                         .child(Icon::new(IconName::Inbox).size(px(28.)))
                         .into_any_element()
                 }
@@ -519,7 +519,7 @@ where
 
         if self.state.selection.is_empty() {
             return div()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(cx.theme().on_surface_variant)
                 .child(placeholder_text)
                 .into_any_element();
         }
@@ -620,7 +620,7 @@ where
         } else {
             trigger_icon
                 .xsmall()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(cx.theme().on_surface_variant)
                 .into_any_element()
         };
 
@@ -931,7 +931,7 @@ fn render_trigger_container(
             this.bg(bg)
                 .text_color(fg)
                 .when(disabled, |this| this.opacity(0.5))
-                .border_color(cx.theme().input)
+                .border_color(cx.theme().surface_container_highest)
                 .rounded(cx.theme().radius)
                 .when(cx.theme().shadow, |this| this.shadow_xs())
         })
@@ -986,9 +986,9 @@ fn render_popup_shell<D: SearchableListDelegate + 'static>(
                     v_flex()
                         .occlude()
                         .mt_1p5()
-                        .bg(cx.theme().tokens.background)
+                        .bg(cx.theme().surface)
                         .border_1()
-                        .border_color(cx.theme().border)
+                        .border_color(cx.theme().outline_variant)
                         .rounded(popup_radius)
                         .shadow_md()
                         .child(
@@ -1004,7 +1004,7 @@ fn render_popup_shell<D: SearchableListDelegate + 'static>(
                             this.child(
                                 div()
                                     .border_t_1()
-                                    .border_color(cx.theme().border)
+                                    .border_color(cx.theme().outline_variant)
                                     .p_1()
                                     .when_some(footer_el, |this, el| this.child(el)),
                             )

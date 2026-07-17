@@ -406,7 +406,7 @@ impl RenderOnce for DatePicker {
                             .text_color(fg)
                             .when(self.disabled, |this| this.opacity(0.5))
                             .border_1()
-                            .border_color(cx.theme().input)
+                            .border_color(cx.theme().outline_variant)
                             .rounded(cx.theme().radius)
                             .when(cx.theme().shadow, |this| this.shadow_xs())
                             .when(is_focused, |this| this.focused_border(cx))
@@ -430,7 +430,7 @@ impl RenderOnce for DatePicker {
                                     .w_full()
                                     .overflow_hidden()
                                     .when(!state.date.is_some(), |this| {
-                                        this.text_color(cx.theme().muted_foreground)
+                                        this.text_color(cx.theme().on_surface_variant)
                                     })
                                     .child(display_title),
                             )
@@ -444,7 +444,7 @@ impl RenderOnce for DatePicker {
                                     this.child(
                                         Icon::new(IconName::Calendar)
                                             .xsmall()
-                                            .text_color(cx.theme().muted_foreground),
+                                            .text_color(cx.theme().on_surface_variant),
                                     )
                                 })
                             }),
@@ -459,11 +459,11 @@ impl RenderOnce for DatePicker {
                                 .mt_1p5()
                                 .p_3()
                                 .border_1()
-                                .border_color(cx.theme().border)
+                                .border_color(cx.theme().outline_variant)
                                 .shadow_lg()
                                 .rounded((cx.theme().radius * 2.).min(px(8.)))
-                                .bg(cx.theme().tokens.popover)
-                                .text_color(cx.theme().popover_foreground)
+                                .bg(cx.theme().surface_container)
+                                .text_color(cx.theme().on_surface)
                                 .on_mouse_up_out(
                                     MouseButton::Left,
                                     window.listener_for(&self.state, |view, _, window, cx| {

@@ -269,20 +269,20 @@ impl SidebarItem for SidebarMenuItem {
                     .text_sm()
                     .when(is_hoverable, |this| {
                         this.hover(|this| {
-                            this.bg(cx.theme().sidebar_accent.opacity(0.8))
-                                .text_color(cx.theme().sidebar_accent_foreground)
+                            this.bg(cx.theme().secondary_container.opacity(0.8))
+                                .text_color(cx.theme().on_secondary_container)
                         })
                     })
                     .when(is_active, |this| {
                         this.font_medium()
-                            .bg(cx.theme().tokens.sidebar_accent)
-                            .text_color(cx.theme().sidebar_accent_foreground)
+                            .bg(cx.theme().secondary_container)
+                            .text_color(cx.theme().on_secondary_container)
                     })
                     .when_some(self.icon.clone(), |this, icon| this.child(icon))
                     .when(is_collapsed, |this| {
                         this.justify_center().when(is_active, |this| {
-                            this.bg(cx.theme().tokens.sidebar_accent)
-                                .text_color(cx.theme().sidebar_accent_foreground)
+                            this.bg(cx.theme().secondary_container)
+                                .text_color(cx.theme().on_secondary_container)
                         })
                     })
                     .when(!is_collapsed, |this| {
@@ -329,7 +329,7 @@ impl SidebarItem for SidebarMenuItem {
                             })
                     })
                     .when(is_disabled, |this| {
-                        this.text_color(cx.theme().muted_foreground)
+                        this.text_color(cx.theme().on_surface)
                     })
                     .when(!is_disabled, |this| {
                         this.on_click({
@@ -370,7 +370,7 @@ impl SidebarItem for SidebarMenuItem {
                     v_flex()
                         .id("submenu")
                         .border_l_1()
-                        .border_color(cx.theme().sidebar_border)
+                        .border_color(cx.theme().outline_variant)
                         .gap_1()
                         .ml_3p5()
                         .pl_2p5()

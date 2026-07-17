@@ -111,8 +111,8 @@ impl Render for Example {
                         .py_1p5()
                         .px_4()
                         .border_t_1()
-                        .border_color(cx.theme().border)
-                        .text_color(cx.theme().muted_foreground)
+                        .border_color(cx.theme().outline)
+                        .text_color(cx.theme().on_surface_variant)
                         .child(h_flex().gap_3().child({
                             Button::new("soft-wrap")
                                 .ghost()

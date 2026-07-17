@@ -139,7 +139,7 @@ impl Render for CheckboxStory {
                             .w(px(300.))
                             .checked(self.check4)
                             .label("A multi-line checkbox.")
-                            .child(div().text_color(cx.theme().muted_foreground).child(
+                            .child(div().text_color(cx.theme().on_surface_variant).child(
                                 "This is a long long label text that \
                                 should wrap when the text is too long.",
                             ))
@@ -156,7 +156,7 @@ impl Render for CheckboxStory {
                             .w(px(260.))
                             .p_2()
                             .border_1()
-                            .border_color(cx.theme().border)
+                            .border_color(cx.theme().outline)
                             .rounded(cx.theme().radius)
                             .child(
                                 Checkbox::new("label-wrap-checkbox")
@@ -180,7 +180,7 @@ impl Render for CheckboxStory {
                         .label("Label with description (Markdown)")
                         .child(
                             div()
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(cx.theme().on_surface_variant)
                                 .child(markdown(
                                     "The [long long label](https://github.com) \
                             text used **Markdown**, \

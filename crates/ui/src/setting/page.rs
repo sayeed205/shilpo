@@ -165,7 +165,7 @@ impl SettingPage {
                     .p_4()
                     .gap_3()
                     .border_b_1()
-                    .border_color(cx.theme().border)
+                    .border_color(cx.theme().outline_variant)
                     .refine_style(&self.header_style)
                     .child(
                         h_flex()
@@ -198,7 +198,7 @@ impl SettingPage {
                         this.child(
                             Label::new(description)
                                 .text_sm()
-                                .text_color(cx.theme().muted_foreground),
+                                .text_color(cx.theme().on_surface_variant),
                         )
                     }),
             )

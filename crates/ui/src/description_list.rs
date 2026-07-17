@@ -285,13 +285,13 @@ impl RenderOnce for DescriptionList {
             .when(self.bordered, |this| {
                 this.rounded(padding_x)
                     .border_1()
-                    .border_color(cx.theme().border)
+                    .border_color(cx.theme().outline_variant)
             })
             .children(rows.into_iter().enumerate().map(|(ix, items)| {
                 let is_last = ix == rows_len - 1;
                 h_flex()
                     .when(self.bordered && !is_last, |this| {
-                        this.border_b_1().border_color(cx.theme().border)
+                        this.border_b_1().border_color(cx.theme().outline_variant)
                     })
                     .children({
                         items.into_iter().enumerate().map(|(item_ix, item)| {
@@ -314,7 +314,7 @@ impl RenderOnce for DescriptionList {
                                                     this.h_full()
                                                 })
                                                 .text_color(
-                                                    cx.theme().description_list_label_foreground,
+                                                    cx.theme().on_surface_variant,
                                                 )
                                                 .text_sm()
                                                 .px(padding_x)
@@ -329,8 +329,8 @@ impl RenderOnce for DescriptionList {
                                                     .when(self.layout.is_vertical(), |this| {
                                                         this.border_b_1()
                                                     })
-                                                    .border_color(cx.theme().border)
-                                                    .bg(cx.theme().tokens.description_list_label)
+                                                    .border_color(cx.theme().outline_variant)
+                                                    .bg(cx.theme().surface_container_low)
                                                 })
                                                 .map(|this| match label_width {
                                                     Some(label_width) => {
@@ -350,7 +350,7 @@ impl RenderOnce for DescriptionList {
                                         )
                                 }
                                 _ => div().h_2().w_full().when(self.bordered, |this| {
-                                    this.bg(cx.theme().tokens.description_list_label)
+                                    this.bg(cx.theme().surface_container_low)
                                 }),
                             }
                         })

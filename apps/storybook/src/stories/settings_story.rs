@@ -472,7 +472,7 @@ impl SettingsStory {
                                     desktop application by using GPUI.",
                                 )
                                 .text_sm()
-                                .text_color(cx.theme().muted_foreground),
+                                .text_color(cx.theme().on_surface_variant),
                             )
                             .into_any()
                     })),

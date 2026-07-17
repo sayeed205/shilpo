@@ -311,11 +311,11 @@ impl RenderOnce for OtpInput {
                 h_flex()
                     .id(ix)
                     .border_1()
-                    .border_color(cx.theme().input)
+                    .border_color(cx.theme().outline_variant)
                     .bg(bg)
                     .text_color(fg)
                     .when(self.disabled, |this| this.opacity(0.5))
-                    .when(is_input_focused, |this| this.border_color(cx.theme().ring))
+                    .when(is_input_focused, |this| this.border_color(cx.theme().primary))
                     .when(cx.theme().shadow, |this| this.shadow_xs())
                     .items_center()
                     .justify_center()
@@ -337,9 +337,9 @@ impl RenderOnce for OtpInput {
                             if state.masked {
                                 this.child(
                                     Icon::new(IconName::Asterisk)
-                                        .text_color(cx.theme().secondary_foreground)
+                                        .text_color(cx.theme().on_surface)
                                         .when(self.disabled, |this| {
-                                            this.text_color(cx.theme().muted_foreground)
+                                            this.text_color(cx.theme().on_surface_variant)
                                         })
                                         .with_size(text_size),
                                 )
@@ -353,7 +353,7 @@ impl RenderOnce for OtpInput {
                                     .h_4()
                                     .w_0()
                                     .border_l_3()
-                                    .border_color(cx.theme().caret),
+                                    .border_color(cx.theme().primary),
                             )
                         }),
                     })

@@ -71,7 +71,7 @@ impl Render for SwitchStory {
                 .w_full()
                 .rounded(cx.theme().radius)
                 .border_1()
-                .border_color(cx.theme().border)
+                .border_color(cx.theme().outline_variant)
         }
 
         v_flex()
@@ -82,7 +82,7 @@ impl Render for SwitchStory {
                     .child(
                         title("Marketing emails").child(
                             Label::new("Receive emails about new products, features, and more.")
-                                .text_color(theme.muted_foreground),
+                                .text_color(theme.on_surface_variant),
                         ),
                     )
                     .child(
@@ -104,7 +104,7 @@ impl Render for SwitchStory {
                                 "Receive emails about your account security. \
                                     When turn off, you never receive email again.",
                             )
-                            .text_color(theme.muted_foreground),
+                            .text_color(theme.on_surface_variant),
                         ),
                     )
                     .child(
@@ -140,7 +140,7 @@ impl Render for SwitchStory {
                             Switch::new("switch4")
                                 .checked(self.switch4)
                                 .label("Success")
-                                .color(theme.success)
+                                .color(theme.tertiary)
                                 .on_click(cx.listener(|view, checked, _, cx| {
                                     view.switch4 = *checked;
                                     cx.notify();
@@ -150,7 +150,7 @@ impl Render for SwitchStory {
                             Switch::new("switch5")
                                 .checked(self.switch5)
                                 .label("Destructive")
-                                .color(theme.danger)
+                                .color(theme.error)
                                 .on_click(cx.listener(|view, checked, _, cx| {
                                     view.switch5 = *checked;
                                     cx.notify();
@@ -160,7 +160,7 @@ impl Render for SwitchStory {
                             Switch::new("switch4_disabled")
                                 .checked(true)
                                 .label("Disabled")
-                                .color(theme.success)
+                                .color(theme.tertiary)
                                 .disabled(true),
                         ),
                 ),

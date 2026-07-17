@@ -261,7 +261,7 @@ impl Render for SelectStory {
                             h_flex()
                                 .h_24()
                                 .justify_center()
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(cx.theme().on_surface_variant)
                                 .child("No Data")
                         }),
                 ),
@@ -270,9 +270,9 @@ impl Render for SelectStory {
                 section("Appearance false with Input").max_w_128().child(
                     h_flex()
                         .border_1()
-                        .border_color(cx.theme().input)
+                        .border_color(cx.theme().outline)
                         .rounded(cx.theme().radius_lg)
-                        .text_color(cx.theme().secondary_foreground)
+                        .text_color(cx.theme().on_secondary)
                         .w_full()
                         .gap_1()
                         .child(

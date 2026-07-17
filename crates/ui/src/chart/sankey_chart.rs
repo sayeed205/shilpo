@@ -278,7 +278,7 @@ impl<T> Plot for SankeyChart<T> {
                     }
                     if let Some(node_label) = &self.node_label {
                         lines.push(
-                            SankeyLabel::new(node_label(datum)).color(cx.theme().muted_foreground),
+                            SankeyLabel::new(node_label(datum)).color(cx.theme().on_surface_variant),
                         );
                     }
                     lines
@@ -354,11 +354,10 @@ impl<T> Plot for SankeyChart<T> {
             .layout_from(topology);
 
         let palette = [
-            cx.theme().chart_1,
-            cx.theme().chart_2,
-            cx.theme().chart_3,
-            cx.theme().chart_4,
-            cx.theme().chart_5,
+            cx.theme().primary,
+            cx.theme().secondary,
+            cx.theme().tertiary,
+            cx.theme().error,
         ];
         let colors: Vec<Hsla> = self
             .nodes
@@ -455,7 +454,7 @@ impl<T> Plot for SankeyChart<T> {
                     Text::new(
                         text,
                         point(px(x), px(y)),
-                        line.color.unwrap_or(cx.theme().foreground),
+                        line.color.unwrap_or(cx.theme().on_surface_variant),
                     )
                     .font_size(font_size)
                     .align(align),

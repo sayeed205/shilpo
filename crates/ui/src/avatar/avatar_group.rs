@@ -86,8 +86,8 @@ impl RenderOnce for AvatarGroup {
                 Some(
                     Avatar::new()
                         .name("⋯")
-                        .bg(cx.theme().tokens.secondary)
-                        .text_color(cx.theme().muted_foreground)
+                        .bg(cx.theme().secondary)
+                        .text_color(cx.theme().on_surface_variant)
                         .with_size(self.size)
                         .ml_1(),
                 )

@@ -174,14 +174,14 @@ where
         let height = bounds.size.height.as_f32() - axis_gap;
 
         // Draw X axis
-        let mut axis = PlotAxis::new().stroke(cx.theme().border);
+        let mut axis = PlotAxis::new().stroke(cx.theme().outline_variant);
         if self.x_axis {
             let labels = build_point_x_labels(
                 &self.data,
                 x_fn.as_ref(),
                 &x,
                 self.tick_margin,
-                cx.theme().muted_foreground,
+                cx.theme().on_surface_variant,
             );
             axis = axis.x(height).x_label(labels);
         }
@@ -191,13 +191,13 @@ where
         if self.grid {
             Grid::new()
                 .y((0..=3).map(|i| height * i as f32 / 4.0).collect())
-                .stroke(cx.theme().border)
+                .stroke(cx.theme().outline_variant)
                 .dash_array(&[px(4.), px(2.)])
                 .paint(&bounds, window);
         }
 
         // Draw line
-        let stroke = self.stroke.unwrap_or(cx.theme().chart_2);
+        let stroke = self.stroke.unwrap_or(cx.theme().secondary);
         let x_fn = x_fn.clone();
         let y_fn = y_fn.clone();
         let mut line = Line::new()
@@ -258,7 +258,7 @@ where
         let d = self.data.get(state.index)?;
         let title: SharedString = x_fn(d).into();
         let value = y_fn(d).to_f64()?;
-        let stroke = self.stroke.unwrap_or(cx.theme().chart_2);
+        let stroke = self.stroke.unwrap_or(cx.theme().secondary);
         let name = self.name.clone().unwrap_or_default();
 
         Some(
@@ -275,7 +275,7 @@ where
                     state
                         .dots
                         .iter()
-                        .map(|p| Dot::new(*p).stroke(cx.theme().background).fill(stroke)),
+                        .map(|p| Dot::new(*p).stroke(cx.theme().surface).fill(stroke)),
                 )
                 .title(title)
                 .row(stroke, name, format!("{}", value))

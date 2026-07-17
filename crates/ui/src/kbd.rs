@@ -221,12 +221,12 @@ impl RenderOnce for Kbd {
         }
 
         div()
-            .text_color(cx.theme().muted_foreground)
-            .bg(cx.theme().tokens.muted)
+            .text_color(cx.theme().on_surface_variant)
+            .bg(cx.theme().surface_container_highest)
             .when(self.outline, |this| {
                 this.border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().tokens.background)
+                    .border_color(cx.theme().outline_variant)
+                    .bg(cx.theme().surface)
             })
             .py_0p5()
             .px_1()

@@ -106,12 +106,12 @@ impl RenderOnce for Switch {
         let checked_bg = self
             .color
             .map(Background::from)
-            .unwrap_or(cx.theme().tokens.primary.into());
+            .unwrap_or(cx.theme().primary.into());
         let (bg, toggle_bg): (Background, Background) = match checked {
-            true => (checked_bg, cx.theme().tokens.switch_thumb.into()),
+            true => (checked_bg, cx.theme().on_secondary.into()),
             false => (
-                cx.theme().tokens.switch.into(),
-                cx.theme().tokens.switch_thumb.into(),
+                cx.theme().secondary.into(),
+                cx.theme().on_secondary.into(),
             ),
         };
 

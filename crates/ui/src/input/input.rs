@@ -24,11 +24,11 @@ use super::{
 pub(crate) fn input_style(disabled: bool, cx: &App) -> (Hsla, Hsla) {
     if disabled {
         (
-            cx.theme().input.mix_oklab(cx.theme().transparent, 0.8),
-            cx.theme().muted_foreground,
+            cx.theme().surface_container_high.mix_oklab(cx.theme().transparent, 0.8),
+            cx.theme().on_surface_variant,
         )
     } else {
-        (cx.theme().input_background(), cx.theme().foreground)
+        (cx.theme().surface_container, cx.theme().on_surface)
     }
 }
 
@@ -379,9 +379,9 @@ impl RenderOnce for Input {
         };
         let bg = if state.disabled { bg.opacity(0.5) } else { bg };
         let border_color = if state.disabled {
-            cx.theme().input.opacity(0.5)
+            cx.theme().outline_variant.opacity(0.5)
         } else {
-            cx.theme().input
+            cx.theme().outline_variant
         };
 
         let prefix = self.prefix;
@@ -526,7 +526,7 @@ impl RenderOnce for Input {
                         .items_center()
                         .when(state.disabled, |this| this.opacity(0.5))
                         .when(state.loading, |this| {
-                            this.child(Spinner::new().color(cx.theme().muted_foreground))
+                            this.child(Spinner::new().color(cx.theme().on_surface_variant))
                         })
                         .when(self.mask_toggle, |this| {
                             this.child(Self::render_toggle_mask_button(&self.state, cx))

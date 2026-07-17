@@ -12,7 +12,7 @@ use crate::{
     v_flex,
 };
 use gpui::{
-    AppContext, Axis, Bounds, ClickEvent, Context, Div, DragMoveEvent, EventEmitter, FocusHandle,
+    AppContext, Axis, Background, Bounds, ClickEvent, Context, Div, DragMoveEvent, EventEmitter, FocusHandle,
     Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, MouseDownEvent,
     ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled, Task, UniformListScrollHandle, Window, div,
@@ -1254,7 +1254,7 @@ where
         }
 
         if selectable && self.selected_col == Some(col_ix) && self.selection_mode.is_column() {
-            el.bg(cx.theme().tokens.table_active)
+            el.bg(Background::from(cx.theme().primary_container))
         } else {
             el
         }
@@ -1294,8 +1294,10 @@ where
                 div()
                     .h_full()
                     .justify_center()
-                    .bg(cx.theme().table_row_border)
-                    .group_hover(&group_id, |this| this.bg(cx.theme().border).h_full())
+                    .bg(Background::from(cx.theme().outline_variant))
+                    .group_hover(&group_id, |this| {
+                        this.bg(Background::from(cx.theme().primary)).h_full()
+                    })
                     .w(px(1.)),
             )
             .on_drag_move(
@@ -1367,8 +1369,8 @@ where
             .w_3()
             .h_full()
             .border_r_1()
-            .border_color(cx.theme().table_row_border)
-            .bg(cx.theme().tokens.table_head)
+            .border_color(cx.theme().outline_variant)
+            .bg(Background::from(cx.theme().surface_container))
             .flex_shrink_0()
             .table_cell_size(self.options.size)
             .when(!is_head, |this| {
@@ -1410,15 +1412,15 @@ where
                     true => this,
                     false => this.opacity(0.5),
                 })
-                .hover(|this| this.bg(cx.theme().tokens.secondary).opacity(7.))
-                .active(|this| this.bg(cx.theme().tokens.secondary_active).opacity(1.))
+                .hover(|this| this.bg(Background::from(cx.theme().secondary)).opacity(7.))
+                .active(|this| this.bg(Background::from(cx.theme().secondary_container)).opacity(1.))
                 .on_click(
                     cx.listener(move |table, _, window, cx| table.perform_sort(col_ix, window, cx)),
                 )
                 .child(
                     Icon::new(icon)
                         .size_3()
-                        .text_color(cx.theme().secondary_foreground),
+                        .text_color(cx.theme().on_secondary),
                 ),
         )
     }
@@ -1490,7 +1492,7 @@ where
                                         .bottom_0()
                                         .w(px(2.))
                                         .map(|d| if right_side { d.right_0() } else { d.left_0() })
-                                        .bg(cx.theme().drag_border),
+                                        .bg(Background::from(cx.theme().primary)),
                                 )
                             }
                             _ => this,
@@ -1605,8 +1607,8 @@ where
             .h_flex()
             .w_full()
             .flex_shrink_0()
-            .bg(cx.theme().tokens.table_head)
-            .text_color(cx.theme().table_head_foreground)
+            .bg(Background::from(cx.theme().surface_container))
+            .text_color(cx.theme().on_surface)
             .refine_style(&style)
             .on_drag_move(cx.listener(|table, e: &DragMoveEvent<DragColumn>, _, cx| {
                 let drag = e.drag(cx);
@@ -1646,14 +1648,14 @@ where
                     h_flex()
                         .relative()
                         .h_full()
-                        .bg(cx.theme().tokens.table_head)
+                        .bg(Background::from(cx.theme().surface_container))
                         .child(v_flex().min_w_full().flex_shrink_0().children(
                             layout.iter().enumerate().map(|(_row_ix, row_cells)| {
                                 h_flex()
                                     .min_w_full()
                                     .h(self.options.size.table_row_height())
                                     .border_b_1()
-                                    .border_color(cx.theme().border)
+                                    .border_color(cx.theme().outline_variant)
                                     .children(row_cells.iter().filter_map(|cell| {
                                         if cell.start_leaf_col_ix < left_columns_count {
                                             if cell.is_leaf {
@@ -1691,7 +1693,7 @@ where
                                 .w_0()
                                 .flex_shrink_0()
                                 .border_r_1()
-                                .border_color(cx.theme().border),
+                                .border_color(cx.theme().outline_variant),
                         )
                         .on_prepaint(move |bounds, _, cx| {
                             view.update(cx, |r, _| r.fixed_head_cols_bounds = bounds)
@@ -1706,7 +1708,7 @@ where
                     .overflow_scroll()
                     .relative()
                     .track_scroll(&horizontal_scroll_handle)
-                    .bg(cx.theme().tokens.table_head)
+                    .bg(Background::from(cx.theme().surface_container))
                     .child(v_flex().min_w_full().flex_shrink_0().children(
                         layout.iter().enumerate().map(|(row_ix, row_cells)| {
                             let is_leaf_row = row_ix + 1 == layout_len;
@@ -1714,7 +1716,7 @@ where
                                 .min_w_full()
                                 .h(self.options.size.table_row_height())
                                 .border_b_1()
-                                .border_color(cx.theme().border)
+                                .border_color(cx.theme().outline_variant)
                                 .map(|this| {
                                     if is_leaf_row {
                                         // Leaf row: apply the spacer virtualization pattern.
@@ -1812,15 +1814,17 @@ where
                 .w_full()
                 .h(row_height)
                 .when(need_render_border, |this| {
-                    this.border_b_1().border_color(cx.theme().table_row_border)
+                    this.border_b_1().border_color(cx.theme().outline_variant)
                 })
-                .when(is_stripe_row, |this| this.bg(cx.theme().tokens.table_even))
+                .when(is_stripe_row, |this| {
+                    this.bg(Background::from(cx.theme().surface_container_low))
+                })
                 .refine_style(&style)
                 .hover(|this| {
                     if is_selected || self.right_clicked_row == Some(row_ix) {
                         this
                     } else {
-                        this.bg(cx.theme().tokens.table_hover)
+                        this.bg(Background::from(cx.theme().surface_container))
                     }
                 })
                 .when(self.cell_selectable && self.row_header, |this| {
@@ -1856,10 +1860,12 @@ where
                                                             div()
                                                                 .absolute()
                                                                 .inset_0()
-                                                                .bg(cx.theme().tokens.table_active)
+                                                                .bg(Background::from(
+                                                                    cx.theme().primary_container,
+                                                                ))
                                                                 .border_1()
                                                                 .border_color(
-                                                                    cx.theme().table_active_border,
+                                                                    cx.theme().primary,
                                                                 ),
                                                         )
                                                     })
@@ -1873,7 +1879,7 @@ where
                                                                     .border_1()
                                                                     .border_color(
                                                                         cx.theme()
-                                                                            .table_active_border
+                                                                            .primary
                                                                             .opacity(0.5),
                                                                     ),
                                                             )
@@ -1915,7 +1921,7 @@ where
                                     .w_0()
                                     .flex_shrink_0()
                                     .border_r_1()
-                                    .border_color(cx.theme().border),
+                                    .border_color(cx.theme().outline_variant),
                             ),
                     )
                 })
@@ -1975,14 +1981,11 @@ where
                                                                 div()
                                                                     .absolute()
                                                                     .inset_0()
-                                                                    .bg(cx
-                                                                        .theme()
-                                                                        .tokens
-                                                                        .table_active)
+                                                                    .bg(Background::from(cx.theme().primary_container))
                                                                     .border_1()
                                                                     .border_color(
                                                                         cx.theme()
-                                                                            .table_active_border,
+                                                                            .primary,
                                                                     ),
                                                             )
                                                         })
@@ -1997,7 +2000,7 @@ where
                                                                         .border_1()
                                                                         .border_color(
                                                                             cx.theme()
-                                                                                .table_active_border
+                                                                                .primary
                                                                                 .opacity(0.5),
                                                                         ),
                                                                 )
@@ -2051,12 +2054,12 @@ where
                                         .right(px(0.))
                                         .bottom(px(-1.))
                                         .absolute()
-                                        .bg(cx.theme().tokens.table_active)
+                                        .bg(Background::from(cx.theme().primary_container))
                                         .border_1()
-                                        .border_color(cx.theme().table_active_border),
+                                        .border_color(cx.theme().primary),
                                 )
                             } else {
-                                this.bg(cx.theme().tokens.accent)
+                                this.bg(Background::from(cx.theme().secondary_container))
                             }
                         })
                     })
@@ -2071,7 +2074,7 @@ where
                             .bottom(px(-1.))
                             .absolute()
                             .border_1()
-                            .border_color(cx.theme().selection),
+                            .border_color(cx.theme().primary),
                     )
                 })
                 .on_mouse_down(
@@ -2091,8 +2094,8 @@ where
                 .w_full()
                 .h(row_height)
                 .border_b_1()
-                .border_color(cx.theme().table_row_border)
-                .when(is_stripe_row, |this| this.bg(cx.theme().tokens.table_even))
+                .border_color(cx.theme().outline_variant)
+                .when(is_stripe_row, |this| this.bg(Background::from(cx.theme().surface_container_low)))
                 .when(self.cell_selectable && self.row_header, |this| {
                     // Render empty row header cell for fake rows
                     this.child(

@@ -529,9 +529,9 @@ impl Render for InputStory {
                         .px_6()
                         .py_3()
                         .font_family(cx.theme().mono_font_family.clone())
-                        .border_color(cx.theme().border)
+                        .border_color(cx.theme().outline)
                         .bg(cx.theme().secondary)
-                        .text_color(cx.theme().secondary_foreground)
+                        .text_color(cx.theme().on_secondary)
                         .w_full()
                         .child(Input::new(&self.custom_input).appearance(false)),
                 ),
@@ -547,7 +547,7 @@ impl Render for InputStory {
             .child(
                 section("Custom Text Color")
                     .max_w_md()
-                    .child(Input::new(&self.color_input).text_color(cx.theme().info)),
+                    .child(Input::new(&self.color_input).text_color(cx.theme().primary)),
             )
             .child(
                 section("Single line code editor").max_w_md().child(

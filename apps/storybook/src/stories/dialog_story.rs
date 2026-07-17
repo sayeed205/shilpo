@@ -206,7 +206,7 @@ impl DialogStory {
                             .child(
                                 DialogFooter::new()
                                     .p_4()
-                                    .bg(cx.theme().muted)
+                                    .bg(cx.theme().surface_variant)
                                     .justify_between()
                                     .child(
                                         Button::new("new-dialog")
@@ -295,9 +295,9 @@ impl DialogStory {
                                             .items_center()
                                             .justify_center()
                                             .rounded(cx.theme().radius_lg)
-                                            .bg(cx.theme().warning.opacity(0.2))
+                                            .bg(cx.theme().tertiary.opacity(0.2))
                                             .size_12()
-                                            .text_color(cx.theme().warning)
+                                            .text_color(cx.theme().tertiary)
                                             .child(Icon::new(IconName::TriangleAlert).size_8()),
                                     )
                                     .child(
@@ -418,8 +418,8 @@ impl DialogStory {
                     window.open_dialog(cx, move |dialog, _, cx| {
                         dialog
                             .rounded(cx.theme().radius_lg)
-                            .bg(cx.theme().cyan)
-                            .text_color(cx.theme().info_foreground)
+                            .bg(cx.theme().primary)
+                            .text_color(cx.theme().on_primary)
                             .title("Custom Dialog Title")
                             .child("This is a custom dialog content.")
                     });
@@ -514,7 +514,7 @@ impl DialogStory {
                             .child(
                                 DialogFooter::new()
                                     .p_4()
-                                    .bg(cx.theme().muted)
+                                    .bg(cx.theme().surface_variant)
                                     .child(
                                         DialogClose::new()
                                             .child(Button::new("cancel").label("Cancel").outline()),

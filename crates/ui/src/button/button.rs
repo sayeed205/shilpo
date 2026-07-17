@@ -97,7 +97,7 @@ impl ButtonCustomVariant {
     pub fn new(cx: &App) -> Self {
         Self {
             color: cx.theme().transparent,
-            foreground: cx.theme().foreground,
+            foreground: cx.theme().on_surface,
             hover: cx.theme().transparent,
             active: cx.theme().transparent,
             shadow: false,
@@ -672,70 +672,70 @@ enum ButtonStyleState {
 impl ButtonVariant {
     fn outline_background(&self, state: ButtonStyleState, cx: &mut App) -> Background {
         match (self, state) {
-            (Self::Default, ButtonStyleState::Normal) => cx.theme().input_background().into(),
+            (Self::Default, ButtonStyleState::Normal) => cx.theme().surface_container_highest.into(),
             (Self::Default, ButtonStyleState::Hovered) => cx
                 .theme()
-                .input
+                .surface_container_highest
                 .mix_oklab(cx.theme().transparent, 0.5)
                 .into(),
             (Self::Default, ButtonStyleState::Active) => cx
                 .theme()
-                .input
+                .surface_container_highest
                 .mix_oklab(cx.theme().transparent, 0.7)
                 .into(),
             (Self::Primary, ButtonStyleState::Normal) => {
-                cx.theme().tokens.primary.background.opacity(0.1)
+                cx.theme().primary_container.opacity(0.1).into()
             }
             (Self::Primary, ButtonStyleState::Hovered) => {
-                cx.theme().tokens.primary_hover.background.opacity(0.2)
+                cx.theme().primary_container.opacity(0.2).into()
             }
             (Self::Primary, ButtonStyleState::Active) => {
-                cx.theme().tokens.primary_active.background.opacity(0.4)
+                cx.theme().primary_container.opacity(0.4).into()
             }
             (Self::Secondary, ButtonStyleState::Normal) => {
-                cx.theme().tokens.secondary.background.opacity(0.1)
+                cx.theme().secondary_container.opacity(0.1).into()
             }
             (Self::Secondary, ButtonStyleState::Hovered) => {
-                cx.theme().tokens.secondary_hover.background.opacity(0.2)
+                cx.theme().secondary_container.opacity(0.2).into()
             }
             (Self::Secondary, ButtonStyleState::Active) => {
-                cx.theme().tokens.secondary_active.background.opacity(0.4)
+                cx.theme().secondary_container.opacity(0.4).into()
             }
             (Self::Danger, ButtonStyleState::Normal) => {
-                cx.theme().tokens.danger.background.opacity(0.1)
+                cx.theme().error_container.opacity(0.1).into()
             }
             (Self::Danger, ButtonStyleState::Hovered) => {
-                cx.theme().tokens.danger_hover.background.opacity(0.2)
+                cx.theme().error_container.opacity(0.2).into()
             }
             (Self::Danger, ButtonStyleState::Active) => {
-                cx.theme().tokens.danger_active.background.opacity(0.4)
+                cx.theme().error_container.opacity(0.4).into()
             }
             (Self::Warning, ButtonStyleState::Normal) => {
-                cx.theme().tokens.warning.background.opacity(0.1)
+                cx.theme().tertiary_container.opacity(0.1).into()
             }
             (Self::Warning, ButtonStyleState::Hovered) => {
-                cx.theme().tokens.warning_hover.background.opacity(0.2)
+                cx.theme().tertiary_container.opacity(0.2).into()
             }
             (Self::Warning, ButtonStyleState::Active) => {
-                cx.theme().tokens.warning_active.background.opacity(0.4)
+                cx.theme().tertiary_container.opacity(0.4).into()
             }
             (Self::Success, ButtonStyleState::Normal) => {
-                cx.theme().tokens.success.background.opacity(0.1)
+                cx.theme().tertiary_container.opacity(0.1).into()
             }
             (Self::Success, ButtonStyleState::Hovered) => {
-                cx.theme().tokens.success_hover.background.opacity(0.2)
+                cx.theme().tertiary_container.opacity(0.2).into()
             }
             (Self::Success, ButtonStyleState::Active) => {
-                cx.theme().tokens.success_active.background.opacity(0.4)
+                cx.theme().tertiary_container.opacity(0.4).into()
             }
             (Self::Info, ButtonStyleState::Normal) => {
-                cx.theme().tokens.info.background.opacity(0.1)
+                cx.theme().primary_container.opacity(0.1).into()
             }
             (Self::Info, ButtonStyleState::Hovered) => {
-                cx.theme().tokens.info_hover.background.opacity(0.2)
+                cx.theme().primary_container.opacity(0.2).into()
             }
             (Self::Info, ButtonStyleState::Active) => {
-                cx.theme().tokens.info_active.background.opacity(0.4)
+                cx.theme().primary_container.opacity(0.4).into()
             }
             (Self::Ghost | Self::Link | Self::Text, _) => cx.theme().transparent.into(),
             (Self::Custom(colors), _) => colors.color.mix_oklab(cx.theme().transparent, 0.2).into(),
@@ -748,13 +748,13 @@ impl ButtonVariant {
         }
 
         match self {
-            Self::Default => cx.theme().tokens.button.into(),
-            Self::Primary => cx.theme().tokens.button_primary.into(),
-            Self::Secondary => cx.theme().tokens.button_secondary.into(),
-            Self::Danger => cx.theme().tokens.button_danger.into(),
-            Self::Warning => cx.theme().tokens.button_warning.into(),
-            Self::Success => cx.theme().tokens.button_success.into(),
-            Self::Info => cx.theme().tokens.button_info.into(),
+            Self::Default => cx.theme().surface_container.into(),
+            Self::Primary => cx.theme().primary.into(),
+            Self::Secondary => cx.theme().secondary.into(),
+            Self::Danger => cx.theme().error.into(),
+            Self::Warning => cx.theme().tertiary.into(),
+            Self::Success => cx.theme().tertiary.into(),
+            Self::Info => cx.theme().primary.into(),
             Self::Ghost | Self::Link | Self::Text => cx.theme().transparent.into(),
             Self::Custom(colors) => colors.color.mix_oklab(cx.theme().transparent, 0.2).into(),
         }
@@ -762,87 +762,87 @@ impl ButtonVariant {
 
     fn text_color(&self, outline: bool, cx: &mut App) -> Hsla {
         match self {
-            Self::Default => cx.theme().button_foreground,
+            Self::Default => cx.theme().on_surface,
             Self::Primary => {
                 if outline {
                     cx.theme().primary
                 } else {
-                    cx.theme().button_primary_foreground
+                    cx.theme().on_primary
                 }
             }
             Self::Secondary => {
                 if outline {
-                    cx.theme().secondary_foreground
+                    cx.theme().on_secondary
                 } else {
-                    cx.theme().button_secondary_foreground
+                    cx.theme().on_secondary
                 }
             }
-            Self::Ghost => cx.theme().secondary_foreground,
+            Self::Ghost => cx.theme().on_secondary,
             Self::Danger => {
                 if outline {
-                    cx.theme().danger
+                    cx.theme().error
                 } else {
-                    cx.theme().button_danger_foreground
+                    cx.theme().on_error
                 }
             }
             Self::Warning => {
                 if outline {
-                    cx.theme().warning
+                    cx.theme().tertiary
                 } else {
-                    cx.theme().button_warning_foreground
+                    cx.theme().on_tertiary
                 }
             }
             Self::Success => {
                 if outline {
-                    cx.theme().success
+                    cx.theme().tertiary
                 } else {
-                    cx.theme().button_success_foreground
+                    cx.theme().on_tertiary
                 }
             }
             Self::Info => {
                 if outline {
-                    cx.theme().info
+                    cx.theme().primary
                 } else {
-                    cx.theme().button_info_foreground
+                    cx.theme().on_primary
                 }
             }
-            Self::Link => cx.theme().link,
-            Self::Text => cx.theme().foreground,
+            Self::Link => cx.theme().primary,
+            Self::Text => cx.theme().on_surface,
             Self::Custom(colors) => colors.color,
         }
     }
 
     fn border_color(&self, outline: bool, cx: &mut App) -> Hsla {
         match self {
-            Self::Default => cx.theme().input,
-            Self::Secondary => cx.theme().border,
+            Self::Default => cx.theme().surface_container_highest,
+            Self::Secondary => cx.theme().outline_variant,
             Self::Primary => cx.theme().primary,
             Self::Danger => {
                 if outline {
-                    cx.theme().danger.mix_oklab(transparent_white(), 0.4)
+                    cx.theme().error.mix_oklab(transparent_white(), 0.4)
                 } else {
-                    cx.theme().button_danger
+                    cx.theme().error
                 }
             }
             Self::Info => {
                 if outline {
-                    cx.theme().info.mix_oklab(transparent_white(), 0.4)
+                    cx.theme().primary.mix_oklab(transparent_white(), 0.4)
                 } else {
-                    cx.theme().button_info
+                    cx.theme().primary
                 }
             }
             Self::Warning => {
                 if outline {
-                    cx.theme().warning.mix_oklab(transparent_white(), 0.4)
+                    cx.theme().tertiary.mix_oklab(transparent_white(), 0.4)
                 } else {
-                    cx.theme().button_warning
+                    cx.theme().tertiary
                 }
             }
             Self::Success => {
                 if outline {
-                    cx.theme().success.mix_oklab(transparent_white(), 0.4)
+                    cx.theme().tertiary.mix_oklab(transparent_white(), 0.4)
                 } else {
-                    cx.theme().button_success
+                    cx.theme().tertiary
                 }
             }
             Self::Ghost | Self::Link | Self::Text => cx.theme().transparent,
@@ -894,49 +894,49 @@ impl ButtonVariant {
                 if outline {
                     self.outline_background(ButtonStyleState::Hovered, cx)
                 } else {
-                    cx.theme().tokens.button_hover.into()
+                    cx.theme().surface_container_high.into()
                 }
             }
             Self::Primary => {
                 if outline {
                     self.outline_background(ButtonStyleState::Hovered, cx)
                 } else {
-                    cx.theme().tokens.button_primary_hover.into()
+                    cx.theme().primary_container.into()
                 }
             }
             Self::Secondary => {
                 if outline {
                     self.outline_background(ButtonStyleState::Hovered, cx)
                 } else {
-                    cx.theme().tokens.button_secondary_hover.into()
+                    cx.theme().secondary_container.into()
                 }
             }
             Self::Danger => {
                 if outline {
                     self.outline_background(ButtonStyleState::Hovered, cx)
                 } else {
-                    cx.theme().tokens.button_danger_hover.into()
+                    cx.theme().error_container.into()
                 }
             }
             Self::Warning => {
                 if outline {
                     self.outline_background(ButtonStyleState::Hovered, cx)
                 } else {
-                    cx.theme().tokens.button_warning_hover.into()
+                    cx.theme().tertiary_container.into()
                 }
             }
             Self::Success => {
                 if outline {
                     self.outline_background(ButtonStyleState::Hovered, cx)
                 } else {
-                    cx.theme().tokens.button_success_hover.into()
+                    cx.theme().tertiary_container.into()
                 }
             }
             Self::Info => {
                 if outline {
                     self.outline_background(ButtonStyleState::Hovered, cx)
                 } else {
-                    cx.theme().tokens.button_info_hover.into()
+                    cx.theme().primary_container.into()
                 }
             }
             Self::Custom(colors) => if outline {
@@ -957,7 +957,7 @@ impl ButtonVariant {
 
         let border = self.border_color(outline, cx);
         let fg = match self {
-            Self::Link => cx.theme().link_hover,
+            Self::Link => cx.theme().primary_container,
             _ => self.text_color(outline, cx),
         };
 
@@ -974,26 +974,26 @@ impl ButtonVariant {
     }
 
     fn active(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
-        let bg = match self {
+        let bg: Background = match self {
             Self::Default => {
                 if outline {
                     self.outline_background(ButtonStyleState::Active, cx)
                 } else {
-                    cx.theme().tokens.button_active.into()
+                    cx.theme().surface_container_highest.into()
                 }
             }
             Self::Primary => {
                 if outline {
                     self.outline_background(ButtonStyleState::Active, cx)
                 } else {
-                    cx.theme().tokens.button_primary_active.into()
+                    cx.theme().primary_container.into()
                 }
             }
             Self::Secondary => {
                 if outline {
                     self.outline_background(ButtonStyleState::Active, cx)
                 } else {
-                    cx.theme().tokens.button_secondary_active.into()
+                    cx.theme().secondary_container.into()
                 }
             }
             Self::Ghost => if cx.theme().mode.is_dark() {
@@ -1006,28 +1006,28 @@ impl ButtonVariant {
                 if outline {
                     self.outline_background(ButtonStyleState::Active, cx)
                 } else {
-                    cx.theme().tokens.button_danger_active.into()
+                    cx.theme().error_container.into()
                 }
             }
             Self::Warning => {
                 if outline {
                     self.outline_background(ButtonStyleState::Active, cx)
                 } else {
-                    cx.theme().tokens.button_warning_active.into()
+                    cx.theme().tertiary_container.into()
                 }
             }
             Self::Success => {
                 if outline {
                     self.outline_background(ButtonStyleState::Active, cx)
                 } else {
-                    cx.theme().tokens.button_success_active.into()
+                    cx.theme().tertiary_container.into()
                 }
             }
             Self::Info => {
                 if outline {
                     self.outline_background(ButtonStyleState::Active, cx)
                 } else {
-                    cx.theme().tokens.button_info_active.into()
+                    cx.theme().primary_container.into()
                 }
             }
             Self::Custom(colors) => colors.color.mix_oklab(cx.theme().transparent, 0.4).into(),
@@ -1036,8 +1036,8 @@ impl ButtonVariant {
         };
         let border = self.border_color(outline, cx);
         let fg = match self {
-            Self::Link => cx.theme().link_active,
-            Self::Text => cx.theme().foreground.opacity(0.7),
+            Self::Link => cx.theme().primary_container,
+            Self::Text => cx.theme().on_surface.opacity(0.7),
             _ => self.text_color(outline, cx),
         };
         let underline = self.underline(cx);
@@ -1062,15 +1062,15 @@ impl ButtonVariant {
             };
         }
 
-        let bg = match self {
-            Self::Default => cx.theme().tokens.button_active.into(),
-            Self::Primary => cx.theme().tokens.button_primary_active.into(),
-            Self::Secondary => cx.theme().tokens.button_secondary_active.into(),
-            Self::Ghost => cx.theme().tokens.secondary_active.into(),
-            Self::Danger => cx.theme().tokens.button_danger_active.into(),
-            Self::Warning => cx.theme().tokens.button_warning_active.into(),
-            Self::Success => cx.theme().tokens.button_success_active.into(),
-            Self::Info => cx.theme().tokens.button_info_active.into(),
+        let bg: Background = match self {
+            Self::Default => cx.theme().surface_container_highest.into(),
+            Self::Primary => cx.theme().primary_container.into(),
+            Self::Secondary => cx.theme().secondary_container.into(),
+            Self::Ghost => cx.theme().secondary_container.into(),
+            Self::Danger => cx.theme().error_container.into(),
+            Self::Warning => cx.theme().tertiary_container.into(),
+            Self::Success => cx.theme().tertiary_container.into(),
+            Self::Info => cx.theme().primary_container.into(),
             Self::Link => cx.theme().transparent.into(),
             Self::Text => cx.theme().transparent.into(),
             Self::Custom(colors) => colors.active.into(),
@@ -1078,8 +1078,8 @@ impl ButtonVariant {
 
         let border = self.border_color(outline, cx);
         let fg = match self {
-            Self::Link => cx.theme().link_active,
-            Self::Text => cx.theme().foreground.opacity(0.7),
+            Self::Link => cx.theme().primary_container,
+            Self::Text => cx.theme().on_surface.opacity(0.7),
             _ => self.text_color(false, cx),
         };
         let underline = self.underline(cx);
@@ -1097,15 +1097,15 @@ impl ButtonVariant {
     fn disabled(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
         let bg = match self {
             Self::Default | Self::Link | Self::Ghost | Self::Text => cx.theme().transparent.into(),
-            Self::Primary => cx.theme().tokens.button_primary.background.opacity(0.15),
-            Self::Danger => cx.theme().tokens.button_danger.background.opacity(0.15),
-            Self::Warning => cx.theme().tokens.button_warning.background.opacity(0.15),
-            Self::Success => cx.theme().tokens.button_success.background.opacity(0.15),
-            Self::Info => cx.theme().tokens.button_info.background.opacity(0.15),
-            Self::Secondary => cx.theme().tokens.button_secondary.background.opacity(1.5),
+            Self::Primary => cx.theme().primary_container.opacity(0.15).into(),
+            Self::Danger => cx.theme().error_container.opacity(0.15).into(),
+            Self::Warning => cx.theme().tertiary_container.opacity(0.15).into(),
+            Self::Success => cx.theme().tertiary_container.opacity(0.15).into(),
+            Self::Info => cx.theme().primary_container.opacity(0.15).into(),
+            Self::Secondary => cx.theme().secondary_container.opacity(1.5).into(),
             Self::Custom(style) => style.color.opacity(0.15).into(),
         };
-        let fg = cx.theme().muted_foreground.opacity(0.5);
+        let fg = cx.theme().on_surface_variant.opacity(0.5);
         let (bg, border) = if outline {
             (
                 self.outline_background(ButtonStyleState::Normal, cx)
@@ -1114,17 +1114,17 @@ impl ButtonVariant {
             )
         } else if let Self::Default = self {
             (
-                cx.theme().input_background().opacity(0.5).into(),
-                cx.theme().input.opacity(0.5),
+                Background::from(cx.theme().surface_container_highest.opacity(0.5)),
+                cx.theme().surface_container_highest.opacity(0.5),
             )
         } else {
             let border = match self {
-                Self::Primary => cx.theme().button_primary.opacity(0.15),
-                Self::Secondary => cx.theme().button_secondary.opacity(1.5),
-                Self::Danger => cx.theme().button_danger.opacity(0.15),
-                Self::Warning => cx.theme().button_warning.opacity(0.15),
-                Self::Success => cx.theme().button_success.opacity(0.15),
-                Self::Info => cx.theme().button_info.opacity(0.15),
+                Self::Primary => cx.theme().primary.opacity(0.15),
+                Self::Secondary => cx.theme().secondary.opacity(1.5),
+                Self::Danger => cx.theme().error.opacity(0.15),
+                Self::Warning => cx.theme().tertiary.opacity(0.15),
+                Self::Success => cx.theme().tertiary.opacity(0.15),
+                Self::Info => cx.theme().primary.opacity(0.15),
                 Self::Custom(style) => style.color.opacity(0.15),
                 Self::Default | Self::Link | Self::Ghost | Self::Text => cx.theme().transparent,
             };
@@ -1221,176 +1221,9 @@ mod tests {
 
             assert_eq!(selected_style.bg, active_style.bg);
             assert_eq!(selected_style.border, active_style.border);
-            assert_eq!(selected_style.fg, cx.theme().danger);
-            assert_ne!(selected_style.bg, cx.theme().tokens.danger_active.into());
+            assert_eq!(selected_style.fg, cx.theme().error);
+            assert_ne!(selected_style.bg, cx.theme().error_container.into());
         });
     }
 
-    #[gpui::test]
-    fn test_primary_button_uses_gradient_background_tokens(cx: &mut gpui::TestAppContext) {
-        cx.update(crate::init);
-        let window = cx.add_empty_window();
-        window.update(|_, cx| {
-            let config = serde_json::from_value::<crate::ThemeConfig>(serde_json::json!({
-                "name": "Gradient",
-                "mode": "light",
-                "colors": {
-                    "button.primary.background": "linear-gradient(135deg, #4F46E5, #06B6D4)",
-                    "button.primary.hover.background": "linear-gradient(145deg, #4338CA, #0891B2)",
-                    "button.primary.active.background": "linear-gradient(155deg, #3730A3, #0E7490)"
-                }
-            }))
-            .unwrap();
-            crate::Theme::global_mut(cx).apply_config(&std::rc::Rc::new(config));
-
-            assert_eq!(
-                ButtonVariant::Primary.normal(false, cx).bg,
-                cx.theme().tokens.button_primary.into()
-            );
-            assert_eq!(
-                ButtonVariant::Primary.hovered(false, cx).bg,
-                cx.theme().tokens.button_primary_hover.into()
-            );
-            assert_eq!(
-                ButtonVariant::Primary.active(false, cx).bg,
-                cx.theme().tokens.button_primary_active.into()
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_outline_primary_keeps_original_depth(cx: &mut gpui::TestAppContext) {
-        cx.update(crate::init);
-        let window = cx.add_empty_window();
-        window.update(|_, cx| {
-            let config = serde_json::from_value::<crate::ThemeConfig>(serde_json::json!({
-                "name": "Outline Depth",
-                "mode": "light",
-                "colors": {
-                    "primary.background": "linear-gradient(180deg, #111827, #020617)",
-                    "primary.hover.background": "linear-gradient(180deg, #1F2937, #111827)",
-                    "primary.active.background": "linear-gradient(180deg, #020617, #000000)"
-                }
-            }))
-            .unwrap();
-            crate::Theme::global_mut(cx).apply_config(&std::rc::Rc::new(config));
-
-            assert_eq!(
-                ButtonVariant::Primary.normal(true, cx).bg,
-                cx.theme().tokens.primary.background.opacity(0.1)
-            );
-            assert_eq!(
-                ButtonVariant::Primary.hovered(true, cx).bg,
-                cx.theme().tokens.primary_hover.background.opacity(0.2)
-            );
-            assert_eq!(
-                ButtonVariant::Primary.active(true, cx).bg,
-                cx.theme().tokens.primary_active.background.opacity(0.4)
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_outline_buttons_use_semantic_gradient_tokens(cx: &mut gpui::TestAppContext) {
-        cx.update(crate::init);
-        let window = cx.add_empty_window();
-        window.update(|_, cx| {
-            let config = serde_json::from_value::<crate::ThemeConfig>(serde_json::json!({
-                "name": "Outline Gradient",
-                "mode": "light",
-                "colors": {
-                    "primary.background": "linear-gradient(180deg, #111827, #020617)",
-                    "primary.hover.background": "linear-gradient(180deg, #1F2937, #111827)",
-                    "primary.active.background": "linear-gradient(180deg, #020617, #000000)",
-                    "button.primary.background": "linear-gradient(180deg, #FFFFFF, #E5E7EB)",
-                    "button.primary.hover.background": "linear-gradient(180deg, #F9FAFB, #E5E7EB)",
-                    "button.primary.active.background": "linear-gradient(180deg, #E5E7EB, #D1D5DB)",
-                    "danger.background": "linear-gradient(180deg, #EF4444, #DC2626)",
-                    "danger.hover.background": "linear-gradient(180deg, #F87171, #EF4444)",
-                    "danger.active.background": "linear-gradient(180deg, #DC2626, #B91C1C)",
-                    "button.danger.background": "linear-gradient(180deg, #FEF2F2, #FEE2E2)",
-                    "button.danger.hover.background": "linear-gradient(180deg, #FEE2E2, #FECACA)",
-                    "button.danger.active.background": "linear-gradient(180deg, #FECACA, #FCA5A5)"
-                }
-            }))
-            .unwrap();
-            crate::Theme::global_mut(cx).apply_config(&std::rc::Rc::new(config));
-
-            assert_eq!(
-                ButtonVariant::Primary.normal(true, cx).bg,
-                cx.theme().tokens.primary.background.opacity(0.1)
-            );
-            assert_eq!(
-                ButtonVariant::Danger.normal(true, cx).bg,
-                cx.theme().tokens.danger.background.opacity(0.1)
-            );
-            assert_eq!(
-                ButtonVariant::Danger.hovered(true, cx).bg,
-                cx.theme().tokens.danger_hover.background.opacity(0.2)
-            );
-            assert_eq!(
-                ButtonVariant::Danger.active(true, cx).bg,
-                cx.theme().tokens.danger_active.background.opacity(0.4)
-            );
-            assert_eq!(
-                ButtonVariant::Primary.normal(false, cx).bg,
-                cx.theme().tokens.button_primary.into()
-            );
-            assert_eq!(
-                ButtonVariant::Danger.normal(false, cx).bg,
-                linear_gradient(
-                    180.,
-                    linear_color_stop(crate::try_parse_color("#FEF2F2").unwrap(), 0.),
-                    linear_color_stop(crate::try_parse_color("#FEE2E2").unwrap(), 1.)
-                )
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_disabled_outline_buttons_keep_semantic_backgrounds(cx: &mut gpui::TestAppContext) {
-        cx.update(crate::init);
-        let window = cx.add_empty_window();
-        window.update(|_, cx| {
-            let config = serde_json::from_value::<crate::ThemeConfig>(serde_json::json!({
-                "name": "Disabled Outline Gradient",
-                "mode": "light",
-                "colors": {
-                    "primary.background": "linear-gradient(180deg, #111827, #020617)",
-                    "button.primary.background": "linear-gradient(180deg, #FFFFFF, #E5E7EB)",
-                    "danger.background": "linear-gradient(180deg, #EF4444, #DC2626)",
-                    "button.danger.background": "linear-gradient(180deg, #E5E7EB, #D1D5DB)"
-                }
-            }))
-            .unwrap();
-            crate::Theme::global_mut(cx).apply_config(&std::rc::Rc::new(config));
-
-            assert_eq!(
-                ButtonVariant::Primary.disabled(true, cx).bg,
-                cx.theme()
-                    .tokens
-                    .primary
-                    .background
-                    .opacity(0.1)
-                    .opacity(0.5)
-            );
-            assert_eq!(
-                ButtonVariant::Danger.disabled(true, cx).bg,
-                cx.theme()
-                    .tokens
-                    .danger
-                    .background
-                    .opacity(0.1)
-                    .opacity(0.5)
-            );
-            assert_ne!(
-                ButtonVariant::Danger.disabled(true, cx).bg,
-                cx.theme().input_background().opacity(0.5).into()
-            );
-            assert_ne!(
-                ButtonVariant::Danger.disabled(true, cx).bg,
-                cx.theme().tokens.button_danger.background.opacity(0.15)
-            );
-        });
-    }
 }

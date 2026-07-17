@@ -324,7 +324,7 @@ impl RenderOnce for NumberInput {
                     .compact()
                     .tab_stop(false)
                     .disabled(self.disabled)
-                    .border_color(cx.theme().input)
+                    .border_color(cx.theme().outline_variant)
                     .border_corners(Corners {
                         top_left: true,
                         top_right: false,
@@ -369,7 +369,7 @@ impl RenderOnce for NumberInput {
                     .compact()
                     .tab_stop(false)
                     .disabled(self.disabled)
-                    .border_color(cx.theme().input)
+                    .border_color(cx.theme().outline_variant)
                     .border_corners(Corners {
                         top_left: false,
                         top_right: true,

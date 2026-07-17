@@ -101,13 +101,13 @@ impl ListDelegate for ListItemDeletegate {
     ) -> impl IntoElement {
         v_flex()
             .size_full()
-            .child(Icon::new(IconName::Inbox).size(px(50.)).text_color(cx.theme().muted_foreground))
+            .child(Icon::new(IconName::Inbox).size(px(50.)).text_color(cx.theme().on_surface_variant))
             .child("No matches found")
             .items_center()
             .justify_center()
             .p_3()
-            .bg(cx.theme().muted)
-            .text_color(cx.theme().muted_foreground)
+            .bg(cx.theme().surface_variant)
+            .text_color(cx.theme().on_surface_variant)
     }
 
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<ListState<Self>>) {
@@ -312,7 +312,7 @@ impl SheetStory {
                         .child(
                             List::new(&list)
                                 .border_1()
-                                .border_color(cx.theme().border)
+                                .border_color(cx.theme().outline)
                                 .rounded(cx.theme().radius),
                         ),
                 )

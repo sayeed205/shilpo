@@ -66,7 +66,7 @@ impl<E: SidebarItem> SidebarItem for SidebarGroup<E> {
                         .px_2()
                         .rounded(cx.theme().radius)
                         .text_xs()
-                        .text_color(cx.theme().sidebar_foreground.opacity(0.7))
+                        .text_color(cx.theme().on_surface.opacity(0.7))
                         .h_8()
                         .child(self.label),
                 )

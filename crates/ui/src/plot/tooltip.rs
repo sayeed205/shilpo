@@ -115,9 +115,9 @@ impl CrossLine {
     /// solid band fills a `thickness`-wide strip centered on the data point.
     fn line(&self, vertical: bool, cx: &App) -> Div {
         let color = if self.dashed {
-            cx.theme().border.mix(cx.theme().foreground, 0.8)
+            cx.theme().outline_variant.mix(cx.theme().on_surface_variant, 0.8)
         } else {
-            cx.theme().foreground.opacity(0.08)
+            cx.theme().on_surface_variant.opacity(0.08)
         };
         // The dashed hairline is a zero-width strip drawn entirely by its 1px border.
         let thickness = if self.dashed { px(0.) } else { self.thickness };
@@ -382,7 +382,7 @@ impl RenderOnce for Tooltip {
                                 .child(div().size_2().rounded_sm().bg(row.color))
                                 .child(
                                     div()
-                                        .text_color(cx.theme().muted_foreground)
+                                        .text_color(cx.theme().on_surface_variant)
                                         .child(row.label),
                                 ),
                         )
@@ -412,6 +412,7 @@ impl RenderOnce for Tooltip {
                 this.absolute()
                     .min_w(px(150.))
                     .popover_style(cx)
+                    .bg(cx.theme().surface_container_high)
                     .p_2()
                     .map(|c| {
                         if cursor.x < within.width * 0.5 {

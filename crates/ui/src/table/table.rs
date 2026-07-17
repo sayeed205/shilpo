@@ -1,5 +1,5 @@
 use gpui::{
-    AnyElement, App, InteractiveElement as _, IntoElement, ParentElement, Pixels, RenderOnce, Role,
+    AnyElement, App, Background, InteractiveElement as _, IntoElement, ParentElement, Pixels, RenderOnce, Role,
     StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, Window, div,
     prelude::FluentBuilder as _, px, relative,
 };
@@ -93,7 +93,7 @@ impl RenderOnce for Table {
             .w_full()
             .text_sm()
             .overflow_hidden()
-            .bg(cx.theme().tokens.table)
+            .bg(Background::from(cx.theme().surface))
             .refine_style(&self.style)
             .children(
                 self.children
@@ -164,11 +164,11 @@ impl RenderOnce for TableHeader {
             .id(("table-header", self.ix))
             .role(Role::RowGroup)
             .w_full()
-            .bg(cx.theme().tokens.table_head)
-            .text_color(cx.theme().table_head_foreground)
+            .bg(Background::from(cx.theme().surface_container))
+            .text_color(cx.theme().on_surface)
             .refine_style(&self.style)
             .border_b_1()
-            .border_color(cx.theme().table_row_border)
+            .border_color(cx.theme().outline_variant)
             .children(
                 self.children
                     .into_iter()
@@ -307,10 +307,10 @@ impl RenderOnce for TableFooter {
         div()
             .id(("table-footer", self.ix))
             .w_full()
-            .bg(cx.theme().tokens.table_foot)
-            .text_color(cx.theme().table_foot_foreground)
+            .bg(Background::from(cx.theme().surface_container))
+            .text_color(cx.theme().on_surface)
             .border_t_1()
-            .border_color(cx.theme().table_row_border)
+            .border_color(cx.theme().outline_variant)
             .refine_style(&self.style)
             .children(
                 self.children
@@ -385,7 +385,7 @@ impl RenderOnce for TableRow {
             .flex()
             .flex_row()
             .refine_style(&self.style)
-            .border_color(cx.theme().table_row_border)
+            .border_color(cx.theme().outline_variant)
             .when(self.ix > 0, |this| this.border_t_1())
             .children(
                 self.children
@@ -640,7 +640,7 @@ impl RenderOnce for TableCaption {
             .px(paddings.left)
             .py(paddings.top)
             .text_sm()
-            .text_color(cx.theme().muted_foreground)
+            .text_color(cx.theme().on_surface_variant)
             .text_center()
             .refine_style(&self.style)
             .children(self.children)

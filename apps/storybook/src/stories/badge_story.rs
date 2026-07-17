@@ -83,7 +83,7 @@ impl Render for BadgeStory {
                     .child(
                         Badge::new()
                             .icon(IconName::Check)
-                            .color(cx.theme().cyan)
+                            .color(cx.theme().primary)
                             .child(
                                 Avatar::new()
                                     .src("https://avatars.githubusercontent.com/u/5518?v=4"),
@@ -92,7 +92,7 @@ impl Render for BadgeStory {
                     .child(
                         Badge::new()
                             .icon(IconName::Star)
-                            .color(cx.theme().yellow)
+                            .color(cx.theme().primary)
                             .child(
                                 Avatar::new()
                                     .src("https://avatars.githubusercontent.com/u/20092316?v=4"),
@@ -109,10 +109,10 @@ impl Render for BadgeStory {
             .child(
                 section("Badge with color")
                     .max_w_md()
-                    .child(Badge::new().count(3).color(cx.theme().blue).child(
+                    .child(Badge::new().count(3).color(cx.theme().primary).child(
                         Avatar::new().src("https://avatars.githubusercontent.com/u/5518?v=4"),
                     ))
-                    .child(Badge::new().dot().color(cx.theme().green).count(1).child(
+                    .child(Badge::new().dot().color(cx.theme().primary).count(1).child(
                         Avatar::new().src("https://avatars.githubusercontent.com/u/5518?v=4"),
                     )),
             )
@@ -124,7 +124,7 @@ impl Render for BadgeStory {
                             Badge::new()
                                 .icon(IconName::Check)
                                 .large()
-                                .color(cx.theme().cyan)
+                                .color(cx.theme().primary)
                                 .child(
                                     Avatar::new()
                                         .large()
@@ -133,11 +133,11 @@ impl Render for BadgeStory {
                         ),
                     )
                     .child(
-                        Badge::new().count(2).color(cx.theme().green).large().child(
+                        Badge::new().count(2).color(cx.theme().primary).large().child(
                             Badge::new()
                                 .icon(IconName::Star)
                                 .large()
-                                .color(cx.theme().yellow)
+                                .color(cx.theme().primary)
                                 .child(
                                     Avatar::new().large().src(
                                         "https://avatars.githubusercontent.com/u/20092316?v=4",
@@ -146,10 +146,10 @@ impl Render for BadgeStory {
                         ),
                     )
                     .child(
-                        Badge::new().count(3).color(cx.theme().green).child(
+                        Badge::new().count(3).color(cx.theme().primary).child(
                             Badge::new()
                                 .icon(IconName::Asterisk)
-                                .color(cx.theme().green)
+                                .color(cx.theme().primary)
                                 .child(
                                     Avatar::new().src(
                                         "https://avatars.githubusercontent.com/u/22312482?v=4",
@@ -162,7 +162,7 @@ impl Render for BadgeStory {
                             Badge::new()
                                 .icon(IconName::Sun)
                                 .small()
-                                .color(cx.theme().red)
+                                .color(cx.theme().primary)
                                 .child(
                                     Avatar::new().small().src(
                                         "https://avatars.githubusercontent.com/u/150917089?v=4",

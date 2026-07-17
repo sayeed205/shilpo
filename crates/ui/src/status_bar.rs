@@ -88,10 +88,10 @@ impl RenderOnce for StatusBar {
             .py_1()
             .px_2()
             .border_t_1()
-            .border_color(cx.theme().status_bar_border)
-            .bg(cx.theme().tokens.status_bar)
+            .border_color(cx.theme().outline_variant)
+            .bg(cx.theme().surface_container)
             .text_xs()
-            .text_color(cx.theme().muted_foreground)
+            .text_color(cx.theme().on_surface)
             .refine_style(&self.style)
             .when(has_left, |this| this.child(region().children(self.left)))
             .child(

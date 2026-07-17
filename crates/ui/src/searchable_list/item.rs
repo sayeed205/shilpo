@@ -103,7 +103,7 @@ impl RenderOnce for SearchableListItemElement {
             .px_2()
             .rounded(cx.theme().radius)
             .text_base()
-            .text_color(cx.theme().foreground)
+            .text_color(cx.theme().on_surface)
             .items_center()
             .justify_between()
             .input_text_size(self.size)
@@ -111,13 +111,13 @@ impl RenderOnce for SearchableListItemElement {
             .refine_style(&self.style)
             .when(!self.disabled, |this| {
                 this.when(!self.selected, |this| {
-                    this.hover(|this| this.bg(cx.theme().accent.opacity(0.7)))
+                    this.hover(|this| this.bg(cx.theme().primary.opacity(0.7)))
                 })
             })
-            .when(self.selected, |this| this.bg(cx.theme().tokens.accent))
+            .when(self.selected, |this| this.bg(cx.theme().primary_container))
             .when(self.disabled, |this| {
                 this.cursor_not_allowed()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(cx.theme().on_surface_variant)
             })
             .child(
                 h_flex()
@@ -129,7 +129,7 @@ impl RenderOnce for SearchableListItemElement {
                     .when_some(self.check_icon, |this, icon| {
                         this.child(
                             icon.xsmall()
-                                .text_color(cx.theme().foreground)
+                                .text_color(cx.theme().on_surface)
                                 .when(!self.checked, |this| this.invisible()),
                         )
                     }),

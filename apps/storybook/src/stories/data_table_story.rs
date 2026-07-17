@@ -317,11 +317,11 @@ impl StockTableDelegate {
             })
             .map(|this| {
                 if right_num % 3 == 0 {
-                    this.text_color(cx.theme().red)
-                        .bg(cx.theme().red_light.alpha(0.05))
+                    this.text_color(cx.theme().primary)
+                        .bg(cx.theme().primary.alpha(0.05))
                 } else if right_num % 3 == 1 {
-                    this.text_color(cx.theme().green)
-                        .bg(cx.theme().green_light.alpha(0.05))
+                    this.text_color(cx.theme().primary)
+                        .bg(cx.theme().primary.alpha(0.05))
                 } else {
                     this
                 }
@@ -340,11 +340,11 @@ impl StockTableDelegate {
         let right_num = ((val - val.floor()) * 1000.).floor() as i32;
 
         let this = if right_num % 3 == 0 {
-            this.text_color(cx.theme().red)
-                .bg(cx.theme().red_light.alpha(0.05))
+            this.text_color(cx.theme().primary)
+                .bg(cx.theme().primary.alpha(0.05))
         } else if right_num % 3 == 1 {
-            this.text_color(cx.theme().green)
-                .bg(cx.theme().green_light.alpha(0.05))
+            this.text_color(cx.theme().primary)
+                .bg(cx.theme().primary.alpha(0.05))
         } else {
             this
         };
@@ -496,9 +496,9 @@ impl TableDelegate for StockTableDelegate {
             "market" => div()
                 .map(|this| {
                     if stock.counter.market == "US" {
-                        this.text_color(cx.theme().blue)
+                        this.text_color(cx.theme().primary)
                     } else {
-                        this.text_color(cx.theme().magenta)
+                        this.text_color(cx.theme().primary)
                     }
                 })
                 .child(stock.counter.market.clone())

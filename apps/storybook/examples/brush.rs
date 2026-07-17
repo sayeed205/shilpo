@@ -183,7 +183,7 @@ impl BrushStory {
             .when(is_selected, |this| {
                 this.border_color(theme.primary).shadow_md()
             })
-            .when(!is_selected, |this| this.border_color(theme.border))
+            .when(!is_selected, |this| this.border_color(theme.outline_variant))
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
@@ -206,7 +206,7 @@ impl BrushStory {
         let base_div = div()
             .id("canvas")
             .size_full()
-            .bg(theme.background)
+            .bg(theme.surface)
             .cursor_crosshair()
             .relative()
             .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
@@ -237,7 +237,7 @@ impl BrushStory {
                     let size = prepaint_bounds.size;
 
                     if show_grid {
-                        let grid_color = theme.border.opacity(0.2);
+                        let grid_color = theme.outline_variant.opacity(0.2);
                         let grid_size = 40.0;
 
                         let mut x = 0.0;
@@ -334,7 +334,7 @@ impl Render for BrushStory {
                                             Slider::new(&self.brush_size)
                                                 .w(px(200.))
                                                 .bg(theme.primary)
-                                                .text_color(theme.primary_foreground),
+                                                .text_color(theme.on_primary),
                                         )
                                         .child(format!("{:.0}px", brush_size)),
                                 )
@@ -347,7 +347,7 @@ impl Render for BrushStory {
                                             Slider::new(&self.brush_opacity)
                                                 .w(px(200.))
                                                 .bg(theme.primary)
-                                                .text_color(theme.primary_foreground),
+                                                .text_color(theme.on_primary),
                                         )
                                         .child(format!("{:.0}%", brush_opacity * 100.0)),
                                 )

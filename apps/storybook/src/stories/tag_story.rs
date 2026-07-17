@@ -3,7 +3,7 @@ use gpui::{
     Styled, Window, px,
 };
 
-use gpui_component::{ColorName, Sizable, h_flex, indigo_50, indigo_500, tag::Tag, v_flex};
+use gpui_component::{Sizable, h_flex, tag::Tag, v_flex, ActiveTheme as _};
 
 use crate::section;
 
@@ -42,7 +42,7 @@ impl Focusable for TagStory {
     }
 }
 impl Render for TagStory {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .w_full()
             .gap_3()
@@ -57,7 +57,8 @@ impl Render for TagStory {
                         .child(Tag::warning().child("Warning"))
                         .child(Tag::info().child("Info"))
                         .child(
-                            Tag::custom(indigo_500(), indigo_50(), indigo_500()).child("Custom"),
+                            Tag::custom(cx.theme().primary, cx.theme().primary_container, cx.theme().on_primary)
+                                .child("Custom"),
                         ),
                 ),
             )
@@ -72,7 +73,7 @@ impl Render for TagStory {
                         .child(Tag::warning().outline().child("Warning"))
                         .child(Tag::info().outline().child("Info"))
                         .child(
-                            Tag::custom(indigo_500(), indigo_500(), indigo_500())
+                            Tag::custom(cx.theme().secondary, cx.theme().secondary_container, cx.theme().on_secondary)
                                 .outline()
                                 .child("Custom"),
                         ),
@@ -126,17 +127,14 @@ impl Render for TagStory {
                         .child(Tag::info().small().rounded(px(0.)).child("Info")),
                 ),
             )
-            .child(
-                section("Color Tags").child(
-                    v_flex().gap_4().child(
-                        h_flex().gap_2().flex_wrap().children(
-                            ColorName::all()
-                                .into_iter()
-                                .filter(|color| *color != ColorName::Gray)
-                                .map(|color| Tag::color(color).child(color.to_string())),
-                        ),
-                    ),
-                ),
-            )
+            .child(section("Material role tags").child(
+                h_flex()
+                    .gap_2()
+                    .flex_wrap()
+                    .child(Tag::custom(cx.theme().primary, cx.theme().primary_container, cx.theme().on_primary).child("Primary"))
+                    .child(Tag::custom(cx.theme().secondary, cx.theme().secondary_container, cx.theme().on_secondary).child("Secondary"))
+                    .child(Tag::custom(cx.theme().tertiary, cx.theme().tertiary_container, cx.theme().on_tertiary).child("Tertiary"))
+                    .child(Tag::custom(cx.theme().error, cx.theme().error_container, cx.theme().on_error).child("Error")),
+            ))
     }
 }

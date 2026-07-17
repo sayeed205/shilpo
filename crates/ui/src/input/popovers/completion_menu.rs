@@ -96,7 +96,7 @@ impl RenderOnce for CompletionMenuItem {
         let highlights = vec![(
             0..matched_len,
             HighlightStyle {
-                color: Some(cx.theme().blue),
+                color: Some(cx.theme().primary),
                 ..Default::default()
             },
         )];
@@ -109,16 +109,16 @@ impl RenderOnce for CompletionMenuItem {
             .line_height(relative(1.))
             .rounded(cx.theme().radius.half())
             .when(item.deprecated.unwrap_or(false), |this| this.line_through())
-            .hover(|this| this.bg(cx.theme().accent.opacity(0.8)))
+            .hover(|this| this.bg(cx.theme().primary.opacity(0.8)))
             .when(self.selected, |this| {
-                this.bg(cx.theme().tokens.accent)
-                    .text_color(cx.theme().accent_foreground)
+                this.bg(cx.theme().primary_container)
+                    .text_color(cx.theme().on_primary_container)
             })
             .child(div().child(StyledText::new(item.label.clone()).with_highlights(highlights)))
             .when(item.detail.is_some(), |this| {
                 this.child(
                     Label::new(item.detail.as_deref().unwrap_or("").to_string())
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(cx.theme().on_surface_variant)
                         .when(deprecated, |this| this.line_through())
                         .italic(),
                 )

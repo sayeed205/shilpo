@@ -271,7 +271,7 @@ impl Render for TreeStory {
                                 })
                                 .p_1()
                                 .border_1()
-                                .border_color(cx.theme().border)
+                                .border_color(cx.theme().outline)
                                 .rounded(cx.theme().radius)
                                 .h(px(540.)),
                             )

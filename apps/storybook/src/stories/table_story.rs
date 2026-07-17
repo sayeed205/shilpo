@@ -175,7 +175,7 @@ impl Render for TableStory {
                     Table::new()
                         .with_size(self.size)
                         .border_1()
-                        .border_color(cx.theme().border)
+                        .border_color(cx.theme().outline)
                         .rounded(cx.theme().radius)
                         .child(
                             TableHeader::new().child(
@@ -190,7 +190,7 @@ impl Render for TableStory {
                             TableBody::new().children(invoices.iter().enumerate().take(6).map(
                                 |(ix, (invoice, _, method, amount, date))| {
                                     TableRow::new()
-                                        .when(ix % 2 != 0, |this| this.bg(cx.theme().table_even))
+                                        .when(ix % 2 != 0, |this| this.bg(cx.theme().surface_container_low))
                                         .child(
                                             TableCell::new().w(px(100.)).child(invoice.to_string()),
                                         )

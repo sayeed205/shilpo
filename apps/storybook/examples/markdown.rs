@@ -365,8 +365,8 @@ fn render_math_formula(source: &str, inline: bool, font_size: f32, cx: &mut App)
         source,
         inline,
         font_size,
-        cx.theme().foreground,
-        cx.theme().background,
+        cx.theme().on_surface,
+        cx.theme().surface,
     ) {
         img(image.image)
             .object_fit(ObjectFit::Contain)
@@ -375,7 +375,7 @@ fn render_math_formula(source: &str, inline: bool, font_size: f32, cx: &mut App)
             .h(px(image.height))
             .into_any_element()
     } else {
-        render_math_text(source, inline, font_size, cx.theme().foreground)
+        render_math_text(source, inline, font_size, cx.theme().on_surface)
     }
 }
 
@@ -419,7 +419,7 @@ impl MarkdownPlugin for TickerPlugin {
         let symbol = ticker.symbol.as_str();
         let quote = self.quote(symbol);
         let up = quote.change >= 0.0;
-        let trend = if up { cx.theme().green } else { cx.theme().red };
+        let trend = if up { cx.theme().primary } else { cx.theme().primary };
 
         v_flex()
             .w(px(240.))
@@ -428,8 +428,8 @@ impl MarkdownPlugin for TickerPlugin {
             .py_2()
             .rounded(cx.theme().radius)
             .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
+            .border_color(cx.theme().outline)
+            .bg(cx.theme().surface)
             .child(
                 h_flex()
                     .items_center()
@@ -448,7 +448,7 @@ impl MarkdownPlugin for TickerPlugin {
                                 div()
                                     .text_xs()
                                     .line_height(relative(1.))
-                                    .text_color(cx.theme().muted_foreground)
+                                    .text_color(cx.theme().on_surface_variant)
                                     .child(quote.name),
                             ),
                     )
@@ -493,7 +493,7 @@ impl MarkdownPlugin for TickerPlugin {
                         div()
                             .text_xs()
                             .line_height(relative(1.))
-                            .text_color(cx.theme().muted_foreground)
+                            .text_color(cx.theme().on_surface_variant)
                             .child("Last"),
                     ),
             )
@@ -569,7 +569,7 @@ impl MarkdownPlugin for UserCardPlugin {
             .py_2()
             .rounded(cx.theme().radius)
             .border_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().outline)
             .child(
                 Avatar::new()
                     .name(name)

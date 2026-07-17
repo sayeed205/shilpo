@@ -563,13 +563,13 @@ impl RenderOnce for Slider {
             .background
             .clone()
             .and_then(|bg| bg.color())
-            .unwrap_or(cx.theme().tokens.slider_bar.into());
+            .unwrap_or(cx.theme().surface_container_highest.into());
         let thumb_bg: Background = self
             .style
             .text
             .color
             .map(Into::into)
-            .unwrap_or_else(|| cx.theme().tokens.slider_thumb.into());
+            .unwrap_or_else(|| cx.theme().primary.into());
         let corner_radii = self.style.corner_radii.clone();
         let default_radius = px(999.);
         let mut radius = Corners {
@@ -642,7 +642,7 @@ impl RenderOnce for Slider {
             .when(axis.is_horizontal(), |this| this.w_full())
             .refine_style(&self.style)
             .bg(cx.theme().transparent)
-            .text_color(cx.theme().foreground)
+            .text_color(cx.theme().on_surface)
             .when(!self.disabled, |this| {
                 this.on_mouse_up(
                     MouseButton::Left,

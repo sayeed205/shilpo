@@ -205,8 +205,8 @@ impl RenderOnce for Sheet {
                             })
                             .absolute()
                             .occlude()
-                            .bg(cx.theme().tokens.background)
-                            .border_color(cx.theme().border)
+                            .bg(cx.theme().surface_container)
+                            .border_color(cx.theme().outline_variant)
                             .shadow_xl()
                             .refine_style(&self.style)
                             .map(|this| {

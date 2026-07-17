@@ -279,7 +279,7 @@ impl Render for VirtualListStory {
                                 .track_scroll(&self.scroll_handle)
                                 .p_4()
                                 .border_1()
-                                .border_color(cx.theme().border)
+                                .border_color(cx.theme().outline)
                                 .gap_1(),
                             )
                             .scrollbar(&self.scroll_handle, self.axis),

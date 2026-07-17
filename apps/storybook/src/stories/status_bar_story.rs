@@ -85,7 +85,7 @@ impl Render for StatusBarStory {
                                             .child(
                                                 Icon::new(IconName::CircleCheck)
                                                     .xsmall()
-                                                    .text_color(cx.theme().green),
+                                                    .text_color(cx.theme().primary),
                                             )
                                             .child("0"),
                                     )
@@ -96,7 +96,7 @@ impl Render for StatusBarStory {
                                             .child(
                                                 Icon::new(IconName::Info)
                                                     .xsmall()
-                                                    .text_color(cx.theme().blue),
+                                                    .text_color(cx.theme().primary),
                                             )
                                             .child("2"),
                                     ),

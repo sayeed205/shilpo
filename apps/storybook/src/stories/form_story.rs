@@ -193,8 +193,8 @@ impl Render for FormStory {
                             h_flex()
                                 .gap_2()
                                 .border_1()
-                                .border_color(cx.theme().input)
-                                .bg(cx.theme().input_background())
+                                .border_color(cx.theme().outline)
+                                .bg(cx.theme().surface)
                                 .rounded(cx.theme().radius)
                                 .child(
                                     div().w(px(90.)).child(
