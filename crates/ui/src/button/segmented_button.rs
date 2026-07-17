@@ -2,9 +2,9 @@ use std::rc::Rc;
 
 use crate::{ActiveTheme, Icon, Sizable, Size, StyledExt};
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, Role, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled,
-    Window, div, prelude::FluentBuilder as _,
+    div, prelude::FluentBuilder as _, AnyElement, App, ClickEvent, ElementId, InteractiveElement,
+    IntoElement, ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
+    StyleRefinement, Styled, Window,
 };
 
 use super::{button_shared_tokens, segmented_button_tokens, shared};
@@ -61,10 +61,12 @@ impl SegmentedButtonItem {
     }
 }
 
+#[derive(IntoElement)]
 pub struct SingleChoiceSegmentedButton {
     id: ElementId,
     items: Vec<SegmentedButtonItem>,
     style: StyleRefinement,
+    on_selection_change: Option<Rc<dyn Fn(usize, &ClickEvent, &mut Window, &mut App)>>,
 }
 
 impl SingleChoiceSegmentedButton {
@@ -73,6 +75,7 @@ impl SingleChoiceSegmentedButton {
             id: id.into(),
             items: Vec::new(),
             style: StyleRefinement::default(),
+            on_selection_change: None,
         }
     }
 
@@ -85,12 +88,22 @@ impl SingleChoiceSegmentedButton {
         self.items.extend(items);
         self
     }
+
+    pub fn on_selection_change(
+        mut self,
+        handler: impl Fn(usize, &ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_selection_change = Some(Rc::new(handler));
+        self
+    }
 }
 
+#[derive(IntoElement)]
 pub struct MultiChoiceSegmentedButton {
     id: ElementId,
     items: Vec<SegmentedButtonItem>,
     style: StyleRefinement,
+    on_selection_change: Option<Rc<dyn Fn(usize, &ClickEvent, &mut Window, &mut App)>>,
 }
 
 impl MultiChoiceSegmentedButton {
@@ -99,6 +112,7 @@ impl MultiChoiceSegmentedButton {
             id: id.into(),
             items: Vec::new(),
             style: StyleRefinement::default(),
+            on_selection_change: None,
         }
     }
 
@@ -109,6 +123,14 @@ impl MultiChoiceSegmentedButton {
 
     pub fn items(mut self, items: impl IntoIterator<Item = SegmentedButtonItem>) -> Self {
         self.items.extend(items);
+        self
+    }
+
+    pub fn on_selection_change(
+        mut self,
+        handler: impl Fn(usize, &ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_selection_change = Some(Rc::new(handler));
         self
     }
 }
@@ -130,6 +152,7 @@ fn render_item(
     index: usize,
     count: usize,
     multi: bool,
+    on_selection_change: Option<Rc<dyn Fn(usize, &ClickEvent, &mut Window, &mut App)>>,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
@@ -157,6 +180,7 @@ fn render_item(
     let focus_layer = shared::interaction::state_layer(background, content, state.focus);
     let left = index == 0;
     let right = index + 1 == count;
+    let item_handler = item.on_click;
 
     div()
         .id(item.id)
@@ -171,11 +195,13 @@ fn render_item(
         .when(!multi, |this| this.aria_selected(selected))
         .when(!disabled, |this| this.track_focus(&focus))
         .flex_1()
+        .flex()
+        .flex_row()
         .h(tokens.height)
         .min_w(button_shared_tokens::COMMON_MIN_WIDTH)
         .items_center()
         .justify_center()
-        .gap_1()
+        .gap_2()
         .px_3()
         .border_1()
         .border_color(tokens.border)
@@ -207,11 +233,34 @@ fn render_item(
                 .active(|this| this.bg(pressed))
         })
         .when(focused && !disabled, |this| this.bg(focus_layer))
-        .when_some(item.on_click.filter(|_| !disabled), |this, handler| {
-            this.on_click(move |event, window, cx| handler(event, window, cx))
-        })
+        .when_some(
+            item_handler.clone().filter(|_| !disabled),
+            |this, handler| {
+                let group_handler = on_selection_change.clone();
+                this.on_click(move |event, window, cx| {
+                    if let Some(group_handler) = group_handler.as_ref() {
+                        group_handler(index, event, window, cx);
+                    }
+                    handler(event, window, cx)
+                })
+            },
+        )
+        .when_some(
+            on_selection_change.filter(|_| item_handler.is_none() && !disabled),
+            |this, handler| {
+                this.on_click(move |event, window, cx| handler(index, event, window, cx))
+            },
+        )
         .when_some(item.icon, |this, icon| {
-            this.child(icon.with_size(Size::Size(tokens.icon_constraint)))
+            this.child(
+                div()
+                    .w(tokens.icon_constraint)
+                    .h(tokens.icon_constraint)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon.with_size(Size::Size(tokens.icon_constraint))),
+            )
         })
         .child(item.label)
         .into_any_element()
@@ -220,34 +269,46 @@ fn render_item(
 impl RenderOnce for SingleChoiceSegmentedButton {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let count = self.items.len();
+        let on_selection_change = self.on_selection_change;
         div()
             .id(self.id)
             .h_flex()
             .w_full()
             .refine_style(&self.style)
-            .children(
-                self.items
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, item)| render_item(item, index, count, false, window, cx)),
-            )
+            .children(self.items.into_iter().enumerate().map(|(index, item)| {
+                render_item(
+                    item,
+                    index,
+                    count,
+                    false,
+                    on_selection_change.clone(),
+                    window,
+                    cx,
+                )
+            }))
     }
 }
 
 impl RenderOnce for MultiChoiceSegmentedButton {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let count = self.items.len();
+        let on_selection_change = self.on_selection_change;
         div()
             .id(self.id)
             .h_flex()
             .w_full()
             .refine_style(&self.style)
-            .children(
-                self.items
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, item)| render_item(item, index, count, true, window, cx)),
-            )
+            .children(self.items.into_iter().enumerate().map(|(index, item)| {
+                render_item(
+                    item,
+                    index,
+                    count,
+                    true,
+                    on_selection_change.clone(),
+                    window,
+                    cx,
+                )
+            }))
     }
 }
 

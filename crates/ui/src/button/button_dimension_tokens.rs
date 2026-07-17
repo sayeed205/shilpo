@@ -1,4 +1,4 @@
-use gpui::{Pixels, px};
+use gpui::{px, Pixels};
 
 use super::button_shared_tokens::COMMON_MIN_WIDTH;
 use crate::Size;
@@ -34,7 +34,27 @@ fn dimension_size(size: Size) -> DimensionSize {
     }
 }
 
-pub(crate) fn resolve(size: Size, is_text: bool, compact: bool) -> ButtonDimensions {
+pub(crate) fn resolve(
+    size: Size,
+    is_text: bool,
+    compact: bool,
+    icon_only: bool,
+) -> ButtonDimensions {
+    if icon_only {
+        let container = match size {
+            Size::XSmall => px(32.),
+            Size::Small => px(40.),
+            Size::Medium => px(48.),
+            Size::Large => px(56.),
+            Size::Size(value) => value,
+        };
+        return ButtonDimensions {
+            height: container,
+            horizontal_padding: Pixels::ZERO,
+            vertical_padding: Pixels::ZERO,
+            min_width: container,
+        };
+    }
     let dimensions = match dimension_size(size) {
         DimensionSize::XSmall => (px(32.), px(12.), px(6.)),
         DimensionSize::Small => (px(40.), px(24.), px(8.)),
@@ -59,7 +79,7 @@ pub(crate) fn resolve(size: Size, is_text: bool, compact: bool) -> ButtonDimensi
 }
 
 pub(crate) fn height(size: Size) -> Pixels {
-    resolve(size, false, false).height
+    resolve(size, false, false, false).height
 }
 
 #[cfg(test)]
@@ -75,7 +95,7 @@ mod tests {
             (Size::Large, 96., 48., 32.),
         ];
         for (size, height, horizontal, vertical) in expected {
-            let actual = resolve(size, false, false);
+            let actual = resolve(size, false, false, false);
             assert_eq!(actual.height, px(height));
             assert_eq!(actual.horizontal_padding, px(horizontal));
             assert_eq!(actual.vertical_padding, px(vertical));
@@ -85,11 +105,21 @@ mod tests {
 
     #[test]
     fn text_buttons_keep_height_and_min_width_but_narrow_padding() {
-        let normal = resolve(Size::Small, false, false);
-        let text = resolve(Size::Small, true, false);
+        let normal = resolve(Size::Small, false, false, false);
+        let text = resolve(Size::Small, true, false, false);
         assert_eq!(text.height, normal.height);
         assert_eq!(text.min_width, normal.min_width);
         assert_eq!(text.horizontal_padding, px(12.));
         assert!(text.horizontal_padding < normal.horizontal_padding);
+    }
+
+    #[test]
+    fn icon_only_buttons_use_icon_button_geometry() {
+        let text_icon = resolve(Size::Medium, true, false, true);
+        let icon = resolve(Size::Medium, false, false, true);
+        assert_eq!(text_icon, icon);
+        assert_eq!(icon.height, px(48.));
+        assert_eq!(icon.min_width, px(48.));
+        assert_eq!(icon.horizontal_padding, Pixels::ZERO);
     }
 }

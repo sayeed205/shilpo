@@ -1,17 +1,17 @@
 use std::rc::Rc;
 
 use crate::{
-    ActiveTheme, Disableable, FocusableExt as _, Icon, IconName, Selectable, Sizable, Size,
-    StyleSized, StyledExt,
     button::ButtonIcon,
     h_flex,
     tooltip::{ManagedTooltipExt as _, Tooltip},
+    ActiveTheme, Disableable, FocusableExt as _, Icon, IconName, Selectable, Sizable, Size,
+    StyleSized, StyledExt,
 };
 use gpui::{
-    AnyElement, App, Background, ClickEvent, Corners, CursorStyle, Div, Edges, ElementId, Hsla,
-    InteractiveElement, Interactivity, IntoElement, MouseButton, ParentElement, Pixels, RenderOnce,
-    Role, SharedString, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled, Window,
-    div, prelude::FluentBuilder as _, px, relative,
+    div, prelude::FluentBuilder as _, px, relative, AnyElement, App, Background, ClickEvent,
+    Corners, CursorStyle, Div, Edges, ElementId, Hsla, InteractiveElement, Interactivity,
+    IntoElement, MouseButton, ParentElement, Pixels, RenderOnce, Role, SharedString, Stateful,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Window,
 };
 
 use super::{
@@ -344,8 +344,13 @@ impl RenderOnce for Button {
         let normal_style = style.normal(cx);
         let state_tokens = button_shared_tokens::STATE_OPACITIES;
         let color_tokens = button_tokens::tokens(style, cx);
-        let dimensions =
-            button_dimension_tokens::resolve(self.size, style == ButtonVariant::Text, self.compact);
+        let icon_only = self.label.is_none() && self.children.is_empty() && self.icon.is_some();
+        let dimensions = button_dimension_tokens::resolve(
+            self.size,
+            style == ButtonVariant::Text,
+            self.compact,
+            icon_only,
+        );
         let icon_size = match self.size {
             Size::Size(v) => Size::Size(v * 0.75),
             _ => self.size,

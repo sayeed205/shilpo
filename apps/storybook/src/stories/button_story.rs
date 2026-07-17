@@ -262,7 +262,7 @@ impl Render for ButtonStory {
             )
             .child(
                 section("Content and grouping")
-                    .sub_title(Label::new("Label, icon, and grouped controls keep the same M3 interaction surface."))
+                    .sub_title(Label::new("Button content stays label-bearing; icon-only actions belong to IconButton."))
                     .child(Button::new("content-label").filled().label("Label only"))
                     .child(
                         Button::new("content-icon-label")
@@ -271,10 +271,9 @@ impl Render for ButtonStory {
                             .label("Confirmed"),
                     )
                     .child(
-                        Button::new("content-icon")
-                            .filled_tonal()
-                            .icon(gpui_component::IconName::Plus)
-                            .tooltip("Icon only"),
+                        Button::new("content-text")
+                            .text()
+                            .label("Learn more"),
                     )
                     .child(
                         ButtonGroup::new("content-group")

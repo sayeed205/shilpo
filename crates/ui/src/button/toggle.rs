@@ -1,14 +1,14 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    AnyElement, App, Corners, Edges, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, Role, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Toggled,
-    Window, div, prelude::FluentBuilder as _,
+    div, prelude::FluentBuilder as _, AnyElement, App, Corners, Edges, ElementId,
+    InteractiveElement, IntoElement, ParentElement, RenderOnce, Role, SharedString,
+    StatefulInteractiveElement, StyleRefinement, Styled, Toggled, Window,
 };
-use smallvec::{SmallVec, smallvec};
+use smallvec::{smallvec, SmallVec};
 
 use crate::{
-    ActiveTheme, Disableable, Icon, Sizable, Size, StyledExt, h_flex, tooltip::ComponentTooltip,
+    h_flex, tooltip::ComponentTooltip, ActiveTheme, Disableable, Icon, Sizable, Size, StyledExt,
 };
 
 #[derive(Default, Copy, Debug, Clone, PartialEq, Eq, Hash)]

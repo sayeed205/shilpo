@@ -1,7 +1,7 @@
 use crate::Size;
-use gpui::{Pixels, px};
+use gpui::{px, Pixels};
 
-use super::{ButtonRounded, button_dimension_tokens};
+use super::{button_dimension_tokens, ButtonRounded};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ButtonShape {

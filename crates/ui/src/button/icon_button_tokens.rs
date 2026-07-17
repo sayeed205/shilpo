@@ -1,4 +1,4 @@
-use gpui::{Hsla, Pixels, px};
+use gpui::{px, Hsla, Pixels};
 
 use crate::ActiveTheme;
 

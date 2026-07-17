@@ -1,10 +1,10 @@
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, Styled, Window,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement,
+    ParentElement, Render, Styled, Window, div, px,
 };
 use gpui_component::{
-    Disableable as _, IconName,
-    button::{IconButton, IconButtonSize, IconButtonVariant, IconButtonVariants as _},
+    ActiveTheme as _, Disableable as _, IconName,
+    button::{IconButton, IconButtonSize, IconButtonVariants as _},
     h_flex, v_flex,
 };
 
@@ -43,120 +43,209 @@ impl Focusable for IconButtonStory {
 }
 
 impl Render for IconButtonStory {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let variants = [
-            ("Standard", IconButtonVariant::Standard),
-            ("Filled", IconButtonVariant::Filled),
-            ("Filled tonal", IconButtonVariant::FilledTonal),
-            ("Outlined", IconButtonVariant::Outlined),
-        ];
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sizes = [
-            ("XSmall", IconButtonSize::XSmall),
-            ("Small", IconButtonSize::Small),
-            ("Medium", IconButtonSize::Medium),
-            ("Large", IconButtonSize::Large),
-            ("XLarge", IconButtonSize::XLarge),
+            ("XSmall", "32px", IconButtonSize::XSmall),
+            ("Small", "40px", IconButtonSize::Small),
+            ("Medium", "48px", IconButtonSize::Medium),
+            ("Large", "56px", IconButtonSize::Large),
+            ("XLarge", "72px", IconButtonSize::XLarge),
         ];
+
+        let on_surface_variant = cx.theme().on_surface_variant;
+        let cell = move |control: AnyElement, caption: &'static str, note: &'static str| {
+            v_flex()
+                .w(px(124.))
+                .h(px(118.))
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(74.))
+                        .items_center()
+                        .justify_center()
+                        .child(control),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(20.))
+                        .items_center()
+                        .justify_center()
+                        .text_sm()
+                        .child(caption),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(18.))
+                        .items_center()
+                        .justify_center()
+                        .text_xs()
+                        .text_color(on_surface_variant)
+                        .child(note),
+                )
+                .into_any_element()
+        };
+        let size_cell = move |control: AnyElement, caption: &'static str, note: &'static str| {
+            v_flex()
+                .flex_1()
+                .min_w(px(0.))
+                .h(px(118.))
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(74.))
+                        .items_center()
+                        .justify_center()
+                        .child(control),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(20.))
+                        .items_center()
+                        .justify_center()
+                        .text_sm()
+                        .child(caption),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(18.))
+                        .items_center()
+                        .justify_center()
+                        .text_xs()
+                        .text_color(on_surface_variant)
+                        .child(note),
+                )
+                .into_any_element()
+        };
 
         v_flex()
             .w_full()
-            .gap_6()
+            .gap_4()
             .child(
                 section("Variants")
-                    .sub_title("Standard, filled, filled tonal, and outlined")
-                    .children(variants.into_iter().map(|(label, variant)| {
-                        v_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                IconButton::new(format!("variant-{label}"))
-                                    .icon(IconName::Heart)
-                                    .icon_variant(variant),
-                            )
-                            .child(label)
-                    })),
+                    .sub_title("Standard is transparent; other variants own their container.")
+                    .child(cell(
+                        IconButton::new("variant-standard")
+                            .icon(IconName::Search)
+                            .standard()
+                            .into_any_element(),
+                        "Standard",
+                        "transparent",
+                    ))
+                    .child(cell(
+                        IconButton::new("variant-filled")
+                            .icon(IconName::Check)
+                            .filled()
+                            .into_any_element(),
+                        "Filled",
+                        "primary",
+                    ))
+                    .child(cell(
+                        IconButton::new("variant-tonal")
+                            .icon(IconName::Star)
+                            .filled_tonal()
+                            .into_any_element(),
+                        "Filled tonal",
+                        "secondary",
+                    ))
+                    .child(cell(
+                        IconButton::new("variant-outlined")
+                            .icon(IconName::Settings2)
+                            .outlined()
+                            .into_any_element(),
+                        "Outlined",
+                        "outline",
+                    )),
             )
             .child(
                 section("Size scale")
                     .sub_title("32, 40, 48, 56, and 72px containers")
-                    .children(sizes.into_iter().map(|(label, size)| {
-                        v_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                IconButton::new(format!("size-{label}"))
-                                    .icon(IconName::Settings2)
-                                    .size(size),
-                            )
-                            .child(label)
-                    })),
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .items_start()
+                            .gap_1()
+                            .children(sizes.into_iter().map(|(label, note, size)| {
+                                size_cell(
+                                    IconButton::new(format!("size-{label}"))
+                                        .icon(IconName::Settings2)
+                                        .size(size)
+                                        .filled_tonal()
+                                        .into_any_element(),
+                                    label,
+                                    note,
+                                )
+                            })),
+                    ),
             )
             .child(
                 section("Checked and states")
                     .sub_title("Direct examples; no state simulation controls")
-                    .child(
-                        v_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                IconButton::new("toggle-off")
-                                    .standard()
-                                    .icon(IconName::Heart)
-                                    .checkable(true),
-                            )
-                            .child("Unchecked"),
-                    )
-                    .child(
-                        v_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                IconButton::new("toggle-on")
-                                    .standard()
-                                    .icon(IconName::Heart)
-                                    .checkable(true)
-                                    .checked(true),
-                            )
-                            .child("Checked"),
-                    )
-                    .child(
-                        v_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                IconButton::new("disabled")
-                                    .filled_tonal()
-                                    .icon(IconName::Bell)
-                                    .disabled(true),
-                            )
-                            .child("Disabled"),
-                    )
-                    .child(
-                        v_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                IconButton::new("loading")
-                                    .filled()
-                                    .icon(IconName::Loader)
-                                    .loading(true),
-                            )
-                            .child("Loading"),
-                    ),
+                    .child(cell(
+                        IconButton::new("toggle-off")
+                            .standard()
+                            .icon(IconName::Heart)
+                            .checkable(true)
+                            .into_any_element(),
+                        "Unchecked",
+                        "standard",
+                    ))
+                    .child(cell(
+                        IconButton::new("toggle-on")
+                            .standard()
+                            .icon(IconName::Heart)
+                            .checkable(true)
+                            .checked(true)
+                            .into_any_element(),
+                        "Checked",
+                        "selected",
+                    ))
+                    .child(cell(
+                        IconButton::new("disabled")
+                            .filled_tonal()
+                            .icon(IconName::Bell)
+                            .disabled(true)
+                            .into_any_element(),
+                        "Disabled",
+                        "not allowed",
+                    ))
+                    .child(cell(
+                        IconButton::new("loading")
+                            .filled()
+                            .icon(IconName::Loader)
+                            .loading(true)
+                            .into_any_element(),
+                        "Loading",
+                        "busy",
+                    )),
             )
             .child(
                 section("Shapes")
                     .sub_title("Round is default; square keeps M3 static corner tokens")
-                    .child(
-                        h_flex()
-                            .gap_4()
-                            .child(IconButton::new("round").icon(IconName::Plus))
-                            .child(
-                                IconButton::new("square")
-                                    .icon(IconName::Plus)
-                                    .shape(gpui_component::button::IconButtonShape::Square),
-                            ),
-                    ),
+                    .child(cell(
+                        IconButton::new("round")
+                            .icon(IconName::Plus)
+                            .filled_tonal()
+                            .into_any_element(),
+                        "Round",
+                        "default",
+                    ))
+                    .child(cell(
+                        IconButton::new("square")
+                            .icon(IconName::Plus)
+                            .filled_tonal()
+                            .shape(gpui_component::button::IconButtonShape::Square)
+                            .into_any_element(),
+                        "Square",
+                        "override",
+                    )),
             )
     }
 }

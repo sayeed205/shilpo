@@ -1,6 +1,10 @@
-use gpui::{Hsla, Pixels, px};
+use gpui::{px, Hsla, Pixels};
 
 use crate::ActiveTheme;
+
+pub(crate) const HEIGHT: Pixels = px(40.);
+pub(crate) const ICON_CONSTRAINT: Pixels = px(18.);
+pub(crate) const SEAM: Pixels = px(-1.);
 
 pub(crate) struct SegmentedButtonTokens {
     pub height: Pixels,
@@ -15,10 +19,10 @@ pub(crate) struct SegmentedButtonTokens {
 
 pub(crate) fn tokens(cx: &gpui::App) -> SegmentedButtonTokens {
     SegmentedButtonTokens {
-        height: px(40.),
-        icon_constraint: px(18.),
+        height: HEIGHT,
+        icon_constraint: ICON_CONSTRAINT,
         border: cx.theme().outline,
-        seam: px(-1.),
+        seam: SEAM,
         radius: px(20.),
         selected_container: cx.theme().secondary_container,
         selected_content: cx.theme().on_secondary_container,
@@ -32,8 +36,8 @@ mod tests {
 
     #[test]
     fn outlined_segment_geometry_is_static() {
-        assert_eq!(px(40.), px(40.));
-        assert_eq!(px(18.), px(18.));
-        assert_eq!(px(-1.), px(-1.));
+        assert_eq!(HEIGHT.as_f32(), 40.);
+        assert_eq!(ICON_CONSTRAINT.as_f32(), 18.);
+        assert_eq!(SEAM.as_f32(), -1.);
     }
 }

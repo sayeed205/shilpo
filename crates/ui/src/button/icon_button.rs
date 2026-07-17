@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
-use crate::{ActiveTheme, Disableable, Selectable, Sizable, Size, StyledExt, button::ButtonIcon};
+use crate::{button::ButtonIcon, ActiveTheme, Disableable, Selectable, Sizable, Size, StyledExt};
 use gpui::{
-    App, ClickEvent, CursorStyle, Div, ElementId, InteractiveElement, Interactivity, IntoElement,
-    ParentElement, RenderOnce, Role, Stateful, StatefulInteractiveElement as _, StyleRefinement,
-    Styled, Toggled, Window, div, prelude::FluentBuilder as _,
+    div, prelude::FluentBuilder as _, App, ClickEvent, CursorStyle, Div, ElementId,
+    InteractiveElement, Interactivity, IntoElement, ParentElement, RenderOnce, Role, Stateful,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Toggled, Window,
 };
 
 use super::{button_shared_tokens, icon_button_tokens, shared};
@@ -194,13 +194,7 @@ impl RenderOnce for IconButton {
             .clone();
         let focused = focus_handle.is_focused(window);
         let disabled = self.disabled || self.loading;
-        let cursor = self.cursor;
-        let icon_size = match self.size {
-            IconButtonSize::XSmall => Size::XSmall,
-            IconButtonSize::Small => Size::Small,
-            IconButtonSize::Medium => Size::Medium,
-            IconButtonSize::Large | IconButtonSize::XLarge => Size::Large,
-        };
+        let cursor = self.cursor.or(self.style.mouse_cursor);
         let radius = match shapes.shape {
             icon_button_tokens::IconButtonCorner::Full => dimensions.container * 0.5,
             icon_button_tokens::IconButtonCorner::Square(value) => value,
@@ -217,12 +211,17 @@ impl RenderOnce for IconButton {
                 .aria_selected(self.checked)
             })
             .when(!disabled, |this| this.track_focus(&focus_handle))
+            .flex()
+            .flex_shrink_0()
             .size(dimensions.container)
             .items_center()
             .justify_center()
             .rounded(radius)
             .bg(colors.container)
             .border_color(colors.border)
+            .when(self.variant == IconButtonVariant::Outlined, |this| {
+                this.border_1()
+            })
             .text_color(if disabled {
                 cx.theme()
                     .on_surface_variant
@@ -260,9 +259,24 @@ impl RenderOnce for IconButton {
                 this.on_click(move |event, window, cx| on_click(event, window, cx))
             })
             .refine_style(&self.style)
+            .cursor(shared::interaction::cursor(
+                self.disabled,
+                self.loading,
+                cursor,
+            ))
             .when_some(
-                self.icon.map(|icon| icon.with_size(icon_size)),
-                |this, icon| this.child(icon),
+                self.icon
+                    .map(|icon| icon.with_size(Size::Size(dimensions.icon))),
+                |this, icon| {
+                    this.child(
+                        div()
+                            .flex()
+                            .size(dimensions.icon)
+                            .items_center()
+                            .justify_center()
+                            .child(icon),
+                    )
+                },
             )
     }
 }

@@ -1,6 +1,6 @@
 use gpui::Hsla;
 
-use super::{ButtonVariant, button_color_tokens::colors};
+use super::{button_color_tokens::colors, ButtonVariant};
 
 #[derive(Clone, Copy)]
 pub(crate) enum ButtonElevation {

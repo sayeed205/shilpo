@@ -1,4 +1,4 @@
-use gpui::{Pixels, px};
+use gpui::{px, Pixels};
 
 pub(crate) const STATE_HOVER: f32 = 0.08;
 pub(crate) const STATE_FOCUS: f32 = 0.10;
