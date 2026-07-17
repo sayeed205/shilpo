@@ -184,6 +184,7 @@ fn render_item(
 
     div()
         .id(item.id)
+        .debug_selector(move || format!("segment-{index}"))
         .role(Role::Button)
         .when(multi, |this| {
             this.aria_toggled(if selected {
@@ -317,6 +318,53 @@ pub type SegmentedButton = SingleChoiceSegmentedButton;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{
+        div, px, AppContext, Context, Entity, IntoElement, Render, TestAppContext,
+        VisualTestContext, Window,
+    };
+
+    struct SelectionState {
+        selected: usize,
+    }
+
+    struct SelectionRoot {
+        state: Entity<SelectionState>,
+    }
+
+    impl Render for SelectionRoot {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let selected = self.state.read(cx).selected;
+            let state = self.state.clone();
+            div().size_full().child(
+                SingleChoiceSegmentedButton::new("date-segments")
+                    .item(SegmentedButtonItem::new("day", "Day").selected(selected == 0))
+                    .item(SegmentedButtonItem::new("week", "Week").selected(selected == 1))
+                    .item(SegmentedButtonItem::new("month", "Month").selected(selected == 2))
+                    .on_selection_change(move |index, _, _, cx| {
+                        state.update(cx, |state, _| state.selected = index);
+                    }),
+            )
+        }
+    }
+
+    fn selection_root<'a>(
+        cx: &'a mut TestAppContext,
+    ) -> (Entity<SelectionState>, &'a mut VisualTestContext) {
+        cx.update(crate::init);
+        let state = cx.new(|_| SelectionState { selected: 0 });
+        let state_for_root = state.clone();
+        let (_, visual) = cx.add_window_view(move |_, _| SelectionRoot {
+            state: state_for_root,
+        });
+        (state, visual)
+    }
+
+    fn draw(visual: &mut VisualTestContext) {
+        visual.run_until_parked();
+        visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+    }
 
     #[test]
     fn selection_mapping_is_controlled_per_item() {
@@ -332,5 +380,23 @@ mod tests {
             .item(SegmentedButtonItem::new("a", "A"))
             .item(SegmentedButtonItem::new("b", "B"));
         assert_eq!(row.items.len(), 2);
+    }
+
+    #[gpui::test]
+    fn rendered_segment_selection_and_connected_geometry(cx: &mut TestAppContext) {
+        let (state, visual) = selection_root(cx);
+        draw(visual);
+        let day = visual.debug_bounds("segment-0").expect("day bounds");
+        let week = visual.debug_bounds("segment-1").expect("week bounds");
+        let month = visual.debug_bounds("segment-2").expect("month bounds");
+        assert!((day.size.width.as_f32() - week.size.width.as_f32()).abs() < 1.);
+        assert!((week.size.width.as_f32() - month.size.width.as_f32()).abs() < 1.);
+        assert!(week.origin.x <= day.right());
+        assert!(month.origin.x <= week.right());
+        assert_eq!(day.size.height, px(40.));
+
+        visual.simulate_click(month.center(), Default::default());
+        assert_eq!(state.read_with(visual, |state, _| state.selected), 2);
+        assert!(visual.debug_bounds("segment-2").is_some());
     }
 }

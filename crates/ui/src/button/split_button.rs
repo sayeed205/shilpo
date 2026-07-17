@@ -1,9 +1,9 @@
 use std::rc::Rc;
 
 use gpui::{
-    div, prelude::FluentBuilder, Anchor, App, Context, Edges, ElementId, InteractiveElement as _,
-    IntoElement, ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window,
-    Corners,
+    div, prelude::FluentBuilder, Anchor, App, Context, Corners, Edges, ElementId,
+    InteractiveElement as _, IntoElement, ParentElement, RenderOnce, SharedString, StyleRefinement,
+    Styled, Window,
 };
 
 use crate::{
@@ -12,7 +12,10 @@ use crate::{
     ActiveTheme, Disableable, Sizable, Size, StyledExt as _,
 };
 
-use super::{button_dimension_tokens, button_color_tokens, Button, ButtonRounded, ButtonVariant, ButtonVariants};
+use super::{
+    button_color_tokens, button_dimension_tokens, Button, ButtonRounded, ButtonVariant,
+    ButtonVariants,
+};
 
 #[derive(IntoElement)]
 pub struct SplitButton {
@@ -28,7 +31,8 @@ pub struct SplitButton {
     outline: bool,
     rounded: ButtonRounded,
     anchor: Anchor,
-    menu: Option<Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static>>,
+    menu:
+        Option<Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static>>,
     tooltip: ComponentTooltip,
 }
 
@@ -151,14 +155,31 @@ impl RenderOnce for SplitButton {
         let (leading_left, inner_padding, trailing_right) = split_button_paddings(self.size);
         let height = button_dimension_tokens::height(self.size);
 
-        let leading_left = if self.compact { leading_left * 0.5 } else { leading_left };
-        let inner_padding = if self.compact { inner_padding * 0.5 } else { inner_padding };
-        let trailing_right = if self.compact { trailing_right * 0.5 } else { trailing_right };
+        let leading_left = if self.compact {
+            leading_left * 0.5
+        } else {
+            leading_left
+        };
+        let inner_padding = if self.compact {
+            inner_padding * 0.5
+        } else {
+            inner_padding
+        };
+        let trailing_right = if self.compact {
+            trailing_right * 0.5
+        } else {
+            trailing_right
+        };
 
-        let variant = if self.outline { ButtonVariant::Outlined } else { self.variant };
+        let variant = if self.outline {
+            ButtonVariant::Outlined
+        } else {
+            self.variant
+        };
         let colors = button_color_tokens::colors(variant, cx);
 
-        let leading = self.leading
+        let leading = self
+            .leading
             .with_variant(variant)
             .with_size(self.size)
             .disabled(self.disabled || self.loading)
@@ -180,7 +201,8 @@ impl RenderOnce for SplitButton {
             .pl(leading_left)
             .pr(inner_padding);
 
-        let trailing = self.trailing
+        let trailing = self
+            .trailing
             .with_variant(variant)
             .with_size(self.size)
             .disabled(self.disabled || self.loading)
@@ -210,10 +232,13 @@ impl RenderOnce for SplitButton {
         };
 
         let trailing_element = if let Some(menu) = self.menu {
-            let menu = move |pop: PopupMenu, win: &mut Window, ctx: &mut Context<PopupMenu>| -> PopupMenu {
-                (menu)(pop, win, ctx)
-            };
-            trailing.dropdown_menu_with_anchor(self.anchor, menu).into_any_element()
+            let menu = move |pop: PopupMenu,
+                             win: &mut Window,
+                             ctx: &mut Context<PopupMenu>|
+                  -> PopupMenu { (menu)(pop, win, ctx) };
+            trailing
+                .dropdown_menu_with_anchor(self.anchor, menu)
+                .into_any_element()
         } else {
             trailing.into_any_element()
         };
@@ -229,12 +254,7 @@ impl RenderOnce for SplitButton {
             ))
             .refine_style(&self.style)
             .child(leading)
-            .child(
-                div()
-                    .w(gpui::px(1.))
-                    .h(height)
-                    .bg(divider_color)
-            )
+            .child(div().w(gpui::px(1.)).h(height).bg(divider_color))
             .child(trailing_element)
             .map(|this| self.tooltip.apply(this))
     }

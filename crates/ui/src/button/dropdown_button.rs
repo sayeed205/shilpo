@@ -1,8 +1,8 @@
+use gpui::CursorStyle;
 use gpui::{
     div, prelude::FluentBuilder, Anchor, App, Context, ElementId, InteractiveElement as _,
     IntoElement, ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window,
 };
-use gpui::CursorStyle;
 
 use crate::{
     menu::{DropdownMenu, PopupMenu},
@@ -10,7 +10,9 @@ use crate::{
     Disableable, Selectable, Sizable, Size, StyledExt as _,
 };
 
-use super::{shared, Button, ButtonRounded, ButtonVariant, ButtonVariants, button_dimension_tokens};
+use super::{
+    button_dimension_tokens, shared, Button, ButtonRounded, ButtonVariant, ButtonVariants,
+};
 
 #[derive(IntoElement)]
 pub struct DropdownButton {
@@ -179,7 +181,9 @@ impl RenderOnce for DropdownButton {
             .with_variant(self.variant);
 
         let element = if let Some(menu) = self.menu {
-            trigger.dropdown_menu_with_anchor(self.anchor, menu).into_any_element()
+            trigger
+                .dropdown_menu_with_anchor(self.anchor, menu)
+                .into_any_element()
         } else {
             trigger.into_any_element()
         };

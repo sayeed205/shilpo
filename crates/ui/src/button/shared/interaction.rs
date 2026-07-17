@@ -22,6 +22,7 @@ pub(crate) fn cursor(disabled: bool, loading: bool, explicit: Option<CursorStyle
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::hsla;
 
     #[test]
     fn disabled_cursor_wins_over_explicit_cursor() {
@@ -33,5 +34,15 @@ mod tests {
             cursor(false, false, Some(CursorStyle::Arrow)),
             CursorStyle::Arrow
         );
+    }
+
+    #[test]
+    fn state_layer_distinguishes_transparent_and_semitransparent_bases() {
+        let role = hsla(0.6, 0.8, 0.5, 1.);
+        let transparent = state_layer(Hsla::transparent_black(), role, 0.1);
+        let semitransparent = state_layer(hsla(0., 0., 0.2, 0.5), role, 0.1);
+        let alternate_role = state_layer(Hsla::transparent_black(), hsla(0.1, 0.8, 0.5, 1.), 0.1);
+        assert_ne!(transparent, semitransparent);
+        assert_ne!(transparent, alternate_role);
     }
 }

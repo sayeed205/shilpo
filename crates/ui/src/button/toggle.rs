@@ -1,9 +1,9 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    div, prelude::FluentBuilder as _, AnyElement, App, Corners, Edges, ElementId,
+    div, prelude::FluentBuilder as _, AnyElement, App, Corners, Edges, ElementId, Hsla,
     InteractiveElement, IntoElement, ParentElement, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window, Hsla,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window,
 };
 use smallvec::{smallvec, SmallVec};
 
@@ -11,9 +11,7 @@ use crate::{
     h_flex, tooltip::ComponentTooltip, ActiveTheme, Disableable, Icon, Sizable, Size, StyledExt,
 };
 
-use super::{
-    shared, button_shared_tokens, button_dimension_tokens,
-};
+use super::{button_dimension_tokens, button_shared_tokens, shared};
 
 #[derive(Default, Copy, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ToggleVariant {
@@ -307,21 +305,33 @@ impl Styled for Toggle {
 impl RenderOnce for Toggle {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let height = button_dimension_tokens::height(self.size);
-        let resolved_shapes = self.shapes.unwrap_or_else(|| toggle_button_shapes(self.size));
+        let resolved_shapes = self
+            .shapes
+            .unwrap_or_else(|| toggle_button_shapes(self.size));
 
         let normal_radius = resolve_corner_radius(
-            if self.checked { resolved_shapes.checked_shape } else { resolved_shapes.shape },
+            if self.checked {
+                resolved_shapes.checked_shape
+            } else {
+                resolved_shapes.shape
+            },
             height,
         );
         let pressed_radius = resolve_corner_radius(
-            if self.checked { resolved_shapes.checked_shape } else { resolved_shapes.pressed_shape },
+            if self.checked {
+                resolved_shapes.checked_shape
+            } else {
+                resolved_shapes.pressed_shape
+            },
             height,
         );
 
         let colors = toggle_button_colors(self.variant, self.checked, cx);
 
         let border_color = if self.disabled {
-            colors.border.opacity(button_shared_tokens::DISABLED_CONTAINER_OPACITY)
+            colors
+                .border
+                .opacity(button_shared_tokens::DISABLED_CONTAINER_OPACITY)
         } else {
             colors.border
         };
@@ -330,14 +340,18 @@ impl RenderOnce for Toggle {
             if colors.container.a == 0. {
                 colors.container
             } else {
-                colors.container.opacity(button_shared_tokens::DISABLED_CONTAINER_OPACITY)
+                colors
+                    .container
+                    .opacity(button_shared_tokens::DISABLED_CONTAINER_OPACITY)
             }
         } else {
             colors.container
         };
 
         let content_color = if self.disabled {
-            colors.content.opacity(button_shared_tokens::DISABLED_CONTENT_OPACITY)
+            colors
+                .content
+                .opacity(button_shared_tokens::DISABLED_CONTENT_OPACITY)
         } else {
             colors.content
         };
@@ -359,9 +373,17 @@ impl RenderOnce for Toggle {
             .items_center()
             .justify_center()
             .h(height)
-            .min_w(button_dimension_tokens::resolve(self.size, false, false, !has_children).min_width)
-            .px(button_dimension_tokens::resolve(self.size, false, false, !has_children).horizontal_padding)
-            .py(button_dimension_tokens::resolve(self.size, false, false, !has_children).vertical_padding)
+            .min_w(
+                button_dimension_tokens::resolve(self.size, false, false, !has_children).min_width,
+            )
+            .px(
+                button_dimension_tokens::resolve(self.size, false, false, !has_children)
+                    .horizontal_padding,
+            )
+            .py(
+                button_dimension_tokens::resolve(self.size, false, false, !has_children)
+                    .vertical_padding,
+            )
             .when(self.border_corners.top_left, |this| {
                 this.rounded_tl(normal_radius)
             })
@@ -376,16 +398,23 @@ impl RenderOnce for Toggle {
             })
             .bg(normal_bg)
             .border_color(border_color)
-            .when(self.variant == ToggleVariant::Outlined || self.variant == ToggleVariant::Outline, |this| {
-                this.when(self.border_edges.left, |this| this.border_l_1())
-                    .when(self.border_edges.right, |this| this.border_r_1())
-                    .when(self.border_edges.top, |this| this.border_t_1())
-                    .when(self.border_edges.bottom, |this| this.border_b_1())
-            })
+            .when(
+                self.variant == ToggleVariant::Outlined || self.variant == ToggleVariant::Outline,
+                |this| {
+                    this.when(self.border_edges.left, |this| this.border_l_1())
+                        .when(self.border_edges.right, |this| this.border_r_1())
+                        .when(self.border_edges.top, |this| this.border_t_1())
+                        .when(self.border_edges.bottom, |this| this.border_b_1())
+                },
+            )
             .text_color(content_color)
             .when(!self.disabled, |this| {
                 this.track_focus(&focus_handle)
-                    .cursor(shared::interaction::cursor(false, false, self.style.mouse_cursor))
+                    .cursor(shared::interaction::cursor(
+                        false,
+                        false,
+                        self.style.mouse_cursor,
+                    ))
                     .hover(|this| {
                         this.bg(shared::interaction::state_layer(
                             colors.container,
@@ -421,11 +450,16 @@ impl RenderOnce for Toggle {
                     })
             })
             .when(self.disabled, |this| {
-                this.cursor(shared::interaction::cursor(true, false, self.style.mouse_cursor))
+                this.cursor(shared::interaction::cursor(
+                    true,
+                    false,
+                    self.style.mouse_cursor,
+                ))
             })
-            .when(cx.theme().shadow && self.variant == ToggleVariant::Elevated, |this| {
-                this.shadow_xs()
-            })
+            .when(
+                cx.theme().shadow && self.variant == ToggleVariant::Elevated,
+                |this| this.shadow_xs(),
+            )
             .refine_style(&self.style)
             .children(self.children);
 
@@ -620,6 +654,35 @@ impl RenderOnce for ToggleGroup {
 mod tests {
     use super::*;
     use crate::IconName;
+    use gpui::{
+        div, px, AppContext, Context, Entity, IntoElement, Render, TestAppContext,
+        VisualTestContext, Window,
+    };
+
+    struct ToggleState {
+        clicks: usize,
+    }
+
+    struct ToggleRoot {
+        state: Entity<ToggleState>,
+    }
+
+    impl Render for ToggleRoot {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let state = self.state.clone();
+            let checked = self.state.read(cx).clicks > 0;
+            div().size_full().child(
+                div()
+                    .debug_selector(|| "toggle-button".to_string())
+                    .size(px(48.))
+                    .child(Toggle::new("toggle-button").checked(checked).on_click(
+                        move |_, _, cx| {
+                            state.update(cx, |state, _| state.clicks += 1);
+                        },
+                    )),
+            )
+        }
+    }
 
     #[gpui::test]
     fn test_toggle_builder(_cx: &mut gpui::TestAppContext) {
@@ -658,5 +721,23 @@ mod tests {
         assert!(group.segmented);
         assert!(!group.disabled);
         assert!(group.on_click.is_some());
+    }
+
+    #[gpui::test]
+    fn rendered_toggle_click_updates_entity_state(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let state = cx.new(|_| ToggleState { clicks: 0 });
+        let state_for_root = state.clone();
+        let (_, visual) = cx.add_window_view(move |_, _| ToggleRoot {
+            state: state_for_root,
+        });
+        let visual: &mut VisualTestContext = visual;
+        visual.run_until_parked();
+        visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        let bounds = visual.debug_bounds("toggle-button").expect("toggle bounds");
+        visual.simulate_click(bounds.center(), Default::default());
+        assert_eq!(state.read_with(visual, |state, _| state.clicks), 1);
     }
 }

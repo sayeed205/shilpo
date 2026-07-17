@@ -310,7 +310,64 @@ impl RenderOnce for IconButton {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::px;
+    use crate::IconName;
+    use gpui::{
+        div, px, AppContext, Context, Entity, IntoElement, Render, TestAppContext,
+        VisualTestContext, Window,
+    };
+
+    struct ClickState {
+        count: usize,
+    }
+
+    struct ClickRoot {
+        state: Entity<ClickState>,
+        disabled: bool,
+        loading: bool,
+    }
+
+    impl Render for ClickRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let state = self.state.clone();
+            div().size_full().child(
+                div()
+                    .debug_selector(|| "icon-button".to_string())
+                    .size(px(48.))
+                    .child(
+                        IconButton::new("icon-button")
+                            .icon(IconName::Plus)
+                            .disabled(self.disabled)
+                            .loading(self.loading)
+                            .on_click(move |_, _, cx| {
+                                state.update(cx, |state, _| state.count += 1);
+                            }),
+                    ),
+            )
+        }
+    }
+
+    fn click_root<'a>(
+        cx: &'a mut TestAppContext,
+        disabled: bool,
+        loading: bool,
+    ) -> (Entity<ClickState>, &'a mut VisualTestContext) {
+        cx.update(crate::init);
+        let state = cx.new(|_| ClickState { count: 0 });
+        let state_for_root = state.clone();
+        let (_, visual) = cx.add_window_view(move |_, _| ClickRoot {
+            state: state_for_root,
+            disabled,
+            loading,
+        });
+        (state, visual)
+    }
+
+    fn draw(visual: &mut VisualTestContext) {
+        visual.run_until_parked();
+        visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+    }
 
     #[test]
     fn test_icon_button_square_radius() {
@@ -344,5 +401,30 @@ mod tests {
             icon_button_tokens::dimensions(IconButtonSize::XLarge).container,
             px(72.)
         );
+    }
+
+    #[gpui::test]
+    fn rendered_enabled_icon_button_click_mutates_entity_once(cx: &mut TestAppContext) {
+        let (state, mut visual) = click_root(cx, false, false);
+        draw(visual);
+        let bounds = visual
+            .debug_bounds("icon-button")
+            .expect("icon button bounds");
+        visual.simulate_mouse_move(bounds.center(), None, Default::default());
+        visual.simulate_click(bounds.center(), Default::default());
+        assert_eq!(state.read_with(visual, |state, _| state.count), 1);
+    }
+
+    #[gpui::test]
+    fn rendered_disabled_and_loading_icon_buttons_do_not_click(cx: &mut TestAppContext) {
+        for (disabled, loading) in [(true, false), (false, true)] {
+            let (state, mut visual) = click_root(cx, disabled, loading);
+            draw(visual);
+            let bounds = visual
+                .debug_bounds("icon-button")
+                .expect("icon button bounds");
+            visual.simulate_click(bounds.center(), Default::default());
+            assert_eq!(state.read_with(visual, |state, _| state.count), 0);
+        }
     }
 }
