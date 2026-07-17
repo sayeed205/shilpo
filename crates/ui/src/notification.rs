@@ -351,7 +351,7 @@ impl Render for Notification {
                     .child(
                         Button::new("close")
                             .icon(IconName::Close)
-                            .ghost()
+                            .text()
                             .xsmall()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 cx.stop_propagation();

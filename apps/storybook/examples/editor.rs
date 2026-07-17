@@ -975,7 +975,7 @@ impl Example {
         Button::new("line-number")
             .when(self.line_number, |this| this.icon(IconName::Check))
             .label("Line Number")
-            .ghost()
+            .text()
             .xsmall()
             .on_click(cx.listener(|this, _, window, cx| {
                 this.line_number = !this.line_number;
@@ -988,7 +988,7 @@ impl Example {
 
     fn render_soft_wrap_button(&self, _: &mut Window, cx: &mut Context<Self>) -> Button {
         Button::new("soft-wrap")
-            .ghost()
+            .text()
             .xsmall()
             .when(self.soft_wrap, |this| this.icon(IconName::Check))
             .label("Soft Wrap")
@@ -1003,7 +1003,7 @@ impl Example {
 
     fn render_show_whitespaces_button(&self, _: &mut Window, cx: &mut Context<Self>) -> Button {
         Button::new("show-whitespace")
-            .ghost()
+            .text()
             .xsmall()
             .when(self.show_whitespaces, |this| this.icon(IconName::Check))
             .label("Show Whitespaces")
@@ -1018,7 +1018,7 @@ impl Example {
 
     fn render_indent_guides_button(&self, _: &mut Window, cx: &mut Context<Self>) -> Button {
         Button::new("indent-guides")
-            .ghost()
+            .text()
             .xsmall()
             .when(self.indent_guides, |this| this.icon(IconName::Check))
             .label("Indent Guides")
@@ -1033,7 +1033,7 @@ impl Example {
 
     fn render_folding_button(&self, _: &mut Window, cx: &mut Context<Self>) -> Button {
         Button::new("folding")
-            .ghost()
+            .text()
             .xsmall()
             .when(self.folding, |this| this.icon(IconName::Check))
             .label("Folding")
@@ -1048,7 +1048,7 @@ impl Example {
 
     fn render_disabled_button(&self, _: &mut Window, cx: &mut Context<Self>) -> Button {
         Button::new("disabled")
-            .ghost()
+            .text()
             .xsmall()
             .when(self.disabled, |this| this.icon(IconName::Check))
             .label("Disabled")
@@ -1081,7 +1081,7 @@ impl Example {
         cx: &mut Context<Self>,
     ) -> Button {
         Button::new("scroll-beyond-last-line")
-            .ghost()
+            .text()
             .xsmall()
             .label(format!(
                 "Scroll Beyond: {}",
@@ -1102,7 +1102,7 @@ impl Example {
         cx: &mut Context<Self>,
     ) -> Button {
         Button::new("cursor-surrounding-lines")
-            .ghost()
+            .text()
             .xsmall()
             .label(format!(
                 "Cursor Surrounding: {}",
@@ -1122,7 +1122,7 @@ impl Example {
         let cursor = self.editor.read(cx).cursor();
 
         Button::new("line-column")
-            .ghost()
+            .text()
             .xsmall()
             .label(format!(
                 "{}:{} ({} byte)",

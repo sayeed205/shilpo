@@ -1,11 +1,10 @@
 use gpui::{
-    App, AppContext, Axis, Context, Element, Entity, FocusHandle, Focusable, Global, IntoElement,
-    ParentElement as _, Render, SharedString, Styled, Window, prelude::FluentBuilder, px,
+    prelude::FluentBuilder, px, App, AppContext, Axis, Context, Element, Entity, FocusHandle,
+    Focusable, Global, IntoElement, ParentElement as _, Render, SharedString, Styled, Window,
 };
 
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, Theme, ThemeMode,
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonVariants as _},
     group_box::GroupBoxVariant,
     h_flex,
     label::Label,
@@ -14,7 +13,7 @@ use gpui_component::{
         SettingItem, SettingPage, Settings,
     },
     text::markdown,
-    v_flex,
+    v_flex, ActiveTheme, Disableable, Icon, IconName, Sizable, Size, Theme, ThemeMode,
 };
 
 struct AppSettings {
@@ -142,7 +141,7 @@ impl SettingsStory {
                 .title_suffix(|_, _| {
                     Button::new("help")
                         .icon(IconName::Info)
-                        .ghost()
+                        .text()
                         .xsmall()
                         .on_click(|_, _, cx| {
                             cx.open_url("https://longbridge.github.io/gpui-component/")
@@ -375,7 +374,7 @@ impl SettingsStory {
                                             .with_size(options.size)
                                             .map(|this| {
                                                 if current == value {
-                                                    this.primary()
+                                                    this.filled()
                                                 } else {
                                                     this.outline()
                                                 }

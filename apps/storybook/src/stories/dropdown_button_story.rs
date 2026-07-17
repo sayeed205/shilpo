@@ -1,15 +1,14 @@
-use gpui::{ Anchor,
-    Action, App, AppContext as _, Context, Entity, Focusable, IntoElement,
-    ParentElement as _, Render, Styled as _, Window, prelude::FluentBuilder as _,
+use gpui::{
+    prelude::FluentBuilder as _, Action, Anchor, App, AppContext as _, Context, Entity, Focusable,
+    IntoElement, ParentElement as _, Render, Styled as _, Window,
 };
 use serde::Deserialize;
 
 use crate::section;
 use gpui_component::{
-    ActiveTheme, Disableable, Selectable as _, Sizable as _, Theme,
     button::{Button, ButtonVariants as _, DropdownButton},
     checkbox::Checkbox,
-    h_flex, v_flex,
+    h_flex, v_flex, ActiveTheme, Disableable, Selectable as _, Sizable as _, Theme,
 };
 
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]
@@ -128,7 +127,7 @@ impl Render for DropdownButtonStory {
             .child(
                 section("Dropdown Button").child(
                     DropdownButton::new("btn0")
-                        .primary()
+                        .filled()
                         .button(Button::new("btn").label("Primary Dropdown"))
                         .when(self.compact, |this| this.compact())
                         .loading(self.loading)
@@ -179,7 +178,7 @@ impl Render for DropdownButtonStory {
                 section("Outline").child(
                     DropdownButton::new("btn-outline")
                         .outline()
-                        .danger()
+                        .filled()
                         .button(Button::new("btn").label("Outline Dropdown"))
                         .when(self.compact, |this| this.compact())
                         .loading(self.loading)
@@ -204,7 +203,7 @@ impl Render for DropdownButtonStory {
             .child(
                 section("Ghost").child(
                     DropdownButton::new("btn-ghost")
-                        .ghost()
+                        .text()
                         .button(Button::new("btn").label("Ghost Dropdown"))
                         .when(self.compact, |this| this.compact())
                         .loading(self.loading)

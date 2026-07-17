@@ -4,13 +4,12 @@ use gpui::{
 };
 
 use gpui_component::{
-    ActiveTheme, Theme, WindowExt as _,
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonVariants as _},
     h_flex,
     menu::{DropdownMenu as _, PopupMenuItem},
     notification::{Notification, NotificationType},
     text::markdown,
-    v_flex,
+    v_flex, ActiveTheme, Theme, WindowExt as _,
 };
 
 use crate::section;
@@ -145,7 +144,7 @@ impl Render for NotificationStory {
                 section("Notification with Type")
                     .child(
                         Button::new("show-notify-info")
-                            .info()
+                            .filled_tonal()
                             .label("Info")
                             .on_click(cx.listener(|_, _, window, cx| {
                                 window.push_notification(
@@ -159,7 +158,7 @@ impl Render for NotificationStory {
                     )
                     .child(
                         Button::new("show-notify-success")
-                            .success()
+                            .filled_tonal()
                             .label("Success")
                             .on_click(cx.listener(|_, _, window, cx| {
                                 window.push_notification(
@@ -173,7 +172,7 @@ impl Render for NotificationStory {
                     )
                     .child(
                         Button::new("show-notify-warning")
-                            .warning()
+                            .filled_tonal()
                             .label("Warning")
                             .on_click(cx.listener(|_, _, window, cx| {
                                 window.push_notification(
@@ -187,7 +186,7 @@ impl Render for NotificationStory {
                     )
                     .child(
                         Button::new("show-notify-error")
-                            .danger()
+                            .filled()
                             .label("Error")
                             .on_click(cx.listener(|_, _, window, cx| {
                                 window.push_notification(
@@ -204,7 +203,7 @@ impl Render for NotificationStory {
                 section("Type with Title and Description")
                     .child(
                         Button::new("show-typed-info")
-                            .info()
+                            .filled_tonal()
                             .label("Info")
                             .on_click(cx.listener(|_, _, window, cx| {
                                 window.push_notification(
@@ -219,7 +218,7 @@ impl Render for NotificationStory {
                     )
                     .child(
                         Button::new("show-typed-success")
-                            .success()
+                            .filled_tonal()
                             .label("Success")
                             .on_click(cx.listener(|_, _, window, cx| {
                                 window.push_notification(
@@ -234,7 +233,7 @@ impl Render for NotificationStory {
                     )
                     .child(
                         Button::new("show-typed-warning")
-                            .warning()
+                            .filled_tonal()
                             .label("Warning")
                             .on_click(cx.listener(|_, _, window, cx| {
                                 window.push_notification(
@@ -249,7 +248,7 @@ impl Render for NotificationStory {
                     )
                     .child(
                         Button::new("show-typed-error")
-                            .danger()
+                            .filled()
                             .label("Error")
                             .on_click(cx.listener(|_, _, window, cx| {
                                 window.push_notification(
@@ -325,7 +324,7 @@ impl Render for NotificationStory {
                                     .title("Uh oh! Something went wrong.")
                                     .message("There was a problem with your request.")
                                     .action(|_, _, cx| {
-                                        Button::new("try-again").primary().label("Retry").on_click(
+                                        Button::new("try-again").filled().label("Retry").on_click(
                                             cx.listener(|this, _, window, cx| {
                                                 println!("You have clicked the try again action.");
                                                 this.dismiss(window, cx);

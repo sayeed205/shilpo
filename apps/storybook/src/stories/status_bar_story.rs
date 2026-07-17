@@ -3,14 +3,13 @@ use gpui::{
     Styled, Window,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dock::PanelControl,
     h_flex,
     progress::ProgressCircle,
     separator::Separator,
     status_bar::StatusBar,
-    v_flex,
+    v_flex, ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
 };
 
 use crate::section;
@@ -65,7 +64,9 @@ impl Render for StatusBarStory {
                     v_flex().w_full().child(
                         StatusBar::new()
                             .left(
-                                Button::new("branch").ghost().xsmall()
+                                Button::new("branch")
+                                    .text()
+                                    .xsmall()
                                     .icon(IconName::Github)
                                     .label("main")
                                     .tooltip("Git branch")
@@ -102,7 +103,9 @@ impl Render for StatusBarStory {
                                     ),
                             )
                             .right(
-                                Button::new("position").ghost().xsmall()
+                                Button::new("position")
+                                    .text()
+                                    .xsmall()
                                     .label("Ln 12, Col 34")
                                     .tooltip("Go to Line/Column")
                                     .on_click(|_, window, cx| {
@@ -110,16 +113,24 @@ impl Render for StatusBarStory {
                                     }),
                             )
                             .right(Separator::vertical().h_3())
-                            .right(Button::new("encoding").ghost().xsmall().label("UTF-8").on_click(
-                                |_, window, cx| {
-                                    window.push_notification("Select encoding", cx);
-                                },
-                            ))
-                            .right(Button::new("language").ghost().xsmall().label("Rust").on_click(
-                                |_, window, cx| {
-                                    window.push_notification("Select language", cx);
-                                },
-                            )),
+                            .right(
+                                Button::new("encoding")
+                                    .text()
+                                    .xsmall()
+                                    .label("UTF-8")
+                                    .on_click(|_, window, cx| {
+                                        window.push_notification("Select encoding", cx);
+                                    }),
+                            )
+                            .right(
+                                Button::new("language")
+                                    .text()
+                                    .xsmall()
+                                    .label("Rust")
+                                    .on_click(|_, window, cx| {
+                                        window.push_notification("Select language", cx);
+                                    }),
+                            ),
                     ),
                 ),
             )
@@ -143,7 +154,9 @@ impl Render for StatusBarStory {
                             )
                             .right("All changes saved")
                             .right(
-                                Button::new("notifications").ghost().xsmall()
+                                Button::new("notifications")
+                                    .text()
+                                    .xsmall()
                                     .icon(IconName::Bell)
                                     .label("3")
                                     .tooltip("3 notifications")

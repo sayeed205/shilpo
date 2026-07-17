@@ -4,12 +4,11 @@ use gpui::{
 };
 
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable, Size,
-    button::{Button, ButtonGroup, ButtonVariants},
+    button::{Button, ButtonGroup, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
     tab::{Tab, TabBar},
-    v_flex,
+    v_flex, ActiveTheme as _, Icon, IconName, Selectable as _, Sizable, Size,
 };
 
 use crate::section;
@@ -167,13 +166,13 @@ impl Render for TabsStory {
                                 .mx_1()
                                 .child(
                                     Button::new("back")
-                                        .ghost()
+                                        .text()
                                         .xsmall()
                                         .icon(IconName::ArrowLeft),
                                 )
                                 .child(
                                     Button::new("forward")
-                                        .ghost()
+                                        .text()
                                         .xsmall()
                                         .icon(IconName::ArrowRight),
                                 ),
@@ -189,12 +188,9 @@ impl Render for TabsStory {
                         .suffix(
                             h_flex()
                                 .mx_1()
-                                .child(Button::new("inbox").ghost().xsmall().icon(IconName::Inbox))
+                                .child(Button::new("inbox").text().xsmall().icon(IconName::Inbox))
                                 .child(
-                                    Button::new("more")
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::Ellipsis),
+                                    Button::new("more").text().xsmall().icon(IconName::Ellipsis),
                                 ),
                         ),
                 ),
@@ -321,7 +317,7 @@ impl Render for TabsStory {
                                     .label(label)
                                     .suffix(
                                         Button::new(format!("dynamic-tab-close-{id}"))
-                                            .ghost()
+                                            .text()
                                             .xsmall()
                                             .icon(IconName::Close),
                                     )

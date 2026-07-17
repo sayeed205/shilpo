@@ -189,7 +189,7 @@ impl AlertDialog {
     /// alert.button_props(
     ///     DialogButtonProps::default()
     ///         .ok_text("Delete")
-    ///         .ok_variant(ButtonVariant::Danger)
+    ///         .ok_variant(ButtonVariant::Filled)
     ///         .cancel_text("Keep")
     ///         .show_cancel(true)
     /// )

@@ -1,16 +1,15 @@
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    ParentElement, Render, Styled, Window, div, px,
+    div, px, App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, ParentElement, Render, Styled, Window,
 };
 
 use gpui_component::{
-    ActiveTheme, Icon, IconName, StyledExt, WindowExt as _,
-    button::{Button, ButtonVariant, ButtonVariants},
+    button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{
         AlertDialog, DialogAction, DialogButtonProps, DialogClose, DialogDescription, DialogFooter,
         DialogHeader, DialogTitle,
     },
-    v_flex,
+    v_flex, ActiveTheme, Icon, IconName, StyledExt, WindowExt as _,
 };
 
 use crate::section;
@@ -89,7 +88,7 @@ impl Render for AlertDialogStory {
                                         )
                                         .child(
                                             DialogAction::new().child(
-                                                Button::new("ok").label("Continue").primary()
+                                                Button::new("ok").label("Continue").filled()
                                             )
                                         )
                                     )
@@ -111,7 +110,7 @@ impl Render for AlertDialogStory {
                                     )
                                     .button_props(
                                         DialogButtonProps::default()
-                                            .ok_variant(ButtonVariant::Danger)
+                                            .ok_variant(ButtonVariant::Filled)
                                             .ok_text("Delete")
                                             .cancel_text("Cancel")
                                             .show_cancel(true),
@@ -151,7 +150,7 @@ impl Render for AlertDialogStory {
                                     .v_flex()
                                     .child(
                                         DialogAction::new().child(
-                                            Button::new("agree").w_full().primary().label("Allow")
+                                            Button::new("agree").w_full().filled().label("Allow")
                                         )
                                     )
                                     .child(
@@ -165,7 +164,7 @@ impl Render for AlertDialogStory {
                 .child(
                     section("Destructive Action").child(
                         AlertDialog::new(cx)
-                            .trigger(Button::new("destructive-action").outline().danger().label("Delete Account"))
+                            .trigger(Button::new("destructive-action").outline().filled().label("Delete Account"))
                             .on_ok(|_, window, cx| {
                                 window.push_notification("Your account has been deleted", cx);
                                 true
@@ -190,7 +189,7 @@ impl Render for AlertDialogStory {
                                                     Button::new("delete")
                                                         .flex_1()
                                                         .outline()
-                                                        .danger()
+                                                        .filled()
                                                         .label("Delete Forever")
                                                 )
                                             )
@@ -224,7 +223,7 @@ impl Render for AlertDialogStory {
                                         Please log in again to continue.")
                                     .footer(
                                         DialogFooter::new().child(
-                                            Button::new("sign-in").label("Sign in").primary().flex_1().on_click(
+                                            Button::new("sign-in").label("Sign in").filled().flex_1().on_click(
                                                 move |_, window, cx| {
                                                     window.push_notification("Redirecting to login...", cx);
                                                     window.close_dialog(cx);
@@ -266,7 +265,7 @@ impl Render for AlertDialogStory {
                                         )
                                         .child(
                                             DialogAction::new().child(
-                                                Button::new("update-now").flex_1().primary().label("Update Now")
+                                                Button::new("update-now").flex_1().filled().label("Update Now")
                                             )
                                         )
                                 )

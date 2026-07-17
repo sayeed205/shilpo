@@ -1,18 +1,17 @@
 use gpui::{
-    App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render,
-    StyleRefinement, Styled, Window, relative,
+    relative, App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render,
+    StyleRefinement, Styled, Window,
 };
 
 use gpui_component::{
-    ActiveTheme as _, StyledExt,
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
     radio::{Radio, RadioGroup},
     switch::Switch,
     text::markdown,
-    v_flex,
+    v_flex, ActiveTheme as _, StyledExt,
 };
 
 use crate::section;
@@ -67,7 +66,7 @@ impl Render for GroupBoxStory {
                         .child(Checkbox::new("all").label("All"))
                         .child(Checkbox::new("news-letter").label("News Letter"))
                         .child(Checkbox::new("account-activity").label("Account Activity"))
-                        .child(Button::new("ok").primary().label("Update Subscriptions")),
+                        .child(Button::new("ok").filled().label("Update Subscriptions")),
                 ),
             )
             .child(
@@ -88,7 +87,7 @@ impl Render for GroupBoxStory {
                                 .child("Include private contributions on my profile")
                                 .child(Switch::new("toggle-1").checked(false)),
                         )
-                        .child(Button::new("btn-1").primary().label("Save")),
+                        .child(Button::new("btn-1").filled().label("Save")),
                 ),
             )
             .child(

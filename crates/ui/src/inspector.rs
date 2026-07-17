@@ -515,7 +515,7 @@ fn render_inspector(
                                 .icon(IconName::Inspector)
                                 .selected(inspector.is_picking())
                                 .small()
-                                .ghost()
+                                .text()
                                 .on_click(cx.listener(|this, _, window, _| {
                                     this.start_picking();
                                     window.refresh();
@@ -527,7 +527,7 @@ fn render_inspector(
                     Button::new("close")
                         .icon(IconName::Close)
                         .small()
-                        .ghost()
+                        .text()
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(ToggleInspector), cx);
                         }),

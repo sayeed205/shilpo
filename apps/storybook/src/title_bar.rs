@@ -1,20 +1,20 @@
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, AnyElement, App, AppContext, Context, Entity, FocusHandle, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Render, SharedString, Styled as _, Subscription,
-    Window, div, px,
+    div, px, Anchor, AnyElement, App, AppContext, Context, Entity, FocusHandle,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, SharedString,
+    Styled as _, Subscription, Window,
 };
 use gpui_component::{
-    ActiveTheme as _, IconName, Side, Sizable as _, Theme, TitleBar, WindowExt as _,
     badge::Badge,
     button::{Button, ButtonVariants as _},
     menu::{AppMenuBar, DropdownMenu as _},
     scroll::ScrollbarShow,
+    ActiveTheme as _, IconName, Side, Sizable as _, Theme, TitleBar, WindowExt as _,
 };
 
 use crate::{
-    AppState, SelectFont, SelectRadius, SelectScrollbarShow, ToggleListActiveHighlight, app_menus,
+    app_menus, AppState, SelectFont, SelectRadius, SelectScrollbarShow, ToggleListActiveHighlight,
 };
 
 pub struct AppTitleBar {
@@ -107,7 +107,7 @@ impl Render for AppTitleBar {
                         .child(self.font_size_selector.clone())
                         .child(
                             Button::new("github")
-                                .ghost()
+                                .text()
                                 .icon(IconName::Github)
                                 .small()
                                 .text_color(normal_fg)
@@ -120,7 +120,7 @@ impl Render for AppTitleBar {
                             div().relative().child(
                                 Badge::new().count(notifications_count).max(99).child(
                                     Button::new("bell")
-                                        .ghost()
+                                        .text()
                                         .small()
                                         .compact()
                                         .icon(IconName::Bell)
@@ -212,7 +212,7 @@ impl Render for FontSizeSelector {
             .child(
                 Button::new("btn")
                     .small()
-                    .ghost()
+                    .text()
                     .icon(IconName::Settings2)
                     .text_color(normal_fg)
                     .hover(|style| style.bg(hover_bg).text_color(hover_fg))

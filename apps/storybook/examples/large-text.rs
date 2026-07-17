@@ -115,7 +115,7 @@ impl Render for Example {
                         .text_color(cx.theme().on_surface_variant)
                         .child(h_flex().gap_3().child({
                             Button::new("soft-wrap")
-                                .ghost()
+                                .text()
                                 .xsmall()
                                 .label("Soft Wrap")
                                 .selected(self.soft_wrap)
@@ -126,7 +126,7 @@ impl Render for Example {
                             let cursor = self.editor.read(cx).cursor();
 
                             Button::new("line-column")
-                                .ghost()
+                                .text()
                                 .xsmall()
                                 .label(format!("{}:{} ({} c)", loc.line, loc.character, cursor))
                                 .on_click(cx.listener(Self::go_to_line))

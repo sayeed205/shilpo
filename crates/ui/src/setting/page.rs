@@ -182,7 +182,7 @@ impl SettingPage {
                                 this.child(
                                     Button::new("reset")
                                         .icon(IconName::Undo2)
-                                        .ghost()
+                                        .text()
                                         .small()
                                         .tooltip(t!("Settings.Reset All"))
                                         .on_click({

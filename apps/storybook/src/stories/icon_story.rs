@@ -89,7 +89,7 @@ impl Render for IconStory {
                                         .text_color(cx.theme().on_surface_variant)
                                         .size_6(),
                                 )
-                                .with_variant(ButtonVariant::Ghost),
+                                .with_variant(ButtonVariant::Text),
                         )
                         .child(
                             Button::new("like2")
@@ -98,7 +98,7 @@ impl Render for IconStory {
                                         .text_color(cx.theme().primary)
                                         .size_6(),
                                 )
-                                .with_variant(ButtonVariant::Ghost),
+                                .with_variant(ButtonVariant::Text),
                         )
                         .child(
                             Button::new("like3")
@@ -107,7 +107,7 @@ impl Render for IconStory {
                                         .text_color(cx.theme().primary)
                                         .size_6(),
                                 )
-                                .with_variant(ButtonVariant::Ghost),
+                                .with_variant(ButtonVariant::Text),
                         ),
                 ),
             )

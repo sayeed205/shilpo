@@ -272,7 +272,7 @@ mod tests {
             .child(Button::new("btn1").label("One"))
             .child(Button::new("btn2").label("Two"))
             .child(Button::new("btn3").label("Three"))
-            .primary()
+            .filled()
             .large()
             .outline()
             .compact()
@@ -282,7 +282,7 @@ mod tests {
             .on_click(|_, _, _| {});
 
         assert_eq!(group.children.len(), 3);
-        assert_eq!(group.variant, Some(ButtonVariant::Primary));
+        assert_eq!(group.variant, Some(ButtonVariant::Filled));
         assert_eq!(group.size, Some(Size::Large));
         assert!(group.outline);
         assert!(group.compact);

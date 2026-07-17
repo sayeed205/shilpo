@@ -307,7 +307,7 @@ impl SidebarItem for SidebarMenuItem {
                                 this.child(
                                     Button::new("caret")
                                         .xsmall()
-                                        .ghost()
+                                        .text()
                                         .icon(
                                             Icon::new(IconName::ChevronRight)
                                                 .size_4()
@@ -328,9 +328,7 @@ impl SidebarItem for SidebarMenuItem {
                                 )
                             })
                     })
-                    .when(is_disabled, |this| {
-                        this.text_color(cx.theme().on_surface)
-                    })
+                    .when(is_disabled, |this| this.text_color(cx.theme().on_surface))
                     .when(!is_disabled, |this| {
                         this.on_click({
                             let open_state = open_state.clone();

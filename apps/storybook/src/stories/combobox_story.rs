@@ -1,15 +1,13 @@
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, Sizable as _,
-    button::Button,
-    button::ButtonVariants as _,
+    button::{Button, ButtonVariants as _},
     combobox::*,
     h_flex,
     searchable_list::{
         SearchableGroup, SearchableListChange, SearchableListDelegate, SearchableListItem,
         SearchableVec,
     },
-    v_flex, white,
+    v_flex, white, ActiveTheme, Icon, IconName, IndexPath, Sizable as _,
 };
 
 use crate::section;
@@ -365,7 +363,7 @@ impl ComboboxStory {
     fn new(window: &mut Window, cx: &mut App) -> Entity<Self> {
         let basic = cx.new(|cx| {
             ComboboxState::new(SearchableVec::new(FRAMEWORKS.to_vec()), vec![], window, cx)
-                                .searchable(true)
+                .searchable(true)
         });
 
         let basic_multi = cx.new(|cx| {
@@ -376,7 +374,7 @@ impl ComboboxStory {
 
         let grouped = cx.new(|cx| {
             ComboboxState::new(food_groups(), vec![IndexPath::default()], window, cx)
-                                .searchable(true)
+                .searchable(true)
         });
 
         let disabled_items = cx.new(|cx| {
@@ -387,30 +385,26 @@ impl ComboboxStory {
                 FoodItem::new("Carrots"),
                 FoodItem::new("Broccoli").disabled(),
             ]);
-            ComboboxState::new(items, vec![], window, cx)
-                                .searchable(true)
+            ComboboxState::new(items, vec![], window, cx).searchable(true)
         });
 
-        let with_icon = cx.new(|cx| {
-            ComboboxState::new(industries(), vec![], window, cx)
-                                .searchable(true)
-        });
+        let with_icon =
+            cx.new(|cx| ComboboxState::new(industries(), vec![], window, cx).searchable(true));
 
         let custom_check = cx.new(|cx| {
             ComboboxState::new(SearchableVec::new(FRAMEWORKS.to_vec()), vec![], window, cx)
-                                .searchable(true)
+                .searchable(true)
         });
 
         let with_footer = cx.new(|cx| {
             let items =
                 SearchableVec::new(vec!["Harvard University", "MIT", "Stanford", "Cambridge"]);
-            ComboboxState::new(items, vec![IndexPath::default()], window, cx)
-                                .searchable(true)
+            ComboboxState::new(items, vec![IndexPath::default()], window, cx).searchable(true)
         });
 
         let custom_trigger = cx.new(|cx| {
             ComboboxState::new(SearchableVec::new(FRAMEWORKS.to_vec()), vec![], window, cx)
-                                .searchable(true)
+                .searchable(true)
         });
 
         let multi_badges = cx.new(|cx| {
@@ -442,7 +436,7 @@ impl ComboboxStory {
                 window,
                 cx,
             )
-                        .searchable(true)
+            .searchable(true)
         });
 
         let featured = cx.new(|cx| {
@@ -452,7 +446,7 @@ impl ComboboxStory {
                 window,
                 cx,
             )
-                        .searchable(true)
+            .searchable(true)
         });
 
         let multi_expand = cx.new(|cx| {
@@ -617,7 +611,7 @@ impl Render for ComboboxStory {
                         .search_placeholder("Find university")
                         .footer(|_, cx| {
                             Button::new("add-new")
-                                .ghost()
+                                .text()
                                 .label("New university")
                                 .icon(Icon::new(IconName::Plus))
                                 .text_color(cx.theme().on_surface)
@@ -720,7 +714,7 @@ impl Render for ComboboxStory {
                                             Button::new(SharedString::from(format!(
                                                 "remove-{item}"
                                             )))
-                                            .ghost()
+                                            .text()
                                             .xsmall()
                                             .icon(Icon::new(IconName::Close).xsmall())
                                             .tab_stop(false)

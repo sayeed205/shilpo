@@ -238,7 +238,7 @@ impl RenderOnce for Sheet {
                                     .child(
                                         Button::new("close")
                                             .small()
-                                            .ghost()
+                                            .text()
                                             .icon(IconName::Close)
                                             .on_click(move |_, window, cx| {
                                                 window.close_sheet(cx);

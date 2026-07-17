@@ -640,7 +640,7 @@ impl Calendar {
                 Button::new("prev")
                     .icon(IconName::ArrowLeft)
                     .tab_stop(false)
-                    .ghost()
+                    .text()
                     .disabled(disabled)
                     .with_size(icon_size)
                     .when(view_mode.is_day(), |this| {
@@ -660,7 +660,7 @@ impl Calendar {
                         .gap_3()
                         .child(
                             Button::new("month")
-                                .ghost()
+                                .text()
                                 .label(state.month_name(0))
                                 .compact()
                                 .tab_stop(false)
@@ -680,7 +680,7 @@ impl Calendar {
                         )
                         .child(
                             Button::new("year")
-                                .ghost()
+                                .text()
                                 .label(current_year.to_string())
                                 .compact()
                                 .tab_stop(false)
@@ -718,7 +718,7 @@ impl Calendar {
             .child(
                 Button::new("next")
                     .icon(IconName::ArrowRight)
-                    .ghost()
+                    .text()
                     .tab_stop(false)
                     .disabled(disabled)
                     .with_size(icon_size)

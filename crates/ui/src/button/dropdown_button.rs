@@ -1,4 +1,4 @@
-use gpui::Corners;
+use gpui::{Corners, CursorStyle};
 use gpui::{
     Anchor, App, Context, Edges, ElementId, InteractiveElement as _, IntoElement, ParentElement,
     RenderOnce, SharedString, StyleRefinement, Styled, Window, div, prelude::FluentBuilder,
@@ -51,6 +51,14 @@ impl DropdownButton {
             anchor: Anchor::TopRight,
             tooltip: ComponentTooltip::default(),
         }
+    }
+
+    /// Override default pointing-hand cursor for this DropdownButton.
+    ///
+    /// Applied after DropdownButton defaults, so caller choice wins.
+    pub fn cursor(mut self, cursor: CursorStyle) -> Self {
+        self.style.mouse_cursor = Some(cursor);
+        self
     }
 
     /// Set tooltip text for the dropdown button.
@@ -154,12 +162,16 @@ impl Selectable for DropdownButton {
 
 impl RenderOnce for DropdownButton {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let rounded = self.variant.is_ghost() && !self.selected;
+        let rounded = matches!(self.variant, ButtonVariant::Text) && !self.selected;
 
         div()
             .id(self.id)
             .h_flex()
+            .cursor_pointer()
             .refine_style(&self.style)
+            .when(self.disabled || self.loading, |this| {
+                this.cursor(CursorStyle::OperationNotAllowed)
+            })
             .when_some(self.button, |this, button| {
                 this.child(
                     button
@@ -181,7 +193,7 @@ impl RenderOnce for DropdownButton {
                         .disabled(self.disabled || self.loading)
                         .when(self.compact, |this| this.compact())
                         .when(self.outline, |this| this.outline())
-                        .with_size(self.size)
+                        .when(self.size != Size::Medium, |this| this.with_size(self.size))
                         .with_variant(self.variant),
                 )
                 .when_some(self.menu, |this, menu| {
@@ -205,7 +217,7 @@ impl RenderOnce for DropdownButton {
                             .disabled(self.disabled || self.loading)
                             .when(self.compact, |this| this.compact())
                             .when(self.outline, |this| this.outline())
-                            .with_size(self.size)
+                            .when(self.size != Size::Medium, |this| this.with_size(self.size))
                             .with_variant(self.variant)
                             .dropdown_menu_with_anchor(self.anchor, menu),
                     )
@@ -224,7 +236,7 @@ mod tests {
         let button = Button::new("inner").label("Action");
         let dropdown = DropdownButton::new("complex-dropdown")
             .button(button)
-            .primary()
+            .filled()
             .outline()
             .large()
             .compact()
@@ -235,7 +247,7 @@ mod tests {
             .dropdown_menu_with_anchor(Anchor::BottomLeft, |menu, _, _| menu);
 
         assert!(dropdown.button.is_some());
-        assert_eq!(dropdown.variant, ButtonVariant::Primary);
+        assert_eq!(dropdown.variant, ButtonVariant::Filled);
         assert!(dropdown.outline);
         assert_eq!(dropdown.size, Size::Large);
         assert!(dropdown.compact);

@@ -1,19 +1,18 @@
 use gpui::div;
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Window, prelude::FluentBuilder as _,
+    prelude::FluentBuilder as _, App, AppContext, Context, Entity, FocusHandle, Focusable,
+    IntoElement, ParentElement, Render, Styled, Window,
 };
 
 use gpui_component::group_box::{GroupBox, GroupBoxVariants as _};
 use gpui_component::label::Label;
 use gpui_component::tag::Tag;
-use gpui_component::{ActiveTheme, IconName, StyledExt, h_flex};
 use gpui_component::{
-    Sizable,
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonVariants as _},
     collapsible::Collapsible,
-    v_flex,
+    v_flex, Sizable,
 };
+use gpui_component::{h_flex, ActiveTheme, IconName, StyledExt};
 
 use crate::section;
 
@@ -93,7 +92,7 @@ impl Render for CollapsibleStory {
                                         this.icon(IconName::ChevronUp).label("Show less")
                                     })
                                     .xsmall()
-                                    .link()
+                                    .text()
                                     .on_click({
                                         cx.listener(move |this, _, _, cx| {
                                             this.item1_open = !this.item1_open;

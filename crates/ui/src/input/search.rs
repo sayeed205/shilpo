@@ -502,7 +502,7 @@ impl Render for SearchPanel {
                                             .selected(!self.case_insensitive)
                                             .xsmall()
                                             .compact()
-                                            .ghost()
+                                            .text()
                                             .icon(IconName::CaseSensitive)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.case_insensitive = !this.case_insensitive;
@@ -525,7 +525,7 @@ impl Render for SearchPanel {
                         this.child(
                             Button::new("replace-mode")
                                 .xsmall()
-                                .ghost()
+                                .text()
                                 .icon(IconName::Replace)
                                 .selected(self.replace_mode)
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -550,7 +550,7 @@ impl Render for SearchPanel {
                     .child(
                         Button::new("prev")
                             .xsmall()
-                            .ghost()
+                            .text()
                             .icon(IconName::ChevronLeft)
                             .disabled(!has_matches)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -560,7 +560,7 @@ impl Render for SearchPanel {
                     .child(
                         Button::new("next")
                             .xsmall()
-                            .ghost()
+                            .text()
                             .icon(IconName::ChevronRight)
                             .disabled(!has_matches)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -579,7 +579,7 @@ impl Render for SearchPanel {
                     .child(
                         Button::new("close")
                             .xsmall()
-                            .ghost()
+                            .text()
                             .icon(IconName::Close)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.on_action_escape(&Escape, window, cx);

@@ -24,7 +24,9 @@ use super::{
 pub(crate) fn input_style(disabled: bool, cx: &App) -> (Hsla, Hsla) {
     if disabled {
         (
-            cx.theme().surface_container_high.mix_oklab(cx.theme().transparent, 0.8),
+            cx.theme()
+                .surface_container_high
+                .mix_oklab(cx.theme().transparent, 0.8),
             cx.theme().on_surface_variant,
         )
     } else {
@@ -201,7 +203,7 @@ impl Input {
                 IconName::EyeOff
             })
             .xsmall()
-            .ghost()
+            .text()
             .tab_stop(false)
             .on_click({
                 let state = state.clone();

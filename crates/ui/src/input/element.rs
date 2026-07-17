@@ -1108,7 +1108,7 @@ impl TextElement {
 
             // Create and prepaint icon
             let mut icon = Button::new(("fold", ix))
-                .ghost()
+                .text()
                 .icon(if info.is_folded {
                     IconName::ChevronRight
                 } else {

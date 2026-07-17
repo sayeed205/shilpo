@@ -1,6 +1,5 @@
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -8,7 +7,7 @@ use gpui_component::{
     separator::Separator,
     sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem},
     status_bar::StatusBar,
-    v_flex,
+    v_flex, Icon, IconName, Sizable as _,
 };
 
 use crate::*;
@@ -326,7 +325,7 @@ impl Render for Gallery {
                     .right(format!("v{}", env!("CARGO_PKG_VERSION")))
                     .right(
                         Button::new("assistant")
-                            .ghost()
+                            .text()
                             .xsmall()
                             .icon(IconName::Github)
                             .tooltip("GPUI Component GitHub repository")

@@ -482,7 +482,7 @@ impl RenderOnce for DatePicker {
                                                         |(i, preset)| {
                                                             Button::new(("preset", i))
                                                                 .small()
-                                                                .ghost()
+                                                                .text()
                                                                 .tab_stop(false)
                                                                 .label(preset.label.clone())
                                                                 .on_click(window.listener_for(

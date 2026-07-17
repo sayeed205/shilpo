@@ -124,7 +124,7 @@ impl Pagination {
         };
 
         Button::new(id)
-            .ghost()
+            .text()
             .compact()
             .with_size(self.size)
             .disabled(self.disabled || disabled)
@@ -198,9 +198,9 @@ impl RenderOnce for Pagination {
                             .with_size(self.size)
                             .map(|this| {
                                 if is_selected {
-                                    this.outline()
+                                    this.outlined()
                                 } else {
-                                    this.ghost()
+                                    this.text()
                                 }
                             })
                             .label(page.to_string())
@@ -219,7 +219,7 @@ impl RenderOnce for Pagination {
                         "ellipsis-{}-{}",
                         range.start, range.end
                     )))
-                    .ghost()
+                    .text()
                     .with_size(self.size)
                     .compact()
                     .disabled(self.disabled)

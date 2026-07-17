@@ -7,7 +7,7 @@ use gpui::{
 
 use crate::{
     AxisExt, Disableable, Sizable, StyledExt,
-    button::Button,
+    button::{Button, ButtonVariants as _},
     menu::{DropdownMenu, PopupMenuItem},
     setting::{
         AnySettingField, RenderOptions,
@@ -61,7 +61,7 @@ where
             .when(options.layout.is_vertical(), |this| this.w_full())
             .label(old_label)
             .dropdown_caret(true)
-            .outline()
+            .outlined()
             .disabled(options.disabled)
             .with_size(options.size)
             .refine_style(style)

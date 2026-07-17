@@ -1247,7 +1247,7 @@ impl Render for Example {
                                                             this.child(
                                                                 Button::new("run-terminal")
                                                                     .icon(IconName::SquareTerminal)
-                                                                    .ghost()
+                                                                    .text()
                                                                     .xsmall()
                                                                     .on_click(move |_, _, _cx| {
                                                                         println!(
@@ -1289,7 +1289,7 @@ impl Render for Example {
                     .child(
                         StatusBar::new().right(
                             Button::new("table-wrap")
-                                .ghost()
+                                .text()
                                 .xsmall()
                                 .label(if self.table_wrap {
                                     "Table: Wrap"

@@ -1,13 +1,13 @@
 use std::{rc::Rc, time::Duration};
 
 use gpui::{
-    prelude::FluentBuilder, App, ClipboardItem, ElementId, IntoElement, RenderOnce, SharedString,
-    Window,
+    App, ClipboardItem, ElementId, IntoElement, RenderOnce, SharedString, Window,
+    prelude::FluentBuilder,
 };
 
 use crate::{
-    button::{Button, ButtonVariants as _},
     IconName, Sizable as _,
+    button::{Button, ButtonVariants as _},
 };
 
 /// An element that provides clipboard copy functionality.
@@ -80,7 +80,7 @@ impl RenderOnce for Clipboard {
             } else {
                 IconName::Copy
             })
-            .ghost()
+            .text()
             .xsmall()
             .when_some(self.tooltip_text, |this, text| this.tooltip(text))
             .when(!copied, |this| {

@@ -79,7 +79,7 @@ impl ListDelegate for ListItemDeletegate {
                     Button::new("like")
                         .tab_stop(false)
                         .icon(IconName::Heart)
-                        .with_variant(ButtonVariant::Ghost)
+                        .with_variant(ButtonVariant::Text)
                         .size(px(18.))
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
@@ -320,7 +320,7 @@ impl SheetStory {
                     h_flex()
                         .gap_6()
                         .items_center()
-                        .child(Button::new("confirm").primary().label("Confirm").on_click(
+                        .child(Button::new("confirm").filled().label("Confirm").on_click(
                             |_, window, cx| {
                                 window.close_sheet(cx);
                             },

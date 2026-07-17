@@ -461,7 +461,7 @@ impl TabPanel {
                 this.children(
                     buttons
                         .into_iter()
-                        .map(|btn| btn.xsmall().ghost().tab_stop(false)),
+                        .map(|btn| btn.xsmall().text().tab_stop(false)),
                 )
             })
             .map(|this| {
@@ -478,7 +478,7 @@ impl TabPanel {
                         Button::new(id)
                             .icon(icon)
                             .xsmall()
-                            .ghost()
+                            .text()
                             .tab_stop(false)
                             .tooltip_with_action(tooltip, &ToggleZoom, None)
                             .when(zoomed, |this| this.selected(true))
@@ -494,7 +494,7 @@ impl TabPanel {
                 Button::new("menu")
                     .icon(IconName::Ellipsis)
                     .xsmall()
-                    .ghost()
+                    .text()
                     .tab_stop(false)
                     .dropdown_menu({
                         let zoomable = state.zoomable.map_or(false, |v| v.menu_visible());
@@ -593,7 +593,7 @@ impl TabPanel {
             Button::new(SharedString::from(format!("toggle-dock:{:?}", placement)))
                 .icon(icon)
                 .xsmall()
-                .ghost()
+                .text()
                 .tab_stop(false)
                 .tooltip(match is_open {
                     true => t!("Dock.Collapse"),
@@ -804,11 +804,8 @@ impl TabPanel {
                     .flex_grow_1()
                     .min_w_16()
                     .when(state.droppable, |this| {
-                        this.drag_over::<DragPanel>(|this, _, _, cx| {
-                            this.bg(cx.theme().primary)
-                        })
-                        .on_drop(cx.listener(
-                            move |this, drag: &DragPanel, window, cx| {
+                        this.drag_over::<DragPanel>(|this, _, _, cx| this.bg(cx.theme().primary))
+                            .on_drop(cx.listener(move |this, drag: &DragPanel, window, cx| {
                                 this.will_split_placement = None;
 
                                 let ix = if drag.tab_panel == view {
@@ -818,8 +815,7 @@ impl TabPanel {
                                 };
 
                                 this.on_drop(drag, ix, false, window, cx)
-                            },
-                        ))
+                            }))
                     }),
             )
             .when(!self.collapsed, |this| {

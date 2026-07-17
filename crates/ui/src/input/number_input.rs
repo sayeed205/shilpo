@@ -314,9 +314,9 @@ impl RenderOnce for NumberInput {
                 Button::new("minus")
                     .map(|this| {
                         if self.appearance {
-                            this.outline()
+                            this.outlined()
                         } else {
-                            this.ghost()
+                            this.text()
                         }
                     })
                     .with_size(self.size)
@@ -359,9 +359,9 @@ impl RenderOnce for NumberInput {
                 Button::new("plus")
                     .map(|this| {
                         if self.appearance {
-                            this.outline()
+                            this.outlined()
                         } else {
-                            this.ghost()
+                            this.text()
                         }
                     })
                     .with_size(self.size)

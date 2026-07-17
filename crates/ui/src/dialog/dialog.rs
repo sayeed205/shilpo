@@ -3,9 +3,9 @@ use std::{rc::Rc, sync::LazyLock, time::Duration};
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, Bounds, BoxShadow, ClickEvent, Edges,
     FocusHandle, Hsla, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement,
-    Pixels, Point, RenderOnce, Role, SharedString, StatefulInteractiveElement as _, StyleRefinement,
-    Styled, Window, WindowControlArea, actions, anchored, div, hsla, point, prelude::FluentBuilder,
-    px,
+    Pixels, Point, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
+    StyleRefinement, Styled, Window, WindowControlArea, actions, anchored, div, hsla, point,
+    prelude::FluentBuilder, px,
 };
 use rust_i18n::t;
 
@@ -49,9 +49,9 @@ impl Default for DialogButtonProps {
     fn default() -> Self {
         Self {
             ok_text: None,
-            ok_variant: ButtonVariant::Primary,
+            ok_variant: ButtonVariant::Filled,
             cancel_text: None,
-            cancel_variant: ButtonVariant::default(),
+            cancel_variant: ButtonVariant::Text,
             show_cancel: false,
             on_ok: Rc::new(|_, _, _| true),
             on_cancel: Rc::new(|_, _, _| true),
@@ -67,7 +67,7 @@ impl DialogButtonProps {
         self
     }
 
-    /// Sets the variant of the OK button. Default is `ButtonVariant::Primary`.
+    /// Sets the variant of the OK button. Default is `ButtonVariant::Filled`.
     pub fn ok_variant(mut self, ok_variant: ButtonVariant) -> Self {
         self.ok_variant = ok_variant;
         self
@@ -79,7 +79,7 @@ impl DialogButtonProps {
         self
     }
 
-    /// Sets the variant of the Cancel button. Default is `ButtonVariant::default()`.
+    /// Sets the variant of the Cancel button. Default is `ButtonVariant::Text`.
     pub fn cancel_variant(mut self, cancel_variant: ButtonVariant) -> Self {
         self.cancel_variant = cancel_variant;
         self
@@ -637,7 +637,7 @@ impl RenderOnce for Dialog {
                                     .top(top)
                                     .right(right)
                                     .small()
-                                    .ghost()
+                                    .text()
                                     .icon(IconName::Close)
                                     .on_click({
                                         let on_cancel = self.button_props.on_cancel.clone();

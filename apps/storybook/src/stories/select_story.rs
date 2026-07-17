@@ -295,7 +295,7 @@ impl Render for SelectStory {
                         .child(
                             div()
                                 .p_2()
-                                .child(Button::new("send").small().ghost().label("Send")),
+                                .child(Button::new("send").small().text().label("Send")),
                         ),
                 ),
             )

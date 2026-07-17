@@ -81,7 +81,7 @@ impl Render for TooltipStory {
                     .child(
                         Button::new("btn0")
                             .label("Search")
-                            .with_variant(ButtonVariant::Primary)
+                            .with_variant(ButtonVariant::Filled)
                             .tooltip("This is a search Button."),
                     )
                     .child(Button::new("btn1").label("Info").tooltip_with_action(
@@ -153,7 +153,7 @@ impl Render for TooltipStory {
                         .when(self.removable_button_visible, |this| {
                             this.child(
                                 Button::new("remove-tooltip-trigger")
-                                    .danger()
+                                    .filled()
                                     .label("Remove me")
                                     .tooltip("Clicking this button removes the trigger.")
                                     .on_click(cx.listener(|story, _, _, cx| {

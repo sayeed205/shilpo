@@ -191,7 +191,7 @@ impl Render for LabelStory {
                                 )
                                 .child(
                                     Button::new("btn-mask")
-                                        .with_variant(ButtonVariant::Ghost)
+                                        .with_variant(ButtonVariant::Text)
                                         .icon(if self.masked {
                                             IconName::EyeOff
                                         } else {

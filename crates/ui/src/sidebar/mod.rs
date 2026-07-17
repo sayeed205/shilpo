@@ -310,7 +310,7 @@ impl SidebarToggleButton {
     /// Create a new SidebarToggleButton.
     pub fn new() -> Self {
         Self {
-            btn: Button::new("collapse").ghost().small(),
+            btn: Button::new("collapse").text().small(),
             collapsed: false,
             side: Side::Left,
             on_click: None,

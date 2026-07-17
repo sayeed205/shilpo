@@ -226,12 +226,10 @@ impl TabBar {
                         .rounded(inner_radius)
                         .shadow_xs(),
                 ),
-                TabVariant::Pill => el.flex().items_center().child(
-                    div()
-                        .size_full()
-                        .bg(cx.theme().primary)
-                        .rounded(px(99.)),
-                ),
+                TabVariant::Pill => el
+                    .flex()
+                    .items_center()
+                    .child(div().size_full().bg(cx.theme().primary).rounded(px(99.))),
                 TabVariant::Underline => el.child(
                     div()
                         .absolute()
@@ -503,7 +501,7 @@ impl RenderOnce for TabBar {
                 this.child(
                     Button::new("more")
                         .xsmall()
-                        .ghost()
+                        .text()
                         .icon(IconName::ChevronDown)
                         .dropdown_menu(move |mut this, _, _| {
                             this = this.scrollable(true);

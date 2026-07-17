@@ -278,15 +278,13 @@ impl Render for AppMenu {
                 Button::new("menu")
                     .h_full()
                     .px_2()
-                    .ghost()
+                    .text()
                     .label(self.name.clone())
                     .selected(is_selected)
                     // ButtonCustomVariant currently ignores its foreground field.
                     // Apply title-bar colors as final style refinements instead.
                     .text_color(normal_fg)
-                    .hover(|style| {
-                        style.bg(hover_bg).text_color(hover_fg)
-                    })
+                    .hover(|style| style.bg(hover_bg).text_color(hover_fg))
                     .on_mouse_down(
                         MouseButton::Left,
                         window.listener_for(&cx.entity(), move |this, _, window, cx| {

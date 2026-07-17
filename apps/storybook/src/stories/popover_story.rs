@@ -1,17 +1,16 @@
 use gpui::{
-    Action, Anchor, App, AppContext, Context, DismissEvent, Entity, EventEmitter, FocusHandle,
-    Focusable, Half, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement as _,
-    Render, Styled as _, WeakEntity, Window, actions, div, px,
+    actions, div, px, Action, Anchor, App, AppContext, Context, DismissEvent, Entity, EventEmitter,
+    FocusHandle, Focusable, Half, InteractiveElement, IntoElement, KeyBinding, MouseButton,
+    ParentElement as _, Render, Styled as _, WeakEntity, Window,
 };
 use gpui_component::{
-    ActiveTheme, StyledExt, WindowExt,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputState},
     list::{List, ListDelegate, ListItem, ListState},
     popover::Popover,
     separator::Separator,
-    v_flex,
+    v_flex, ActiveTheme, StyledExt, WindowExt,
 };
 use serde::Deserialize;
 
@@ -122,7 +121,7 @@ impl Render for Form {
             .child(
                 Button::new("submit")
                     .label("Submit")
-                    .primary()
+                    .filled()
                     .on_click(cx.listener(move |_, _, _, cx| {
                         let _ = parent.update(cx, |this, cx| {
                             this.form_popover_open = false;
@@ -297,7 +296,7 @@ impl Render for PopoverStory {
                                 .child(Separator::horizontal())
                                 .child(
                                     Button::new("info1")
-                                        .primary()
+                                        .filled()
                                         .label("Dismiss")
                                         .w(px(80.))
                                         .on_click(cx.listener(|_, _, window, cx| {
