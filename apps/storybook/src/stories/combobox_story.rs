@@ -1,5 +1,6 @@
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
+    ActiveTheme, Icon, IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
     combobox::*,
     h_flex,
@@ -7,7 +8,7 @@ use gpui_component::{
         SearchableGroup, SearchableListChange, SearchableListDelegate, SearchableListItem,
         SearchableVec,
     },
-    v_flex, white, ActiveTheme, Icon, IconName, IndexPath, Sizable as _,
+    v_flex, white,
 };
 
 use crate::section;

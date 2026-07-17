@@ -1,5 +1,6 @@
 use gpui::{Pixels, px};
 
+use super::button_shared_tokens::COMMON_MIN_WIDTH;
 use crate::Size;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,11 +42,7 @@ pub(crate) fn resolve(size: Size, is_text: bool, compact: bool) -> ButtonDimensi
         DimensionSize::Large => (px(96.), px(48.), px(32.)),
         DimensionSize::XLarge => (px(136.), px(64.), px(48.)),
     };
-    let horizontal_padding = if is_text {
-        px(12.)
-    } else {
-        dimensions.1
-    };
+    let horizontal_padding = if is_text { px(12.) } else { dimensions.1 };
     ButtonDimensions {
         height: match size {
             Size::Size(value) => value,
@@ -57,7 +54,7 @@ pub(crate) fn resolve(size: Size, is_text: bool, compact: bool) -> ButtonDimensi
             horizontal_padding
         },
         vertical_padding: dimensions.2,
-        min_width: px(58.),
+        min_width: COMMON_MIN_WIDTH,
     }
 }
 

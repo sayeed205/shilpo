@@ -1,16 +1,17 @@
 use gpui::{
-    actions, div, px, Action, Anchor, App, AppContext, Context, DismissEvent, Entity, EventEmitter,
-    FocusHandle, Focusable, Half, InteractiveElement, IntoElement, KeyBinding, MouseButton,
-    ParentElement as _, Render, Styled as _, WeakEntity, Window,
+    Action, Anchor, App, AppContext, Context, DismissEvent, Entity, EventEmitter, FocusHandle,
+    Focusable, Half, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement as _,
+    Render, Styled as _, WeakEntity, Window, actions, div, px,
 };
 use gpui_component::{
+    ActiveTheme, StyledExt, WindowExt,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputState},
     list::{List, ListDelegate, ListItem, ListState},
     popover::Popover,
     separator::Separator,
-    v_flex, ActiveTheme, StyledExt, WindowExt,
+    v_flex,
 };
 use serde::Deserialize;
 

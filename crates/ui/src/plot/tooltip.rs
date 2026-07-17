@@ -115,7 +115,9 @@ impl CrossLine {
     /// solid band fills a `thickness`-wide strip centered on the data point.
     fn line(&self, vertical: bool, cx: &App) -> Div {
         let color = if self.dashed {
-            cx.theme().outline_variant.mix(cx.theme().on_surface_variant, 0.8)
+            cx.theme()
+                .outline_variant
+                .mix(cx.theme().on_surface_variant, 0.8)
         } else {
             cx.theme().on_surface_variant.opacity(0.08)
         };

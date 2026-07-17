@@ -433,11 +433,19 @@ impl std::ops::Deref for HighlightTheme {
 
 impl HighlightTheme {
     pub fn default_dark() -> std::sync::Arc<Self> {
-        std::sync::Arc::new(Self { name: "Material Dark".into(), appearance: crate::ThemeMode::Dark, style: HighlightThemeStyle::default() })
+        std::sync::Arc::new(Self {
+            name: "Material Dark".into(),
+            appearance: crate::ThemeMode::Dark,
+            style: HighlightThemeStyle::default(),
+        })
     }
 
     pub fn default_light() -> std::sync::Arc<Self> {
-        std::sync::Arc::new(Self { name: "Material Light".into(), appearance: crate::ThemeMode::Light, style: HighlightThemeStyle::default() })
+        std::sync::Arc::new(Self {
+            name: "Material Light".into(),
+            appearance: crate::ThemeMode::Light,
+            style: HighlightThemeStyle::default(),
+        })
     }
 }
 

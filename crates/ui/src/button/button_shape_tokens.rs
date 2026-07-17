@@ -1,35 +1,46 @@
-use gpui::{Pixels, px};
 use crate::Size;
+use gpui::{Pixels, px};
 
 use super::{ButtonRounded, button_dimension_tokens};
 
-#[derive(Clone, Copy)]
-enum Corner {
-    Full,
-    Dp(f32),
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ButtonShape {
+    CornerFull,
+    Corner(Pixels),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ButtonShapes {
+    pub shape: ButtonShape,
+    pub pressed_shape: ButtonShape,
 }
 
 #[derive(Clone, Copy)]
 struct ShapeFamily {
-    shape: Corner,
-    pressed_shape: Corner,
-    square: Corner,
+    shapes: ButtonShapes,
+    square: ButtonShape,
 }
 
 const SMALL: ShapeFamily = ShapeFamily {
-    shape: Corner::Full,
-    pressed_shape: Corner::Dp(8.),
-    square: Corner::Dp(12.),
+    shapes: ButtonShapes {
+        shape: ButtonShape::CornerFull,
+        pressed_shape: ButtonShape::Corner(px(8.)),
+    },
+    square: ButtonShape::Corner(px(12.)),
 };
 const MEDIUM: ShapeFamily = ShapeFamily {
-    shape: Corner::Full,
-    pressed_shape: Corner::Dp(12.),
-    square: Corner::Dp(16.),
+    shapes: ButtonShapes {
+        shape: ButtonShape::CornerFull,
+        pressed_shape: ButtonShape::Corner(px(12.)),
+    },
+    square: ButtonShape::Corner(px(16.)),
 };
 const LARGE: ShapeFamily = ShapeFamily {
-    shape: Corner::Full,
-    pressed_shape: Corner::Dp(16.),
-    square: Corner::Dp(28.),
+    shapes: ButtonShapes {
+        shape: ButtonShape::CornerFull,
+        pressed_shape: ButtonShape::Corner(px(16.)),
+    },
+    square: ButtonShape::Corner(px(28.)),
 };
 
 fn family(size: Size) -> ShapeFamily {
@@ -40,31 +51,39 @@ fn family(size: Size) -> ShapeFamily {
     }
 }
 
-fn corner_radius(corner: Corner, height: Pixels) -> Pixels {
+pub fn button_shapes(size: Size) -> ButtonShapes {
+    family(size).shapes
+}
+
+fn corner_radius(corner: ButtonShape, height: Pixels) -> Pixels {
     match corner {
-        Corner::Full => height * 0.5,
-        Corner::Dp(value) => px(value),
+        ButtonShape::CornerFull => height * 0.5,
+        ButtonShape::Corner(value) => value,
     }
 }
 
 /// Resolves static M3/M3E shape tokens. Pressed-shape morphing is intentionally
 /// not applied; state layers remain static.
-pub(crate) fn resolve(
-    rounding: ButtonRounded,
-    size: Size,
-    final_height: Option<Pixels>,
-) -> Pixels {
+pub(crate) fn resolve(rounding: ButtonRounded, size: Size, final_height: Option<Pixels>) -> Pixels {
     let family = family(size);
-    let _pressed_shape = family.pressed_shape;
+    let _pressed_shape = family.shapes.pressed_shape;
     match rounding {
         ButtonRounded::Token => corner_radius(
-            family.shape,
+            family.shapes.shape,
             final_height.unwrap_or_else(|| button_dimension_tokens::height(size)),
         ),
         ButtonRounded::None => Pixels::ZERO,
-        ButtonRounded::Small => corner_radius(family.pressed_shape, button_dimension_tokens::height(size)),
-        ButtonRounded::Medium => corner_radius(family.square, button_dimension_tokens::height(size)),
-        ButtonRounded::Large => corner_radius(family.pressed_shape, button_dimension_tokens::height(size)),
+        ButtonRounded::Small => corner_radius(
+            family.shapes.pressed_shape,
+            button_dimension_tokens::height(size),
+        ),
+        ButtonRounded::Medium => {
+            corner_radius(family.square, button_dimension_tokens::height(size))
+        }
+        ButtonRounded::Large => corner_radius(
+            family.shapes.pressed_shape,
+            button_dimension_tokens::height(size),
+        ),
         ButtonRounded::Size(value) => value,
     }
 }

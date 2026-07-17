@@ -1,5 +1,6 @@
 use gpui::{prelude::*, *};
 use gpui_component::{
+    Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -7,7 +8,7 @@ use gpui_component::{
     separator::Separator,
     sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem},
     status_bar::StatusBar,
-    v_flex, Icon, IconName, Sizable as _,
+    v_flex,
 };
 
 use crate::*;
@@ -63,6 +64,7 @@ impl Gallery {
                     StoryContainer::panel::<GroupBoxStory>(window, cx),
                     StoryContainer::panel::<HoverCardStory>(window, cx),
                     StoryContainer::panel::<IconStory>(window, cx),
+                    StoryContainer::panel::<IconButtonStory>(window, cx),
                     StoryContainer::panel::<ImageStory>(window, cx),
                     StoryContainer::panel::<InputStory>(window, cx),
                     StoryContainer::panel::<KbdStory>(window, cx),
@@ -81,6 +83,7 @@ impl Gallery {
                     StoryContainer::panel::<ResizableStory>(window, cx),
                     StoryContainer::panel::<ScrollbarStory>(window, cx),
                     StoryContainer::panel::<SelectStory>(window, cx),
+                    StoryContainer::panel::<SegmentedButtonStory>(window, cx),
                     StoryContainer::panel::<SeparatorStory>(window, cx),
                     StoryContainer::panel::<SettingsStory>(window, cx),
                     StoryContainer::panel::<SheetStory>(window, cx),

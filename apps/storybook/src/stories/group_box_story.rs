@@ -1,9 +1,10 @@
 use gpui::{
-    relative, App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render,
-    StyleRefinement, Styled, Window,
+    App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render,
+    StyleRefinement, Styled, Window, relative,
 };
 
 use gpui_component::{
+    ActiveTheme as _, StyledExt,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     group_box::{GroupBox, GroupBoxVariants as _},
@@ -11,7 +12,7 @@ use gpui_component::{
     radio::{Radio, RadioGroup},
     switch::Switch,
     text::markdown,
-    v_flex, ActiveTheme as _, StyledExt,
+    v_flex,
 };
 
 use crate::section;

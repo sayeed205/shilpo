@@ -1,8 +1,8 @@
-use gpui::{Corners, CursorStyle};
 use gpui::{
     Anchor, App, Context, Edges, ElementId, InteractiveElement as _, IntoElement, ParentElement,
     RenderOnce, SharedString, StyleRefinement, Styled, Window, div, prelude::FluentBuilder,
 };
+use gpui::{Corners, CursorStyle};
 
 use crate::{
     Disableable, IconName, Selectable, Sizable, Size, StyledExt as _,
@@ -10,7 +10,7 @@ use crate::{
     tooltip::ComponentTooltip,
 };
 
-use super::{Button, ButtonRounded, ButtonVariant, ButtonVariants};
+use super::{Button, ButtonRounded, ButtonVariant, ButtonVariants, shared};
 
 #[derive(IntoElement)]
 pub struct DropdownButton {
@@ -163,14 +163,19 @@ impl Selectable for DropdownButton {
 impl RenderOnce for DropdownButton {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let rounded = matches!(self.variant, ButtonVariant::Text) && !self.selected;
+        let cursor = self.style.mouse_cursor;
 
         div()
             .id(self.id)
             .h_flex()
-            .cursor_pointer()
+            .cursor(shared::interaction::cursor(
+                self.disabled,
+                self.loading,
+                cursor,
+            ))
             .refine_style(&self.style)
             .when(self.disabled || self.loading, |this| {
-                this.cursor(CursorStyle::OperationNotAllowed)
+                this.cursor(shared::interaction::cursor(true, self.loading, cursor))
             })
             .when_some(self.button, |this, button| {
                 this.child(

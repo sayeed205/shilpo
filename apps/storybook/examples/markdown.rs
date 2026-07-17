@@ -419,7 +419,11 @@ impl MarkdownPlugin for TickerPlugin {
         let symbol = ticker.symbol.as_str();
         let quote = self.quote(symbol);
         let up = quote.change >= 0.0;
-        let trend = if up { cx.theme().primary } else { cx.theme().primary };
+        let trend = if up {
+            cx.theme().primary
+        } else {
+            cx.theme().primary
+        };
 
         v_flex()
             .w(px(240.))

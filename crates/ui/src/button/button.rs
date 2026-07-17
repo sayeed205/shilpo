@@ -15,10 +15,9 @@ use gpui::{
 };
 
 use super::{
-    button_dimension_tokens,
-    button_state_tokens,
-    button_shape_tokens,
+    button_dimension_tokens, button_shape_tokens, button_shared_tokens,
     button_tokens::{self, ButtonElevation},
+    shared,
 };
 
 #[derive(Default, Clone, Copy)]
@@ -343,13 +342,10 @@ impl RenderOnce for Button {
         let cursor_disabled = self.disabled || self.loading;
         let hoverable = self.hoverable();
         let normal_style = style.normal(cx);
-        let state_tokens = button_state_tokens::tokens();
+        let state_tokens = button_shared_tokens::STATE_OPACITIES;
         let color_tokens = button_tokens::tokens(style, cx);
-        let dimensions = button_dimension_tokens::resolve(
-            self.size,
-            style == ButtonVariant::Text,
-            self.compact,
-        );
+        let dimensions =
+            button_dimension_tokens::resolve(self.size, style == ButtonVariant::Text, self.compact);
         let icon_size = match self.size {
             Size::Size(v) => Size::Size(v * 0.75),
             _ => self.size,
@@ -361,11 +357,8 @@ impl RenderOnce for Button {
             .clone();
         let is_focused = focus_handle.is_focused(window);
 
-        let rounding = button_shape_tokens::resolve(
-            self.rounded,
-            self.size,
-            Some(dimensions.height),
-        );
+        let rounding =
+            button_shape_tokens::resolve(self.rounded, self.size, Some(dimensions.height));
 
         self.base
             .role(Role::Button)
@@ -380,12 +373,15 @@ impl RenderOnce for Button {
                         .tab_stop(self.tab_stop),
                 )
             })
-            .cursor_pointer()
+            .cursor(shared::interaction::cursor(
+                self.disabled,
+                self.loading,
+                None,
+            ))
             .flex()
             .flex_shrink_0()
             .items_center()
             .justify_center()
-            .cursor_pointer()
             .h(dimensions.height)
             .min_w(dimensions.min_width)
             .px(dimensions.horizontal_padding)
@@ -448,7 +444,7 @@ impl RenderOnce for Button {
                 this.border_color(cx.theme().transparent).shadow_none()
             })
             .when(is_focused && !self.disabled, |this| {
-                this.bg(button_state_tokens::state_layer(
+                this.bg(shared::interaction::state_layer(
                     color_tokens.container,
                     color_tokens.content,
                     state_tokens.focus,
@@ -575,21 +571,21 @@ impl ButtonVariant {
     }
 
     fn hovered(&self, cx: &mut App) -> ButtonVariantStyle {
-        self.state(cx, button_state_tokens::tokens().hover)
+        self.state(cx, button_shared_tokens::STATE_OPACITIES.hover)
     }
 
     fn pressed(&self, cx: &mut App) -> ButtonVariantStyle {
-        self.state(cx, button_state_tokens::tokens().pressed)
+        self.state(cx, button_shared_tokens::STATE_OPACITIES.pressed)
     }
 
     fn selected(&self, cx: &mut App) -> ButtonVariantStyle {
-        self.state(cx, button_state_tokens::tokens().dragged)
+        self.normal(cx)
     }
 
     fn state(&self, cx: &mut App, opacity: f32) -> ButtonVariantStyle {
         let tokens = button_tokens::tokens(*self, cx);
         ButtonVariantStyle {
-            bg: button_state_tokens::state_layer(tokens.container, tokens.content, opacity),
+            bg: shared::interaction::state_layer(tokens.container, tokens.content, opacity),
             border: tokens.border,
             fg: tokens.content,
             underline: false,
@@ -599,8 +595,14 @@ impl ButtonVariant {
 
     fn disabled(&self, cx: &mut App) -> ButtonVariantStyle {
         let container = match self {
-            ButtonVariant::FilledTonal => cx.theme().on_surface.opacity(0.12),
-            _ => cx.theme().on_surface.opacity(0.10),
+            ButtonVariant::FilledTonal => cx
+                .theme()
+                .on_surface
+                .opacity(button_shared_tokens::DISABLED_CONTAINER_OPACITY),
+            _ => cx
+                .theme()
+                .on_surface
+                .opacity(button_shared_tokens::DISABLED_CONTAINER_OPACITY),
         };
         ButtonVariantStyle {
             bg: container.into(),
@@ -609,7 +611,10 @@ impl ButtonVariant {
             } else {
                 cx.theme().transparent
             },
-            fg: cx.theme().on_surface_variant.opacity(0.38),
+            fg: cx
+                .theme()
+                .on_surface_variant
+                .opacity(button_shared_tokens::DISABLED_CONTENT_OPACITY),
             underline: false,
             shadow: false,
         }

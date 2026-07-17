@@ -477,11 +477,19 @@ impl Deref for HighlightTheme {
 
 impl HighlightTheme {
     pub fn default_dark() -> Arc<Self> {
-        Arc::new(Self { name: "Material Dark".into(), appearance: ThemeMode::Dark, style: HighlightThemeStyle::default() })
+        Arc::new(Self {
+            name: "Material Dark".into(),
+            appearance: ThemeMode::Dark,
+            style: HighlightThemeStyle::default(),
+        })
     }
 
     pub fn default_light() -> Arc<Self> {
-        Arc::new(Self { name: "Material Light".into(), appearance: ThemeMode::Light, style: HighlightThemeStyle::default() })
+        Arc::new(Self {
+            name: "Material Light".into(),
+            appearance: ThemeMode::Light,
+            style: HighlightThemeStyle::default(),
+        })
     }
 }
 

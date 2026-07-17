@@ -1,9 +1,10 @@
 use gpui::{
-    prelude::FluentBuilder, px, App, AppContext, Axis, Context, Element, Entity, FocusHandle,
-    Focusable, Global, IntoElement, ParentElement as _, Render, SharedString, Styled, Window,
+    App, AppContext, Axis, Context, Element, Entity, FocusHandle, Focusable, Global, IntoElement,
+    ParentElement as _, Render, SharedString, Styled, Window, prelude::FluentBuilder, px,
 };
 
 use gpui_component::{
+    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, Theme, ThemeMode,
     button::{Button, ButtonVariants as _},
     group_box::GroupBoxVariant,
     h_flex,
@@ -13,7 +14,7 @@ use gpui_component::{
         SettingItem, SettingPage, Settings,
     },
     text::markdown,
-    v_flex, ActiveTheme, Disableable, Icon, IconName, Sizable, Size, Theme, ThemeMode,
+    v_flex,
 };
 
 struct AppSettings {

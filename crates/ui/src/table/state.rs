@@ -12,9 +12,9 @@ use crate::{
     v_flex,
 };
 use gpui::{
-    AppContext, Axis, Background, Bounds, ClickEvent, Context, Div, DragMoveEvent, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, MouseDownEvent,
-    ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString, Stateful,
+    AppContext, Axis, Background, Bounds, ClickEvent, Context, Div, DragMoveEvent, EventEmitter,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
+    MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled, Task, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
@@ -1413,15 +1413,14 @@ where
                     false => this.opacity(0.5),
                 })
                 .hover(|this| this.bg(Background::from(cx.theme().secondary)).opacity(7.))
-                .active(|this| this.bg(Background::from(cx.theme().secondary_container)).opacity(1.))
+                .active(|this| {
+                    this.bg(Background::from(cx.theme().secondary_container))
+                        .opacity(1.)
+                })
                 .on_click(
                     cx.listener(move |table, _, window, cx| table.perform_sort(col_ix, window, cx)),
                 )
-                .child(
-                    Icon::new(icon)
-                        .size_3()
-                        .text_color(cx.theme().on_secondary),
-                ),
+                .child(Icon::new(icon).size_3().text_color(cx.theme().on_secondary)),
         )
     }
 
@@ -1864,9 +1863,7 @@ where
                                                                     cx.theme().primary_container,
                                                                 ))
                                                                 .border_1()
-                                                                .border_color(
-                                                                    cx.theme().primary,
-                                                                ),
+                                                                .border_color(cx.theme().primary),
                                                         )
                                                     })
                                                     .when(
@@ -1981,11 +1978,13 @@ where
                                                                 div()
                                                                     .absolute()
                                                                     .inset_0()
-                                                                    .bg(Background::from(cx.theme().primary_container))
+                                                                    .bg(Background::from(
+                                                                        cx.theme()
+                                                                            .primary_container,
+                                                                    ))
                                                                     .border_1()
                                                                     .border_color(
-                                                                        cx.theme()
-                                                                            .primary,
+                                                                        cx.theme().primary,
                                                                     ),
                                                             )
                                                         })
@@ -2095,7 +2094,9 @@ where
                 .h(row_height)
                 .border_b_1()
                 .border_color(cx.theme().outline_variant)
-                .when(is_stripe_row, |this| this.bg(Background::from(cx.theme().surface_container_low)))
+                .when(is_stripe_row, |this| {
+                    this.bg(Background::from(cx.theme().surface_container_low))
+                })
                 .when(self.cell_selectable && self.row_header, |this| {
                     // Render empty row header cell for fake rows
                     this.child(

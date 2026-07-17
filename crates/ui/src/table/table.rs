@@ -1,7 +1,7 @@
 use gpui::{
-    AnyElement, App, Background, InteractiveElement as _, IntoElement, ParentElement, Pixels, RenderOnce, Role,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, Window, div,
-    prelude::FluentBuilder as _, px, relative,
+    AnyElement, App, Background, InteractiveElement as _, IntoElement, ParentElement, Pixels,
+    RenderOnce, Role, StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, Window,
+    div, prelude::FluentBuilder as _, px, relative,
 };
 
 use crate::{ActiveTheme as _, AnyChildElement, ChildElement, Sizable, Size, StyledExt as _};

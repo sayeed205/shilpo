@@ -149,7 +149,10 @@ impl RenderOnce for Radio {
         let (border_color, bg) = if checked {
             (cx.theme().primary, cx.theme().primary)
         } else {
-            (cx.theme().surface_container_highest, cx.theme().surface_container_highest.opacity(0.5))
+            (
+                cx.theme().surface_container_highest,
+                cx.theme().surface_container_highest.opacity(0.5),
+            )
         };
         let (border_color, bg) = if disabled {
             (border_color.opacity(0.5), bg.opacity(0.5))

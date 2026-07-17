@@ -1,9 +1,10 @@
 use gpui::{
-    div, px, App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
+    ParentElement, Render, SharedString, Styled, Window, div, px,
 };
 
 use gpui_component::{
+    ActiveTheme, Icon, IconName, WindowExt as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     date_picker::{DatePicker, DatePickerState},
@@ -15,11 +16,11 @@ use gpui_component::{
     input::{Input, InputState},
     select::{Select, SelectState},
     table::{Column, DataTable, TableDelegate, TableState},
-    text::{markdown, TextView},
-    v_flex, ActiveTheme, Icon, IconName, WindowExt as _,
+    text::{TextView, markdown},
+    v_flex,
 };
 
-use crate::{section, TestAction};
+use crate::{TestAction, section};
 
 pub struct DialogStory {
     focus_handle: FocusHandle,

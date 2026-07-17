@@ -278,7 +278,8 @@ impl<T> Plot for SankeyChart<T> {
                     }
                     if let Some(node_label) = &self.node_label {
                         lines.push(
-                            SankeyLabel::new(node_label(datum)).color(cx.theme().on_surface_variant),
+                            SankeyLabel::new(node_label(datum))
+                                .color(cx.theme().on_surface_variant),
                         );
                     }
                     lines

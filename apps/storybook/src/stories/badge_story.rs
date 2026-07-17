@@ -3,8 +3,8 @@ use gpui::{
     Styled, Window,
 };
 use gpui_component::{
-    avatar::Avatar, badge::Badge, dock::PanelControl, v_flex, ActiveTheme as _, Icon, IconName,
-    Sizable as _,
+    ActiveTheme as _, Icon, IconName, Sizable as _, avatar::Avatar, badge::Badge,
+    dock::PanelControl, v_flex,
 };
 
 use crate::section;
@@ -133,17 +133,19 @@ impl Render for BadgeStory {
                         ),
                     )
                     .child(
-                        Badge::new().count(2).color(cx.theme().primary).large().child(
-                            Badge::new()
-                                .icon(IconName::Star)
-                                .large()
-                                .color(cx.theme().primary)
-                                .child(
-                                    Avatar::new().large().src(
+                        Badge::new()
+                            .count(2)
+                            .color(cx.theme().primary)
+                            .large()
+                            .child(
+                                Badge::new()
+                                    .icon(IconName::Star)
+                                    .large()
+                                    .color(cx.theme().primary)
+                                    .child(Avatar::new().large().src(
                                         "https://avatars.githubusercontent.com/u/20092316?v=4",
-                                    ),
-                                ),
-                        ),
+                                    )),
+                            ),
                     )
                     .child(
                         Badge::new().count(3).color(cx.theme().primary).child(

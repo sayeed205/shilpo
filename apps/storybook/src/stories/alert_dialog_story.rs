@@ -1,15 +1,16 @@
 use gpui::{
-    div, px, App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement, Render, Styled, Window,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
+    ParentElement, Render, Styled, Window, div, px,
 };
 
 use gpui_component::{
+    ActiveTheme, Icon, IconName, StyledExt, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{
         AlertDialog, DialogAction, DialogButtonProps, DialogClose, DialogDescription, DialogFooter,
         DialogHeader, DialogTitle,
     },
-    v_flex, ActiveTheme, Icon, IconName, StyledExt, WindowExt as _,
+    v_flex,
 };
 
 use crate::section;

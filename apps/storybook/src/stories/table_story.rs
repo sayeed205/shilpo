@@ -190,7 +190,9 @@ impl Render for TableStory {
                             TableBody::new().children(invoices.iter().enumerate().take(6).map(
                                 |(ix, (invoice, _, method, amount, date))| {
                                     TableRow::new()
-                                        .when(ix % 2 != 0, |this| this.bg(cx.theme().surface_container_low))
+                                        .when(ix % 2 != 0, |this| {
+                                            this.bg(cx.theme().surface_container_low)
+                                        })
                                         .child(
                                             TableCell::new().w(px(100.)).child(invoice.to_string()),
                                         )

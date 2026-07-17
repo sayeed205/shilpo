@@ -313,9 +313,7 @@ impl RenderOnce for DescriptionList {
                                                 .when(self.layout.is_horizontal(), |this| {
                                                     this.h_full()
                                                 })
-                                                .text_color(
-                                                    cx.theme().on_surface_variant,
-                                                )
+                                                .text_color(cx.theme().on_surface_variant)
                                                 .text_sm()
                                                 .px(padding_x)
                                                 .py(padding_y)

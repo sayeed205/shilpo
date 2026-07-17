@@ -3,10 +3,10 @@ use gpui::{
     Styled as _, Window, px,
 };
 use gpui_component::{
+    Disableable as _, Selectable as _, Sizable as _, Size,
     button::{Button, ButtonGroup, ButtonRounded, ButtonVariant, ButtonVariants as _},
     label::Label,
     v_flex,
-    Disableable as _, Selectable as _, Sizable as _, Size,
 };
 
 use crate::section;

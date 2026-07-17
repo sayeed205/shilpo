@@ -109,10 +109,7 @@ impl RenderOnce for Switch {
             .unwrap_or(cx.theme().primary.into());
         let (bg, toggle_bg): (Background, Background) = match checked {
             true => (checked_bg, cx.theme().on_secondary.into()),
-            false => (
-                cx.theme().secondary.into(),
-                cx.theme().on_secondary.into(),
-            ),
+            false => (cx.theme().secondary.into(), cx.theme().on_secondary.into()),
         };
 
         let (bg, toggle_bg) = if self.disabled {

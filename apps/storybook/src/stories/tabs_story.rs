@@ -4,11 +4,12 @@ use gpui::{
 };
 
 use gpui_component::{
+    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable, Size,
     button::{Button, ButtonGroup, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme as _, Icon, IconName, Selectable as _, Sizable, Size,
+    v_flex,
 };
 
 use crate::section;

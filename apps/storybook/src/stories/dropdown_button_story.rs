@@ -1,14 +1,15 @@
 use gpui::{
-    prelude::FluentBuilder as _, Action, Anchor, App, AppContext as _, Context, Entity, Focusable,
-    IntoElement, ParentElement as _, Render, Styled as _, Window,
+    Action, Anchor, App, AppContext as _, Context, Entity, Focusable, IntoElement,
+    ParentElement as _, Render, Styled as _, Window, prelude::FluentBuilder as _,
 };
 use serde::Deserialize;
 
 use crate::section;
 use gpui_component::{
+    ActiveTheme, Disableable, Selectable as _, Sizable as _, Theme,
     button::{Button, ButtonVariants as _, DropdownButton},
     checkbox::Checkbox,
-    h_flex, v_flex, ActiveTheme, Disableable, Selectable as _, Sizable as _, Theme,
+    h_flex, v_flex,
 };
 
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]

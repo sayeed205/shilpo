@@ -1,7 +1,5 @@
 use gpui::{App, Entity, Menu, MenuItem, SharedString};
-use gpui_component::{
-    ActiveTheme as _, GlobalState, Theme, ThemeMode, menu::AppMenuBar,
-};
+use gpui_component::{ActiveTheme as _, GlobalState, Theme, ThemeMode, menu::AppMenuBar};
 use std::cell::Cell;
 
 use crate::{
@@ -133,16 +131,14 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
                             SelectWindowControls(WindowControlsMode::Auto),
                         )
                         .checked(AppState::global(cx).window_controls == WindowControlsMode::Auto),
-                        MenuItem::action(
-                            "Show",
-                            SelectWindowControls(WindowControlsMode::Show),
-                        )
-                        .checked(AppState::global(cx).window_controls == WindowControlsMode::Show),
-                        MenuItem::action(
-                            "Hide",
-                            SelectWindowControls(WindowControlsMode::Hide),
-                        )
-                        .checked(AppState::global(cx).window_controls == WindowControlsMode::Hide),
+                        MenuItem::action("Show", SelectWindowControls(WindowControlsMode::Show))
+                            .checked(
+                                AppState::global(cx).window_controls == WindowControlsMode::Show,
+                            ),
+                        MenuItem::action("Hide", SelectWindowControls(WindowControlsMode::Hide))
+                            .checked(
+                                AppState::global(cx).window_controls == WindowControlsMode::Hide,
+                            ),
                     ],
                     disabled: false,
                 }),

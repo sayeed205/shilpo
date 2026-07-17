@@ -213,14 +213,12 @@ impl RenderOnce for ListItem {
                     .gap_x_1()
                     .child(div().w_full().children(self.children))
                     .when_some(self.check_icon, |this, icon| {
-                        this.child(
-                            div().w_5().items_center().justify_center().when(
-                                self.confirmed,
-                                |this| {
-                                    this.child(icon.small().text_color(cx.theme().on_surface_variant))
-                                },
-                            ),
-                        )
+                        this.child(div().w_5().items_center().justify_center().when(
+                            self.confirmed,
+                            |this| {
+                                this.child(icon.small().text_color(cx.theme().on_surface_variant))
+                            },
+                        ))
                     }),
             )
             .when_some(self.suffix, |this, suffix| this.child(suffix(window, cx)))

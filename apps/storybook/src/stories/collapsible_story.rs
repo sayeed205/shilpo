@@ -1,18 +1,19 @@
 use gpui::div;
 use gpui::{
-    prelude::FluentBuilder as _, App, AppContext, Context, Entity, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, Styled, Window,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    Styled, Window, prelude::FluentBuilder as _,
 };
 
 use gpui_component::group_box::{GroupBox, GroupBoxVariants as _};
 use gpui_component::label::Label;
 use gpui_component::tag::Tag;
+use gpui_component::{ActiveTheme, IconName, StyledExt, h_flex};
 use gpui_component::{
+    Sizable,
     button::{Button, ButtonVariants as _},
     collapsible::Collapsible,
-    v_flex, Sizable,
+    v_flex,
 };
-use gpui_component::{h_flex, ActiveTheme, IconName, StyledExt};
 
 use crate::section;
 

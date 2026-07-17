@@ -1,10 +1,9 @@
 use gpui::{
     Action, AnyElement, AnyView, App, AppContext, Bounds, Context, Div, Entity, EventEmitter,
     FocusHandle, Focusable, Global, Hsla, InteractiveElement, IntoElement, KeyBinding,
-    ParentElement, Pixels, Render, RenderOnce, SharedString, Size, StyleRefinement, Styled, Window,
-    Subscription, WindowBounds, WindowKind, WindowOptions, actions, div,
-    prelude::FluentBuilder as _, px, rems,
-    size,
+    ParentElement, Pixels, Render, RenderOnce, SharedString, Size, StyleRefinement, Styled,
+    Subscription, Window, WindowBounds, WindowKind, WindowOptions, actions, div,
+    prelude::FluentBuilder as _, px, rems, size,
 };
 use gpui_component::{
     ActiveTheme, IconName, Root, TitleBar, WindowControlsMode, WindowExt,
@@ -138,14 +137,12 @@ pub fn create_new_window_with_size<F, E>(
                 let story_root = cx.new(|cx| StoryRoot::new(title.clone(), view, window, cx));
 
                 story_root.update(cx, |story_root, cx| {
-                    story_root.appearance_subscription = Some(cx.observe_window_appearance(
-                        window,
-                        |_, window, cx| {
+                    story_root.appearance_subscription =
+                        Some(cx.observe_window_appearance(window, |_, window, cx| {
                             window.defer(cx, |window, cx| {
                                 gpui_component::Theme::sync_system_appearance(Some(window), cx);
                             });
-                        },
-                    ));
+                        }));
                 });
 
                 // Set focus to the StoryRoot to enable it's actions.

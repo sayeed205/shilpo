@@ -4,12 +4,13 @@ use gpui::{
 };
 
 use gpui_component::{
+    ActiveTheme, Theme, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{DropdownMenu as _, PopupMenuItem},
     notification::{Notification, NotificationType},
     text::markdown,
-    v_flex, ActiveTheme, Theme, WindowExt as _,
+    v_flex,
 };
 
 use crate::section;

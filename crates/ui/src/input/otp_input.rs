@@ -315,7 +315,9 @@ impl RenderOnce for OtpInput {
                     .bg(bg)
                     .text_color(fg)
                     .when(self.disabled, |this| this.opacity(0.5))
-                    .when(is_input_focused, |this| this.border_color(cx.theme().primary))
+                    .when(is_input_focused, |this| {
+                        this.border_color(cx.theme().primary)
+                    })
                     .when(cx.theme().shadow, |this| this.shadow_xs())
                     .items_center()
                     .justify_center()

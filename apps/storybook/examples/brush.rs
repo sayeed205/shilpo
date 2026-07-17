@@ -183,7 +183,9 @@ impl BrushStory {
             .when(is_selected, |this| {
                 this.border_color(theme.primary).shadow_md()
             })
-            .when(!is_selected, |this| this.border_color(theme.outline_variant))
+            .when(!is_selected, |this| {
+                this.border_color(theme.outline_variant)
+            })
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,

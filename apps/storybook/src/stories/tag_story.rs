@@ -3,7 +3,7 @@ use gpui::{
     Styled, Window, px,
 };
 
-use gpui_component::{Sizable, h_flex, tag::Tag, v_flex, ActiveTheme as _};
+use gpui_component::{ActiveTheme as _, Sizable, h_flex, tag::Tag, v_flex};
 
 use crate::section;
 
@@ -57,8 +57,12 @@ impl Render for TagStory {
                         .child(Tag::warning().child("Warning"))
                         .child(Tag::info().child("Info"))
                         .child(
-                            Tag::custom(cx.theme().primary, cx.theme().primary_container, cx.theme().on_primary)
-                                .child("Custom"),
+                            Tag::custom(
+                                cx.theme().primary,
+                                cx.theme().primary_container,
+                                cx.theme().on_primary,
+                            )
+                            .child("Custom"),
                         ),
                 ),
             )
@@ -73,9 +77,13 @@ impl Render for TagStory {
                         .child(Tag::warning().outline().child("Warning"))
                         .child(Tag::info().outline().child("Info"))
                         .child(
-                            Tag::custom(cx.theme().secondary, cx.theme().secondary_container, cx.theme().on_secondary)
-                                .outline()
-                                .child("Custom"),
+                            Tag::custom(
+                                cx.theme().secondary,
+                                cx.theme().secondary_container,
+                                cx.theme().on_secondary,
+                            )
+                            .outline()
+                            .child("Custom"),
                         ),
                 ),
             )
@@ -127,14 +135,44 @@ impl Render for TagStory {
                         .child(Tag::info().small().rounded(px(0.)).child("Info")),
                 ),
             )
-            .child(section("Material role tags").child(
-                h_flex()
-                    .gap_2()
-                    .flex_wrap()
-                    .child(Tag::custom(cx.theme().primary, cx.theme().primary_container, cx.theme().on_primary).child("Primary"))
-                    .child(Tag::custom(cx.theme().secondary, cx.theme().secondary_container, cx.theme().on_secondary).child("Secondary"))
-                    .child(Tag::custom(cx.theme().tertiary, cx.theme().tertiary_container, cx.theme().on_tertiary).child("Tertiary"))
-                    .child(Tag::custom(cx.theme().error, cx.theme().error_container, cx.theme().on_error).child("Error")),
-            ))
+            .child(
+                section("Material role tags").child(
+                    h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(
+                            Tag::custom(
+                                cx.theme().primary,
+                                cx.theme().primary_container,
+                                cx.theme().on_primary,
+                            )
+                            .child("Primary"),
+                        )
+                        .child(
+                            Tag::custom(
+                                cx.theme().secondary,
+                                cx.theme().secondary_container,
+                                cx.theme().on_secondary,
+                            )
+                            .child("Secondary"),
+                        )
+                        .child(
+                            Tag::custom(
+                                cx.theme().tertiary,
+                                cx.theme().tertiary_container,
+                                cx.theme().on_tertiary,
+                            )
+                            .child("Tertiary"),
+                        )
+                        .child(
+                            Tag::custom(
+                                cx.theme().error,
+                                cx.theme().error_container,
+                                cx.theme().on_error,
+                            )
+                            .child("Error"),
+                        ),
+                ),
+            )
     }
 }

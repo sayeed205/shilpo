@@ -36,7 +36,11 @@ pub enum ColorPickerEvent {
 
 fn color_palettes() -> Vec<Vec<Hsla>> {
     vec![
-        vec![hsla(0., 0., 0.1, 1.), hsla(0., 0., 0.5, 1.), hsla(0., 0., 0.9, 1.)],
+        vec![
+            hsla(0., 0., 0.1, 1.),
+            hsla(0., 0., 0.5, 1.),
+            hsla(0., 0., 0.9, 1.),
+        ],
         vec![hsla(0., 0.8, 0.5, 1.), hsla(0.02, 0.7, 0.4, 1.)],
         vec![hsla(0.08, 0.8, 0.5, 1.), hsla(0.1, 0.7, 0.4, 1.)],
         vec![hsla(0.16, 0.8, 0.5, 1.), hsla(0.18, 0.7, 0.4, 1.)],
