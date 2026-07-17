@@ -1,16 +1,16 @@
 use gpui::{
-    div, prelude::FluentBuilder, Anchor, App, Context, Edges, ElementId, InteractiveElement as _,
+    div, prelude::FluentBuilder, Anchor, App, Context, ElementId, InteractiveElement as _,
     IntoElement, ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window,
 };
-use gpui::{Corners, CursorStyle};
+use gpui::CursorStyle;
 
 use crate::{
     menu::{DropdownMenu, PopupMenu},
     tooltip::ComponentTooltip,
-    Disableable, IconName, Selectable, Sizable, Size, StyledExt as _,
+    Disableable, Selectable, Sizable, Size, StyledExt as _,
 };
 
-use super::{shared, Button, ButtonRounded, ButtonVariant, ButtonVariants};
+use super::{shared, Button, ButtonRounded, ButtonVariant, ButtonVariants, button_dimension_tokens};
 
 #[derive(IntoElement)]
 pub struct DropdownButton {
@@ -162,72 +162,37 @@ impl Selectable for DropdownButton {
 
 impl RenderOnce for DropdownButton {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let rounded = matches!(self.variant, ButtonVariant::Text) && !self.selected;
         let cursor = self.style.mouse_cursor;
+        let height = button_dimension_tokens::height(self.size);
+        let button = self.button.unwrap_or_else(|| Button::new(self.id.clone()));
+
+        let trigger = button
+            .rounded(self.rounded)
+            .h(height)
+            .loading(self.loading)
+            .selected(self.selected)
+            .disabled(self.disabled || self.loading)
+            .dropdown_caret(true)
+            .when(self.compact, |this| this.compact())
+            .when(self.outline, |this| this.outline())
+            .when(self.size != Size::Medium, |this| this.with_size(self.size))
+            .with_variant(self.variant);
+
+        let element = if let Some(menu) = self.menu {
+            trigger.dropdown_menu_with_anchor(self.anchor, menu).into_any_element()
+        } else {
+            trigger.into_any_element()
+        };
 
         div()
             .id(self.id)
-            .h_flex()
             .cursor(shared::interaction::cursor(
                 self.disabled,
                 self.loading,
                 cursor,
             ))
             .refine_style(&self.style)
-            .when(self.disabled || self.loading, |this| {
-                this.cursor(shared::interaction::cursor(true, self.loading, cursor))
-            })
-            .when_some(self.button, |this, button| {
-                this.child(
-                    button
-                        .rounded(self.rounded)
-                        .border_corners(Corners {
-                            top_left: true,
-                            top_right: rounded,
-                            bottom_left: true,
-                            bottom_right: rounded,
-                        })
-                        .border_edges(Edges {
-                            left: true,
-                            top: true,
-                            right: true,
-                            bottom: true,
-                        })
-                        .loading(self.loading)
-                        .selected(self.selected)
-                        .disabled(self.disabled || self.loading)
-                        .when(self.compact, |this| this.compact())
-                        .when(self.outline, |this| this.outline())
-                        .when(self.size != Size::Medium, |this| this.with_size(self.size))
-                        .with_variant(self.variant),
-                )
-                .when_some(self.menu, |this, menu| {
-                    this.child(
-                        Button::new("popup")
-                            .icon(IconName::ChevronDown)
-                            .rounded(self.rounded)
-                            .border_edges(Edges {
-                                left: rounded,
-                                top: true,
-                                right: true,
-                                bottom: true,
-                            })
-                            .border_corners(Corners {
-                                top_left: rounded,
-                                top_right: true,
-                                bottom_left: rounded,
-                                bottom_right: true,
-                            })
-                            .selected(self.selected)
-                            .disabled(self.disabled || self.loading)
-                            .when(self.compact, |this| this.compact())
-                            .when(self.outline, |this| this.outline())
-                            .when(self.size != Size::Medium, |this| this.with_size(self.size))
-                            .with_variant(self.variant)
-                            .dropdown_menu_with_anchor(self.anchor, menu),
-                    )
-                })
-            })
+            .child(element)
             .map(|this| self.tooltip.apply(this))
     }
 }

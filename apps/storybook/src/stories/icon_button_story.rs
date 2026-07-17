@@ -247,5 +247,35 @@ impl Render for IconButtonStory {
                         "override",
                     )),
             )
+            .child(
+                section("Widths")
+                    .sub_title("Narrow, Default, and Wide options")
+                    .child(cell(
+                        IconButton::new("width-narrow")
+                            .icon(IconName::ArrowDown)
+                            .filled_tonal()
+                            .narrow()
+                            .into_any_element(),
+                        "Narrow",
+                        "width 36px",
+                    ))
+                    .child(cell(
+                        IconButton::new("width-default")
+                            .icon(IconName::ArrowDown)
+                            .filled_tonal()
+                            .into_any_element(),
+                        "Default",
+                        "width 48px",
+                    ))
+                    .child(cell(
+                        IconButton::new("width-wide")
+                            .icon(IconName::ArrowDown)
+                            .filled_tonal()
+                            .wide()
+                            .into_any_element(),
+                        "Wide",
+                        "width 64px",
+                    )),
+            )
     }
 }

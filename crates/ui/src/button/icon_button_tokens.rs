@@ -2,7 +2,28 @@ use gpui::{px, Hsla, Pixels};
 
 use crate::ActiveTheme;
 
-use super::{IconButtonShape, IconButtonSize, IconButtonVariant};
+use super::{IconButtonShape, IconButtonSize, IconButtonVariant, IconButtonWidth};
+
+pub(crate) fn resolve_width(size: IconButtonSize, width: IconButtonWidth) -> Pixels {
+    let container = dimensions(size).container;
+    match width {
+        IconButtonWidth::Default => container,
+        IconButtonWidth::Narrow => match size {
+            IconButtonSize::XSmall => px(24.),
+            IconButtonSize::Small => px(30.),
+            IconButtonSize::Medium => px(36.),
+            IconButtonSize::Large => px(42.),
+            IconButtonSize::XLarge => px(54.),
+        },
+        IconButtonWidth::Wide => match size {
+            IconButtonSize::XSmall => px(42.),
+            IconButtonSize::Small => px(54.),
+            IconButtonSize::Medium => px(64.),
+            IconButtonSize::Large => px(76.),
+            IconButtonSize::XLarge => px(96.),
+        },
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IconButtonDimensions {

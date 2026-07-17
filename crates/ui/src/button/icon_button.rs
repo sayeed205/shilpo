@@ -29,6 +29,14 @@ pub enum IconButtonSize {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IconButtonWidth {
+    #[default]
+    Default,
+    Narrow,
+    Wide,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum IconButtonShape {
     #[default]
     Round,
@@ -60,6 +68,7 @@ pub struct IconButton {
     variant: IconButtonVariant,
     size: IconButtonSize,
     shape: IconButtonShape,
+    width_type: IconButtonWidth,
     checked: bool,
     checkable: bool,
     disabled: bool,
@@ -79,6 +88,7 @@ impl IconButton {
             variant: IconButtonVariant::Standard,
             size: IconButtonSize::Medium,
             shape: IconButtonShape::Round,
+            width_type: IconButtonWidth::Default,
             checked: false,
             checkable: false,
             disabled: false,
@@ -101,6 +111,19 @@ impl IconButton {
     pub fn shape(mut self, shape: IconButtonShape) -> Self {
         self.shape = shape;
         self
+    }
+
+    pub fn width(mut self, width: IconButtonWidth) -> Self {
+        self.width_type = width;
+        self
+    }
+
+    pub fn narrow(self) -> Self {
+        self.width(IconButtonWidth::Narrow)
+    }
+
+    pub fn wide(self) -> Self {
+        self.width(IconButtonWidth::Wide)
     }
 
     pub fn checkable(mut self, checkable: bool) -> Self {
@@ -200,6 +223,8 @@ impl RenderOnce for IconButton {
             icon_button_tokens::IconButtonCorner::Square(value) => value,
         };
 
+        let width = icon_button_tokens::resolve_width(self.size, self.width_type);
+
         self.base
             .role(Role::Button)
             .when(self.checkable, |this| {
@@ -213,7 +238,8 @@ impl RenderOnce for IconButton {
             .when(!disabled, |this| this.track_focus(&focus_handle))
             .flex()
             .flex_shrink_0()
-            .size(dimensions.container)
+            .w(width)
+            .h(dimensions.container)
             .items_center()
             .justify_center()
             .rounded(radius)
@@ -285,6 +311,16 @@ impl RenderOnce for IconButton {
 mod tests {
     use super::*;
     use gpui::px;
+
+    #[test]
+    fn test_icon_button_square_radius() {
+        let shapes = icon_button_tokens::shapes(IconButtonSize::Medium, IconButtonShape::Square);
+        let radius = match shapes.shape {
+            icon_button_tokens::IconButtonCorner::Full => px(24.),
+            icon_button_tokens::IconButtonCorner::Square(value) => value,
+        };
+        assert_eq!(radius, px(12.));
+    }
 
     #[test]
     fn variants_and_toggle_state_are_distinct() {

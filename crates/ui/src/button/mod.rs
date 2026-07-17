@@ -12,6 +12,7 @@ mod icon_button_tokens;
 mod segmented_button;
 mod segmented_button_tokens;
 mod shared;
+mod split_button;
 mod toggle;
 
 pub use button::*;
@@ -25,4 +26,5 @@ pub use icon_button_tokens::{
     IconButtonShapes,
 };
 pub use segmented_button::*;
+pub use split_button::*;
 pub use toggle::*;

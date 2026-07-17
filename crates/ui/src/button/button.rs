@@ -95,6 +95,8 @@ pub struct Button {
     on_hover: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
     loading: bool,
     loading_icon: Option<Icon>,
+    pl: Option<gpui::Pixels>,
+    pr: Option<gpui::Pixels>,
 
     tab_index: isize,
     tab_stop: bool,
@@ -140,6 +142,8 @@ impl Button {
             children: Vec::new(),
             loading_icon: None,
             dropdown_caret: false,
+            pl: None,
+            pr: None,
             tab_index: 0,
             tab_stop: true,
         }
@@ -186,6 +190,16 @@ impl Button {
     /// Set the icon of the button, if the Button have no label, the button well in Icon Button mode.
     pub fn icon(mut self, icon: impl Into<ButtonIcon>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    pub fn pl(mut self, pl: impl Into<gpui::Pixels>) -> Self {
+        self.pl = Some(pl.into());
+        self
+    }
+
+    pub fn pr(mut self, pr: impl Into<gpui::Pixels>) -> Self {
+        self.pr = Some(pr.into());
         self
     }
 
@@ -389,7 +403,11 @@ impl RenderOnce for Button {
             .justify_center()
             .h(dimensions.height)
             .min_w(dimensions.min_width)
-            .px(dimensions.horizontal_padding)
+            .when_some(self.pl, |this, pl| this.pl(pl))
+            .when_some(self.pr, |this, pr| this.pr(pr))
+            .when(self.pl.is_none() && self.pr.is_none(), |this| {
+                this.px(dimensions.horizontal_padding)
+            })
             .py(dimensions.vertical_padding)
             .when(cx.theme().shadow && normal_style.shadow, |this| {
                 this.shadow_xs()
