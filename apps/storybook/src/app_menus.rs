@@ -2,11 +2,13 @@ use gpui::{App, Entity, Menu, MenuItem, SharedString};
 use gpui_component::{
     ActiveTheme as _, GlobalState, Theme, ThemeMode, menu::AppMenuBar,
 };
+use std::cell::Cell;
 
 use crate::{
-    About, Open, Quit, SelectLocale, ToggleSearch,
+    About, AppState, Open, Quit, SelectLocale, SelectWindowControls, ToggleSearch,
     themes::SwitchThemeMode,
 };
+use gpui_component::WindowControlsMode;
 
 pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> {
     let app_menu_bar = AppMenuBar::new(cx);
@@ -22,11 +24,26 @@ pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> 
         }
     });
 
+    cx.on_action({
+        let title = title.clone();
+        let app_menu_bar = app_menu_bar.clone();
+        move |select: &SelectWindowControls, cx: &mut App| {
+            AppState::global_mut(cx).window_controls = select.0;
+            update_app_menu(title.clone(), app_menu_bar.clone(), cx);
+        }
+    });
+
     // Observe theme changes to update the menu to refresh the checked state
+    let selected_mode = Cell::new(cx.theme().selected_mode());
     cx.observe_global::<Theme>({
         let title = title.clone();
         let app_menu_bar = app_menu_bar.clone();
         move |cx| {
+            let mode = cx.theme().selected_mode();
+            if selected_mode.get() == mode {
+                return;
+            }
+            selected_mode.set(mode);
             update_app_menu(title.clone(), app_menu_bar.clone(), cx);
         }
     })
@@ -105,7 +122,31 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
         },
         Menu {
             name: "Window".into(),
-            items: vec![MenuItem::action("Toggle Search", ToggleSearch)],
+            items: vec![
+                MenuItem::action("Toggle Search", ToggleSearch),
+                MenuItem::Separator,
+                MenuItem::Submenu(Menu {
+                    name: "Window Controls".into(),
+                    items: vec![
+                        MenuItem::action(
+                            "Automatic",
+                            SelectWindowControls(WindowControlsMode::Auto),
+                        )
+                        .checked(AppState::global(cx).window_controls == WindowControlsMode::Auto),
+                        MenuItem::action(
+                            "Show",
+                            SelectWindowControls(WindowControlsMode::Show),
+                        )
+                        .checked(AppState::global(cx).window_controls == WindowControlsMode::Show),
+                        MenuItem::action(
+                            "Hide",
+                            SelectWindowControls(WindowControlsMode::Hide),
+                        )
+                        .checked(AppState::global(cx).window_controls == WindowControlsMode::Hide),
+                    ],
+                    disabled: false,
+                }),
+            ],
             disabled: false,
         },
         Menu {

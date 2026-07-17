@@ -13,9 +13,12 @@ use gpui_component::{
     scroll::ScrollbarShow,
 };
 
-use crate::{SelectFont, SelectRadius, SelectScrollbarShow, ToggleListActiveHighlight, app_menus};
+use crate::{
+    AppState, SelectFont, SelectRadius, SelectScrollbarShow, ToggleListActiveHighlight, app_menus,
+};
 
 pub struct AppTitleBar {
+    title: SharedString,
     app_menu_bar: Entity<AppMenuBar>,
     font_size_selector: Entity<FontSizeSelector>,
     child: Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>,
@@ -28,10 +31,12 @@ impl AppTitleBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let app_menu_bar = app_menus::init(title, cx);
+        let title = title.into();
+        let app_menu_bar = app_menus::init(title.clone(), cx);
         let font_size_selector = cx.new(|cx| FontSizeSelector::new(window, cx));
 
         Self {
+            title,
             app_menu_bar,
             font_size_selector,
             child: Rc::new(|_, _| div().into_any_element()),
@@ -52,41 +57,80 @@ impl AppTitleBar {
 impl Render for AppTitleBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let notifications_count = window.notifications(cx).len();
+        let normal_fg = cx.theme().on_surface_variant;
+        let hover_fg = cx.theme().on_surface;
+        let hover_bg = cx.theme().surface_container_high;
+        let window_controls = AppState::global(cx).window_controls;
 
-        TitleBar::new()
-            // left side
-            .child(div().flex().items_center().child(self.app_menu_bar.clone()))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .px_2()
-                    .gap_2()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child((self.child.clone())(window, cx))
-                    .child(self.font_size_selector.clone())
-                    .child(
-                        Button::new("github")
-                            .icon(IconName::Github)
-                            .small()
-                            .ghost()
-                            .on_click(|_, _, cx| {
-                                cx.open_url("https://github.com/longbridge/gpui-component")
-                            }),
-                    )
-                    .child(
-                        div().relative().child(
-                            Badge::new().count(notifications_count).max(99).child(
-                                Button::new("bell")
-                                    .small()
-                                    .ghost()
-                                    .compact()
-                                    .icon(IconName::Bell),
+        TitleBar::new().window_controls(window_controls).child(
+            div()
+                .id("app-title-bar-content")
+                .flex()
+                .flex_row()
+                .items_center()
+                .h_full()
+                .w_full()
+                .flex_1()
+                // leading zone
+                .child(
+                    div()
+                        .h_full()
+                        .flex_shrink_0()
+                        .items_center()
+                        .child(self.app_menu_bar.clone()),
+                )
+                // centered title zone
+                .child(
+                    div()
+                        .h_full()
+                        .min_w_0()
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .px_3()
+                        .text_color(cx.theme().on_surface)
+                        .child(div().max_w_full().truncate().child(self.title.clone())),
+                )
+                // trailing zone
+                .child(
+                    div()
+                        .h_full()
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .px_1()
+                        .gap_2()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child((self.child.clone())(window, cx))
+                        .child(self.font_size_selector.clone())
+                        .child(
+                            Button::new("github")
+                                .ghost()
+                                .icon(IconName::Github)
+                                .small()
+                                .text_color(normal_fg)
+                                .hover(|style| style.bg(hover_bg).text_color(hover_fg))
+                                .on_click(|_, _, cx| {
+                                    cx.open_url("https://github.com/longbridge/gpui-component")
+                                }),
+                        )
+                        .child(
+                            div().relative().child(
+                                Badge::new().count(notifications_count).max(99).child(
+                                    Button::new("bell")
+                                        .ghost()
+                                        .small()
+                                        .compact()
+                                        .icon(IconName::Bell)
+                                        .text_color(normal_fg)
+                                        .hover(|style| style.bg(hover_bg).text_color(hover_fg)),
+                                ),
                             ),
                         ),
-                    ),
-            )
+                ),
+        )
     }
 }
 
@@ -154,6 +198,9 @@ impl Render for FontSizeSelector {
         let font_size = cx.theme().font_size.as_f32() as i32;
         let radius = cx.theme().radius.as_f32() as i32;
         let scroll_show = cx.theme().scrollbar_show;
+        let normal_fg = cx.theme().on_surface_variant;
+        let hover_fg = cx.theme().on_surface;
+        let hover_bg = cx.theme().surface_container_high;
 
         div()
             .id("font-size-selector")
@@ -167,6 +214,8 @@ impl Render for FontSizeSelector {
                     .small()
                     .ghost()
                     .icon(IconName::Settings2)
+                    .text_color(normal_fg)
+                    .hover(|style| style.bg(hover_bg).text_color(hover_fg))
                     .dropdown_menu(move |this, _, cx| {
                         this.scrollable(true)
                             .check_side(Side::Right)

@@ -7,7 +7,7 @@ use gpui::{
     size,
 };
 use gpui_component::{
-    ActiveTheme, IconName, Root, TitleBar, WindowExt,
+    ActiveTheme, IconName, Root, TitleBar, WindowControlsMode, WindowExt,
     button::Button,
     dock::{Panel, PanelControl, PanelEvent, PanelInfo, PanelState, TitleStyle, register_panel},
     group_box::{GroupBox, GroupBoxVariants as _},
@@ -34,6 +34,10 @@ rust_i18n::i18n!("locales", fallback = "en");
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = story, no_json)]
 pub struct SelectScrollbarShow(ScrollbarShow);
+
+#[derive(Action, Clone, PartialEq)]
+#[action(namespace = story, no_json)]
+pub struct SelectWindowControls(WindowControlsMode);
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = story, no_json)]
@@ -66,11 +70,13 @@ const PANEL_NAME: &str = "StoryContainer";
 
 pub struct AppState {
     pub invisible_panels: Entity<Vec<SharedString>>,
+    pub window_controls: WindowControlsMode,
 }
 impl AppState {
     fn init(cx: &mut App) {
         let state = Self {
             invisible_panels: cx.new(|_| Vec::new()),
+            window_controls: WindowControlsMode::Auto,
         };
         cx.set_global::<AppState>(state);
     }
@@ -135,8 +141,9 @@ pub fn create_new_window_with_size<F, E>(
                     story_root.appearance_subscription = Some(cx.observe_window_appearance(
                         window,
                         |_, window, cx| {
-                            gpui_component::Theme::sync_system_appearance(Some(window), cx);
-                            cx.refresh_windows();
+                            window.defer(cx, |window, cx| {
+                                gpui_component::Theme::sync_system_appearance(Some(window), cx);
+                            });
                         },
                     ));
                 });
@@ -251,6 +258,11 @@ pub fn init(cx: &mut App) {
                     .unwrap();
             });
         }
+    });
+
+    cx.on_action(|select: &SelectWindowControls, cx: &mut App| {
+        AppState::global_mut(cx).window_controls = select.0;
+        cx.refresh_windows();
     });
 
     register_panel(cx, PANEL_NAME, |_, _, info, window, cx| {

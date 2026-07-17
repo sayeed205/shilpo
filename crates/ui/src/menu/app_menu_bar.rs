@@ -1,5 +1,5 @@
 use crate::{
-    Selectable, Sizable,
+    ActiveTheme, Selectable,
     actions::{Cancel, SelectLeft, SelectRight},
     button::{Button, ButtonVariants},
     global_state::GlobalState,
@@ -126,6 +126,7 @@ impl Render for AppMenuBar {
             .on_action(cx.listener(Self::on_move_right))
             .on_action(cx.listener(Self::on_cancel))
             .size_full()
+            .items_center()
             .gap_x_1()
             .overflow_x_scroll()
             .children(self.menus.clone())
@@ -256,18 +257,36 @@ impl AppMenu {
 impl Render for AppMenu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_selected = self.is_selected(cx);
-
+        let normal_fg = if is_selected {
+            cx.theme().on_secondary_container
+        } else {
+            cx.theme().on_surface_variant
+        };
+        let hover_fg = if is_selected {
+            cx.theme().on_secondary_container
+        } else {
+            cx.theme().on_surface
+        };
+        let hover_bg = cx.theme().surface_container_high;
         div()
             .id(self.ix)
+            .h_full()
+            .flex_shrink_0()
+            .items_center()
             .relative()
             .child(
                 Button::new("menu")
-                    .small()
-                    .py_0p5()
-                    .compact()
+                    .h_full()
+                    .px_2()
                     .ghost()
                     .label(self.name.clone())
                     .selected(is_selected)
+                    // ButtonCustomVariant currently ignores its foreground field.
+                    // Apply title-bar colors as final style refinements instead.
+                    .text_color(normal_fg)
+                    .hover(|style| {
+                        style.bg(hover_bg).text_color(hover_fg)
+                    })
                     .on_mouse_down(
                         MouseButton::Left,
                         window.listener_for(&cx.entity(), move |this, _, window, cx| {

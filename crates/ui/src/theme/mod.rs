@@ -192,9 +192,6 @@ impl Theme {
             .unwrap_or_else(|| cx.window_appearance());
         let theme = cx.global_mut::<Theme>();
         theme.set_effective_mode(appearance.into());
-        if let Some(window) = window {
-            window.refresh();
-        }
     }
 
     pub fn input_background(&self) -> Hsla {

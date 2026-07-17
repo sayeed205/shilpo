@@ -17,6 +17,27 @@ const TITLE_BAR_LEFT_PADDING: Pixels = px(80.);
 #[cfg(not(target_os = "macos"))]
 const TITLE_BAR_LEFT_PADDING: Pixels = px(12.);
 
+/// Controls policy for [`TitleBar`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WindowControlsMode {
+    /// Use platform and decoration capabilities to decide.
+    #[default]
+    Auto,
+    /// Show controls when client decorations make them safe.
+    Show,
+    /// Never render application window controls.
+    Hide,
+}
+
+impl WindowControlsMode {
+    fn should_render(self, is_client_decorated: bool) -> bool {
+        !matches!(self, Self::Hide)
+            && is_client_decorated
+            && !cfg!(target_os = "macos")
+            && !cfg!(target_family = "wasm")
+    }
+}
+
 /// TitleBar used to customize the appearance of the title bar.
 ///
 /// We can put some elements inside the title bar.
@@ -25,6 +46,7 @@ pub struct TitleBar {
     style: StyleRefinement,
     children: SmallVec<[AnyElement; 1]>,
     on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
+    window_controls: WindowControlsMode,
 }
 
 impl TitleBar {
@@ -34,6 +56,7 @@ impl TitleBar {
             style: StyleRefinement::default(),
             children: SmallVec::new(),
             on_close_window: None,
+            window_controls: WindowControlsMode::Auto,
         }
     }
 
@@ -55,6 +78,12 @@ impl TitleBar {
         if cfg!(target_os = "linux") {
             self.on_close_window = Some(Rc::new(Box::new(f)));
         }
+        self
+    }
+
+    /// Configure application window controls.
+    pub fn window_controls(mut self, mode: WindowControlsMode) -> Self {
+        self.window_controls = mode;
         self
     }
 }
@@ -255,6 +284,7 @@ impl RenderOnce for TitleBar {
         let is_web = cfg!(target_family = "wasm");
         let is_linux = cfg!(target_os = "linux");
         let is_macos = cfg!(target_os = "macos");
+        let show_window_controls = self.window_controls.should_render(is_client_decorated);
 
         let state = window.use_state(cx, |_, _| TitleBarState { should_move: false });
 
@@ -327,8 +357,10 @@ impl RenderOnce for TitleBar {
                         })
                         .children(self.children),
                 )
-                .child(WindowControls {
-                    on_close_window: self.on_close_window,
+                .when(show_window_controls, |this| {
+                    this.child(WindowControls {
+                        on_close_window: self.on_close_window,
+                    })
                 }),
         )
     }
