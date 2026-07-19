@@ -345,6 +345,23 @@ pub(crate) fn button_semantic_table(variant: ButtonVariant) -> ButtonSemanticTab
             ThemeRole::Primary,
             (0, 0, 0, 0, 0),
         ),
+        ButtonVariant::Plain => (
+            state(
+                ThemeRole::Transparent,
+                ThemeRole::OnSurfaceVariant,
+                ThemeRole::Transparent,
+            ),
+            ButtonSemanticState {
+                container: ThemeRole::Transparent,
+                content: ThemeRole::OnSurfaceVariant,
+                border: ThemeRole::Transparent,
+                container_opacity: 1.0,
+                content_opacity: 0.38,
+                border_opacity: 0.0,
+            },
+            ThemeRole::Transparent,
+            (0, 0, 0, 0, 0),
+        ),
     };
     ButtonSemanticTable {
         base,

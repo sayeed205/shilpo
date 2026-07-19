@@ -97,7 +97,7 @@ pub(crate) fn resolved_paint(
         table.base
     };
     let mut container = role(semantic.container, cx).opacity(semantic.container_opacity);
-    let content = role(semantic.content, cx).opacity(semantic.content_opacity);
+    let mut content = role(semantic.content, cx).opacity(semantic.content_opacity);
     let border = role(semantic.border, cx).opacity(semantic.border_opacity);
     let elevation = match state {
         ButtonPaintState::Rest => table.elevation_rest,
@@ -106,7 +106,14 @@ pub(crate) fn resolved_paint(
         ButtonPaintState::Pressed => table.elevation_pressed,
         ButtonPaintState::Disabled => table.elevation_disabled,
     };
-    if matches!(
+    if variant == ButtonVariant::Plain {
+        if matches!(
+            state,
+            ButtonPaintState::Hover | ButtonPaintState::Focus | ButtonPaintState::Pressed
+        ) {
+            content = role(super::button_scale_tokens::ThemeRole::OnSurface, cx);
+        }
+    } else if matches!(
         state,
         ButtonPaintState::Hover | ButtonPaintState::Focus | ButtonPaintState::Pressed
     ) {

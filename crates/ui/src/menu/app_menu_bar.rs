@@ -267,7 +267,6 @@ impl Render for AppMenu {
         } else {
             cx.theme().on_surface
         };
-        let hover_bg = cx.theme().surface_container_high;
         div()
             .id(self.ix)
             .h_full()
@@ -278,13 +277,13 @@ impl Render for AppMenu {
                 Button::new("menu")
                     .h_full()
                     .px_2()
-                    .text()
+                    .plain()
                     .label(self.name.clone())
                     .selected(is_selected)
                     // ButtonCustomVariant currently ignores its foreground field.
                     // Apply title-bar colors as final style refinements instead.
                     .text_color(normal_fg)
-                    .hover(|style| style.bg(hover_bg).text_color(hover_fg))
+                    .hover(|style| style.text_color(hover_fg))
                     .on_mouse_down(
                         MouseButton::Left,
                         window.listener_for(&cx.entity(), move |this, _, window, cx| {

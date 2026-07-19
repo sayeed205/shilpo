@@ -316,7 +316,7 @@ impl RenderOnce for NumberInput {
                         if self.appearance {
                             this.outlined()
                         } else {
-                            this.text()
+                            this.plain()
                         }
                     })
                     .with_size(self.size)
@@ -361,7 +361,7 @@ impl RenderOnce for NumberInput {
                         if self.appearance {
                             this.outlined()
                         } else {
-                            this.text()
+                            this.plain()
                         }
                     })
                     .with_size(self.size)

@@ -56,6 +56,9 @@ pub trait ButtonVariants: Sized {
     fn text(self) -> Self {
         self.with_variant(ButtonVariant::Text)
     }
+    fn plain(self) -> Self {
+        self.with_variant(ButtonVariant::Plain)
+    }
 }
 
 /// The variant of the Button.
@@ -67,6 +70,7 @@ pub enum ButtonVariant {
     FilledTonal,
     Outlined,
     Text,
+    Plain,
 }
 
 /// A Button element.
@@ -410,7 +414,7 @@ impl RenderOnce for Button {
         let icon_only = self.label.is_none() && self.children.is_empty() && self.icon.is_some();
         let dimensions = button_dimension_tokens::resolve(
             self.size,
-            style == ButtonVariant::Text,
+            self.variant,
             self.compact,
             icon_only,
         );
@@ -503,15 +507,19 @@ impl RenderOnce for Button {
             .flex_shrink_0()
             .items_center()
             .justify_center()
-            .h(dimensions.height)
+            .when(dimensions.height > Pixels::ZERO, |this| this.h(dimensions.height))
             .when(self.full_width, |this| this.w_full())
-            .when(!self.full_width, |this| this.min_w(dimensions.min_width))
+            .when(!self.full_width && dimensions.min_width > Pixels::ZERO, |this| {
+                this.min_w(dimensions.min_width)
+            })
             .when_some(self.pl, |this, pl| this.pl(pl))
             .when_some(self.pr, |this, pr| this.pr(pr))
-            .when(self.pl.is_none() && self.pr.is_none(), |this| {
+            .when(self.pl.is_none() && self.pr.is_none() && dimensions.horizontal_padding > Pixels::ZERO, |this| {
                 this.px(dimensions.horizontal_padding)
             })
-            .py(dimensions.vertical_padding)
+            .when(dimensions.vertical_padding > Pixels::ZERO, |this| {
+                this.py(dimensions.vertical_padding)
+            })
             .when(cx.theme().shadow && normal_style.shadow > 0, |this| {
                 if normal_style.shadow > 1 {
                     this.shadow_md()
@@ -587,7 +595,7 @@ impl RenderOnce for Button {
             })
             // M3 TextButton has no container, elevation, or border. Its
             // interaction feedback is only an on-surface-variant state layer.
-            .when(style == ButtonVariant::Text, |this| {
+            .when(style == ButtonVariant::Text || style == ButtonVariant::Plain, |this| {
                 this.border_color(cx.theme().transparent).shadow_none()
             })
             .when(is_focused && !self.disabled, |this| {
@@ -734,7 +742,7 @@ impl RenderOnce for Button {
             })
             // TextButton focus is represented by the M3 state layer, not the
             // generic primary focus border used by container buttons.
-            .when(style != ButtonVariant::Text, |this| {
+            .when(style != ButtonVariant::Text && style != ButtonVariant::Plain, |this| {
                 this.focus_ring(is_focused, px(0.), window, cx)
             })
     }

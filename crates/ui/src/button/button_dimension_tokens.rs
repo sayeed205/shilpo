@@ -15,12 +15,30 @@ pub(crate) struct ButtonDimensions {
     pub outline: Pixels,
 }
 
+use super::ButtonVariant;
+
 pub(crate) fn resolve(
     size: Size,
-    is_text: bool,
+    variant: ButtonVariant,
     compact: bool,
     icon_only: bool,
 ) -> ButtonDimensions {
+    if variant == ButtonVariant::Plain {
+        let metrics = button_scale_tokens::size_metrics(size);
+        let row = button_scale_tokens::button_m3e_row(metrics.metric_bucket);
+        return ButtonDimensions {
+            height: match size {
+                Size::Size(value) => value,
+                _ => Pixels::ZERO,
+            },
+            horizontal_padding: Pixels::ZERO,
+            vertical_padding: Pixels::ZERO,
+            min_width: Pixels::ZERO,
+            icon: row.icon,
+            gap: row.gap,
+            outline: row.outline,
+        };
+    }
     if icon_only {
         let container = match size {
             Size::XSmall => px(32.),
@@ -43,6 +61,7 @@ pub(crate) fn resolve(
     }
     let metrics = button_scale_tokens::size_metrics(size);
     let row = button_scale_tokens::button_m3e_row(metrics.metric_bucket);
+    let is_text = variant == ButtonVariant::Text;
     let horizontal_padding = if is_text {
         match metrics.metric_bucket {
             button_scale_tokens::ButtonScale::XSmall => px(12.),
@@ -73,7 +92,7 @@ pub(crate) fn resolve(
 }
 
 pub(crate) fn height(size: Size) -> Pixels {
-    resolve(size, false, false, false).height
+    resolve(size, ButtonVariant::Filled, false, false).height
 }
 
 #[cfg(test)]
@@ -89,7 +108,7 @@ mod tests {
             (Size::Large, 96., 48., 32.),
         ];
         for (size, height, horizontal, vertical) in expected {
-            let actual = resolve(size, false, false, false);
+            let actual = resolve(size, ButtonVariant::Filled, false, false);
             assert_eq!(actual.height, px(height));
             assert_eq!(actual.horizontal_padding, px(horizontal));
             assert_eq!(actual.vertical_padding, px(vertical));
@@ -107,7 +126,7 @@ mod tests {
             (Size::Size(px(136.)), 64.),
         ] {
             assert_eq!(
-                resolve(size, true, false, false).horizontal_padding,
+                resolve(size, ButtonVariant::Text, false, false).horizontal_padding,
                 px(padding)
             );
         }
@@ -122,7 +141,7 @@ mod tests {
             (97., 48., 32., 12.),
             (116., 48., 32., 12.),
         ] {
-            let dimensions = resolve(Size::Size(px(height)), false, false, false);
+            let dimensions = resolve(Size::Size(px(height)), ButtonVariant::Filled, false, false);
             assert_eq!(dimensions.height, px(height));
             assert_eq!(dimensions.horizontal_padding, px(padding));
             assert_eq!(dimensions.icon, px(icon));
@@ -132,8 +151,8 @@ mod tests {
 
     #[test]
     fn icon_only_buttons_use_icon_button_geometry() {
-        let text_icon = resolve(Size::Medium, true, false, true);
-        let icon = resolve(Size::Medium, false, false, true);
+        let text_icon = resolve(Size::Medium, ButtonVariant::Text, false, true);
+        let icon = resolve(Size::Medium, ButtonVariant::Filled, false, true);
         assert_eq!(text_icon, icon);
         assert_eq!(icon.height, px(48.));
         assert_eq!(icon.min_width, px(48.));

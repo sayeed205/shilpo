@@ -203,7 +203,7 @@ impl Input {
                 IconName::EyeOff
             })
             .xsmall()
-            .text()
+            .plain()
             .tab_stop(false)
             .on_click({
                 let state = state.clone();

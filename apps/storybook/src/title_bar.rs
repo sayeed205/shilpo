@@ -57,9 +57,6 @@ impl AppTitleBar {
 impl Render for AppTitleBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let notifications_count = window.notifications(cx).len();
-        let normal_fg = cx.theme().on_surface_variant;
-        let hover_fg = cx.theme().on_surface;
-        let hover_bg = cx.theme().surface_container_high;
         let window_controls = AppState::global(cx).window_controls;
 
         TitleBar::new().window_controls(window_controls).child(
@@ -107,11 +104,9 @@ impl Render for AppTitleBar {
                         .child(self.font_size_selector.clone())
                         .child(
                             Button::new("github")
-                                .text()
+                                .plain()
                                 .icon(IconName::Github)
                                 .small()
-                                .text_color(normal_fg)
-                                .hover(|style| style.bg(hover_bg).text_color(hover_fg))
                                 .on_click(|_, _, cx| {
                                     cx.open_url("https://github.com/longbridge/gpui-component")
                                 }),
@@ -120,12 +115,10 @@ impl Render for AppTitleBar {
                             div().relative().child(
                                 Badge::new().count(notifications_count).max(99).child(
                                     Button::new("bell")
-                                        .text()
+                                        .plain()
                                         .small()
                                         .compact()
-                                        .icon(IconName::Bell)
-                                        .text_color(normal_fg)
-                                        .hover(|style| style.bg(hover_bg).text_color(hover_fg)),
+                                        .icon(IconName::Bell),
                                 ),
                             ),
                         ),
@@ -198,10 +191,6 @@ impl Render for FontSizeSelector {
         let font_size = cx.theme().font_size.as_f32() as i32;
         let radius = cx.theme().radius.as_f32() as i32;
         let scroll_show = cx.theme().scrollbar_show;
-        let normal_fg = cx.theme().on_surface_variant;
-        let hover_fg = cx.theme().on_surface;
-        let hover_bg = cx.theme().surface_container_high;
-
         div()
             .id("font-size-selector")
             .track_focus(&focus_handle)
@@ -212,10 +201,8 @@ impl Render for FontSizeSelector {
             .child(
                 Button::new("btn")
                     .small()
-                    .text()
+                    .plain()
                     .icon(IconName::Settings2)
-                    .text_color(normal_fg)
-                    .hover(|style| style.bg(hover_bg).text_color(hover_fg))
                     .dropdown_menu(move |this, _, cx| {
                         this.scrollable(true)
                             .check_side(Side::Right)
