@@ -29,6 +29,8 @@ pub(crate) fn resolve(
             Size::Large => px(56.),
             Size::Size(value) => value,
         };
+        let metrics = button_scale_tokens::size_metrics(size);
+        let row = button_scale_tokens::button_m3e_row(metrics.metric_bucket);
         return ButtonDimensions {
             height: container,
             horizontal_padding: Pixels::ZERO,
@@ -36,7 +38,7 @@ pub(crate) fn resolve(
             min_width: container,
             icon: button_scale_tokens::icon_button_m3e_bucket_for_height(container).icon,
             gap: Pixels::ZERO,
-            outline: Pixels::ZERO,
+            outline: row.outline,
         };
     }
     let metrics = button_scale_tokens::size_metrics(size);

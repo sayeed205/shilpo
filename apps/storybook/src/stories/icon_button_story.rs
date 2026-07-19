@@ -215,7 +215,7 @@ impl Render for IconButtonStory {
                     .child(cell(
                         IconButton::new("loading")
                             .filled()
-                            .icon(IconName::Loader)
+                            .icon(IconName::Bell)
                             .loading(true)
                             .into_any_element(),
                         "Loading",
@@ -245,7 +245,7 @@ impl Render for IconButtonStory {
             )
             .child(
                 section("Widths")
-                    .sub_title("Narrow, Default, and Wide options")
+                    .sub_title("Narrow, Default, Wide, and Full Width options")
                     .child(cell(
                         IconButton::new("width-narrow")
                             .icon(IconName::ArrowDown)
@@ -271,7 +271,27 @@ impl Render for IconButtonStory {
                             .into_any_element(),
                         "Wide",
                         "width 64px",
-                    )),
+                    ))
+                    .child(
+                        v_flex()
+                            .w(px(200.))
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                IconButton::new("width-full")
+                                    .icon(IconName::ArrowDown)
+                                    .filled_tonal()
+                                    .full_width(true)
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_sm()
+                                    .child("Full Width")
+                            )
+                    ),
             )
     }
 }

@@ -101,7 +101,11 @@ impl Render for SplitButtonStory {
                             action_button("filled-leading", "Save"),
                             menu_button("filled-trailing"),
                         )
-                        .filled(),
+                        .filled()
+                        .dropdown_menu_with_anchor(Anchor::BottomRight, |menu, _, _| {
+                            menu.menu("Save", Box::new(SplitAction::Publish))
+                                .menu("Save as draft", Box::new(SplitAction::Draft))
+                        }),
                         "Filled",
                         "primary container",
                     ))
@@ -110,7 +114,11 @@ impl Render for SplitButtonStory {
                             "tonal",
                             action_button("tonal-leading", "Share"),
                             menu_button("tonal-trailing"),
-                        ),
+                        )
+                        .dropdown_menu_with_anchor(Anchor::BottomRight, |menu, _, _| {
+                            menu.menu("Share to Web", Box::new(SplitAction::Publish))
+                                .menu("Copy link", Box::new(SplitAction::Draft))
+                        }),
                         "Filled tonal",
                         "secondary container",
                     ))
@@ -119,7 +127,11 @@ impl Render for SplitButtonStory {
                             "outlined",
                             action_button("outlined-leading", "Filter"),
                             menu_button("outlined-trailing"),
-                        ),
+                        )
+                        .dropdown_menu_with_anchor(Anchor::BottomRight, |menu, _, _| {
+                            menu.menu("Filter by name", Box::new(SplitAction::Draft))
+                                .menu("Filter by date", Box::new(SplitAction::Publish))
+                        }),
                         "Outlined",
                         "outline container",
                     ))
@@ -128,9 +140,50 @@ impl Render for SplitButtonStory {
                             "elevated",
                             action_button("elevated-leading", "Export"),
                             menu_button("elevated-trailing"),
-                        ),
+                        )
+                        .dropdown_menu_with_anchor(Anchor::BottomRight, |menu, _, _| {
+                            menu.menu("Export as PDF", Box::new(SplitAction::Draft))
+                                .menu("Export as CSV", Box::new(SplitAction::Publish))
+                        }),
                         "Elevated",
                         "surface container + elevation",
+                    )),
+            )
+            .child(
+                section("With Icon")
+                    .sub_title("Split buttons can include leading icons in their action button.")
+                    .child(labeled(
+                        SplitButton::new(
+                            "icon-filled",
+                            Button::new("icon-filled-leading")
+                                .icon(IconName::Plus)
+                                .label("Create")
+                                .on_click(|_, _, _| {}),
+                            menu_button("icon-filled-trailing"),
+                        )
+                        .filled()
+                        .dropdown_menu_with_anchor(Anchor::BottomRight, |menu, _, _| {
+                            menu.menu("Create project", Box::new(SplitAction::Publish))
+                                .menu("Create file", Box::new(SplitAction::Draft))
+                        }),
+                        "Filled with Icon",
+                        "leading icon + label",
+                    ))
+                    .child(labeled(
+                        SplitButton::outlined(
+                            "icon-outlined",
+                            Button::new("icon-outlined-leading")
+                                .icon(IconName::Settings)
+                                .label("Settings")
+                                .on_click(|_, _, _| {}),
+                            menu_button("icon-outlined-trailing"),
+                        )
+                        .dropdown_menu_with_anchor(Anchor::BottomRight, |menu, _, _| {
+                            menu.menu("General settings", Box::new(SplitAction::Draft))
+                                .menu("Advanced settings", Box::new(SplitAction::Publish))
+                        }),
+                        "Outlined with Icon",
+                        "leading icon + label",
                     )),
             )
             .child(

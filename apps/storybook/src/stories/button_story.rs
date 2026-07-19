@@ -276,6 +276,12 @@ impl Render for ButtonStory {
                             .label("Learn more"),
                     )
                     .child(
+                        Button::new("content-full-width")
+                            .filled()
+                            .full_width(true)
+                            .label("Full Width Button"),
+                    )
+                    .child(
                         ButtonGroup::new("content-group")
                             .outlined()
                             .child(Button::new("group-one").label("Day"))

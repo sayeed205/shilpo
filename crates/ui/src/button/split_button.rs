@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, App, Context, Corners, Edges, ElementId, InteractiveElement as _, IntoElement,
+    Anchor, App, Context, Corners, ElementId, InteractiveElement as _, IntoElement,
     ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder,
 };
@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::{
-    Button, ButtonRounded, ButtonVariant, ButtonVariants, SplitButtonShape, SplitButtonShapes,
+    Button, ButtonRounded, ButtonVariant, ButtonVariants, SplitButtonShapes,
     split_button_tokens,
 };
 
@@ -172,7 +172,6 @@ impl ButtonVariants for SplitButton {
 impl RenderOnce for SplitButton {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let tokens = split_button_tokens::tokens(self.size);
-        let shapes = self.shape_tokens();
         let height = tokens.height;
         let (leading_left, leading_inner, trailing_inner, trailing_right) = (
             tokens.leading_start,
@@ -207,33 +206,37 @@ impl RenderOnce for SplitButton {
         } else {
             self.variant
         };
-        let trailing_shape = if self.trailing.selected {
-            shapes.checked_shape
-        } else {
-            shapes.shape
+        let outer_radius = crate::button::button_shape_tokens::resolve(
+            self.rounded,
+            self.size,
+            Some(height),
+        );
+        let leading_corners = gpui::Corners {
+            top_left: outer_radius,
+            bottom_left: outer_radius,
+            top_right: tokens.inner_radius,
+            bottom_right: tokens.inner_radius,
         };
+        let trailing_corners = gpui::Corners {
+            top_left: tokens.inner_radius,
+            bottom_left: tokens.inner_radius,
+            top_right: outer_radius,
+            bottom_right: outer_radius,
+        };
+
         let leading = self
             .leading
             .with_variant(variant)
             .with_size(self.size)
             .disabled(self.disabled || self.loading)
             .loading(self.loading)
-            .rounded(match shapes.shape {
-                SplitButtonShape::CornerFull => self.rounded,
-                SplitButtonShape::Corner(value) => ButtonRounded::Size(value),
-            })
             .h(height)
+            .corner_radii(leading_corners)
             .border_corners(Corners {
                 top_left: true,
                 top_right: true,
                 bottom_left: true,
                 bottom_right: true,
-            })
-            .border_edges(Edges {
-                left: true,
-                top: true,
-                right: false,
-                bottom: true,
             })
             .pl(leading_left)
             .pr(leading_inner)
@@ -244,23 +247,14 @@ impl RenderOnce for SplitButton {
             .with_variant(variant)
             .with_size(self.size)
             .disabled(self.disabled || self.loading)
-            .rounded(match trailing_shape {
-                SplitButtonShape::CornerFull => self.rounded,
-                SplitButtonShape::Corner(value) => ButtonRounded::Size(value),
-            })
             .loading(self.loading)
             .h(height)
+            .corner_radii(trailing_corners)
             .border_corners(Corners {
                 top_left: true,
                 top_right: true,
                 bottom_left: true,
                 bottom_right: true,
-            })
-            .border_edges(Edges {
-                left: false,
-                top: true,
-                right: true,
-                bottom: true,
             })
             .pl(trailing_inner)
             .pr(trailing_right)

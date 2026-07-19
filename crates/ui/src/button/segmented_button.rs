@@ -66,6 +66,7 @@ pub struct SingleChoiceSegmentedButton {
     id: ElementId,
     items: Vec<SegmentedButtonItem>,
     style: StyleRefinement,
+    size: Size,
     on_selection_change: Option<Rc<dyn Fn(usize, &ClickEvent, &mut Window, &mut App)>>,
 }
 
@@ -75,6 +76,7 @@ impl SingleChoiceSegmentedButton {
             id: id.into(),
             items: Vec::new(),
             style: StyleRefinement::default(),
+            size: Size::Small,
             on_selection_change: None,
         }
     }
@@ -103,6 +105,7 @@ pub struct MultiChoiceSegmentedButton {
     id: ElementId,
     items: Vec<SegmentedButtonItem>,
     style: StyleRefinement,
+    size: Size,
     on_selection_change: Option<Rc<dyn Fn(usize, &ClickEvent, &mut Window, &mut App)>>,
 }
 
@@ -112,6 +115,7 @@ impl MultiChoiceSegmentedButton {
             id: id.into(),
             items: Vec::new(),
             style: StyleRefinement::default(),
+            size: Size::Small,
             on_selection_change: None,
         }
     }
@@ -141,9 +145,23 @@ impl Styled for SingleChoiceSegmentedButton {
     }
 }
 
+impl Sizable for SingleChoiceSegmentedButton {
+    fn with_size(mut self, size: impl Into<Size>) -> Self {
+        self.size = size.into();
+        self
+    }
+}
+
 impl Styled for MultiChoiceSegmentedButton {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
+    }
+}
+
+impl Sizable for MultiChoiceSegmentedButton {
+    fn with_size(mut self, size: impl Into<Size>) -> Self {
+        self.size = size.into();
+        self
     }
 }
 
@@ -151,12 +169,13 @@ fn render_item(
     item: SegmentedButtonItem,
     index: usize,
     count: usize,
+    size: Size,
     multi: bool,
     on_selection_change: Option<Rc<dyn Fn(usize, &ClickEvent, &mut Window, &mut App)>>,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    let tokens = segmented_button_tokens::tokens(cx);
+    let tokens = segmented_button_tokens::tokens(size, cx);
     let state = button_shared_tokens::STATE_OPACITIES;
     let selected = if multi { item.checked } else { item.selected };
     let disabled = item.disabled;
@@ -271,6 +290,7 @@ impl RenderOnce for SingleChoiceSegmentedButton {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let count = self.items.len();
         let on_selection_change = self.on_selection_change;
+        let size = self.size;
         div()
             .id(self.id)
             .h_flex()
@@ -281,6 +301,7 @@ impl RenderOnce for SingleChoiceSegmentedButton {
                     item,
                     index,
                     count,
+                    size,
                     false,
                     on_selection_change.clone(),
                     window,
@@ -294,6 +315,7 @@ impl RenderOnce for MultiChoiceSegmentedButton {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let count = self.items.len();
         let on_selection_change = self.on_selection_change;
+        let size = self.size;
         div()
             .id(self.id)
             .h_flex()
@@ -304,6 +326,7 @@ impl RenderOnce for MultiChoiceSegmentedButton {
                     item,
                     index,
                     count,
+                    size,
                     true,
                     on_selection_change.clone(),
                     window,
@@ -414,5 +437,11 @@ mod tests {
         let day = visual.debug_bounds("segment-0").unwrap();
         visual.simulate_click(day.center(), Default::default());
         assert_eq!(state.read_with(visual, |state, _| state.selected), 0);
+    }
+
+    #[test]
+    fn test_segmented_button_size_override() {
+        let button = SingleChoiceSegmentedButton::new("row").with_size(Size::Large);
+        assert_eq!(button.size, Size::Large);
     }
 }
