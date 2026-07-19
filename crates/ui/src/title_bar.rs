@@ -11,7 +11,7 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-pub const TITLE_BAR_HEIGHT: Pixels = px(34.);
+pub const TITLE_BAR_HEIGHT: Pixels = px(48.);
 #[cfg(target_os = "macos")]
 const TITLE_BAR_LEFT_PADDING: Pixels = px(80.);
 #[cfg(not(target_os = "macos"))]
@@ -297,9 +297,7 @@ impl RenderOnce for TitleBar {
                 .justify_between()
                 .h(TITLE_BAR_HEIGHT)
                 .pl(TITLE_BAR_LEFT_PADDING)
-                .border_b_1()
-                .border_color(cx.theme().outline_variant)
-                .bg(cx.theme().surface_container)
+                .bg(cx.theme().surface_container_low)
                 .refine_style(&self.style)
                 .when(is_linux, |this| {
                     this.on_double_click(|_, window, _| window.zoom_window())

@@ -248,61 +248,102 @@ impl SidebarItem for SidebarMenuItem {
         let handler = self.handler.clone();
         let is_collapsed = self.collapsed;
         let is_active = self.active;
-        let is_hoverable = !is_active && !self.disabled;
         let is_disabled = self.disabled;
         let is_open = open_state
             .as_ref()
             .map_or(false, |s| !is_collapsed && *s.read(cx));
 
+        let make_icon = |icon: Icon, is_active: bool, is_disabled: bool, cx: &App| {
+            div()
+                .id("icon-wrapper")
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(gpui::px(56.))
+                .h(gpui::px(32.))
+                .rounded_full()
+                .when(is_active, |this| {
+                    this.bg(cx.theme().secondary_container)
+                        .text_color(cx.theme().on_secondary_container)
+                })
+                .when(!is_active && !is_disabled, |this| {
+                    this.hover(|style| style.bg(cx.theme().surface_container_high))
+                })
+                .child(icon)
+        };
+
+        let icon_for_collapsed = self.icon.clone().map(|icon| make_icon(icon, is_active, is_disabled, cx));
+        let icon_for_expanded = self.icon.clone().map(|icon| make_icon(icon, is_active, is_disabled, cx));
+
         div()
             .id(id.clone())
             .w_full()
             .child(
-                h_flex()
-                    .size_full()
+                div()
                     .id("item")
-                    .overflow_x_hidden()
+                    .w_full()
+                    .overflow_hidden()
                     .flex_shrink_0()
-                    .p_2()
-                    .gap_x_2()
                     .rounded(cx.theme().radius)
-                    .text_sm()
-                    .when(is_hoverable, |this| {
-                        this.hover(|this| {
-                            this.bg(cx.theme().secondary_container.opacity(0.8))
-                                .text_color(cx.theme().on_secondary_container)
-                        })
-                    })
-                    .when(is_active, |this| {
-                        this.font_medium()
-                            .bg(cx.theme().secondary_container)
-                            .text_color(cx.theme().on_secondary_container)
-                    })
-                    .when_some(self.icon.clone(), |this, icon| this.child(icon))
                     .when(is_collapsed, |this| {
-                        this.justify_center().when(is_active, |this| {
-                            this.bg(cx.theme().secondary_container)
-                                .text_color(cx.theme().on_secondary_container)
-                        })
+                        this.py_2()
+                            .child(
+                                v_flex()
+                                    .items_center()
+                                    .gap_y_1()
+                                    .w_full()
+                                    .when_some(icon_for_collapsed, |this, icon| this.child(icon))
+                                    .child(
+                                        div()
+                                            .max_w_full()
+                                            .truncate()
+                                            .px_1()
+                                            .text_xs()
+                                            .text_color(if is_active {
+                                                cx.theme().on_surface
+                                            } else {
+                                                cx.theme().on_surface_variant
+                                            })
+                                            .child(self.label.clone()),
+                                    )
+                            )
                     })
                     .when(!is_collapsed, |this| {
-                        this.h_7()
+                        this.h_9()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_x_2()
+                            .px_2()
+                            .when(!is_disabled && !is_active, |this| {
+                                this.hover(|style| style.bg(cx.theme().surface_container_low))
+                            })
+                            .when(is_active, |this| {
+                                this.bg(cx.theme().surface_container_high)
+                            })
                             .child(
                                 h_flex()
                                     .flex_1()
                                     .gap_x_2()
-                                    .justify_between()
-                                    .overflow_x_hidden()
+                                    .items_center()
+                                    .overflow_hidden()
+                                    .when_some(icon_for_expanded, |this, icon| this.child(icon))
                                     .child(
-                                        h_flex()
+                                        div()
                                             .flex_1()
-                                            .overflow_x_hidden()
+                                            .truncate()
+                                            .text_sm()
+                                            .text_color(if is_active {
+                                                cx.theme().on_surface
+                                            } else {
+                                                cx.theme().on_surface_variant
+                                            })
                                             .child(self.label.clone()),
                                     )
-                                    .when_some(self.suffix.clone(), |this, suffix| {
-                                        this.child(suffix(window, cx).into_any_element())
-                                    }),
                             )
+                            .when_some(self.suffix.clone(), |this, suffix| {
+                                this.child(suffix(window, cx).into_any_element())
+                            })
                             .when_some(open_state.clone(), |this, open_state| {
                                 this.child(
                                     Button::new("caret")
@@ -317,7 +358,6 @@ impl SidebarItem for SidebarMenuItem {
                                         )
                                         .on_click({
                                             move |_, _, cx| {
-                                                // Avoid trigger item click, just expand/collapse submenu
                                                 cx.stop_propagation();
                                                 open_state.update(cx, |is_open, cx| {
                                                     *is_open = !*is_open;
@@ -328,7 +368,6 @@ impl SidebarItem for SidebarMenuItem {
                                 )
                             })
                     })
-                    .when(is_disabled, |this| this.text_color(cx.theme().on_surface))
                     .when(!is_disabled, |this| {
                         this.on_click({
                             let open_state = open_state.clone();

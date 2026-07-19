@@ -563,7 +563,7 @@ impl Render for Root {
             .relative()
             .size_full()
             .font_family(cx.theme().font_family.clone())
-            .bg(cx.theme().surface)
+            .bg(cx.theme().surface_container_low)
             .text_color(cx.theme().on_surface)
             .refine_style(&self.style)
             .child(TextSelectionController)

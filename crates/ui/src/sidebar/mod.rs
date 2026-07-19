@@ -25,7 +25,7 @@ pub use header::*;
 pub use menu::*;
 
 const DEFAULT_WIDTH: Pixels = px(255.);
-const COLLAPSED_WIDTH: Pixels = px(48.);
+const COLLAPSED_WIDTH: Pixels = px(80.);
 const SIDEBAR_TRANSITION_DURATION: Duration = Duration::from_millis(200);
 
 /// The way a [`Sidebar`] behaves when it is collapsed.
@@ -231,6 +231,7 @@ pub struct Sidebar<E: SidebarItem + 'static> {
     side: Side,
     collapsible: SidebarCollapsible,
     collapsed: bool,
+    border: bool,
 }
 
 impl<E: SidebarItem> Sidebar<E> {
@@ -245,6 +246,7 @@ impl<E: SidebarItem> Sidebar<E> {
             side: Side::Left,
             collapsible: SidebarCollapsible::Icon,
             collapsed: false,
+            border: true,
         }
     }
 
@@ -269,6 +271,12 @@ impl<E: SidebarItem> Sidebar<E> {
     /// Set the sidebar to be collapsed
     pub fn collapsed(mut self, collapsed: bool) -> Self {
         self.collapsed = collapsed;
+        self
+    }
+
+    /// Set whether the sidebar has a border.
+    pub fn border(mut self, border: bool) -> Self {
+        self.border = border;
         self
     }
 
@@ -410,10 +418,10 @@ impl<E: SidebarItem> RenderOnce for Sidebar<E> {
             .h_full()
             .overflow_hidden()
             .relative()
-            .bg(cx.theme().surface_container)
+            .bg(cx.theme().surface_container_low)
             .text_color(cx.theme().on_surface)
             .border_color(cx.theme().outline_variant)
-            .map(|this| match self.side {
+            .when(self.border, |this| match self.side {
                 Side::Left => this.border_r_1(),
                 Side::Right => this.border_l_1(),
             })
