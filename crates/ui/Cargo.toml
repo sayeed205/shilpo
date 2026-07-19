@@ -149,6 +149,7 @@ instant = { version = "0.1", features = ["wasm-bindgen"] }
 # Native-only dependencies (not available on WASM)
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 smol.workspace = true
+notify-rust = { workspace = true }
 tree-sitter = { version = "0.26", optional = true }
 tree-sitter-astro-next = { version = "0.1.1", optional = true }
 tree-sitter-bash = { version = "0.23.3", optional = true }

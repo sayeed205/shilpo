@@ -369,6 +369,39 @@ impl Render for NotificationStory {
                 ),
             )
             .child(
+                section("Native Desktop Notification").child(
+                    h_flex()
+                        .gap_3()
+                        .child(
+                            Button::new("show-native-notify-simple")
+                                .outline()
+                                .label("Simple Native Notification")
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    window.push_notification(
+                                        Notification::new()
+                                            .title("Simple Native")
+                                            .message("This is a native system notification!")
+                                            .only_native(true),
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(
+                            Button::new("show-native-notify-both")
+                                .outline()
+                                .label("In-App + Native")
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    window.push_notification(
+                                        Notification::success("System is fully operational!")
+                                            .title("Status Check")
+                                            .native(true),
+                                        cx,
+                                    );
+                                })),
+                        ),
+                ),
+            )
+            .child(
                 section("Custom Notification").child(
                     Button::new("show-notify-custom")
                         .outline()

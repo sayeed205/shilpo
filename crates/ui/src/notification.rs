@@ -76,6 +76,8 @@ pub struct Notification {
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_close: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     closing: bool,
+    use_native: bool,
+    only_native: bool,
 }
 
 impl From<String> for Notification {
@@ -134,7 +136,25 @@ impl Notification {
             on_click: None,
             on_close: None,
             closing: false,
+            use_native: false,
+            only_native: false,
         }
+    }
+
+    /// Set whether this notification should also be shown as a native desktop notification.
+    pub fn native(mut self, native: bool) -> Self {
+        self.use_native = native;
+        self
+    }
+
+    /// Set whether this notification should only be shown as a native desktop notification,
+    /// with no in-app toast generated inside the window.
+    pub fn only_native(mut self, only_native: bool) -> Self {
+        self.only_native = only_native;
+        if only_native {
+            self.use_native = true;
+        }
+        self
     }
 
     /// Set the message of the notification, default is None.
@@ -473,6 +493,26 @@ impl NotificationList {
         let notification = notification.into();
         let id = notification.id.clone();
         let autohide = notification.autohide;
+
+        if notification.use_native {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                let summary = notification.title.clone().unwrap_or_else(|| "Notification".into());
+                let body = notification.message.clone().unwrap_or_default();
+                cx.background_executor().spawn(async move {
+                    let mut api = notify_rust::Notification::new();
+                    api.summary(&summary)
+                       .body(&body);
+                    if let Err(err) = api.show() {
+                        tracing::error!("failed to show native desktop notification: {:?}", err);
+                    }
+                }).detach();
+            }
+
+            if notification.only_native {
+                return;
+            }
+        }
 
         // Remove the notification by id, for keep unique.
         self.notifications.retain(|note| note.read(cx).id != id);
