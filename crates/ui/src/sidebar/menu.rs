@@ -253,27 +253,37 @@ impl SidebarItem for SidebarMenuItem {
             .as_ref()
             .map_or(false, |s| !is_collapsed && *s.read(cx));
 
-        let make_icon = |icon: Icon, is_active: bool, is_disabled: bool, cx: &App| {
+        let make_icon = |icon: Icon, is_active: bool, is_disabled: bool, is_collapsed: bool, cx: &App| {
             div()
                 .id("icon-wrapper")
                 .flex()
                 .items_center()
                 .justify_center()
-                .w(gpui::px(56.))
-                .h(gpui::px(32.))
-                .rounded_full()
-                .when(is_active, |this| {
-                    this.bg(cx.theme().secondary_container)
-                        .text_color(cx.theme().on_secondary_container)
+                .when(is_collapsed, |this| {
+                    this.w(gpui::px(56.))
+                        .h(gpui::px(32.))
+                        .rounded_full()
+                        .when(is_active, |this| {
+                            this.bg(cx.theme().secondary_container)
+                                .text_color(cx.theme().on_secondary_container)
+                        })
+                        .when(!is_active && !is_disabled, |this| {
+                            this.hover(|style| style.bg(cx.theme().surface_container_high))
+                        })
                 })
-                .when(!is_active && !is_disabled, |this| {
-                    this.hover(|style| style.bg(cx.theme().surface_container_high))
+                .when(!is_collapsed, |this| {
+                    this.size_6()
+                        .text_color(if is_active {
+                            cx.theme().on_secondary_container
+                        } else {
+                            cx.theme().on_surface_variant
+                        })
                 })
                 .child(icon)
         };
 
-        let icon_for_collapsed = self.icon.clone().map(|icon| make_icon(icon, is_active, is_disabled, cx));
-        let icon_for_expanded = self.icon.clone().map(|icon| make_icon(icon, is_active, is_disabled, cx));
+        let icon_for_collapsed = self.icon.clone().map(|icon| make_icon(icon, is_active, is_disabled, true, cx));
+        let icon_for_expanded = self.icon.clone().map(|icon| make_icon(icon, is_active, is_disabled, false, cx));
 
         div()
             .id(id.clone())
@@ -284,9 +294,10 @@ impl SidebarItem for SidebarMenuItem {
                     .w_full()
                     .overflow_hidden()
                     .flex_shrink_0()
-                    .rounded(cx.theme().radius)
+                    .when(!is_disabled, |this| this.cursor_pointer())
                     .when(is_collapsed, |this| {
-                        this.py_2()
+                        this.rounded(cx.theme().radius)
+                            .py_2()
                             .child(
                                 v_flex()
                                     .items_center()
@@ -314,12 +325,13 @@ impl SidebarItem for SidebarMenuItem {
                             .items_center()
                             .justify_between()
                             .gap_x_2()
-                            .px_2()
+                            .px_3()
+                            .rounded_full()
                             .when(!is_disabled && !is_active, |this| {
-                                this.hover(|style| style.bg(cx.theme().surface_container_low))
+                                this.hover(|style| style.bg(cx.theme().surface_container_high))
                             })
                             .when(is_active, |this| {
-                                this.bg(cx.theme().surface_container_high)
+                                this.bg(cx.theme().secondary_container)
                             })
                             .child(
                                 h_flex()
@@ -334,7 +346,7 @@ impl SidebarItem for SidebarMenuItem {
                                             .truncate()
                                             .text_sm()
                                             .text_color(if is_active {
-                                                cx.theme().on_surface
+                                                cx.theme().on_secondary_container
                                             } else {
                                                 cx.theme().on_surface_variant
                                             })
