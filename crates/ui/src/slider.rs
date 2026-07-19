@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::{ActiveTheme, AxisExt, ElementExt, StyledExt, h_flex};
+use crate::{ActiveTheme, AxisExt, ElementExt, Sizable, StyledExt, h_flex};
 use gpui::{
     AccessibleAction, Along, App, AppContext as _, Axis, Background, Bounds, Context, Corners,
     DefiniteLength, DragMoveEvent, Empty, Entity, EntityId, EventEmitter, InteractiveElement,
@@ -196,6 +196,8 @@ pub struct SliderState {
     /// Tracks whether the user is currently interacting with the slider so we
     /// only emit [`SliderEvent::Release`] after a real press/drag.
     dragging: bool,
+    centered: bool,
+    dragging_thumb: Option<bool>,
 }
 
 impl SliderState {
@@ -210,7 +212,16 @@ impl SliderState {
             bounds: Bounds::default(),
             scale: SliderScale::default(),
             dragging: false,
+            centered: false,
+            dragging_thumb: None,
         }
+    }
+
+    /// Set the centered state of the slider (bi-directional centered mode), default: false
+    pub fn centered(mut self, centered: bool) -> Self {
+        self.centered = centered;
+        self.update_thumb_pos();
+        self
     }
 
     /// Set the minimum value of the slider, default: 0.0
@@ -305,6 +316,11 @@ impl SliderState {
         self.step
     }
 
+    /// Check if centered mode is enabled.
+    pub fn is_centered(&self) -> bool {
+        self.centered
+    }
+
     /// Converts a value between 0.0 and 1.0 to a value between the minimum and maximum value,
     /// depending on the chosen scale.
     fn percentage_to_value(&self, percentage: f32) -> f32 {
@@ -364,6 +380,7 @@ impl SliderState {
         cx: &mut Context<Self>,
     ) {
         self.dragging = true;
+        self.dragging_thumb = Some(is_start);
         let bounds = self.bounds;
         let step = self.step;
 
@@ -383,12 +400,13 @@ impl SliderState {
 
         let value = self.percentage_to_value(percentage);
         let value = (value / step).round() * step;
+        let snapped_percentage = self.value_to_percentage(value);
 
         if is_start {
-            self.percentage.start = percentage;
+            self.percentage.start = snapped_percentage;
             self.value.set_start(value);
         } else {
-            self.percentage.end = percentage;
+            self.percentage.end = snapped_percentage;
             self.value.set_end(value);
         }
         cx.emit(SliderEvent::Change(self.value));
@@ -402,6 +420,7 @@ impl SliderState {
             return;
         }
         self.dragging = false;
+        self.dragging_thumb = None;
         cx.emit(SliderEvent::Release(self.value));
     }
 }
@@ -416,6 +435,14 @@ pub struct Slider {
     style: StyleRefinement,
     disabled: bool,
     reverse: bool,
+    size: crate::Size,
+}
+
+impl Sizable for Slider {
+    fn with_size(mut self, size: impl Into<crate::Size>) -> Self {
+        self.size = size.into();
+        self
+    }
 }
 
 impl Slider {
@@ -427,6 +454,7 @@ impl Slider {
             style: StyleRefinement::default(),
             disabled: false,
             reverse: false,
+            size: crate::Size::Medium,
         }
     }
 
@@ -467,9 +495,9 @@ impl Slider {
         &self,
         start: DefiniteLength,
         is_start: bool,
-        bar_color: Background,
+        _bar_color: Background,
         thumb_bg: Background,
-        radius: Corners<Pixels>,
+        _radius: Corners<Pixels>,
         window: &mut Window,
         cx: &mut App,
     ) -> impl gpui::IntoElement {
@@ -481,31 +509,64 @@ impl Slider {
             return div().id(id);
         }
 
+        let state = self.state.read(cx);
+        let is_dragging = state.dragging && state.dragging_thumb == Some(is_start);
+
+        let (thumb_width, thumb_height, top_offset, left_offset, margin_left, margin_bottom) = if axis.is_horizontal() {
+            let tw = if is_dragging { px(8.) } else { px(4.) };
+            let th = match self.size {
+                crate::Size::XSmall => px(20.),
+                crate::Size::Small => px(26.),
+                crate::Size::Medium => px(32.),
+                crate::Size::Large => px(38.),
+                _ => px(32.),
+            };
+            let track_h = match self.size {
+                crate::Size::XSmall => px(8.),
+                crate::Size::Small => px(12.),
+                crate::Size::Medium => px(16.),
+                crate::Size::Large => px(20.),
+                _ => px(16.),
+            };
+            let top = (track_h - th) * 0.5;
+            let ml = tw * -0.5;
+            (tw, th, top, start, ml, px(0.))
+        } else {
+            let th = if is_dragging { px(8.) } else { px(4.) };
+            let tw = match self.size {
+                crate::Size::XSmall => px(20.),
+                crate::Size::Small => px(26.),
+                crate::Size::Medium => px(32.),
+                crate::Size::Large => px(38.),
+                _ => px(32.),
+            };
+            let track_w = match self.size {
+                crate::Size::XSmall => px(8.),
+                crate::Size::Small => px(12.),
+                crate::Size::Medium => px(16.),
+                crate::Size::Large => px(20.),
+                _ => px(16.),
+            };
+            let left = (track_w - tw) * 0.5;
+            let mb = th * -0.5;
+            (tw, th, left, start, px(0.), mb)
+        };
+
         div()
             .id(id)
             .absolute()
             .when(axis.is_horizontal(), |this| {
-                this.top(px(-5.)).left(start).ml(-px(8.))
+                this.top(top_offset).left(left_offset).ml(margin_left)
             })
             .when(axis.is_vertical(), |this| {
-                this.bottom(start).left(px(-5.)).mb(-px(8.))
+                this.bottom(left_offset).left(top_offset).mb(margin_bottom)
             })
-            .flex()
-            .items_center()
-            .justify_center()
+            .w(thumb_width)
+            .h(thumb_height)
             .flex_shrink_0()
-            .corner_radii(radius)
-            .bg(bar_color.opacity(0.5))
-            .when(cx.theme().shadow, |this| this.shadow_md())
-            .size_4()
-            .p(px(1.))
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .size_full()
-                    .corner_radii(radius)
-                    .bg(thumb_bg),
-            )
+            .rounded_full()
+            .bg(thumb_bg)
+            .when(cx.theme().shadow, |this| this.shadow_xs())
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 cx.stop_propagation();
             })
@@ -550,20 +611,17 @@ impl RenderOnce for Slider {
         let state = self.state.read(cx);
         let is_range = state.value().is_range();
         let percentage = state.percentage.clone();
-        let (bar_start, bar_end) = if self.reverse && !is_range {
-            // Fill from the thumb to the max end (remaining side).
-            (relative(percentage.end), relative(0.))
-        } else {
-            (relative(percentage.start), relative(1. - percentage.end))
-        };
+        let centered = state.centered;
         let rem_size = window.rem_size();
 
-        let bar_color = self
+        let active_color: Background = self
             .style
             .background
             .clone()
             .and_then(|bg| bg.color())
-            .unwrap_or(cx.theme().surface_container_highest.into());
+            .unwrap_or(cx.theme().primary.into())
+            .into();
+        let inactive_color: Background = cx.theme().surface_container_highest.into();
         let thumb_bg: Background = self
             .style
             .text
@@ -596,6 +654,244 @@ impl RenderOnce for Slider {
             radius.bottom_left = px(0.);
             radius.bottom_right = px(0.);
         }
+
+        let track_size = match self.size {
+            crate::Size::XSmall => px(8.),
+            crate::Size::Small => px(12.),
+            crate::Size::Medium => px(16.),
+            crate::Size::Large => px(20.),
+            _ => px(16.),
+        };
+
+        // Stop Dots (discrete stop ticks or start/end bounds)
+        let mut dots = Vec::new();
+        let step_count = if state.step > 0.0 && state.step < (state.max - state.min) {
+            let count = ((state.max - state.min) / state.step).round() as usize;
+            if count <= 30 { Some(count) } else { None }
+        } else {
+            None
+        };
+
+        if let Some(count) = step_count {
+            for i in 0..=count {
+                let val = (state.min + (i as f32) * state.step).min(state.max);
+                let pct = state.value_to_percentage(val);
+                dots.push(pct);
+            }
+        } else {
+            dots.push(0.0);
+            dots.push(1.0);
+        }
+
+        let dot_elements: Vec<_> = dots
+            .into_iter()
+            .map(|dot_pct| {
+                let is_active_region = if centered {
+                    if percentage.end < 0.5 {
+                        dot_pct >= percentage.end && dot_pct <= 0.5
+                    } else {
+                        dot_pct >= 0.5 && dot_pct <= percentage.end
+                    }
+                } else if is_range {
+                    dot_pct >= percentage.start && dot_pct <= percentage.end
+                } else if self.reverse {
+                    dot_pct >= percentage.end
+                } else {
+                    dot_pct <= percentage.end
+                };
+
+                let dot_color = if is_active_region {
+                    cx.theme().on_primary.opacity(0.38)
+                } else {
+                    cx.theme().primary.opacity(0.38)
+                };
+
+                let margin = (track_size * 0.5) * (1.0 - 2.0 * dot_pct) - px(2.0);
+
+                div()
+                    .absolute()
+                    .bg(dot_color)
+                    .rounded_full()
+                    .size(px(4.))
+                    .when(axis.is_horizontal(), |this| {
+                        this.left(relative(dot_pct))
+                            .top((track_size - px(4.)) * 0.5)
+                            .ml(margin)
+                    })
+                    .when(axis.is_vertical(), |this| {
+                        this.bottom(relative(dot_pct))
+                            .left((track_size - px(4.)) * 0.5)
+                            .mb(margin)
+                    })
+            })
+            .collect();
+
+        // Centered zero-point tick mark
+        let center_tick = if centered {
+            let tick_size = track_size + px(4.);
+            Some(
+                div()
+                    .absolute()
+                    .bg(cx.theme().on_surface.opacity(0.5))
+                    .when(axis.is_horizontal(), |this| {
+                        this.left(relative(0.5))
+                            .top((track_size - tick_size) * 0.5)
+                            .w(px(2.))
+                            .h(tick_size)
+                            .ml(px(-1.))
+                    })
+                    .when(axis.is_vertical(), |this| {
+                        this.bottom(relative(0.5))
+                            .left((track_size - tick_size) * 0.5)
+                            .h(px(2.))
+                            .w(tick_size)
+                            .mb(px(-1.))
+                    })
+            )
+        } else {
+            None
+        };
+
+        struct TrackSegment {
+            start: f32,
+            end: f32,
+            gap_start: bool,
+            gap_end: bool,
+            color: gpui::Background,
+            round_start: bool,
+            round_end: bool,
+        }
+
+        let create_segment = |start: f32, end: f32, color: gpui::Background| {
+            if end - start <= 0.001 {
+                return None;
+            }
+            let (gap_start, round_start) = if start <= 0.001 {
+                (false, true)
+            } else {
+                (true, false)
+            };
+            let (gap_end, round_end) = if end >= 0.999 {
+                (false, true)
+            } else {
+                (true, false)
+            };
+            Some(TrackSegment {
+                start,
+                end,
+                gap_start,
+                gap_end,
+                color,
+                round_start,
+                round_end,
+            })
+        };
+
+        let mut segments = Vec::new();
+
+        if centered {
+            let val = percentage.end;
+            if val < 0.5 {
+                if let Some(s) = create_segment(0.0, val, inactive_color.clone()) {
+                    segments.push(s);
+                }
+                if let Some(s) = create_segment(val, 0.5, active_color.clone()) {
+                    segments.push(s);
+                }
+                if let Some(s) = create_segment(0.5, 1.0, inactive_color.clone()) {
+                    segments.push(s);
+                }
+            } else {
+                if let Some(s) = create_segment(0.0, 0.5, inactive_color.clone()) {
+                    segments.push(s);
+                }
+                if let Some(s) = create_segment(0.5, val, active_color.clone()) {
+                    segments.push(s);
+                }
+                if let Some(s) = create_segment(val, 1.0, inactive_color.clone()) {
+                    segments.push(s);
+                }
+            }
+        } else if is_range {
+            let start = percentage.start;
+            let end = percentage.end;
+            if let Some(s) = create_segment(0.0, start, inactive_color.clone()) {
+                segments.push(s);
+            }
+            if let Some(s) = create_segment(start, end, active_color.clone()) {
+                segments.push(s);
+            }
+            if let Some(s) = create_segment(end, 1.0, inactive_color.clone()) {
+                segments.push(s);
+            }
+        } else if self.reverse {
+            let val = percentage.end;
+            if let Some(s) = create_segment(0.0, val, inactive_color.clone()) {
+                segments.push(s);
+            }
+            if let Some(s) = create_segment(val, 1.0, active_color.clone()) {
+                segments.push(s);
+            }
+        } else {
+            let val = percentage.end;
+            if let Some(s) = create_segment(0.0, val, active_color.clone()) {
+                segments.push(s);
+            }
+            if let Some(s) = create_segment(val, 1.0, inactive_color.clone()) {
+                segments.push(s);
+            }
+        }
+
+        let is_dragging = state.dragging && state.dragging_thumb.is_some();
+        let gap_margin = if is_dragging { px(8.0) } else { px(6.0) };
+        let inner_radius = if cx.theme().radius.is_zero() {
+            px(0.0)
+        } else {
+            track_size * 0.25
+        };
+
+        let rendered_segments: Vec<_> = segments
+            .into_iter()
+            .map(|segment| {
+                let margin_start = if segment.gap_start { gap_margin } else { px(0.0) };
+                let margin_end = if segment.gap_end { gap_margin } else { px(0.0) };
+
+                let segment_radius = if axis.is_horizontal() {
+                    Corners {
+                        top_left: if segment.round_start { radius.top_left } else { inner_radius },
+                        bottom_left: if segment.round_start { radius.bottom_left } else { inner_radius },
+                        top_right: if segment.round_end { radius.top_right } else { inner_radius },
+                        bottom_right: if segment.round_end { radius.bottom_right } else { inner_radius },
+                    }
+                } else {
+                    Corners {
+                        bottom_left: if segment.round_start { radius.bottom_left } else { inner_radius },
+                        bottom_right: if segment.round_start { radius.bottom_right } else { inner_radius },
+                        top_left: if segment.round_end { radius.top_left } else { inner_radius },
+                        top_right: if segment.round_end { radius.top_right } else { inner_radius },
+                    }
+                };
+
+                div()
+                    .absolute()
+                    .bg(segment.color)
+                    .when(axis.is_horizontal(), |this| {
+                        this.h_full()
+                            .left(relative(segment.start))
+                            .right(relative(1.0 - segment.end))
+                            .ml(margin_start)
+                            .mr(margin_end)
+                    })
+                    .when(axis.is_vertical(), |this| {
+                        this.w_full()
+                            .bottom(relative(segment.start))
+                            .top(relative(1.0 - segment.end))
+                            .mb(margin_start)
+                            .mt(margin_end)
+                    })
+                    .corner_radii(segment_radius)
+            })
+            .collect();
 
         let slider_min = state.min_value() as f64;
         let slider_max = state.max_value() as f64;
@@ -713,38 +1009,30 @@ impl RenderOnce for Slider {
                         ))
                     })
                     .when(axis.is_horizontal(), |this| {
-                        this.items_center().h_6().w_full()
+                        this.items_center().h_8().w_full()
                     })
                     .when(axis.is_vertical(), |this| {
-                        this.justify_center().w_6().h_full()
+                        this.justify_center().w_8().h_full()
                     })
                     .flex_shrink_0()
                     .child(
                         div()
                             .id("slider-bar")
                             .relative()
-                            .when(axis.is_horizontal(), |this| this.w_full().h_1p5())
-                            .when(axis.is_vertical(), |this| this.h_full().w_1p5())
-                            .bg(bar_color.opacity(0.2))
-                            .active(|this| this.bg(bar_color.opacity(0.4)))
-                            .corner_radii(radius)
-                            .child(
-                                div()
-                                    .absolute()
-                                    .when(axis.is_horizontal(), |this| {
-                                        this.h_full().left(bar_start).right(bar_end)
-                                    })
-                                    .when(axis.is_vertical(), |this| {
-                                        this.w_full().bottom(bar_start).top(bar_end)
-                                    })
-                                    .bg(bar_color)
-                                    .when(!cx.theme().radius.is_zero(), |this| this.rounded_full()),
-                            )
+                            .when(axis.is_horizontal(), |this| {
+                                this.w_full().h(track_size)
+                            })
+                            .when(axis.is_vertical(), |this| {
+                                this.h_full().w(track_size)
+                            })
+                            .children(rendered_segments)
+                            .children(center_tick)
+                            .children(dot_elements)
                             .when(is_range, |this| {
                                 this.child(self.render_thumb(
                                     relative(percentage.start),
                                     true,
-                                    bar_color,
+                                    active_color.into(),
                                     thumb_bg,
                                     radius,
                                     window,
@@ -754,7 +1042,7 @@ impl RenderOnce for Slider {
                             .child(self.render_thumb(
                                 relative(percentage.end),
                                 false,
-                                bar_color,
+                                active_color.into(),
                                 thumb_bg,
                                 radius,
                                 window,
@@ -766,5 +1054,38 @@ impl RenderOnce for Slider {
                             }),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_slider_state_new() {
+        let state = SliderState::new();
+        assert_eq!(state.min_value(), 0.0);
+        assert_eq!(state.max_value(), 100.0);
+        assert_eq!(state.step_value(), 1.0);
+        assert!(!state.is_centered());
+    }
+
+    #[test]
+    fn test_slider_state_centered() {
+        let state = SliderState::new().centered(true);
+        assert!(state.is_centered());
+    }
+
+    #[test]
+    fn test_slider_state_snapping() {
+        let state = SliderState::new()
+            .min(0.0)
+            .max(5.0)
+            .step(1.0);
+        let val = state.percentage_to_value(0.3); // 1.5
+        let snapped_val = (val / 1.0).round() * 1.0;
+        let pct = state.value_to_percentage(snapped_val);
+        assert_eq!(snapped_val, 2.0);
+        assert_eq!(pct, 0.4);
     }
 }
