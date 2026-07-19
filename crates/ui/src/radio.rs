@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use crate::{
-    ActiveTheme, AxisExt, FocusableExt as _, Sizable, Size, StyledExt,
-    h_flex, text::Text, tooltip::ComponentTooltip, v_flex,
+    ActiveTheme, AxisExt, FocusableExt as _, Sizable, Size, StyledExt, h_flex, text::Text,
+    tooltip::ComponentTooltip, v_flex,
 };
 use gpui::{
     AnyElement, App, Axis, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
@@ -210,13 +210,8 @@ impl RenderOnce for Radio {
                     .items_center()
                     .justify_center()
                     .when(checked, |this| {
-                        this.child(
-                            div()
-                                .size(inner_size)
-                                .rounded_full()
-                                .bg(circle_color)
-                        )
-                    })
+                        this.child(div().size(inner_size).rounded_full().bg(circle_color))
+                    }),
             )
             .when(!self.children.is_empty() || self.label.is_some(), |this| {
                 this.child(

@@ -1,23 +1,25 @@
 use std::rc::Rc;
 
 use crate::{
+    ActiveTheme, Disableable, FocusableExt as _, Icon, IconName, Selectable, Sizable, Size,
+    StyleSized, StyledExt,
     button::ButtonIcon,
     h_flex,
     tooltip::{ManagedTooltipExt as _, Tooltip},
-    ActiveTheme, Disableable, FocusableExt as _, Icon, IconName, Selectable, Sizable, Size,
-    StyleSized, StyledExt,
 };
 use gpui::{
-    div, prelude::FluentBuilder as _, px, relative, AnyElement, App, Background, ClickEvent,
-    Corners, CursorStyle, Div, Edges, ElementId, Hsla, InteractiveElement, Interactivity,
-    IntoElement, MouseButton, ParentElement, Pixels, RenderOnce, Role, SharedString, Stateful,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Window,
+    AbsoluteLength, AnyElement, App, Background, ClickEvent, Corners, CursorStyle, DefiniteLength,
+    Div, Edges, ElementId, Hsla, InteractiveElement, Interactivity, IntoElement, Length,
+    MouseButton, ParentElement, Pixels, RenderOnce, Role, SharedString, Stateful,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    prelude::FluentBuilder as _, px, relative,
 };
 
 use super::{
-    button_dimension_tokens, button_shape_tokens, button_shared_tokens,
-    button_tokens::{self, ButtonElevation},
-    shared,
+    button_dimension_tokens,
+    button_geometry::ButtonSlotGeometry,
+    button_geometry::{self, CornerShape, CornerToken},
+    button_shape_tokens, button_shared_tokens, button_tokens, shared,
 };
 
 #[derive(Default, Clone, Copy)]
@@ -80,6 +82,8 @@ pub struct Button {
     pub(crate) selected: bool,
     variant: ButtonVariant,
     rounded: ButtonRounded,
+    corner_radii: Option<Corners<Pixels>>,
+    slot_geometry: Option<ButtonSlotGeometry>,
     outline: bool,
     border_corners: Corners<bool>,
     border_edges: Edges<bool>,
@@ -124,6 +128,8 @@ impl Button {
             selected: false,
             variant: ButtonVariant::default(),
             rounded: ButtonRounded::default(),
+            corner_radii: None,
+            slot_geometry: None,
             border_corners: Corners {
                 top_left: true,
                 top_right: true,
@@ -131,7 +137,7 @@ impl Button {
                 bottom_left: true,
             },
             border_edges: Edges::all(true),
-            size: Size::Medium,
+            size: Size::Small,
             tooltip: None,
             tooltip_builder: None,
             on_click: None,
@@ -146,6 +152,14 @@ impl Button {
             pr: None,
             tab_index: 0,
             tab_stop: true,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_debug_selector(self, selector: &'static str) -> Self {
+        Self {
+            base: self.base.debug_selector(move || selector.to_string()),
+            ..self
         }
     }
 
@@ -172,6 +186,18 @@ impl Button {
     /// Set the border corners side of the Button.
     pub(crate) fn border_corners(mut self, corners: impl Into<Corners<bool>>) -> Self {
         self.border_corners = corners.into();
+        self
+    }
+
+    pub(crate) fn corner_radii(mut self, radii: Corners<Pixels>) -> Self {
+        self.corner_radii = Some(radii);
+        self
+    }
+
+    /// Terminal geometry supplied by compound controls. Applied after user style refinement.
+    #[allow(dead_code)]
+    pub(crate) fn slot_geometry(mut self, geometry: ButtonSlotGeometry) -> Self {
+        self.slot_geometry = Some(geometry);
         self
     }
 
@@ -351,13 +377,28 @@ impl RenderOnce for Button {
         } else {
             self.variant
         };
+        #[cfg(test)]
+        button_tokens::record_render_paint(button_tokens::RenderPaintCapture {
+            variant: style,
+            base: button_tokens::resolved_paint(style, button_tokens::ButtonPaintState::Rest, cx),
+            hover: button_tokens::resolved_paint(style, button_tokens::ButtonPaintState::Hover, cx),
+            focus: button_tokens::resolved_paint(style, button_tokens::ButtonPaintState::Focus, cx),
+            pressed: button_tokens::resolved_paint(
+                style,
+                button_tokens::ButtonPaintState::Pressed,
+                cx,
+            ),
+            disabled: button_tokens::resolved_paint(
+                style,
+                button_tokens::ButtonPaintState::Disabled,
+                cx,
+            ),
+        });
         let clickable = self.clickable();
         let is_disabled = self.disabled;
         let cursor_disabled = self.disabled || self.loading;
         let hoverable = self.hoverable();
         let normal_style = style.normal(cx);
-        let state_tokens = button_shared_tokens::STATE_OPACITIES;
-        let color_tokens = button_tokens::tokens(style, cx);
         let icon_only = self.label.is_none() && self.children.is_empty() && self.icon.is_some();
         let dimensions = button_dimension_tokens::resolve(
             self.size,
@@ -365,10 +406,6 @@ impl RenderOnce for Button {
             self.compact,
             icon_only,
         );
-        let icon_size = match self.size {
-            Size::Size(v) => Size::Size(v * 0.75),
-            _ => self.size,
-        };
 
         let focus_handle = window
             .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
@@ -378,6 +415,63 @@ impl RenderOnce for Button {
 
         let rounding =
             button_shape_tokens::resolve(self.rounded, self.size, Some(dimensions.height));
+        let token = if matches!(self.rounded, ButtonRounded::Token) {
+            CornerToken::Full
+        } else {
+            CornerToken::Fixed(rounding)
+        };
+        let explicit = self.corner_radii.map(|radii| CornerShape {
+            top_left: CornerToken::Fixed(radii.top_left),
+            top_right: CornerToken::Fixed(radii.top_right),
+            bottom_right: CornerToken::Fixed(radii.bottom_right),
+            bottom_left: CornerToken::Fixed(radii.bottom_left),
+        });
+        let shape = explicit.unwrap_or(CornerShape::all(token));
+        let shape = CornerShape {
+            top_left: if self.border_corners.top_left {
+                shape.top_left
+            } else {
+                CornerToken::Fixed(Pixels::ZERO)
+            },
+            top_right: if self.border_corners.top_right {
+                shape.top_right
+            } else {
+                CornerToken::Fixed(Pixels::ZERO)
+            },
+            bottom_right: if self.border_corners.bottom_right {
+                shape.bottom_right
+            } else {
+                CornerToken::Fixed(Pixels::ZERO)
+            },
+            bottom_left: if self.border_corners.bottom_left {
+                shape.bottom_left
+            } else {
+                CornerToken::Fixed(Pixels::ZERO)
+            },
+        };
+        let effective_height = match self.style.size.height {
+            Some(Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Pixels(value)))) => {
+                value
+            }
+            _ => dimensions.height,
+        };
+        let resolved_geometry = button_geometry::assemble(
+            effective_height,
+            dimensions.min_width,
+            Edges {
+                left: self.pl.unwrap_or(dimensions.horizontal_padding),
+                right: self.pr.unwrap_or(dimensions.horizontal_padding),
+                top: dimensions.vertical_padding,
+                bottom: dimensions.vertical_padding,
+            },
+            shape,
+            self.border_edges,
+            self.slot_geometry,
+        );
+        #[cfg(test)]
+        button_geometry::record_render_geometry(resolved_geometry);
+        let terminal_geometry = self.slot_geometry.map(|_| resolved_geometry);
+        let radii = resolved_geometry.corners;
 
         self.base
             .role(Role::Button)
@@ -409,26 +503,34 @@ impl RenderOnce for Button {
                 this.px(dimensions.horizontal_padding)
             })
             .py(dimensions.vertical_padding)
-            .when(cx.theme().shadow && normal_style.shadow, |this| {
-                this.shadow_xs()
+            .when(cx.theme().shadow && normal_style.shadow > 0, |this| {
+                if normal_style.shadow > 1 {
+                    this.shadow_md()
+                } else {
+                    this.shadow_xs()
+                }
             })
-            .when(self.border_corners.top_left, |this| {
-                this.rounded_tl(rounding)
-            })
-            .when(self.border_corners.top_right, |this| {
-                this.rounded_tr(rounding)
-            })
-            .when(self.border_corners.bottom_left, |this| {
-                this.rounded_bl(rounding)
-            })
-            .when(self.border_corners.bottom_right, |this| {
-                this.rounded_br(rounding)
-            })
+            .rounded_tl(radii.top_left)
+            .rounded_tr(radii.top_right)
+            .rounded_bl(radii.bottom_left)
+            .rounded_br(radii.bottom_right)
             .when(style == ButtonVariant::Outlined, |this| {
-                this.when(self.border_edges.left, |this| this.border_l_1())
-                    .when(self.border_edges.right, |this| this.border_r_1())
-                    .when(self.border_edges.top, |this| this.border_t_1())
-                    .when(self.border_edges.bottom, |this| this.border_b_1())
+                this.when(self.border_edges.left, |this| {
+                    this.border_l(dimensions.outline)
+                })
+                .when(!self.border_edges.left, |this| this.border_l(px(0.)))
+                .when(self.border_edges.right, |this| {
+                    this.border_r(dimensions.outline)
+                })
+                .when(!self.border_edges.right, |this| this.border_r(px(0.)))
+                .when(self.border_edges.top, |this| {
+                    this.border_t(dimensions.outline)
+                })
+                .when(!self.border_edges.top, |this| this.border_t(px(0.)))
+                .when(self.border_edges.bottom, |this| {
+                    this.border_b(dimensions.outline)
+                })
+                .when(!self.border_edges.bottom, |this| this.border_b(px(0.)))
             })
             .text_color(normal_style.fg)
             .when(self.selected, |this| {
@@ -443,15 +545,88 @@ impl RenderOnce for Button {
                     .when(normal_style.underline, |this| this.text_decoration_1())
                     .hover(|this| {
                         let hover_style = style.hovered(cx);
-                        this.bg(hover_style.bg)
+                        let this = this
+                            .bg(hover_style.bg)
                             .border_color(hover_style.border)
-                            .text_color(hover_style.fg)
+                            .text_color(hover_style.fg);
+                        if cx.theme().shadow && hover_style.shadow > 0 {
+                            if hover_style.shadow > 1 {
+                                this.shadow_md()
+                            } else {
+                                this.shadow_xs()
+                            }
+                        } else {
+                            this
+                        }
                     })
                     .active(|this| {
                         let active_style = style.pressed(cx);
-                        this.bg(active_style.bg)
+                        let this = this
+                            .bg(active_style.bg)
                             .border_color(active_style.border)
-                            .text_color(active_style.fg)
+                            .text_color(active_style.fg);
+                        if cx.theme().shadow && active_style.shadow > 0 {
+                            if active_style.shadow > 1 {
+                                this.shadow_md()
+                            } else {
+                                this.shadow_xs()
+                            }
+                        } else {
+                            this
+                        }
+                    })
+            })
+            // M3 TextButton has no container, elevation, or border. Its
+            // interaction feedback is only an on-surface-variant state layer.
+            .when(style == ButtonVariant::Text, |this| {
+                this.border_color(cx.theme().transparent).shadow_none()
+            })
+            .when(is_focused && !self.disabled, |this| {
+                let focus_paint = button_tokens::resolved_paint(
+                    style,
+                    button_tokens::ButtonPaintState::Focus,
+                    cx,
+                );
+                let this = this.bg(focus_paint.container);
+                if cx.theme().shadow && focus_paint.elevation > 0 {
+                    if focus_paint.elevation > 1 {
+                        this.shadow_md()
+                    } else {
+                        this.shadow_xs()
+                    }
+                } else {
+                    this
+                }
+            })
+            .refine_style(&self.style)
+            .when_some(terminal_geometry, |this, geometry| {
+                this.h(geometry.height)
+                    .min_w(geometry.min_width)
+                    .pl(geometry.padding_start)
+                    .pr(geometry.padding_end)
+                    .pt(geometry.padding_top)
+                    .pb(geometry.padding_bottom)
+                    .rounded_tl(geometry.corners.top_left)
+                    .rounded_tr(geometry.corners.top_right)
+                    .rounded_bl(geometry.corners.bottom_left)
+                    .rounded_br(geometry.corners.bottom_right)
+                    .when(style == ButtonVariant::Outlined, |this| {
+                        this.when(geometry.border_edges.left, |this| {
+                            this.border_l(dimensions.outline)
+                        })
+                        .when(!geometry.border_edges.left, |this| this.border_l(px(0.)))
+                        .when(geometry.border_edges.right, |this| {
+                            this.border_r(dimensions.outline)
+                        })
+                        .when(!geometry.border_edges.right, |this| this.border_r(px(0.)))
+                        .when(geometry.border_edges.top, |this| {
+                            this.border_t(dimensions.outline)
+                        })
+                        .when(!geometry.border_edges.top, |this| this.border_t(px(0.)))
+                        .when(geometry.border_edges.bottom, |this| {
+                            this.border_b(dimensions.outline)
+                        })
+                        .when(!geometry.border_edges.bottom, |this| this.border_b(px(0.)))
                     })
             })
             .when(self.disabled, |this| {
@@ -461,19 +636,6 @@ impl RenderOnce for Button {
                     .border_color(disabled_style.border)
                     .shadow_none()
             })
-            // M3 TextButton has no container, elevation, or border. Its
-            // interaction feedback is only an on-surface-variant state layer.
-            .when(style == ButtonVariant::Text, |this| {
-                this.border_color(cx.theme().transparent).shadow_none()
-            })
-            .when(is_focused && !self.disabled, |this| {
-                this.bg(shared::interaction::state_layer(
-                    color_tokens.container,
-                    color_tokens.content,
-                    state_tokens.focus,
-                ))
-            })
-            .refine_style(&self.style)
             .when(cursor_disabled, |this| {
                 this.cursor(CursorStyle::OperationNotAllowed)
             })
@@ -515,16 +677,12 @@ impl RenderOnce for Button {
                     .items_center()
                     .justify_center()
                     .button_text_size(self.size)
-                    .map(|this| match self.size {
-                        Size::XSmall => this.gap_1(),
-                        Size::Small => this.gap_1(),
-                        _ => this.gap_2(),
-                    })
+                    .gap(dimensions.gap)
                     .when_some(self.icon, |this, icon| {
                         this.child(
                             icon.loading_icon(self.loading_icon)
                                 .loading(self.loading)
-                                .with_size(icon_size),
+                                .with_size(Size::Size(dimensions.icon)),
                         )
                     })
                     .when_some(self.label, |this, label| {
@@ -578,18 +736,18 @@ struct ButtonVariantStyle {
     border: Hsla,
     fg: Hsla,
     underline: bool,
-    shadow: bool,
+    shadow: u8,
 }
 
 impl ButtonVariant {
     fn normal(&self, cx: &mut App) -> ButtonVariantStyle {
-        let tokens = button_tokens::tokens(*self, cx);
+        let paint = button_tokens::resolved_paint(*self, button_tokens::ButtonPaintState::Rest, cx);
         ButtonVariantStyle {
-            bg: tokens.container.into(),
-            border: tokens.border,
-            fg: tokens.content,
+            bg: paint.container.into(),
+            border: paint.border,
+            fg: paint.content,
             underline: false,
-            shadow: matches!(tokens.elevation, ButtonElevation::Level1),
+            shadow: paint.elevation,
         }
     }
 
@@ -606,40 +764,30 @@ impl ButtonVariant {
     }
 
     fn state(&self, cx: &mut App, opacity: f32) -> ButtonVariantStyle {
-        let tokens = button_tokens::tokens(*self, cx);
+        let state = if opacity == button_shared_tokens::STATE_HOVER {
+            button_tokens::ButtonPaintState::Hover
+        } else {
+            button_tokens::ButtonPaintState::Pressed
+        };
+        let paint = button_tokens::resolved_paint(*self, state, cx);
         ButtonVariantStyle {
-            bg: shared::interaction::state_layer(tokens.container, tokens.content, opacity),
-            border: tokens.border,
-            fg: tokens.content,
+            bg: paint.container.into(),
+            border: paint.border,
+            fg: paint.content,
             underline: false,
-            shadow: matches!(tokens.elevation, ButtonElevation::Level1),
+            shadow: paint.elevation,
         }
     }
 
     fn disabled(&self, cx: &mut App) -> ButtonVariantStyle {
-        let container = match self {
-            ButtonVariant::FilledTonal => cx
-                .theme()
-                .on_surface
-                .opacity(button_shared_tokens::DISABLED_CONTAINER_OPACITY),
-            _ => cx
-                .theme()
-                .on_surface
-                .opacity(button_shared_tokens::DISABLED_CONTAINER_OPACITY),
-        };
+        let paint =
+            button_tokens::resolved_paint(*self, button_tokens::ButtonPaintState::Disabled, cx);
         ButtonVariantStyle {
-            bg: container.into(),
-            border: if matches!(self, ButtonVariant::Outlined) {
-                cx.theme().outline_variant
-            } else {
-                cx.theme().transparent
-            },
-            fg: cx
-                .theme()
-                .on_surface_variant
-                .opacity(button_shared_tokens::DISABLED_CONTENT_OPACITY),
+            bg: paint.container.into(),
+            border: paint.border,
+            fg: paint.content,
             underline: false,
-            shadow: false,
+            shadow: 0,
         }
     }
 }

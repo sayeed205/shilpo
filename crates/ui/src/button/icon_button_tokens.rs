@@ -1,4 +1,4 @@
-use gpui::{px, Hsla, Pixels};
+use gpui::{Hsla, Pixels, px};
 
 use crate::ActiveTheme;
 
@@ -81,11 +81,10 @@ pub(crate) fn shapes(size: IconButtonSize, shape: IconButtonShape) -> IconButton
         },
         IconButtonShape::Square => IconButtonShapes {
             shape: IconButtonCorner::Square(match size {
-                IconButtonSize::XSmall => px(8.),
+                IconButtonSize::XSmall => px(12.),
                 IconButtonSize::Small => px(12.),
-                IconButtonSize::Medium => px(12.),
-                IconButtonSize::Large => px(16.),
-                IconButtonSize::XLarge => px(20.),
+                IconButtonSize::Medium => px(16.),
+                IconButtonSize::Large | IconButtonSize::XLarge => px(28.),
             }),
             pressed_shape: IconButtonCorner::Square(container * 0.25),
         },

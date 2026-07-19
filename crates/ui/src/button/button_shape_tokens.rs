@@ -1,7 +1,7 @@
 use crate::Size;
-use gpui::{px, Pixels};
+use gpui::Pixels;
 
-use super::{button_dimension_tokens, ButtonRounded};
+use super::{ButtonRounded, button_dimension_tokens, button_scale_tokens};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ButtonShape {
@@ -15,44 +15,17 @@ pub struct ButtonShapes {
     pub pressed_shape: ButtonShape,
 }
 
-#[derive(Clone, Copy)]
-struct ShapeFamily {
-    shapes: ButtonShapes,
-    square: ButtonShape,
-}
-
-const SMALL: ShapeFamily = ShapeFamily {
-    shapes: ButtonShapes {
-        shape: ButtonShape::CornerFull,
-        pressed_shape: ButtonShape::Corner(px(8.)),
-    },
-    square: ButtonShape::Corner(px(12.)),
-};
-const MEDIUM: ShapeFamily = ShapeFamily {
-    shapes: ButtonShapes {
-        shape: ButtonShape::CornerFull,
-        pressed_shape: ButtonShape::Corner(px(12.)),
-    },
-    square: ButtonShape::Corner(px(16.)),
-};
-const LARGE: ShapeFamily = ShapeFamily {
-    shapes: ButtonShapes {
-        shape: ButtonShape::CornerFull,
-        pressed_shape: ButtonShape::Corner(px(16.)),
-    },
-    square: ButtonShape::Corner(px(28.)),
-};
-
-fn family(size: Size) -> ShapeFamily {
-    match size {
-        Size::XSmall | Size::Small => SMALL,
-        Size::Medium => MEDIUM,
-        Size::Large | Size::Size(_) => LARGE,
-    }
+fn shape_row(size: Size) -> button_scale_tokens::ButtonShapeRow {
+    let bucket = button_scale_tokens::size_metrics(size).shape_bucket;
+    button_scale_tokens::button_shape_row(bucket)
 }
 
 pub fn button_shapes(size: Size) -> ButtonShapes {
-    family(size).shapes
+    let row = shape_row(size);
+    ButtonShapes {
+        shape: ButtonShape::CornerFull,
+        pressed_shape: ButtonShape::Corner(row.pressed),
+    }
 }
 
 fn corner_radius(corner: ButtonShape, height: Pixels) -> Pixels {
@@ -65,25 +38,24 @@ fn corner_radius(corner: ButtonShape, height: Pixels) -> Pixels {
 /// Resolves static M3/M3E shape tokens. Pressed-shape morphing is intentionally
 /// not applied; state layers remain static.
 pub(crate) fn resolve(rounding: ButtonRounded, size: Size, final_height: Option<Pixels>) -> Pixels {
-    let family = family(size);
-    let _pressed_shape = family.shapes.pressed_shape;
+    let shapes = button_shapes(size);
+    let row = shape_row(size);
     match rounding {
         ButtonRounded::Token => corner_radius(
-            family.shapes.shape,
+            shapes.shape,
             final_height.unwrap_or_else(|| button_dimension_tokens::height(size)),
         ),
         ButtonRounded::None => Pixels::ZERO,
-        ButtonRounded::Small => corner_radius(
-            family.shapes.pressed_shape,
-            button_dimension_tokens::height(size),
-        ),
-        ButtonRounded::Medium => {
-            corner_radius(family.square, button_dimension_tokens::height(size))
+        ButtonRounded::Small => {
+            corner_radius(shapes.pressed_shape, button_dimension_tokens::height(size))
         }
-        ButtonRounded::Large => corner_radius(
-            family.shapes.pressed_shape,
+        ButtonRounded::Medium => corner_radius(
+            ButtonShape::Corner(row.square),
             button_dimension_tokens::height(size),
         ),
+        ButtonRounded::Large => {
+            corner_radius(shapes.pressed_shape, button_dimension_tokens::height(size))
+        }
         ButtonRounded::Size(value) => value,
     }
 }
@@ -91,6 +63,7 @@ pub(crate) fn resolve(rounding: ButtonRounded, size: Size, final_height: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::px;
 
     #[test]
     fn default_shapes_are_pills() {
@@ -109,5 +82,29 @@ mod tests {
         assert_eq!(resolve(ButtonRounded::Medium, Size::Small, None), px(12.));
         assert_eq!(resolve(ButtonRounded::Medium, Size::Medium, None), px(16.));
         assert_eq!(resolve(ButtonRounded::Large, Size::Large, None), px(16.));
+    }
+
+    #[test]
+    fn custom_sizes_use_shape_buckets() {
+        assert_eq!(
+            button_shapes(Size::Size(px(33.))).pressed_shape,
+            ButtonShape::Corner(px(8.))
+        );
+        assert_eq!(
+            button_shapes(Size::Size(px(41.))).pressed_shape,
+            ButtonShape::Corner(px(8.))
+        );
+        assert_eq!(
+            button_shapes(Size::Size(px(57.))).pressed_shape,
+            ButtonShape::Corner(px(12.))
+        );
+        assert_eq!(
+            button_shapes(Size::Size(px(97.))).pressed_shape,
+            ButtonShape::Corner(px(16.))
+        );
+        assert_eq!(
+            button_shapes(Size::Size(px(116.))).pressed_shape,
+            ButtonShape::Corner(px(16.))
+        );
     }
 }

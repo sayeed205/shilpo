@@ -1,17 +1,17 @@
 use gpui::CursorStyle;
 use gpui::{
-    div, prelude::FluentBuilder, Anchor, App, Context, ElementId, InteractiveElement as _,
-    IntoElement, ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window,
+    Anchor, App, Context, ElementId, InteractiveElement as _, IntoElement, ParentElement,
+    RenderOnce, SharedString, StyleRefinement, Styled, Window, div, prelude::FluentBuilder,
 };
 
 use crate::{
+    Disableable, Selectable, Sizable, Size, StyledExt as _,
     menu::{DropdownMenu, PopupMenu},
     tooltip::ComponentTooltip,
-    Disableable, Selectable, Sizable, Size, StyledExt as _,
 };
 
 use super::{
-    button_dimension_tokens, shared, Button, ButtonRounded, ButtonVariant, ButtonVariants,
+    Button, ButtonRounded, ButtonVariant, ButtonVariants, button_dimension_tokens, shared,
 };
 
 #[derive(IntoElement)]

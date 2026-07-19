@@ -167,23 +167,19 @@ impl Render for IconButtonStory {
             .child(
                 section("Size scale")
                     .sub_title("32, 40, 48, 56, and 72px containers")
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .items_start()
-                            .gap_1()
-                            .children(sizes.into_iter().map(|(label, note, size)| {
-                                size_cell(
-                                    IconButton::new(format!("size-{label}"))
-                                        .icon(IconName::Settings2)
-                                        .size(size)
-                                        .filled_tonal()
-                                        .into_any_element(),
-                                    label,
-                                    note,
-                                )
-                            })),
-                    ),
+                    .child(h_flex().w_full().items_start().gap_1().children(
+                        sizes.into_iter().map(|(label, note, size)| {
+                            size_cell(
+                                IconButton::new(format!("size-{label}"))
+                                    .icon(IconName::Settings2)
+                                    .size(size)
+                                    .filled_tonal()
+                                    .into_any_element(),
+                                label,
+                                note,
+                            )
+                        }),
+                    )),
             )
             .child(
                 section("Checked and states")

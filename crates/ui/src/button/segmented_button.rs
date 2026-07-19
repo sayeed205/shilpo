@@ -2,9 +2,9 @@ use std::rc::Rc;
 
 use crate::{ActiveTheme, Icon, Sizable, Size, StyledExt};
 use gpui::{
-    div, prelude::FluentBuilder as _, AnyElement, App, ClickEvent, ElementId, InteractiveElement,
-    IntoElement, ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Window,
+    AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement,
+    RenderOnce, Role, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled,
+    Window, div, prelude::FluentBuilder as _,
 };
 
 use super::{button_shared_tokens, segmented_button_tokens, shared};
@@ -213,12 +213,29 @@ fn render_item(
             content
         })
         .when(left, |this| {
-            this.rounded_tl(tokens.radius).rounded_bl(tokens.radius)
+            this.rounded_tl(tokens.radius)
+                .rounded_bl(tokens.radius)
+                .when(!right, |this| {
+                    this.rounded_tr(tokens.inner_radius)
+                        .rounded_br(tokens.inner_radius)
+                })
         })
         .when(right, |this| {
-            this.rounded_tr(tokens.radius).rounded_br(tokens.radius)
+            this.rounded_tr(tokens.radius)
+                .rounded_br(tokens.radius)
+                .when(!left, |this| {
+                    this.rounded_tl(tokens.inner_radius)
+                        .rounded_bl(tokens.inner_radius)
+                })
         })
-        .when(!left, |this| this.ml(tokens.seam))
+        .when(!left, |this| {
+            this.ml(tokens.seam).when(!right, |this| {
+                this.rounded_tl(tokens.inner_radius)
+                    .rounded_tr(tokens.inner_radius)
+                    .rounded_bl(tokens.inner_radius)
+                    .rounded_br(tokens.inner_radius)
+            })
+        })
         .when(disabled, |this| {
             this.cursor(shared::interaction::cursor(true, false, None))
         })
@@ -319,8 +336,8 @@ pub type SegmentedButton = SingleChoiceSegmentedButton;
 mod tests {
     use super::*;
     use gpui::{
-        div, px, AppContext, Context, Entity, IntoElement, Render, TestAppContext,
-        VisualTestContext, Window,
+        AppContext, Context, Entity, IntoElement, Render, TestAppContext, VisualTestContext,
+        Window, div, px,
     };
 
     struct SelectionState {
@@ -329,6 +346,7 @@ mod tests {
 
     struct SelectionRoot {
         state: Entity<SelectionState>,
+        disable_day: bool,
     }
 
     impl Render for SelectionRoot {
@@ -337,7 +355,11 @@ mod tests {
             let state = self.state.clone();
             div().size_full().child(
                 SingleChoiceSegmentedButton::new("date-segments")
-                    .item(SegmentedButtonItem::new("day", "Day").selected(selected == 0))
+                    .item(
+                        SegmentedButtonItem::new("day", "Day")
+                            .selected(selected == 0)
+                            .disabled(self.disable_day),
+                    )
                     .item(SegmentedButtonItem::new("week", "Week").selected(selected == 1))
                     .item(SegmentedButtonItem::new("month", "Month").selected(selected == 2))
                     .on_selection_change(move |index, _, _, cx| {
@@ -349,12 +371,14 @@ mod tests {
 
     fn selection_root<'a>(
         cx: &'a mut TestAppContext,
+        disable_day: bool,
     ) -> (Entity<SelectionState>, &'a mut VisualTestContext) {
         cx.update(crate::init);
         let state = cx.new(|_| SelectionState { selected: 0 });
         let state_for_root = state.clone();
         let (_, visual) = cx.add_window_view(move |_, _| SelectionRoot {
             state: state_for_root,
+            disable_day,
         });
         (state, visual)
     }
@@ -384,7 +408,7 @@ mod tests {
 
     #[gpui::test]
     fn rendered_segment_selection_and_connected_geometry(cx: &mut TestAppContext) {
-        let (state, visual) = selection_root(cx);
+        let (state, visual) = selection_root(cx, false);
         draw(visual);
         let day = visual.debug_bounds("segment-0").expect("day bounds");
         let week = visual.debug_bounds("segment-1").expect("week bounds");
@@ -398,5 +422,14 @@ mod tests {
         visual.simulate_click(month.center(), Default::default());
         assert_eq!(state.read_with(visual, |state, _| state.selected), 2);
         assert!(visual.debug_bounds("segment-2").is_some());
+    }
+
+    #[gpui::test]
+    fn rendered_disabled_segment_does_not_change_controlled_selection(cx: &mut TestAppContext) {
+        let (state, visual) = selection_root(cx, true);
+        draw(visual);
+        let day = visual.debug_bounds("segment-0").unwrap();
+        visual.simulate_click(day.center(), Default::default());
+        assert_eq!(state.read_with(visual, |state, _| state.selected), 0);
     }
 }

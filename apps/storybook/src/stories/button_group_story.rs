@@ -1,34 +1,23 @@
 use gpui::{
-    App, AppContext as _, Context, Entity, Focusable, IntoElement, ParentElement as _, Render, Styled as _, Window, Axis,
-    prelude::FluentBuilder as _,
+    AnyElement, App, AppContext as _, Axis, Context, Entity, Focusable, IntoElement,
+    ParentElement as _, Render, Styled as _, Window, div, px,
 };
 use gpui_component::{
-    button::{Button, ButtonGroup, ButtonVariants as _},
-    checkbox::Checkbox,
-    h_flex, v_flex, Disableable, Selectable as _, Sizable as _, Size,
+    Disableable as _, Selectable as _, Sizable as _, Size,
+    button::{Button, ButtonGroup, ButtonGroupMode, ButtonVariants as _},
+    h_flex, v_flex,
 };
+
 use crate::section;
 
 pub struct ButtonGroupStory {
     focus_handle: gpui::FocusHandle,
-    disabled: bool,
-    compact: bool,
-    outline: bool,
-    multiple: bool,
-    vertical: bool,
-    selected_indices: Vec<usize>,
 }
 
 impl ButtonGroupStory {
     pub fn view(_: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self {
             focus_handle: cx.focus_handle(),
-            disabled: false,
-            compact: false,
-            outline: false,
-            multiple: false,
-            vertical: false,
-            selected_indices: vec![0],
         })
     }
 }
@@ -39,7 +28,7 @@ impl super::Story for ButtonGroupStory {
     }
 
     fn description() -> &'static str {
-        "A group of connected buttons for selection or alignment."
+        "Material 3 button groups with standard spacing, connected seams, and selection states."
     }
 
     fn closable() -> bool {
@@ -57,146 +46,158 @@ impl Focusable for ButtonGroupStory {
     }
 }
 
-impl Render for ButtonGroupStory {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let disabled = self.disabled;
-        let compact = self.compact;
-        let outline = self.outline;
-        let multiple = self.multiple;
-        let vertical = self.vertical;
-        let selected_indices = self.selected_indices.clone();
+fn labeled_group(
+    group: impl IntoElement,
+    title: &'static str,
+    note: &'static str,
+) -> impl IntoElement {
+    let group: AnyElement = group.into_any_element();
+    v_flex()
+        .w(px(220.))
+        .h(px(174.))
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .w_full()
+                .h(px(132.))
+                .items_center()
+                .justify_center()
+                .child(group),
+        )
+        .child(div().h(px(18.)).child(title))
+        .child(div().h(px(18.)).child(note))
+        .into_any_element()
+}
 
+impl Render for ButtonGroupStory {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         v_flex()
+            .w_full()
             .gap_6()
             .child(
-                h_flex()
-                    .gap_3()
+                section("Group modes")
+                    .sub_title("Standard uses 12px spacing; Connected uses a 2px seam.")
+                    .child(labeled_group(
+                        ButtonGroup::new("standard-group")
+                            .mode(ButtonGroupMode::Standard)
+                            .children([
+                                Button::new("standard-one").filled().label("One"),
+                                Button::new("standard-two").filled().label("Two"),
+                                Button::new("standard-three").filled().label("Three"),
+                            ]),
+                        "Standard",
+                        "12px between independent buttons",
+                    ))
+                    .child(labeled_group(
+                        ButtonGroup::new("connected-group")
+                            .mode(ButtonGroupMode::Connected)
+                            .outlined()
+                            .children([
+                                Button::new("connected-one").label("One"),
+                                Button::new("connected-two").label("Two"),
+                                Button::new("connected-three").label("Three"),
+                            ]),
+                        "Connected",
+                        "2px seam with shared outer geometry",
+                    ))
+                    .child(labeled_group(
+                        ButtonGroup::new("connected-vertical")
+                            .mode(ButtonGroupMode::Connected)
+                            .layout(Axis::Vertical)
+                            .filled_tonal()
+                            .children([
+                                Button::new("vertical-one").label("Top"),
+                                Button::new("vertical-two").label("Middle"),
+                                Button::new("vertical-three").label("Bottom"),
+                            ]),
+                        "Connected vertical",
+                        "2px seam; outer corners follow axis",
+                    )),
+            )
+            .child(
+                section("Selection")
+                    .sub_title("Static single-choice and multi-choice examples.")
+                    .child(labeled_group(
+                        ButtonGroup::new("single-selection")
+                            .mode(ButtonGroupMode::Connected)
+                            .filled_tonal()
+                            .child(Button::new("single-a").label("Day"))
+                            .child(Button::new("single-b").label("Week").selected(true))
+                            .child(Button::new("single-c").label("Month")),
+                        "Single choice",
+                        "One selected segment",
+                    ))
+                    .child(labeled_group(
+                        ButtonGroup::new("multi-selection")
+                            .mode(ButtonGroupMode::Connected)
+                            .multiple(true)
+                            .outlined()
+                            .child(Button::new("multi-a").label("Email").selected(true))
+                            .child(Button::new("multi-b").label("Push"))
+                            .child(Button::new("multi-c").label("SMS").selected(true)),
+                        "Multiple choice",
+                        "Independent selected segments",
+                    )),
+            )
+            .child(
+                section("Disabled bulk children")
+                    .sub_title("`.children(...)` applies disabled state to every supplied button.")
+                    .child(labeled_group(
+                        ButtonGroup::new("disabled-children")
+                            .mode(ButtonGroupMode::Connected)
+                            .disabled(true)
+                            .children([
+                                Button::new("disabled-one").label("Available"),
+                                Button::new("disabled-two").label("Unavailable"),
+                                Button::new("disabled-three").label("More"),
+                            ]),
+                        "Disabled group",
+                        "Bulk disabled; geometry remains connected",
+                    )),
+            )
+            .child(
+                section("Size coverage")
+                    .sub_title("Static groups retain Button size tokens.")
                     .child(
-                        Checkbox::new("disabled")
-                            .label("Disabled")
-                            .checked(self.disabled)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.disabled = !view.disabled;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Checkbox::new("compact")
-                            .label("Compact")
-                            .checked(self.compact)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.compact = !view.compact;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Checkbox::new("outline")
-                            .label("Outline")
-                            .checked(self.outline)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.outline = !view.outline;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Checkbox::new("multiple")
-                            .label("Multiple")
-                            .checked(self.multiple)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.multiple = !view.multiple;
-                                if !view.multiple {
-                                    view.selected_indices = vec![0];
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Checkbox::new("vertical")
-                            .label("Vertical")
-                            .checked(self.vertical)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.vertical = !view.vertical;
-                                cx.notify();
-                            })),
+                        h_flex()
+                            .flex_wrap()
+                            .items_start()
+                            .gap_4()
+                            .child(labeled_group(
+                                ButtonGroup::new("small-group")
+                                    .mode(ButtonGroupMode::Standard)
+                                    .small()
+                                    .children([
+                                        Button::new("small-a").label("Small"),
+                                        Button::new("small-b").label("Pair"),
+                                    ]),
+                                "Small",
+                                "12px spacing",
+                            ))
+                            .child(labeled_group(
+                                ButtonGroup::new("medium-group")
+                                    .mode(ButtonGroupMode::Connected)
+                                    .with_size(Size::Medium)
+                                    .children([
+                                        Button::new("medium-a").label("Medium"),
+                                        Button::new("medium-b").label("Pair"),
+                                    ]),
+                                "Medium",
+                                "2px seam",
+                            ))
+                            .child(labeled_group(
+                                ButtonGroup::new("large-group")
+                                    .mode(ButtonGroupMode::Connected)
+                                    .large()
+                                    .children([
+                                        Button::new("large-a").label("Large"),
+                                        Button::new("large-b").label("Pair"),
+                                    ]),
+                                "Large",
+                                "2px seam",
+                            )),
                     ),
-            )
-            .child(
-                section("Button Group Variants").child(
-                    v_flex()
-                        .gap_4()
-                        .child(
-                            ButtonGroup::new("group-filled")
-                                .filled()
-                                .multiple(multiple)
-                                .disabled(disabled)
-                                .when(compact, |this| this.compact())
-                                .when(outline, |this| this.outline())
-                                .layout(if vertical { Axis::Vertical } else { Axis::Horizontal })
-                                .child(Button::new("b1").label("Left").selected(selected_indices.contains(&0)))
-                                .child(Button::new("b2").label("Middle").selected(selected_indices.contains(&1)))
-                                .child(Button::new("b3").label("Right").selected(selected_indices.contains(&2)))
-                                .on_click(cx.listener(|view, ixs: &Vec<usize>, _, cx| {
-                                    view.selected_indices = ixs.clone();
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            ButtonGroup::new("group-tonal")
-                                .filled_tonal()
-                                .multiple(multiple)
-                                .disabled(disabled)
-                                .when(compact, |this| this.compact())
-                                .when(outline, |this| this.outline())
-                                .layout(if vertical { Axis::Vertical } else { Axis::Horizontal })
-                                .child(Button::new("t1").label("Yes").selected(selected_indices.contains(&0)))
-                                .child(Button::new("t2").label("No").selected(selected_indices.contains(&1)))
-                                .on_click(cx.listener(|view, ixs: &Vec<usize>, _, cx| {
-                                    view.selected_indices = ixs.clone();
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            ButtonGroup::new("group-outlined")
-                                .outlined()
-                                .multiple(multiple)
-                                .disabled(disabled)
-                                .when(compact, |this| this.compact())
-                                .when(outline, |this| this.outline())
-                                .layout(if vertical { Axis::Vertical } else { Axis::Horizontal })
-                                .child(Button::new("o1").label("Low").selected(selected_indices.contains(&0)))
-                                .child(Button::new("o2").label("Medium").selected(selected_indices.contains(&1)))
-                                .child(Button::new("o3").label("High").selected(selected_indices.contains(&2)))
-                                .on_click(cx.listener(|view, ixs: &Vec<usize>, _, cx| {
-                                    view.selected_indices = ixs.clone();
-                                    cx.notify();
-                                })),
-                        ),
-                ),
-            )
-            .child(
-                section("Different Sizes").child(
-                    h_flex()
-                        .gap_4()
-                        .items_start()
-                        .child(
-                            ButtonGroup::new("group-small")
-                                .small()
-                                .child(Button::new("s1").label("Small A"))
-                                .child(Button::new("s2").label("Small B")),
-                        )
-                        .child(
-                            ButtonGroup::new("group-medium")
-                                .with_size(Size::Medium)
-                                .child(Button::new("m1").label("Medium A"))
-                                .child(Button::new("m2").label("Medium B")),
-                        )
-                        .child(
-                            ButtonGroup::new("group-large")
-                                .large()
-                                .child(Button::new("l1").label("Large A"))
-                                .child(Button::new("l2").label("Large B")),
-                        ),
-                ),
             )
     }
 }

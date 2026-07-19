@@ -1,16 +1,16 @@
 use gpui::Corners;
 use gpui::InteractiveElement;
 use gpui::ParentElement;
-use gpui::{
-    div, prelude::FluentBuilder as _, RenderOnce, StatefulInteractiveElement as _, StyleRefinement,
-    Styled,
-};
 use gpui::{App, Axis, Edges, ElementId, IntoElement, Window};
+use gpui::{
+    RenderOnce, StatefulInteractiveElement as _, StyleRefinement, Styled, div,
+    prelude::FluentBuilder as _,
+};
 use std::{cell::Cell, rc::Rc};
 
 use crate::{
-    button::{Button, ButtonVariant, ButtonVariants},
     Disableable, Sizable, Size, StyledExt,
+    button::{Button, ButtonGroupMode, ButtonVariant, ButtonVariants, button_group_tokens},
 };
 
 /// A ButtonGroup element, to wrap multiple buttons in a group.
@@ -22,6 +22,7 @@ pub struct ButtonGroup {
     pub(super) multiple: bool,
     pub(super) disabled: bool,
     pub(super) layout: Axis,
+    mode: ButtonGroupMode,
 
     // The button props
     pub(super) compact: bool,
@@ -53,6 +54,7 @@ impl ButtonGroup {
             multiple: false,
             disabled: false,
             layout: Axis::Horizontal,
+            mode: ButtonGroupMode::default(),
             on_click: None,
         }
     }
@@ -65,7 +67,11 @@ impl ButtonGroup {
 
     /// Adds multiple buttons as children to the ButtonGroup.
     pub fn children(mut self, children: impl IntoIterator<Item = Button>) -> Self {
-        self.children.extend(children);
+        self.children.extend(
+            children
+                .into_iter()
+                .map(|child| child.disabled(self.disabled)),
+        );
         self
     }
 
@@ -78,6 +84,11 @@ impl ButtonGroup {
     /// Set the layout of the button group. Default is `Axis::Horizontal`.
     pub fn layout(mut self, layout: Axis) -> Self {
         self.layout = layout;
+        self
+    }
+
+    pub fn mode(mut self, mode: ButtonGroupMode) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -162,10 +173,13 @@ impl RenderOnce for ButtonGroup {
         }
 
         let vertical = self.layout == Axis::Vertical;
+        let tokens = button_group_tokens::tokens(self.mode);
+        let connected = self.mode == ButtonGroupMode::Connected;
 
         div()
             .id(self.id)
             .flex()
+            .gap(tokens.spacing)
             .when(vertical, |this| this.flex_col().justify_center())
             .when(!vertical, |this| this.items_center())
             .refine_style(&self.style)
@@ -175,7 +189,7 @@ impl RenderOnce for ButtonGroup {
                     .enumerate()
                     .map(|(child_index, child)| {
                         let state = Rc::clone(&state);
-                        let child = if children_len == 1 {
+                        let child = if children_len == 1 || !connected {
                             child
                         } else if child_index == 0 {
                             // First
@@ -223,7 +237,16 @@ impl RenderOnce for ButtonGroup {
                                     bottom: true,
                                 })
                         }
+                        .corner_radii(button_group_tokens::corner_radii(
+                            self.mode,
+                            self.layout,
+                            child_index,
+                            children_len,
+                        ))
                         .when_some(self.size, |this, size| this.with_size(size))
+                        .when(self.size.is_none(), |this| {
+                            this.with_size(Size::Size(tokens.height))
+                        })
                         .when_some(self.variant, |this, variant| this.with_variant(variant))
                         .when(self.compact, |this| this.compact())
                         .when(self.outline, |this| this.outline())
@@ -264,7 +287,10 @@ impl RenderOnce for ButtonGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::Axis;
+    use gpui::{
+        AppContext, Axis, Context, Entity, IntoElement, Render, TestAppContext, VisualTestContext,
+        Window, div, px,
+    };
 
     #[gpui::test]
     fn test_button_group_builder(_cx: &mut gpui::TestAppContext) {
@@ -290,5 +316,50 @@ mod tests {
         assert_eq!(group.layout, Axis::Vertical);
         assert!(!group.disabled);
         assert!(group.on_click.is_some());
+    }
+
+    struct GroupClickState {
+        clicks: usize,
+    }
+
+    struct GroupClickRoot {
+        state: Entity<GroupClickState>,
+    }
+
+    impl Render for GroupClickRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let state = self.state.clone();
+            div()
+                .size_full()
+                .debug_selector(|| "button-group-host".to_string())
+                .w(px(200.))
+                .h(px(40.))
+                .child(
+                    ButtonGroup::new("button-group")
+                        .child(Button::new("one").label("One"))
+                        .child(Button::new("two").label("Two"))
+                        .on_click(move |_, _, cx| {
+                            state.update(cx, |state, _| state.clicks += 1);
+                        }),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn rendered_enabled_group_callback_fires_once(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let state = cx.new(|_| GroupClickState { clicks: 0 });
+        let state_for_root = state.clone();
+        let (_, visual) = cx.add_window_view(move |_, _| GroupClickRoot {
+            state: state_for_root,
+        });
+        let visual: &mut VisualTestContext = visual;
+        visual.run_until_parked();
+        visual.update(|window, cx| _ = window.draw(cx));
+        let bounds = visual
+            .debug_bounds("button-group-host")
+            .expect("group bounds");
+        visual.simulate_click(bounds.center(), Default::default());
+        assert_eq!(state.read_with(visual, |state, _| state.clicks), 1);
     }
 }

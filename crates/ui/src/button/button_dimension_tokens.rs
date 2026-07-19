@@ -1,5 +1,6 @@
-use gpui::{px, Pixels};
+use gpui::{Pixels, px};
 
+use super::button_scale_tokens;
 use super::button_shared_tokens::COMMON_MIN_WIDTH;
 use crate::Size;
 
@@ -9,29 +10,9 @@ pub(crate) struct ButtonDimensions {
     pub horizontal_padding: Pixels,
     pub vertical_padding: Pixels,
     pub min_width: Pixels,
-}
-
-#[derive(Clone, Copy)]
-enum DimensionSize {
-    XSmall,
-    Small,
-    Medium,
-    Large,
-    XLarge,
-}
-
-fn dimension_size(size: Size) -> DimensionSize {
-    match size {
-        Size::XSmall => DimensionSize::XSmall,
-        Size::Small => DimensionSize::Small,
-        Size::Medium => DimensionSize::Medium,
-        Size::Large => DimensionSize::Large,
-        Size::Size(value) if value <= px(32.) => DimensionSize::XSmall,
-        Size::Size(value) if value <= px(40.) => DimensionSize::Small,
-        Size::Size(value) if value <= px(56.) => DimensionSize::Medium,
-        Size::Size(value) if value <= px(96.) => DimensionSize::Large,
-        Size::Size(_) => DimensionSize::XLarge,
-    }
+    pub icon: Pixels,
+    pub gap: Pixels,
+    pub outline: Pixels,
 }
 
 pub(crate) fn resolve(
@@ -53,28 +34,39 @@ pub(crate) fn resolve(
             horizontal_padding: Pixels::ZERO,
             vertical_padding: Pixels::ZERO,
             min_width: container,
+            icon: button_scale_tokens::icon_button_m3e_bucket_for_height(container).icon,
+            gap: Pixels::ZERO,
+            outline: Pixels::ZERO,
         };
     }
-    let dimensions = match dimension_size(size) {
-        DimensionSize::XSmall => (px(32.), px(12.), px(6.)),
-        DimensionSize::Small => (px(40.), px(24.), px(8.)),
-        DimensionSize::Medium => (px(56.), px(24.), px(16.)),
-        DimensionSize::Large => (px(96.), px(48.), px(32.)),
-        DimensionSize::XLarge => (px(136.), px(64.), px(48.)),
+    let metrics = button_scale_tokens::size_metrics(size);
+    let row = button_scale_tokens::button_m3e_row(metrics.metric_bucket);
+    let horizontal_padding = if is_text {
+        match metrics.metric_bucket {
+            button_scale_tokens::ButtonScale::XSmall => px(12.),
+            button_scale_tokens::ButtonScale::Small => px(16.),
+            button_scale_tokens::ButtonScale::Medium => px(24.),
+            button_scale_tokens::ButtonScale::Large => px(48.),
+            button_scale_tokens::ButtonScale::XLarge => px(64.),
+        }
+    } else {
+        row.horizontal
     };
-    let horizontal_padding = if is_text { px(12.) } else { dimensions.1 };
     ButtonDimensions {
         height: match size {
             Size::Size(value) => value,
-            _ => dimensions.0,
+            _ => row.height,
         },
         horizontal_padding: if compact {
             horizontal_padding * 0.5
         } else {
             horizontal_padding
         },
-        vertical_padding: dimensions.2,
+        vertical_padding: row.vertical,
         min_width: COMMON_MIN_WIDTH,
+        icon: row.icon,
+        gap: row.gap,
+        outline: row.outline,
     }
 }
 
@@ -90,7 +82,7 @@ mod tests {
     fn m3_dimensions_match_androidx() {
         let expected = [
             (Size::XSmall, 32., 12., 6.),
-            (Size::Small, 40., 24., 8.),
+            (Size::Small, 40., 16., 10.),
             (Size::Medium, 56., 24., 16.),
             (Size::Large, 96., 48., 32.),
         ];
@@ -105,12 +97,35 @@ mod tests {
 
     #[test]
     fn text_buttons_keep_height_and_min_width_but_narrow_padding() {
-        let normal = resolve(Size::Small, false, false, false);
-        let text = resolve(Size::Small, true, false, false);
-        assert_eq!(text.height, normal.height);
-        assert_eq!(text.min_width, normal.min_width);
-        assert_eq!(text.horizontal_padding, px(12.));
-        assert!(text.horizontal_padding < normal.horizontal_padding);
+        for (size, padding) in [
+            (Size::XSmall, 12.),
+            (Size::Small, 16.),
+            (Size::Medium, 24.),
+            (Size::Large, 48.),
+            (Size::Size(px(136.)), 64.),
+        ] {
+            assert_eq!(
+                resolve(size, true, false, false).horizontal_padding,
+                px(padding)
+            );
+        }
+    }
+
+    #[test]
+    fn custom_heights_use_metric_bucket_rows() {
+        for (height, padding, icon, gap) in [
+            (33., 12., 20., 4.),
+            (41., 16., 20., 8.),
+            (57., 24., 24., 8.),
+            (97., 48., 32., 12.),
+            (116., 48., 32., 12.),
+        ] {
+            let dimensions = resolve(Size::Size(px(height)), false, false, false);
+            assert_eq!(dimensions.height, px(height));
+            assert_eq!(dimensions.horizontal_padding, px(padding));
+            assert_eq!(dimensions.icon, px(icon));
+            assert_eq!(dimensions.gap, px(gap));
+        }
     }
 
     #[test]

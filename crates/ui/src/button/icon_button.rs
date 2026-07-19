@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
-use crate::{button::ButtonIcon, ActiveTheme, Disableable, Selectable, Sizable, Size, StyledExt};
+use crate::{ActiveTheme, Disableable, Selectable, Sizable, Size, StyledExt, button::ButtonIcon};
 use gpui::{
-    div, prelude::FluentBuilder as _, App, ClickEvent, CursorStyle, Div, ElementId,
-    InteractiveElement, Interactivity, IntoElement, ParentElement, RenderOnce, Role, Stateful,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Toggled, Window,
+    App, ClickEvent, CursorStyle, Div, ElementId, InteractiveElement, Interactivity, IntoElement,
+    ParentElement, RenderOnce, Role, Stateful, StatefulInteractiveElement as _, StyleRefinement,
+    Styled, Toggled, Window, div, prelude::FluentBuilder as _,
 };
 
 use super::{button_shared_tokens, icon_button_tokens, shared};
@@ -312,8 +312,8 @@ mod tests {
     use super::*;
     use crate::IconName;
     use gpui::{
-        div, px, AppContext, Context, Entity, IntoElement, Render, TestAppContext,
-        VisualTestContext, Window,
+        AppContext, Context, Entity, IntoElement, Render, TestAppContext, VisualTestContext,
+        Window, div, px,
     };
 
     struct ClickState {
@@ -376,7 +376,7 @@ mod tests {
             icon_button_tokens::IconButtonCorner::Full => px(24.),
             icon_button_tokens::IconButtonCorner::Square(value) => value,
         };
-        assert_eq!(radius, px(12.));
+        assert_eq!(radius, px(16.));
     }
 
     #[test]
@@ -389,23 +389,60 @@ mod tests {
 
     #[test]
     fn icon_button_size_table_is_static() {
-        assert_eq!(
-            icon_button_tokens::dimensions(IconButtonSize::XSmall).container,
-            px(32.)
-        );
-        assert_eq!(
-            icon_button_tokens::dimensions(IconButtonSize::Medium).icon,
-            px(24.)
-        );
-        assert_eq!(
-            icon_button_tokens::dimensions(IconButtonSize::XLarge).container,
-            px(72.)
-        );
+        let expected = [
+            (IconButtonSize::XSmall, 32., 16.),
+            (IconButtonSize::Small, 40., 20.),
+            (IconButtonSize::Medium, 48., 24.),
+            (IconButtonSize::Large, 56., 28.),
+            (IconButtonSize::XLarge, 72., 32.),
+        ];
+        for (size, container, icon) in expected {
+            let dimensions = icon_button_tokens::dimensions(size);
+            assert_eq!(dimensions.container, px(container));
+            assert_eq!(dimensions.icon, px(icon));
+        }
+    }
+
+    #[test]
+    fn icon_button_shape_table_is_static() {
+        let expected = [
+            (IconButtonSize::XSmall, 12.),
+            (IconButtonSize::Small, 12.),
+            (IconButtonSize::Medium, 16.),
+            (IconButtonSize::Large, 28.),
+            (IconButtonSize::XLarge, 28.),
+        ];
+        for (size, radius) in expected {
+            let shapes = icon_button_tokens::shapes(size, IconButtonShape::Square);
+            assert_eq!(
+                shapes.shape,
+                icon_button_tokens::IconButtonCorner::Square(px(radius))
+            );
+            assert!(matches!(
+                shapes.pressed_shape,
+                icon_button_tokens::IconButtonCorner::Square(_)
+            ));
+        }
+
+        for size in [
+            IconButtonSize::XSmall,
+            IconButtonSize::Small,
+            IconButtonSize::Medium,
+            IconButtonSize::Large,
+            IconButtonSize::XLarge,
+        ] {
+            let shapes = icon_button_tokens::shapes(size, IconButtonShape::Round);
+            assert_eq!(shapes.shape, icon_button_tokens::IconButtonCorner::Full);
+            assert_eq!(
+                shapes.pressed_shape,
+                icon_button_tokens::IconButtonCorner::Full
+            );
+        }
     }
 
     #[gpui::test]
     fn rendered_enabled_icon_button_click_mutates_entity_once(cx: &mut TestAppContext) {
-        let (state, mut visual) = click_root(cx, false, false);
+        let (state, visual) = click_root(cx, false, false);
         draw(visual);
         let bounds = visual
             .debug_bounds("icon-button")
@@ -418,7 +455,7 @@ mod tests {
     #[gpui::test]
     fn rendered_disabled_and_loading_icon_buttons_do_not_click(cx: &mut TestAppContext) {
         for (disabled, loading) in [(true, false), (false, true)] {
-            let (state, mut visual) = click_root(cx, disabled, loading);
+            let (state, visual) = click_root(cx, disabled, loading);
             draw(visual);
             let bounds = visual
                 .debug_bounds("icon-button")

@@ -1,16 +1,33 @@
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement,
-    ParentElement as _, Render, Styled as _, Window,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement,
+    ParentElement as _, Render, Styled as _, Window, div, px,
 };
 use gpui_component::{
     IconName,
-    button::{
-        MultiChoiceSegmentedButton, SegmentedButtonItem, SingleChoiceSegmentedButton,
-    },
+    button::{MultiChoiceSegmentedButton, SegmentedButtonItem, SingleChoiceSegmentedButton},
     v_flex,
 };
 
 use crate::section;
+
+fn labeled_row(row: impl IntoElement, title: &'static str, note: &'static str) -> impl IntoElement {
+    let row: AnyElement = row.into_any_element();
+    v_flex()
+        .w_full()
+        .h(px(92.))
+        .gap_2()
+        .child(
+            div()
+                .w_full()
+                .h(px(40.))
+                .items_center()
+                .justify_center()
+                .child(row),
+        )
+        .child(div().h(px(16.)).child(title))
+        .child(div().h(px(16.)).text_xs().child(note))
+        .into_any_element()
+}
 
 pub struct SegmentedButtonStory {
     focus_handle: FocusHandle,
@@ -92,7 +109,7 @@ impl Render for SegmentedButtonStory {
             .child(
                 section("Single choice · controlled")
                     .sub_title("Click one segment; selection moves to that segment.")
-                    .child(
+                    .child(labeled_row(
                         SingleChoiceSegmentedButton::new("single-choice")
                             .items([
                                 SegmentedButtonItem::new("single-day", "Day")
@@ -107,12 +124,14 @@ impl Render for SegmentedButtonStory {
                             ])
                             .on_selection_change(single_selection_change)
                             .w_full(),
-                    ),
+                        "Icon + label · single choice",
+                        "40px row · equal-width segments",
+                    )),
             )
             .child(
                 section("Multi choice · controlled")
                     .sub_title("Click segments independently; each checked state is preserved.")
-                    .child(
+                    .child(labeled_row(
                         MultiChoiceSegmentedButton::new("multi-choice")
                             .items([
                                 SegmentedButtonItem::new("multi-ready", "Ready")
@@ -127,12 +146,14 @@ impl Render for SegmentedButtonStory {
                             ])
                             .on_selection_change(multi_selection_change)
                             .w_full(),
-                    ),
+                        "Icon + label · multi choice",
+                        "40px row · independent checks",
+                    )),
             )
             .child(
                 section("Text-only segments")
                     .sub_title("Connected equal-width row without icon content.")
-                    .child(
+                    .child(labeled_row(
                         SingleChoiceSegmentedButton::new("text-only")
                             .items([
                                 SegmentedButtonItem::new("text-list", "List")
@@ -144,22 +165,25 @@ impl Render for SegmentedButtonStory {
                             ])
                             .on_selection_change(text_selection_change)
                             .w_full(),
-                    ),
+                        "Text-only connected row",
+                        "centered content · shared seam",
+                    )),
             )
             .child(
                 section("Disabled segment")
                     .sub_title("Disabled segment keeps row height, seam, and outer corners.")
-                    .child(
+                    .child(labeled_row(
                         SingleChoiceSegmentedButton::new("disabled-segment")
                             .items([
-                                SegmentedButtonItem::new("available", "Available")
-                                    .selected(true),
+                                SegmentedButtonItem::new("available", "Available").selected(true),
                                 SegmentedButtonItem::new("unavailable", "Unavailable")
                                     .disabled(true),
                                 SegmentedButtonItem::new("more", "More"),
                             ])
                             .w_full(),
-                    ),
+                        "Disabled segment",
+                        "outer corners preserved",
+                    )),
             )
     }
 }
