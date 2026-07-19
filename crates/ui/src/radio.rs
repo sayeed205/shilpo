@@ -156,13 +156,15 @@ impl RenderOnce for Radio {
         };
 
         let outer_size = match self.size {
-            Size::XSmall => gpui::px(12.),
-            Size::Small => gpui::px(14.),
-            Size::Medium => gpui::px(16.),
-            Size::Large => gpui::px(18.),
-            _ => gpui::px(16.),
+            Size::XSmall => gpui::px(14.),
+            Size::Small => gpui::px(16.),
+            Size::Medium => gpui::px(20.),
+            Size::Large => gpui::px(24.),
+            _ => gpui::px(20.),
         };
         let inner_size = outer_size * 0.5;
+
+        let group_name = SharedString::from(format!("radio-group-{}", self.id));
 
         self.base
             .id(self.id.clone())
@@ -177,12 +179,13 @@ impl RenderOnce for Radio {
             })
             .when_some(self.size_of_set, |this, size| this.aria_size_of_set(size))
             .when(!self.disabled, |this| {
-                this.track_focus(
+                this.cursor_pointer().track_focus(
                     &focus_handle
                         .tab_stop(self.tab_stop)
                         .tab_index(self.tab_index),
                 )
             })
+            .group(group_name.clone())
             .h_flex()
             .gap_x_2()
             .text_color(cx.theme().on_surface)
@@ -202,16 +205,40 @@ impl RenderOnce for Radio {
                 div()
                     .size(outer_size)
                     .flex_shrink_0()
-                    .rounded_full()
-                    .border_2()
-                    .border_color(border_color)
-                    .bg(cx.theme().transparent)
+                    .relative()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .when(checked, |this| {
-                        this.child(div().size(inner_size).rounded_full().bg(circle_color))
-                    }),
+                    .child(
+                        div()
+                            .absolute()
+                            .size(outer_size + px(16.))
+                            .rounded_full()
+                            .when(!disabled, |this| {
+                                let layer_color = if checked {
+                                    cx.theme().primary
+                                } else {
+                                    cx.theme().on_surface
+                                };
+                                this.group_hover(group_name.clone(), |style| {
+                                    style.bg(layer_color.opacity(0.08))
+                                })
+                            })
+                    )
+                    .child(
+                        div()
+                            .size(outer_size)
+                            .rounded_full()
+                            .border_2()
+                            .border_color(border_color)
+                            .bg(cx.theme().transparent)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(checked, |this| {
+                                this.child(div().size(inner_size).rounded_full().bg(circle_color))
+                            }),
+                    ),
             )
             .when(!self.children.is_empty() || self.label.is_some(), |this| {
                 this.child(
