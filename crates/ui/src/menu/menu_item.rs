@@ -111,20 +111,21 @@ impl RenderOnce for MenuItemElement {
                 this.on_hover(move |hovered, window, cx| (on_hover)(hovered, window, cx))
             })
             .when(!self.disabled, |this| {
-                this.group_hover(self.group_name, |this| {
-                    this.bg(cx.theme().primary_container)
-                        .text_color(cx.theme().on_primary_container)
-                })
-                .when(self.selected, |this| {
-                    this.bg(cx.theme().primary_container)
-                        .text_color(cx.theme().on_primary_container)
-                })
-                .when_some(self.on_click, |this, on_click| {
-                    this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                        cx.stop_propagation();
+                this.cursor_pointer()
+                    .group_hover(self.group_name, |this| {
+                        this.bg(cx.theme().surface_container_high)
+                            .text_color(cx.theme().on_surface)
                     })
-                    .on_click(on_click)
-                })
+                    .when(self.selected, |this| {
+                        this.bg(cx.theme().secondary_container)
+                            .text_color(cx.theme().on_secondary_container)
+                    })
+                    .when_some(self.on_click, |this, on_click| {
+                        this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .on_click(on_click)
+                    })
             })
             .when(self.disabled, |this| {
                 this.text_color(cx.theme().on_surface_variant)
