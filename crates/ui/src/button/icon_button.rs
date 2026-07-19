@@ -73,6 +73,8 @@ pub struct IconButton {
     checkable: bool,
     disabled: bool,
     loading: bool,
+    loading_icon: Option<crate::Icon>,
+    full_width: bool,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     cursor: Option<CursorStyle>,
 }
@@ -93,6 +95,8 @@ impl IconButton {
             checkable: false,
             disabled: false,
             loading: false,
+            loading_icon: None,
+            full_width: false,
             on_click: None,
             cursor: None,
         }
@@ -138,6 +142,16 @@ impl IconButton {
 
     pub fn loading(mut self, loading: bool) -> Self {
         self.loading = loading;
+        self
+    }
+
+    pub fn loading_icon(mut self, icon: impl Into<crate::Icon>) -> Self {
+        self.loading_icon = Some(icon.into());
+        self
+    }
+
+    pub fn full_width(mut self, full_width: bool) -> Self {
+        self.full_width = full_width;
         self
     }
 
@@ -238,7 +252,8 @@ impl RenderOnce for IconButton {
             .when(!disabled, |this| this.track_focus(&focus_handle))
             .flex()
             .flex_shrink_0()
-            .w(width)
+            .when(self.full_width, |this| this.w_full())
+            .when(!self.full_width, |this| this.w(width))
             .h(dimensions.container)
             .items_center()
             .justify_center()
@@ -292,7 +307,23 @@ impl RenderOnce for IconButton {
             ))
             .when_some(
                 self.icon
-                    .map(|icon| icon.with_size(Size::Size(dimensions.icon))),
+                    .map(|icon| {
+                        icon.loading(self.loading)
+                            .loading_icon(self.loading_icon.clone())
+                            .with_size(Size::Size(dimensions.icon))
+                    })
+                    .or_else(|| {
+                        if self.loading {
+                            Some(
+                                ButtonIcon::new(crate::spinner::Spinner::new())
+                                    .loading(true)
+                                    .loading_icon(self.loading_icon.clone())
+                                    .with_size(Size::Size(dimensions.icon)),
+                            )
+                        } else {
+                            None
+                        }
+                    }),
                 |this, icon| {
                     this.child(
                         div()
@@ -463,5 +494,14 @@ mod tests {
             visual.simulate_click(bounds.center(), Default::default());
             assert_eq!(state.read_with(visual, |state, _| state.count), 0);
         }
+    }
+
+    #[test]
+    fn test_icon_button_loading_and_full_width_options() {
+        let button = IconButton::new("test-options")
+            .loading(true)
+            .full_width(true);
+        assert!(button.loading);
+        assert!(button.full_width);
     }
 }

@@ -2,9 +2,9 @@ use std::rc::Rc;
 
 use crate::{ActiveTheme, Icon, Sizable, Size, StyledExt};
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, Role, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled,
-    Window, div, prelude::FluentBuilder as _,
+    div, prelude::FluentBuilder as _, AnyElement, App, ClickEvent, ElementId, InteractiveElement,
+    IntoElement, ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
+    StyleRefinement, Styled, Window,
 };
 
 use super::{button_shared_tokens, segmented_button_tokens, shared};
@@ -213,29 +213,12 @@ fn render_item(
             content
         })
         .when(left, |this| {
-            this.rounded_tl(tokens.radius)
-                .rounded_bl(tokens.radius)
-                .when(!right, |this| {
-                    this.rounded_tr(tokens.inner_radius)
-                        .rounded_br(tokens.inner_radius)
-                })
+            this.rounded_tl(tokens.radius).rounded_bl(tokens.radius)
         })
         .when(right, |this| {
-            this.rounded_tr(tokens.radius)
-                .rounded_br(tokens.radius)
-                .when(!left, |this| {
-                    this.rounded_tl(tokens.inner_radius)
-                        .rounded_bl(tokens.inner_radius)
-                })
+            this.rounded_tr(tokens.radius).rounded_br(tokens.radius)
         })
-        .when(!left, |this| {
-            this.ml(tokens.seam).when(!right, |this| {
-                this.rounded_tl(tokens.inner_radius)
-                    .rounded_tr(tokens.inner_radius)
-                    .rounded_bl(tokens.inner_radius)
-                    .rounded_br(tokens.inner_radius)
-            })
-        })
+        .when(!left, |this| this.ml(tokens.seam))
         .when(disabled, |this| {
             this.cursor(shared::interaction::cursor(true, false, None))
         })
@@ -336,8 +319,8 @@ pub type SegmentedButton = SingleChoiceSegmentedButton;
 mod tests {
     use super::*;
     use gpui::{
-        AppContext, Context, Entity, IntoElement, Render, TestAppContext, VisualTestContext,
-        Window, div, px,
+        div, px, AppContext, Context, Entity, IntoElement, Render,
+        TestAppContext, VisualTestContext, Window,
     };
 
     struct SelectionState {

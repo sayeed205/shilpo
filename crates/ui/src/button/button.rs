@@ -99,6 +99,7 @@ pub struct Button {
     on_hover: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
     loading: bool,
     loading_icon: Option<Icon>,
+    full_width: bool,
     pl: Option<gpui::Pixels>,
     pr: Option<gpui::Pixels>,
 
@@ -147,6 +148,7 @@ impl Button {
             outline: false,
             children: Vec::new(),
             loading_icon: None,
+            full_width: false,
             dropdown_caret: false,
             pl: None,
             pr: None,
@@ -255,6 +257,12 @@ impl Button {
     /// Set true to show the loading indicator.
     pub fn loading(mut self, loading: bool) -> Self {
         self.loading = loading;
+        self
+    }
+
+    /// Set true to make the button take up the full width of its parent container.
+    pub fn full_width(mut self, full_width: bool) -> Self {
+        self.full_width = full_width;
         self
     }
 
@@ -496,7 +504,8 @@ impl RenderOnce for Button {
             .items_center()
             .justify_center()
             .h(dimensions.height)
-            .min_w(dimensions.min_width)
+            .when(self.full_width, |this| this.w_full())
+            .when(!self.full_width, |this| this.min_w(dimensions.min_width))
             .when_some(self.pl, |this, pl| this.pl(pl))
             .when_some(self.pr, |this, pr| this.pr(pr))
             .when(self.pl.is_none() && self.pr.is_none(), |this| {
@@ -799,5 +808,11 @@ mod tests {
     #[test]
     fn m3_variants_are_strict() {
         assert_eq!(ButtonVariant::default(), ButtonVariant::Filled);
+    }
+
+    #[test]
+    fn test_button_full_width_option() {
+        let button = Button::new("test-width").full_width(true);
+        assert!(button.full_width);
     }
 }

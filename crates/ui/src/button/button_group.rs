@@ -1,16 +1,15 @@
-use gpui::Corners;
 use gpui::InteractiveElement;
 use gpui::ParentElement;
-use gpui::{App, Axis, Edges, ElementId, IntoElement, Window};
 use gpui::{
-    RenderOnce, StatefulInteractiveElement as _, StyleRefinement, Styled, div,
-    prelude::FluentBuilder as _,
+    div, prelude::FluentBuilder as _, RenderOnce, StatefulInteractiveElement as _, StyleRefinement,
+    Styled,
 };
+use gpui::{App, Axis, ElementId, IntoElement, Window};
 use std::{cell::Cell, rc::Rc};
 
 use crate::{
-    Disableable, Sizable, Size, StyledExt,
-    button::{Button, ButtonGroupMode, ButtonVariant, ButtonVariants, button_group_tokens},
+    button::{button_group_tokens, Button, ButtonGroupMode, ButtonVariant, ButtonVariants}, Disableable, Sizable, Size,
+    StyledExt,
 };
 
 /// A ButtonGroup element, to wrap multiple buttons in a group.
@@ -174,7 +173,6 @@ impl RenderOnce for ButtonGroup {
 
         let vertical = self.layout == Axis::Vertical;
         let tokens = button_group_tokens::tokens(self.mode);
-        let connected = self.mode == ButtonGroupMode::Connected;
 
         div()
             .id(self.id)
@@ -189,72 +187,25 @@ impl RenderOnce for ButtonGroup {
                     .enumerate()
                     .map(|(child_index, child)| {
                         let state = Rc::clone(&state);
-                        let child = if children_len == 1 || !connected {
-                            child
-                        } else if child_index == 0 {
-                            // First
-                            child
-                                .border_corners(Corners {
-                                    top_left: true,
-                                    top_right: vertical,
-                                    bottom_left: !vertical,
-                                    bottom_right: false,
-                                })
-                                .border_edges(Edges {
-                                    left: true,
-                                    top: true,
-                                    right: true,
-                                    bottom: true,
-                                })
-                        } else if child_index == children_len - 1 {
-                            // Last
-                            child
-                                .border_edges(Edges {
-                                    left: vertical,
-                                    top: !vertical,
-                                    right: true,
-                                    bottom: true,
-                                })
-                                .border_corners(Corners {
-                                    top_left: false,
-                                    top_right: !vertical,
-                                    bottom_left: vertical,
-                                    bottom_right: true,
-                                })
-                        } else {
-                            // Middle
-                            child
-                                .border_corners(Corners {
-                                    top_left: false,
-                                    top_right: false,
-                                    bottom_left: false,
-                                    bottom_right: false,
-                                })
-                                .border_edges(Edges {
-                                    left: vertical,
-                                    top: !vertical,
-                                    right: true,
-                                    bottom: true,
-                                })
-                        }
-                        .corner_radii(button_group_tokens::corner_radii(
-                            self.mode,
-                            self.layout,
-                            child_index,
-                            children_len,
-                        ))
-                        .when_some(self.size, |this, size| this.with_size(size))
-                        .when(self.size.is_none(), |this| {
-                            this.with_size(Size::Size(tokens.height))
-                        })
-                        .when_some(self.variant, |this, variant| this.with_variant(variant))
-                        .when(self.compact, |this| this.compact())
-                        .when(self.outline, |this| this.outline())
-                        .when(self.on_click.is_some(), |this| {
-                            this.on_click(move |_, _, _| {
-                                state.set(Some(child_index));
+                        let child = child
+                            .corner_radii(button_group_tokens::corner_radii(
+                                self.mode,
+                                self.layout,
+                                child_index,
+                                children_len,
+                            ))
+                            .when_some(self.size, |this, size| this.with_size(size))
+                            .when(self.size.is_none(), |this| {
+                                this.with_size(Size::Size(tokens.height))
                             })
-                        });
+                            .when_some(self.variant, |this, variant| this.with_variant(variant))
+                            .when(self.compact, |this| this.compact())
+                            .when(self.outline, |this| this.outline())
+                            .when(self.on_click.is_some(), |this| {
+                                this.on_click(move |_, _, _| {
+                                    state.set(Some(child_index));
+                                })
+                            });
 
                         child
                     }),
@@ -287,9 +238,10 @@ impl RenderOnce for ButtonGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::button::button_geometry;
     use gpui::{
-        AppContext, Axis, Context, Entity, IntoElement, Render, TestAppContext, VisualTestContext,
-        Window, div, px,
+        div, px, AppContext, Axis, Context, Entity, IntoElement, Render,
+        TestAppContext, VisualTestContext, Window,
     };
 
     #[gpui::test]
@@ -361,5 +313,31 @@ mod tests {
             .expect("group bounds");
         visual.simulate_click(bounds.center(), Default::default());
         assert_eq!(state.read_with(visual, |state, _| state.clicks), 1);
+    }
+
+    struct GroupGeometryRoot {}
+    impl Render for GroupGeometryRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().child(
+                ButtonGroup::new("button-group")
+                    .mode(ButtonGroupMode::Connected)
+                    .child(Button::new("one").label("One"))
+                    .child(Button::new("two").label("Two")),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn test_connected_button_group_corners(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let _capture = button_geometry::capture_render_geometry();
+        let (_, visual) = cx.add_window_view(move |_, _| GroupGeometryRoot {});
+        visual.run_until_parked();
+        visual.update(|window, cx| _ = window.draw(cx));
+        let captured = button_geometry::captured_render_geometry().unwrap();
+        assert_eq!(captured.corners.top_left, px(8.));
+        assert_eq!(captured.corners.bottom_left, px(8.));
+        assert_eq!(captured.corners.top_right, px(20.));
+        assert_eq!(captured.corners.bottom_right, px(20.));
     }
 }
