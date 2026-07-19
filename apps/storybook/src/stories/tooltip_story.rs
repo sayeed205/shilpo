@@ -6,7 +6,7 @@ use gpui::{
 
 use gpui_component::{
     IconName,
-    button::{Button, ButtonVariant, ButtonVariants, Toggle},
+    button::{Button, ButtonVariant, ButtonVariants},
     checkbox::Checkbox,
     clipboard::Clipboard,
     dock::PanelControl,
@@ -119,12 +119,16 @@ impl Render for TooltipStory {
                 ),
             )
             .child(
-                section("Toggle Tooltip").child(
+                section("Icon Button Tooltip").child(
                     h_flex()
                         .gap_2()
-                        .child(Toggle::new("toggle1").label("Bold").tooltip("Toggle bold"))
                         .child(
-                            Toggle::new("toggle2")
+                            Button::new("toggle1")
+                                .icon(IconName::Check)
+                                .tooltip("Toggle bold"),
+                        )
+                        .child(
+                            Button::new("toggle2")
                                 .icon(IconName::Heart)
                                 .tooltip("Toggle favorite"),
                         ),
