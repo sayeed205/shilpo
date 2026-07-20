@@ -198,12 +198,29 @@ mod tests {
     use super::*;
     use crate::highlighter::HighlightTheme;
     use lsp_types::{SemanticToken, SemanticTokenType, SemanticTokensLegend};
+    use std::sync::Arc;
 
     fn legend() -> SemanticTokensLegend {
         SemanticTokensLegend {
             token_types: vec![SemanticTokenType::KEYWORD, SemanticTokenType::COMMENT],
             token_modifiers: vec![],
         }
+    }
+
+    /// A test theme that has `keyword` and `comment` entries populated so
+    /// `theme.style("keyword")` / `theme.style("comment")` return `Some`.
+    fn test_theme() -> Arc<HighlightTheme> {
+        let json = r##"{
+            "name": "Test",
+            "appearance": "Dark",
+            "style": {
+                "syntax": {
+                    "keyword": { "color": "#C792EAFF" },
+                    "comment": { "color": "#546E7AFF", "font_style": "italic" }
+                }
+            }
+        }"##;
+        Arc::new(serde_json::from_str::<HighlightTheme>(json).unwrap())
     }
 
     #[test]
@@ -259,7 +276,7 @@ mod tests {
     #[test]
     fn test_for_range_resolves_and_windows() {
         let text = Rope::from("SELECT * FROM users\n-- a comment line\n");
-        let theme = HighlightTheme::default_dark();
+        let theme = test_theme();
 
         let mut lsp = Lsp::default();
         // "SELECT" (line 0, 0..6) as keyword; comment on line 1.
@@ -290,7 +307,7 @@ mod tests {
         assert_eq!(styles[0].0, 0..6, "keyword token maps to bytes 0..6");
         assert!(
             styles[0].1 != HighlightStyle::default(),
-            "'keyword' should resolve to a non-default style on default-dark"
+            "'keyword' should resolve to a non-default style"
         );
     }
 
@@ -299,7 +316,7 @@ mod tests {
         // 100 lines of "foo bar\n" (8 bytes each), one keyword token per line
         // covering "foo" (cols 0..3).
         let text = Rope::from("foo bar\n".repeat(100).as_str());
-        let theme = HighlightTheme::default_dark();
+        let theme = test_theme();
 
         let mut lsp = Lsp::default();
         lsp.semantic_tokens = (0..100u32)

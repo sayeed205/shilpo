@@ -276,10 +276,29 @@ impl SyntaxColors {
 
         if style.is_some() {
             style
-        } else if name.contains('.') {
-            name.split('.').next().and_then(|prefix| self.style(prefix))
         } else {
-            None
+            // Semantic defaults – see `SyntaxColors::style` in registry.rs.
+            match name {
+                "emphasis" => {
+                    return Some(HighlightStyle {
+                        font_style: Some(gpui::FontStyle::Italic),
+                        ..Default::default()
+                    });
+                }
+                "emphasis.strong" => {
+                    return Some(HighlightStyle {
+                        font_weight: Some(gpui::FontWeight::BOLD),
+                        ..Default::default()
+                    });
+                }
+                _ => {}
+            }
+
+            if name.contains('.') {
+                name.split('.').next().and_then(|prefix| self.style(prefix))
+            } else {
+                None
+            }
         }
     }
 

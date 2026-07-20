@@ -290,6 +290,29 @@ impl SyntaxColors {
         if style.is_some() {
             style
         } else {
+            // Semantic defaults for emphasis captures.
+            // When the theme does not explicitly define a style for emphasis
+            // or emphasis.strong, we apply the standard typographic convention:
+            //   emphasis       → italic
+            //   emphasis.strong → bold
+            // This ensures markdown *italic* / **bold** renders correctly with
+            // any theme, even one that omits these entries.
+            match name {
+                "emphasis" => {
+                    return Some(HighlightStyle {
+                        font_style: Some(gpui::FontStyle::Italic),
+                        ..Default::default()
+                    });
+                }
+                "emphasis.strong" => {
+                    return Some(HighlightStyle {
+                        font_weight: Some(gpui::FontWeight::BOLD),
+                        ..Default::default()
+                    });
+                }
+                _ => {}
+            }
+
             // Fallback `keyword.modifier` to `keyword`
             if name.contains(".") {
                 if let Some(prefix) = name.split(".").next() {
@@ -498,6 +521,17 @@ pub struct LanguageRegistry {
     languages: Mutex<HashMap<SharedString, LanguageConfig>>,
 }
 
+/// Extracts the primary language identifier from a language specifier tag.
+/// E.g. "rust,no_run" -> "rust", "cpp {1-5}" -> "cpp", "PYTHON;3.10" -> "PYTHON"
+pub fn sanitize_language_name(name: &str) -> &str {
+    let clean = name.trim();
+    clean
+        .split(|c: char| c == ',' || c == ';' || c == '{' || c == '(' || c.is_whitespace())
+        .next()
+        .unwrap_or(clean)
+        .trim()
+}
+
 impl LanguageRegistry {
     /// Returns the singleton instance of the `LanguageRegistry` with default languages and themes.
     pub fn singleton() -> &'static LazyLock<LanguageRegistry> {
@@ -526,12 +560,45 @@ impl LanguageRegistry {
 
     /// Returns the language configuration for the given language name.
     pub fn language(&self, name: &str) -> Option<LanguageConfig> {
-        // Try to get by name first, there may have a custom language registered
-        // Then try to get built-in language to support short language names, e.g. "js" for "javascript"
         let languages = self.languages.lock().unwrap();
-        languages.get(name).cloned().or_else(|| {
-            Language::from_name(name).and_then(|language| languages.get(language.name()).cloned())
-        })
+
+        // 1. Exact match
+        if let Some(config) = languages.get(name).cloned() {
+            return Some(config);
+        }
+
+        // 2. Built-in alias lookup (e.g. "js" -> "javascript", "rs" -> "rust")
+        if let Some(language) = Language::from_name(name) {
+            if let Some(config) = languages.get(language.name()).cloned() {
+                return Some(config);
+            }
+        }
+
+        // 3. Primary token match after stripping modifiers (e.g. "rust,no_run" -> "rust")
+        let primary = sanitize_language_name(name);
+        if primary != name {
+            if let Some(config) = languages.get(primary).cloned() {
+                return Some(config);
+            }
+            if let Some(language) = Language::from_name(primary) {
+                if let Some(config) = languages.get(language.name()).cloned() {
+                    return Some(config);
+                }
+            }
+        }
+
+        // 4. Lowercase & sanitized lowercase lookup (e.g. "RUST,no_run" -> "rust")
+        let lower = primary.to_lowercase();
+        if let Some(config) = languages.get(lower.as_str()).cloned() {
+            return Some(config);
+        }
+        if let Some(language) = Language::from_name(&lower) {
+            if let Some(config) = languages.get(language.name()).cloned() {
+                return Some(config);
+            }
+        }
+
+        None
     }
 }
 
@@ -554,9 +621,15 @@ mod tests {
         assert!(registry.language("text").is_some());
         assert!(registry.language("unknown").is_none());
 
+        assert_eq!(super::sanitize_language_name("rust,no_run"), "rust");
+        assert_eq!(super::sanitize_language_name("cpp {1-5}"), "cpp");
+        assert_eq!(super::sanitize_language_name("js;example"), "js");
+
         #[cfg(feature = "tree-sitter-rust")]
         {
             assert!(registry.language("rust").is_some());
+            assert!(registry.language("rust,no_run").is_some());
+            assert!(registry.language("RUST,ignore").is_some());
             assert!(registry.language("rs").is_some());
         }
         #[cfg(not(feature = "tree-sitter-rust"))]
