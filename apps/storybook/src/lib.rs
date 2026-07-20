@@ -6,6 +6,7 @@ use gpui::{
     prelude::FluentBuilder as _, px, rems, size,
 };
 
+use serde::{Deserialize, Serialize};
 use shilpo_ui::{
     ActiveTheme, IconName, Root, TitleBar, WindowControlsMode, WindowExt,
     button::Button,
@@ -18,7 +19,6 @@ use shilpo_ui::{
     text::markdown,
     v_flex,
 };
-use serde::{Deserialize, Serialize};
 
 mod app_menus;
 mod gallery;
@@ -206,8 +206,7 @@ pub fn init(cx: &mut App) {
 
     #[cfg(not(target_family = "wasm"))]
     {
-        let http_client =
-            reqwest_client::ReqwestClient::user_agent("shilpo-storybook").unwrap();
+        let http_client = reqwest_client::ReqwestClient::user_agent("shilpo-storybook").unwrap();
         cx.set_http_client(std::sync::Arc::new(http_client));
     }
 

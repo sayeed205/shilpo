@@ -343,9 +343,7 @@ fn button_root(
     loading: bool,
 ) -> (Entity<CountState>, &mut VisualTestContext) {
     cx.update(crate::init);
-    let state = cx.new(|_| CountState {
-        count: 0,
-    });
+    let state = cx.new(|_| CountState { count: 0 });
     let state_for_root = state.clone();
     let (_, visual) = cx.add_window_view(move |_, _| ButtonRoot {
         state: state_for_root,
@@ -462,9 +460,7 @@ fn rendered_icon_button_all_sizes_and_disabled_guards(cx: &mut TestAppContext) {
     ];
     for (size, expected_size) in expected {
         cx.update(crate::init);
-        let state = cx.new(|_| CountState {
-            count: 0,
-        });
+        let state = cx.new(|_| CountState { count: 0 });
         let state_for_root = state.clone();
         let (_, visual) = cx.add_window_view(move |_, _| IconRoot {
             state: state_for_root,
@@ -482,9 +478,7 @@ fn rendered_icon_button_all_sizes_and_disabled_guards(cx: &mut TestAppContext) {
     }
     for (disabled, loading) in [(true, false), (false, true)] {
         cx.update(crate::init);
-        let state = cx.new(|_| CountState {
-            count: 0,
-        });
+        let state = cx.new(|_| CountState { count: 0 });
         let state_for_root = state.clone();
         let (_, visual) = cx.add_window_view(move |_, _| IconRoot {
             state: state_for_root,
@@ -526,9 +520,7 @@ impl Render for SplitRoot {
 #[gpui::test]
 fn rendered_split_button_has_stable_height_and_ordered_region(cx: &mut TestAppContext) {
     cx.update(crate::init);
-    let state = cx.new(|_| CountState {
-        count: 0,
-    });
+    let state = cx.new(|_| CountState { count: 0 });
     let state_for_root = state.clone();
     let (_, visual) = cx.add_window_view(move |_, _| SplitRoot {
         state: state_for_root,
@@ -574,9 +566,7 @@ impl Render for GroupRoot {
 #[gpui::test]
 fn rendered_button_group_modes_and_callback(cx: &mut TestAppContext) {
     cx.update(crate::init);
-    let state = cx.new(|_| CountState {
-        count: 0,
-    });
+    let state = cx.new(|_| CountState { count: 0 });
     let state_for_root = state.clone();
     let (_, visual) = cx.add_window_view(move |_, _| GroupRoot {
         state: state_for_root,

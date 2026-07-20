@@ -223,7 +223,7 @@ impl RenderOnce for Radio {
                                 this.group_hover(group_name.clone(), |style| {
                                     style.bg(layer_color.opacity(0.08))
                                 })
-                            })
+                            }),
                     )
                     .child(
                         div()

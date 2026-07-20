@@ -107,10 +107,7 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
                     "Delete Previous Word",
                     shilpo_ui::input::DeleteToPreviousWordStart,
                 ),
-                MenuItem::action(
-                    "Delete Next Word",
-                    shilpo_ui::input::DeleteToNextWordEnd,
-                ),
+                MenuItem::action("Delete Next Word", shilpo_ui::input::DeleteToNextWordEnd),
                 MenuItem::separator(),
                 MenuItem::action("Find", shilpo_ui::input::Search),
                 MenuItem::separator(),

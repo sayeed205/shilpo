@@ -3,6 +3,7 @@ use gpui::{
     Action, App, AppContext, Axis, Context, Entity, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, Styled, Window,
 };
+use serde::Deserialize;
 use shilpo_ui::{AxisExt, h_flex, menu::DropdownMenu as _};
 use shilpo_ui::{
     Sizable as _, Size,
@@ -13,7 +14,6 @@ use shilpo_ui::{
     text::TextView,
     v_flex,
 };
-use serde::Deserialize;
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = description_list_story, no_json)]

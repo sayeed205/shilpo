@@ -183,25 +183,22 @@ impl Render for Gallery {
                             .border(false)
                             .collapsed(self.collapsed)
                             .header(
-                                v_flex()
-                                    .w_full()
-                                    .pt_2()
-                                    .child(
-                                        div()
-                                            .bg(cx.theme().primary_container)
-                                            .rounded_full()
-                                            .px_1()
-                                            .when(cx.theme().radius.is_zero(), |this| {
-                                                this.rounded(px(0.))
-                                            })
-                                            .flex_1()
-                                            .mx_1()
-                                            .child(
-                                                Input::new(&self.search_input)
-                                                    .appearance(false)
-                                                    .cleanable(true),
-                                            ),
-                                    ),
+                                v_flex().w_full().pt_2().child(
+                                    div()
+                                        .bg(cx.theme().primary_container)
+                                        .rounded_full()
+                                        .px_1()
+                                        .when(cx.theme().radius.is_zero(), |this| {
+                                            this.rounded(px(0.))
+                                        })
+                                        .flex_1()
+                                        .mx_1()
+                                        .child(
+                                            Input::new(&self.search_input)
+                                                .appearance(false)
+                                                .cleanable(true),
+                                        ),
+                                ),
                             )
                             .children(stories.clone().into_iter().enumerate().map(
                                 |(group_ix, (group_name, sub_stories))| {
@@ -265,7 +262,7 @@ impl Render for Gallery {
                                     .when_some(active_story, |this, active_story| {
                                         this.child(active_story.clone())
                                     }),
-                            )
+                            ),
                     )
                     .into_any_element(),
             );

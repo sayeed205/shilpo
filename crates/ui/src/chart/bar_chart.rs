@@ -4,8 +4,8 @@ use gpui::{
     AnyElement, App, Background, Bounds, Corners, ElementId, Hsla, IntoElement, LinearColorStop,
     Pixels, Point, SharedString, Size, TextAlign, Window, linear_gradient, point, px,
 };
-use shilpo_macros::IntoPlot;
 use num_traits::{Num, ToPrimitive};
+use shilpo_macros::IntoPlot;
 
 use crate::{
     ActiveTheme,

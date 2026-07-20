@@ -3,6 +3,7 @@ use gpui::{
     Render, Rgba, SharedString, Styled, Window, div, linear_color_stop, linear_gradient,
     prelude::FluentBuilder, px,
 };
+use serde::Deserialize;
 use shilpo_ui::{
     ActiveTheme, StyledExt,
     chart::{AreaChart, BarChart, CandlestickChart, LineChart, PieChart, SankeyChart, SankeyLabel},
@@ -12,7 +13,6 @@ use shilpo_ui::{
     separator::Separator,
     v_flex,
 };
-use serde::Deserialize;
 
 use super::StackedBarChart;
 use crate::Story;

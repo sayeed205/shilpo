@@ -512,45 +512,46 @@ impl Slider {
         let state = self.state.read(cx);
         let is_dragging = state.dragging && state.dragging_thumb == Some(is_start);
 
-        let (thumb_width, thumb_height, top_offset, left_offset, margin_left, margin_bottom) = if axis.is_horizontal() {
-            let tw = if is_dragging { px(8.) } else { px(4.) };
-            let th = match self.size {
-                crate::Size::XSmall => px(20.),
-                crate::Size::Small => px(26.),
-                crate::Size::Medium => px(32.),
-                crate::Size::Large => px(38.),
-                _ => px(32.),
+        let (thumb_width, thumb_height, top_offset, left_offset, margin_left, margin_bottom) =
+            if axis.is_horizontal() {
+                let tw = if is_dragging { px(8.) } else { px(4.) };
+                let th = match self.size {
+                    crate::Size::XSmall => px(20.),
+                    crate::Size::Small => px(26.),
+                    crate::Size::Medium => px(32.),
+                    crate::Size::Large => px(38.),
+                    _ => px(32.),
+                };
+                let track_h = match self.size {
+                    crate::Size::XSmall => px(8.),
+                    crate::Size::Small => px(12.),
+                    crate::Size::Medium => px(16.),
+                    crate::Size::Large => px(20.),
+                    _ => px(16.),
+                };
+                let top = (track_h - th) * 0.5;
+                let ml = tw * -0.5;
+                (tw, th, top, start, ml, px(0.))
+            } else {
+                let th = if is_dragging { px(8.) } else { px(4.) };
+                let tw = match self.size {
+                    crate::Size::XSmall => px(20.),
+                    crate::Size::Small => px(26.),
+                    crate::Size::Medium => px(32.),
+                    crate::Size::Large => px(38.),
+                    _ => px(32.),
+                };
+                let track_w = match self.size {
+                    crate::Size::XSmall => px(8.),
+                    crate::Size::Small => px(12.),
+                    crate::Size::Medium => px(16.),
+                    crate::Size::Large => px(20.),
+                    _ => px(16.),
+                };
+                let left = (track_w - tw) * 0.5;
+                let mb = th * -0.5;
+                (tw, th, left, start, px(0.), mb)
             };
-            let track_h = match self.size {
-                crate::Size::XSmall => px(8.),
-                crate::Size::Small => px(12.),
-                crate::Size::Medium => px(16.),
-                crate::Size::Large => px(20.),
-                _ => px(16.),
-            };
-            let top = (track_h - th) * 0.5;
-            let ml = tw * -0.5;
-            (tw, th, top, start, ml, px(0.))
-        } else {
-            let th = if is_dragging { px(8.) } else { px(4.) };
-            let tw = match self.size {
-                crate::Size::XSmall => px(20.),
-                crate::Size::Small => px(26.),
-                crate::Size::Medium => px(32.),
-                crate::Size::Large => px(38.),
-                _ => px(32.),
-            };
-            let track_w = match self.size {
-                crate::Size::XSmall => px(8.),
-                crate::Size::Small => px(12.),
-                crate::Size::Medium => px(16.),
-                crate::Size::Large => px(20.),
-                _ => px(16.),
-            };
-            let left = (track_w - tw) * 0.5;
-            let mb = th * -0.5;
-            (tw, th, left, start, px(0.), mb)
-        };
 
         div()
             .id(id)
@@ -746,7 +747,7 @@ impl RenderOnce for Slider {
                             .h(px(2.))
                             .w(tick_size)
                             .mb(px(-1.))
-                    })
+                    }),
             )
         } else {
             None
@@ -853,22 +854,58 @@ impl RenderOnce for Slider {
         let rendered_segments: Vec<_> = segments
             .into_iter()
             .map(|segment| {
-                let margin_start = if segment.gap_start { gap_margin } else { px(0.0) };
+                let margin_start = if segment.gap_start {
+                    gap_margin
+                } else {
+                    px(0.0)
+                };
                 let margin_end = if segment.gap_end { gap_margin } else { px(0.0) };
 
                 let segment_radius = if axis.is_horizontal() {
                     Corners {
-                        top_left: if segment.round_start { radius.top_left } else { inner_radius },
-                        bottom_left: if segment.round_start { radius.bottom_left } else { inner_radius },
-                        top_right: if segment.round_end { radius.top_right } else { inner_radius },
-                        bottom_right: if segment.round_end { radius.bottom_right } else { inner_radius },
+                        top_left: if segment.round_start {
+                            radius.top_left
+                        } else {
+                            inner_radius
+                        },
+                        bottom_left: if segment.round_start {
+                            radius.bottom_left
+                        } else {
+                            inner_radius
+                        },
+                        top_right: if segment.round_end {
+                            radius.top_right
+                        } else {
+                            inner_radius
+                        },
+                        bottom_right: if segment.round_end {
+                            radius.bottom_right
+                        } else {
+                            inner_radius
+                        },
                     }
                 } else {
                     Corners {
-                        bottom_left: if segment.round_start { radius.bottom_left } else { inner_radius },
-                        bottom_right: if segment.round_start { radius.bottom_right } else { inner_radius },
-                        top_left: if segment.round_end { radius.top_left } else { inner_radius },
-                        top_right: if segment.round_end { radius.top_right } else { inner_radius },
+                        bottom_left: if segment.round_start {
+                            radius.bottom_left
+                        } else {
+                            inner_radius
+                        },
+                        bottom_right: if segment.round_start {
+                            radius.bottom_right
+                        } else {
+                            inner_radius
+                        },
+                        top_left: if segment.round_end {
+                            radius.top_left
+                        } else {
+                            inner_radius
+                        },
+                        top_right: if segment.round_end {
+                            radius.top_right
+                        } else {
+                            inner_radius
+                        },
                     }
                 };
 
@@ -1019,12 +1056,8 @@ impl RenderOnce for Slider {
                         div()
                             .id("slider-bar")
                             .relative()
-                            .when(axis.is_horizontal(), |this| {
-                                this.w_full().h(track_size)
-                            })
-                            .when(axis.is_vertical(), |this| {
-                                this.h_full().w(track_size)
-                            })
+                            .when(axis.is_horizontal(), |this| this.w_full().h(track_size))
+                            .when(axis.is_vertical(), |this| this.h_full().w(track_size))
                             .children(rendered_segments)
                             .children(center_tick)
                             .children(dot_elements)
@@ -1078,10 +1111,7 @@ mod tests {
 
     #[test]
     fn test_slider_state_snapping() {
-        let state = SliderState::new()
-            .min(0.0)
-            .max(5.0)
-            .step(1.0);
+        let state = SliderState::new().min(0.0).max(5.0).step(1.0);
         let val = state.percentage_to_value(0.3); // 1.5
         let snapped_val = (val / 1.0).round() * 1.0;
         let pct = state.value_to_percentage(snapped_val);

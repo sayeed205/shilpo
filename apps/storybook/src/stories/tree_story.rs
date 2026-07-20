@@ -5,6 +5,7 @@ use gpui::{
     Styled, Window, actions, prelude::FluentBuilder as _, px,
 };
 
+use rand::seq::SliceRandom as _;
 use shilpo_ui::{
     ActiveTheme as _, IconName,
     button::Button,
@@ -15,7 +16,6 @@ use shilpo_ui::{
     tree::{TreeItem, TreeState, tree},
     v_flex,
 };
-use rand::seq::SliceRandom as _;
 
 #[cfg(not(target_family = "wasm"))]
 use autocorrect::ignorer::Ignorer;
@@ -39,40 +39,29 @@ pub struct TreeStory {
 #[cfg(target_family = "wasm")]
 fn example_file_items() -> Vec<TreeItem> {
     vec![
-        TreeItem::new("shilpo", "shilpo")
-            .expanded(true)
-            .children([
-                TreeItem::new("shilpo/crates", "crates")
-                    .expanded(true)
-                    .children([
-                        TreeItem::new("shilpo/crates/ui", "ui")
-                            .expanded(true)
-                            .children([
-                                TreeItem::new("shilpo/crates/ui/src", "src").children([
-                                    TreeItem::new(
-                                        "shilpo/crates/ui/src/tree.rs",
-                                        "tree.rs",
-                                    ),
-                                    TreeItem::new(
-                                        "shilpo/crates/ui/src/list/mod.rs",
-                                        "mod.rs",
-                                    ),
-                                ]),
-                                TreeItem::new("shilpo/crates/ui/Cargo.toml", "Cargo.toml"),
+        TreeItem::new("shilpo", "shilpo").expanded(true).children([
+            TreeItem::new("shilpo/crates", "crates")
+                .expanded(true)
+                .children([
+                    TreeItem::new("shilpo/crates/ui", "ui")
+                        .expanded(true)
+                        .children([
+                            TreeItem::new("shilpo/crates/ui/src", "src").children([
+                                TreeItem::new("shilpo/crates/ui/src/tree.rs", "tree.rs"),
+                                TreeItem::new("shilpo/crates/ui/src/list/mod.rs", "mod.rs"),
                             ]),
-                        TreeItem::new("shilpo/crates/story", "story").children([
-                            TreeItem::new(
-                                "shilpo/crates/story/src/stories/tree_story.rs",
-                                "tree_story.rs",
-                            ),
-                            TreeItem::new(
-                                "shilpo/crates/story/src/gallery.rs",
-                                "gallery.rs",
-                            ),
+                            TreeItem::new("shilpo/crates/ui/Cargo.toml", "Cargo.toml"),
                         ]),
+                    TreeItem::new("shilpo/crates/story", "story").children([
+                        TreeItem::new(
+                            "shilpo/crates/story/src/stories/tree_story.rs",
+                            "tree_story.rs",
+                        ),
+                        TreeItem::new("shilpo/crates/story/src/gallery.rs", "gallery.rs"),
                     ]),
-                TreeItem::new("shilpo/README.md", "README.md"),
-            ]),
+                ]),
+            TreeItem::new("shilpo/README.md", "README.md"),
+        ]),
     ]
 }
 

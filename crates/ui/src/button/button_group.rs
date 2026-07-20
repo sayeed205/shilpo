@@ -1,15 +1,15 @@
 use gpui::InteractiveElement;
 use gpui::ParentElement;
-use gpui::{
-    div, prelude::FluentBuilder as _, RenderOnce, StatefulInteractiveElement as _, StyleRefinement,
-    Styled,
-};
 use gpui::{App, Axis, ElementId, IntoElement, Window};
+use gpui::{
+    RenderOnce, StatefulInteractiveElement as _, StyleRefinement, Styled, div,
+    prelude::FluentBuilder as _,
+};
 use std::{cell::Cell, rc::Rc};
 
 use crate::{
-    button::{button_group_tokens, Button, ButtonGroupMode, ButtonVariant, ButtonVariants}, Disableable, Sizable, Size,
-    StyledExt,
+    Disableable, Sizable, Size, StyledExt,
+    button::{Button, ButtonGroupMode, ButtonVariant, ButtonVariants, button_group_tokens},
 };
 
 /// A ButtonGroup element, to wrap multiple buttons in a group.
@@ -240,8 +240,8 @@ mod tests {
     use super::*;
     use crate::button::button_geometry;
     use gpui::{
-        div, px, AppContext, Axis, Context, Entity, IntoElement, Render,
-        TestAppContext, VisualTestContext, Window,
+        AppContext, Axis, Context, Entity, IntoElement, Render, TestAppContext, VisualTestContext,
+        Window, div, px,
     };
 
     #[gpui::test]

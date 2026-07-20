@@ -11,6 +11,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, Task, TextAlign, Window, div,
     prelude::FluentBuilder as _, px,
 };
+use serde::{Deserialize, Serialize};
 use shilpo_ui::{
     ActiveTheme as _, Selectable, Sizable as _, Size, StyleSized as _, StyledExt,
     button::Button,
@@ -26,7 +27,6 @@ use shilpo_ui::{
     },
     v_flex,
 };
-use serde::{Deserialize, Serialize};
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = data_table_story, no_json)]

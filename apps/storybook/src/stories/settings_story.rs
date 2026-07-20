@@ -144,9 +144,7 @@ impl SettingsStory {
                         .icon(IconName::Info)
                         .text()
                         .xsmall()
-                        .on_click(|_, _, cx| {
-                            cx.open_url("https://github.com/sayeed205/shilpo/")
-                        })
+                        .on_click(|_, _, cx| cx.open_url("https://github.com/sayeed205/shilpo/"))
                 })
                 .groups(vec![
                     SettingGroup::new().title("Appearance").items(vec![
@@ -355,9 +353,7 @@ impl SettingsStory {
                                         .with_size(options.size)
                                         .disabled(options.disabled)
                                         .on_click(|_, _, cx| {
-                                            cx.open_url(
-                                                "https://github.com/sayeed205/shilpo",
-                                            );
+                                            cx.open_url("https://github.com/sayeed205/shilpo");
                                         }),
                                 )
                                 .into_any_element()

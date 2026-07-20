@@ -497,16 +497,23 @@ impl NotificationList {
         if notification.use_native {
             #[cfg(not(target_family = "wasm"))]
             {
-                let summary = notification.title.clone().unwrap_or_else(|| "Notification".into());
+                let summary = notification
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| "Notification".into());
                 let body = notification.message.clone().unwrap_or_default();
-                cx.background_executor().spawn(async move {
-                    let mut api = notify_rust::Notification::new();
-                    api.summary(&summary)
-                       .body(&body);
-                    if let Err(err) = api.show() {
-                        tracing::error!("failed to show native desktop notification: {:?}", err);
-                    }
-                }).detach();
+                cx.background_executor()
+                    .spawn(async move {
+                        let mut api = notify_rust::Notification::new();
+                        api.summary(&summary).body(&body);
+                        if let Err(err) = api.show() {
+                            tracing::error!(
+                                "failed to show native desktop notification: {:?}",
+                                err
+                            );
+                        }
+                    })
+                    .detach();
             }
 
             if notification.only_native {

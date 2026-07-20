@@ -1,9 +1,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, App, Context, Corners, ElementId, InteractiveElement as _, IntoElement,
-    ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window, div,
-    prelude::FluentBuilder,
+    Anchor, App, Context, Corners, ElementId, InteractiveElement as _, IntoElement, ParentElement,
+    RenderOnce, SharedString, StyleRefinement, Styled, Window, div, prelude::FluentBuilder,
 };
 
 use crate::{
@@ -13,8 +12,7 @@ use crate::{
 };
 
 use super::{
-    Button, ButtonRounded, ButtonVariant, ButtonVariants, SplitButtonShapes,
-    split_button_tokens,
+    Button, ButtonRounded, ButtonVariant, ButtonVariants, SplitButtonShapes, split_button_tokens,
 };
 
 #[derive(IntoElement)]
@@ -206,11 +204,8 @@ impl RenderOnce for SplitButton {
         } else {
             self.variant
         };
-        let outer_radius = crate::button::button_shape_tokens::resolve(
-            self.rounded,
-            self.size,
-            Some(height),
-        );
+        let outer_radius =
+            crate::button::button_shape_tokens::resolve(self.rounded, self.size, Some(height));
         let leading_corners = gpui::Corners {
             top_left: outer_radius,
             bottom_left: outer_radius,

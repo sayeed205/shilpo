@@ -1,11 +1,11 @@
 use crate::{
-    animation::cubic_bezier, ActiveTheme, Disableable, Side, Sizable, Size, StyledExt, h_flex, text::Text,
-    tooltip::ComponentTooltip, Icon, IconName,
+    ActiveTheme, Disableable, Icon, IconName, Side, Sizable, Size, StyledExt,
+    animation::cubic_bezier, h_flex, text::Text, tooltip::ComponentTooltip,
 };
 use gpui::{
-    Animation, AnimationExt as _, App, ElementId, Hsla, InteractiveElement,
-    IntoElement, ParentElement as _, RenderOnce, SharedString, StyleRefinement, Styled, Window,
-    div, prelude::FluentBuilder as _, px,
+    Animation, AnimationExt as _, App, ElementId, Hsla, InteractiveElement, IntoElement,
+    ParentElement as _, RenderOnce, SharedString, StyleRefinement, Styled, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use std::{rc::Rc, time::Duration};
 
@@ -133,16 +133,23 @@ impl RenderOnce for Switch {
         let toggle_state = window.use_keyed_state(self.id.clone(), cx, |_, _| checked);
         let prev_checked = toggle_state.read(cx);
 
-        let (bg_width, bg_height, unchecked_thumb_size, checked_thumb_size, icon_size) = match self.size {
-            Size::XSmall => (px(36.), px(20.), px(10.), px(14.), px(8.)),
-            Size::Small => (px(44.), px(24.), px(12.), px(18.), px(10.)),
-            Size::Medium | Size::Large => (px(52.), px(32.), px(16.), px(24.), px(12.)),
-            Size::Size(height) => {
-                let h = height.as_f32();
-                let scale = h / 32.0;
-                (px(52.0 * scale), px(h), px(16.0 * scale), px(24.0 * scale), px(12.0 * scale))
-            }
-        };
+        let (bg_width, bg_height, unchecked_thumb_size, checked_thumb_size, icon_size) =
+            match self.size {
+                Size::XSmall => (px(36.), px(20.), px(10.), px(14.), px(8.)),
+                Size::Small => (px(44.), px(24.), px(12.), px(18.), px(10.)),
+                Size::Medium | Size::Large => (px(52.), px(32.), px(16.), px(24.), px(12.)),
+                Size::Size(height) => {
+                    let h = height.as_f32();
+                    let scale = h / 32.0;
+                    (
+                        px(52.0 * scale),
+                        px(h),
+                        px(16.0 * scale),
+                        px(24.0 * scale),
+                        px(12.0 * scale),
+                    )
+                }
+            };
 
         let unchecked_thumb_size = if self.unchecked_icon.is_some() {
             checked_thumb_size
@@ -155,15 +162,27 @@ impl RenderOnce for Switch {
 
         let (bg, border_color, toggle_bg) = if self.disabled {
             if checked {
-                (checked_bg.opacity(0.12), checked_border.opacity(0.12), cx.theme().on_primary.opacity(0.38))
+                (
+                    checked_bg.opacity(0.12),
+                    checked_border.opacity(0.12),
+                    cx.theme().on_primary.opacity(0.38),
+                )
             } else {
-                (cx.theme().surface_container_highest.opacity(0.12), cx.theme().outline.opacity(0.12), cx.theme().outline.opacity(0.38))
+                (
+                    cx.theme().surface_container_highest.opacity(0.12),
+                    cx.theme().outline.opacity(0.12),
+                    cx.theme().outline.opacity(0.38),
+                )
             }
         } else {
             if checked {
                 (checked_bg, checked_border, cx.theme().on_primary)
             } else {
-                (cx.theme().surface_container_highest, cx.theme().outline, cx.theme().outline)
+                (
+                    cx.theme().surface_container_highest,
+                    cx.theme().outline,
+                    cx.theme().outline,
+                )
             }
         };
 
@@ -173,18 +192,24 @@ impl RenderOnce for Switch {
         let x_unchecked = (usable_height - unchecked_thumb_size) / 2.;
         let y_unchecked = (usable_height - unchecked_thumb_size) / 2.;
 
-        let x_checked = usable_width - checked_thumb_size - (usable_height - checked_thumb_size) / 2.;
+        let x_checked =
+            usable_width - checked_thumb_size - (usable_height - checked_thumb_size) / 2.;
         let y_checked = (usable_height - checked_thumb_size) / 2.;
 
         let duration = Duration::from_millis(200);
 
-        let active_icon = if checked { self.checked_icon } else { self.unchecked_icon };
-        let icon_color = if checked { cx.theme().primary } else { cx.theme().surface_container_highest };
-        let icon_element = active_icon.map(|icon_name| {
-            Icon::new(icon_name)
-                .size(icon_size)
-                .text_color(icon_color)
-        });
+        let active_icon = if checked {
+            self.checked_icon
+        } else {
+            self.unchecked_icon
+        };
+        let icon_color = if checked {
+            cx.theme().primary
+        } else {
+            cx.theme().surface_container_highest
+        };
+        let icon_element = active_icon
+            .map(|icon_name| Icon::new(icon_name).size(icon_size).text_color(icon_color));
 
         let thumb_element = div()
             .absolute()
@@ -196,7 +221,11 @@ impl RenderOnce for Switch {
             .justify_center()
             .when_some(icon_element, |this, icon| this.child(icon))
             .map(|this| {
-                let static_size = if checked { checked_thumb_size } else { unchecked_thumb_size };
+                let static_size = if checked {
+                    checked_thumb_size
+                } else {
+                    unchecked_thumb_size
+                };
                 let static_x = if checked { x_checked } else { x_unchecked };
                 let static_y = if checked { y_checked } else { y_unchecked };
                 let this = this.size(static_size).left(static_x).top(static_y);
@@ -214,13 +243,22 @@ impl RenderOnce for Switch {
                     })
                     .detach();
 
-                    let animation = Animation::new(duration).with_easing(cubic_bezier(0.2, 0.0, 0.0, 1.0));
+                    let animation =
+                        Animation::new(duration).with_easing(cubic_bezier(0.2, 0.0, 0.0, 1.0));
                     this.with_animation(
                         ElementId::NamedInteger("move_thumb".into(), checked as u64),
                         animation,
                         move |this, delta| {
-                            let size_from = if checked { unchecked_thumb_size } else { checked_thumb_size };
-                            let size_to = if checked { checked_thumb_size } else { unchecked_thumb_size };
+                            let size_from = if checked {
+                                unchecked_thumb_size
+                            } else {
+                                checked_thumb_size
+                            };
+                            let size_to = if checked {
+                                checked_thumb_size
+                            } else {
+                                unchecked_thumb_size
+                            };
                             let x_from = if checked { x_unchecked } else { x_checked };
                             let x_to = if checked { x_checked } else { x_unchecked };
                             let y_from = if checked { y_unchecked } else { y_checked };
@@ -255,7 +293,7 @@ impl RenderOnce for Switch {
                         .border_2()
                         .border_color(border_color)
                         .bg(bg)
-                        .child(thumb_element)
+                        .child(thumb_element),
                 )
                 .when_some(self.label, |this, label| {
                     let label_color = if self.disabled {
@@ -263,16 +301,13 @@ impl RenderOnce for Switch {
                     } else {
                         cx.theme().on_surface
                     };
-                    this.child(
-                        div()
-                            .text_color(label_color)
-                            .child(label)
-                            .map(|this| match self.size {
-                                Size::XSmall => this.text_xs(),
-                                Size::Small => this.text_sm(),
-                                _ => this.text_base(),
-                            })
-                    )
+                    this.child(div().text_color(label_color).child(label).map(
+                        |this| match self.size {
+                            Size::XSmall => this.text_xs(),
+                            Size::Small => this.text_sm(),
+                            _ => this.text_base(),
+                        },
+                    ))
                 })
                 .when_some(
                     on_click

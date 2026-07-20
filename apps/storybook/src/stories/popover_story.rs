@@ -3,6 +3,7 @@ use gpui::{
     Focusable, Half, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement as _,
     Render, Styled as _, WeakEntity, Window, actions, div, px,
 };
+use serde::Deserialize;
 use shilpo_ui::{
     ActiveTheme, StyledExt, WindowExt,
     button::{Button, ButtonVariants as _},
@@ -13,7 +14,6 @@ use shilpo_ui::{
     separator::Separator,
     v_flex,
 };
-use serde::Deserialize;
 
 use crate::section;
 

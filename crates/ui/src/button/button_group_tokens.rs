@@ -1,4 +1,4 @@
-use gpui::{px, Axis, Corners, Pixels};
+use gpui::{Axis, Corners, Pixels, px};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ButtonGroupMode {

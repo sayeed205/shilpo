@@ -8,15 +8,15 @@ use shilpo_ui::{
     status_bar::StatusBar,
 };
 
+use serde::Deserialize;
 use shilpo_assets::Assets;
+use std::{sync::Arc, time::Duration};
 use storybook::{
     AccordionStory, AppState, AppTitleBar, ButtonStory, CalendarStory, DataTableStory, DialogStory,
     FormStory, IconStory, ImageStory, InputStory, LabelStory, ListStory, NotificationStory, Open,
     PopoverStory, ProgressStory, ResizableStory, ScrollbarStory, SelectStory, SidebarStory,
     StoryContainer, SwitchStory, TooltipStory,
 };
-use serde::Deserialize;
-use std::{sync::Arc, time::Duration};
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = story, no_json)]

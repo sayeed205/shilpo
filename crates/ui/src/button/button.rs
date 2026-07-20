@@ -412,12 +412,8 @@ impl RenderOnce for Button {
         let hoverable = self.hoverable();
         let normal_style = style.normal(cx);
         let icon_only = self.label.is_none() && self.children.is_empty() && self.icon.is_some();
-        let dimensions = button_dimension_tokens::resolve(
-            self.size,
-            self.variant,
-            self.compact,
-            icon_only,
-        );
+        let dimensions =
+            button_dimension_tokens::resolve(self.size, self.variant, self.compact, icon_only);
 
         let focus_handle = window
             .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
@@ -507,16 +503,22 @@ impl RenderOnce for Button {
             .flex_shrink_0()
             .items_center()
             .justify_center()
-            .when(dimensions.height > Pixels::ZERO, |this| this.h(dimensions.height))
-            .when(self.full_width, |this| this.w_full())
-            .when(!self.full_width && dimensions.min_width > Pixels::ZERO, |this| {
-                this.min_w(dimensions.min_width)
+            .when(dimensions.height > Pixels::ZERO, |this| {
+                this.h(dimensions.height)
             })
+            .when(self.full_width, |this| this.w_full())
+            .when(
+                !self.full_width && dimensions.min_width > Pixels::ZERO,
+                |this| this.min_w(dimensions.min_width),
+            )
             .when_some(self.pl, |this, pl| this.pl(pl))
             .when_some(self.pr, |this, pr| this.pr(pr))
-            .when(self.pl.is_none() && self.pr.is_none() && dimensions.horizontal_padding > Pixels::ZERO, |this| {
-                this.px(dimensions.horizontal_padding)
-            })
+            .when(
+                self.pl.is_none()
+                    && self.pr.is_none()
+                    && dimensions.horizontal_padding > Pixels::ZERO,
+                |this| this.px(dimensions.horizontal_padding),
+            )
             .when(dimensions.vertical_padding > Pixels::ZERO, |this| {
                 this.py(dimensions.vertical_padding)
             })
@@ -595,9 +597,10 @@ impl RenderOnce for Button {
             })
             // M3 TextButton has no container, elevation, or border. Its
             // interaction feedback is only an on-surface-variant state layer.
-            .when(style == ButtonVariant::Text || style == ButtonVariant::Plain, |this| {
-                this.border_color(cx.theme().transparent).shadow_none()
-            })
+            .when(
+                style == ButtonVariant::Text || style == ButtonVariant::Plain,
+                |this| this.border_color(cx.theme().transparent).shadow_none(),
+            )
             .when(is_focused && !self.disabled, |this| {
                 let focus_paint = button_tokens::resolved_paint(
                     style,
@@ -742,9 +745,10 @@ impl RenderOnce for Button {
             })
             // TextButton focus is represented by the M3 state layer, not the
             // generic primary focus border used by container buttons.
-            .when(style != ButtonVariant::Text && style != ButtonVariant::Plain, |this| {
-                this.focus_ring(is_focused, px(0.), window, cx)
-            })
+            .when(
+                style != ButtonVariant::Text && style != ButtonVariant::Plain,
+                |this| this.focus_ring(is_focused, px(0.), window, cx),
+            )
     }
 }
 

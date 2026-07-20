@@ -9,6 +9,12 @@ use std::{
 
 use autocorrect::ignorer::Ignorer;
 use gpui::{prelude::FluentBuilder, *};
+use lsp_types::{
+    CodeAction, CodeActionKind, CompletionContext, CompletionItem, CompletionResponse,
+    CompletionTextEdit, InlineCompletionContext, InlineCompletionItem, InlineCompletionResponse,
+    InsertReplaceEdit, InsertTextFormat, TextEdit, WorkspaceEdit,
+};
+use shilpo_assets::Assets;
 use shilpo_ui::{
     ActiveTheme, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariants as _},
@@ -24,13 +30,7 @@ use shilpo_ui::{
     tree::{TreeItem, TreeState, tree},
     v_flex,
 };
-use shilpo_assets::Assets;
 use storybook::Open;
-use lsp_types::{
-    CodeAction, CodeActionKind, CompletionContext, CompletionItem, CompletionResponse,
-    CompletionTextEdit, InlineCompletionContext, InlineCompletionItem, InlineCompletionResponse,
-    InsertReplaceEdit, InsertTextFormat, TextEdit, WorkspaceEdit,
-};
 
 enum Lang {
     BuiltIn(Language),

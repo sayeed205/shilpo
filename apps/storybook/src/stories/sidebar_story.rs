@@ -5,6 +5,7 @@ use gpui::{
     Render, SharedString, Styled, Window, div, prelude::FluentBuilder, px, relative,
 };
 
+use serde::Deserialize;
 use shilpo_ui::{
     ActiveTheme, Icon, IconName, Selectable as _, Side, Sizable,
     badge::Badge,
@@ -20,7 +21,6 @@ use shilpo_ui::{
     switch::Switch,
     v_flex,
 };
-use serde::Deserialize;
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = sidebar_story, no_json)]

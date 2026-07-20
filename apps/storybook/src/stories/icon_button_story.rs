@@ -281,7 +281,7 @@ impl Render for IconButtonStory {
                                 IconButton::new("width-full")
                                     .icon(IconName::ArrowDown)
                                     .filled_tonal()
-                                    .full_width(true)
+                                    .full_width(true),
                             )
                             .child(
                                 div()
@@ -289,8 +289,8 @@ impl Render for IconButtonStory {
                                     .items_center()
                                     .justify_center()
                                     .text_sm()
-                                    .child("Full Width")
-                            )
+                                    .child("Full Width"),
+                            ),
                     ),
             )
     }

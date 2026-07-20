@@ -4,7 +4,7 @@ use gpui::{
 };
 
 use shilpo_ui::{
-    ActiveTheme, Disableable as _, Sizable, h_flex, label::Label, switch::Switch, v_flex, IconName,
+    ActiveTheme, Disableable as _, IconName, Sizable, h_flex, label::Label, switch::Switch, v_flex,
 };
 
 use crate::section;

@@ -1,4 +1,5 @@
 use gpui::*;
+use shilpo_assets::Assets;
 use shilpo_ui::{
     ActiveTheme, Selectable, Sizable, WindowExt,
     button::{Button, ButtonVariants as _},
@@ -6,7 +7,6 @@ use shilpo_ui::{
     input::{self, Input, InputEvent, InputState, TabSize},
     v_flex,
 };
-use shilpo_assets::Assets;
 
 pub struct Example {
     editor: Entity<InputState>,

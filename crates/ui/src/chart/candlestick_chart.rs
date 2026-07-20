@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use gpui::{App, Bounds, Hsla, PathBuilder, Pixels, SharedString, Window, fill, px};
-use shilpo_macros::IntoPlot;
 use num_traits::{Num, ToPrimitive};
+use shilpo_macros::IntoPlot;
 
 use crate::{
     ActiveTheme,
