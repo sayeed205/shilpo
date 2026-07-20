@@ -235,6 +235,13 @@ impl RenderOnce for IconButton {
             .read(cx)
             .clone();
         let focused = focus_handle.is_focused(window);
+
+        let ripple_state = window
+            .use_keyed_state(
+                format!("{}-ripple", self.id),
+                cx,
+                |_, _| crate::ripple::RippleState::new(),
+            );
         let disabled = self.disabled || self.loading;
         let cursor = self.cursor.or(self.style.mouse_cursor);
         let radius = match shapes.shape {
@@ -244,7 +251,7 @@ impl RenderOnce for IconButton {
 
         let width = icon_button_tokens::resolve_width(self.size, self.width_type);
 
-        self.base
+        let icon_button_element = self.base
             .role(Role::Button)
             .when(self.checkable, |this| {
                 this.aria_toggled(if self.checked {
@@ -301,8 +308,14 @@ impl RenderOnce for IconButton {
                     state.focus,
                 ))
             })
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
+            .on_mouse_down(gpui::MouseButton::Left, {
+                let ripple_state = ripple_state.clone();
+                move |event, _, cx| {
+                    cx.stop_propagation();
+                    if !disabled {
+                        crate::ripple::RippleState::start_ripple(ripple_state.clone(), event.position, cx);
+                    }
+                }
             })
             .when_some(self.on_click.filter(|_| !disabled), |this, on_click| {
                 this.on_click(move |event, window, cx| on_click(event, window, cx))
@@ -342,7 +355,11 @@ impl RenderOnce for IconButton {
                             .child(icon),
                     )
                 },
-            )
+            );
+
+        crate::ripple::RippleElement::new(icon_button_element.into_element(), ripple_state)
+            .corner_radii(gpui::Corners::all(radius))
+            .color(colors.content)
     }
 }
 

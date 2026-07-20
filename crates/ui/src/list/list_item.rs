@@ -24,6 +24,7 @@ impl ListItemMode {
 
 #[derive(IntoElement)]
 pub struct ListItem {
+    id: ElementId,
     base: Stateful<Div>,
     mode: ListItemMode,
     style: StyleRefinement,
@@ -44,6 +45,7 @@ impl ListItem {
     pub fn new(id: impl Into<ElementId>) -> Self {
         let id: ElementId = id.into();
         Self {
+            id: id.clone(),
             mode: ListItemMode::Entry,
             base: h_flex().id(id),
             style: StyleRefinement::default(),
@@ -164,6 +166,13 @@ impl ParentElement for ListItem {
 
 impl RenderOnce for ListItem {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let ripple_state = window
+            .use_keyed_state(
+                format!("{}-ripple", self.id),
+                cx,
+                |_, _| crate::ripple::RippleState::new(),
+            );
+
         let is_active = self.confirmed || self.selected || self.secondary_selected;
 
         let corner_radii = self.style.corner_radii.clone();
@@ -173,7 +182,7 @@ impl RenderOnce for ListItem {
 
         let is_selectable = !(self.disabled || self.mode.is_separator());
 
-        self.base
+        let list_item_element = self.base
             .relative()
             .gap_x_1()
             .py_1()
@@ -190,13 +199,31 @@ impl RenderOnce for ListItem {
                         this.on_mouse_move(move |ev, window, cx| (on_mouse_enter)(ev, window, cx))
                     })
                     .map(|this| {
-                        self.on_mouse_down
+                        let mut has_left = false;
+                        let this = self.on_mouse_down
                             .into_iter()
                             .fold(this, |this, (button, handler)| {
-                                this.on_mouse_down(button, move |ev, window, cx| {
-                                    handler(ev, window, cx)
-                                })
+                                if button == MouseButton::Left {
+                                    has_left = true;
+                                    let ripple_state = ripple_state.clone();
+                                    this.on_mouse_down(button, move |ev, window, cx| {
+                                        crate::ripple::RippleState::start_ripple(ripple_state.clone(), ev.position, cx);
+                                        handler(ev, window, cx);
+                                    })
+                                } else {
+                                    this.on_mouse_down(button, move |ev, window, cx| {
+                                        handler(ev, window, cx)
+                                    })
+                                }
+                            });
+                        if !has_left {
+                            let ripple_state = ripple_state.clone();
+                            this.on_mouse_down(MouseButton::Left, move |ev, _, cx| {
+                                crate::ripple::RippleState::start_ripple(ripple_state.clone(), ev.position, cx);
                             })
+                        } else {
+                            this
+                        }
                     })
                     .when(!is_active, |this| {
                         this.hover(|this| this.bg(cx.theme().surface_container_high))
@@ -247,7 +274,11 @@ impl RenderOnce for ListItem {
                 } else {
                     this
                 }
-            })
+            });
+
+        crate::ripple::RippleElement::new(list_item_element.into_element(), ripple_state)
+            .corner_radii(gpui::Corners::all(gpui::px(4.)))
+            .color(cx.theme().on_surface)
     }
 }
 

@@ -7,9 +7,9 @@ publish = false
 edition = "2024"
 
 [workspace.dependencies]
-shilpo-ui = { path = "crates/ui", version = "0.1.0" }
-shilpo-assets = { path = "crates/assets", version = "0.1.0" }
-shilpo-macros = { path = "crates/macros", version = "0.1.0" }
+shilpo-ui = { path = "crates/ui" }
+shilpo-assets = { path = "crates/assets" }
+shilpo-macros = { path = "crates/macros" }
 
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }

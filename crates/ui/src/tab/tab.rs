@@ -651,7 +651,14 @@ impl Sizable for Tab {
 }
 
 impl RenderOnce for Tab {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let ripple_state = window
+            .use_keyed_state(
+                format!("{}-ripple", self.ix),
+                cx,
+                |_, _| crate::ripple::RippleState::new(),
+            );
+
         let mut tab_style = if self.selected {
             self.variant.selected(cx)
         } else {
@@ -837,7 +844,7 @@ impl RenderOnce for Tab {
             inner_content.into_any_element()
         };
 
-        self.base
+        let tab_element = self.base
             .id(self.ix)
             .role(Role::Tab)
             .when_some(aria_label, |this, label| this.aria_label(label))
@@ -898,10 +905,17 @@ impl RenderOnce for Tab {
             .when_some(self.prefix, |this, prefix| this.child(prefix))
             .child(inner_element)
             .when_some(self.suffix, |this, suffix| this.child(suffix))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                // Stop propagation behavior, for works on TitleBar.
-                // https://github.com/longbridge/shilpo-ui/issues/1836
-                cx.stop_propagation();
+            .on_mouse_down(MouseButton::Left, {
+                let ripple_state = ripple_state.clone();
+                let disabled = self.disabled;
+                move |event, _, cx| {
+                    // Stop propagation behavior, for works on TitleBar.
+                    // https://github.com/longbridge/shilpo-ui/issues/1836
+                    cx.stop_propagation();
+                    if !disabled {
+                        crate::ripple::RippleState::start_ripple(ripple_state.clone(), event.position, cx);
+                    }
+                }
             })
             .when(!self.disabled, |this| this.cursor_pointer())
             .when(self.disabled, |this| this.cursor_not_allowed())
@@ -909,7 +923,11 @@ impl RenderOnce for Tab {
                 this.when_some(self.on_click.clone(), |this, on_click| {
                     this.on_click(move |event, window, cx| on_click(event, window, cx))
                 })
-            })
+            });
+
+        crate::ripple::RippleElement::new(tab_element.into_element(), ripple_state)
+            .corner_radii(gpui::Corners::all(radius))
+            .color(tab_style.fg)
     }
 }
 

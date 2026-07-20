@@ -422,6 +422,13 @@ impl RenderOnce for Button {
             .clone();
         let is_focused = focus_handle.is_focused(window);
 
+        let ripple_state = window
+            .use_keyed_state(
+                format!("{}-ripple", self.id),
+                cx,
+                |_, _| crate::ripple::RippleState::new(),
+            );
+
         let rounding =
             button_shape_tokens::resolve(self.rounded, self.size, Some(dimensions.height));
         let token = if matches!(self.rounded, ButtonRounded::Token) {
@@ -482,7 +489,7 @@ impl RenderOnce for Button {
         let terminal_geometry = self.slot_geometry.map(|_| resolved_geometry);
         let radii = resolved_geometry.corners;
 
-        self.base
+        let button_element = self.base
             .role(Role::Button)
             .when_some(self.label.as_ref(), |this, label| {
                 this.aria_label(label.clone())
@@ -660,19 +667,25 @@ impl RenderOnce for Button {
             .when(cursor_disabled, |this| {
                 this.cursor(CursorStyle::OperationNotAllowed)
             })
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                // Stop handle any click event when disabled.
-                // To avoid handle dropdown menu open when button is disabled.
-                if is_disabled {
-                    cx.stop_propagation();
-                    return;
+            .on_mouse_down(MouseButton::Left, {
+                let ripple_state = ripple_state.clone();
+                move |event, window, cx| {
+                    // Stop handle any click event when disabled.
+                    // To avoid handle dropdown menu open when button is disabled.
+                    if is_disabled {
+                        cx.stop_propagation();
+                        return;
+                    }
+
+                    // Avoid focus on mouse down.
+                    window.prevent_default();
+
+                    // Pressing a button must not start the window-level text selection.
+                    crate::global_state::GlobalState::suppress_text_selection(cx);
+
+                    // Trigger ripple!
+                    crate::ripple::RippleState::start_ripple(ripple_state.clone(), event.position, cx);
                 }
-
-                // Avoid focus on mouse down.
-                window.prevent_default();
-
-                // Pressing a button must not start the window-level text selection.
-                crate::global_state::GlobalState::suppress_text_selection(cx);
             })
             .when_some(self.on_click, |this, on_click| {
                 this.on_click(move |event, window, cx| {
@@ -749,7 +762,11 @@ impl RenderOnce for Button {
             .when(
                 style != ButtonVariant::Text && style != ButtonVariant::Plain,
                 |this| this.focus_ring(is_focused, px(0.), window, cx),
-            )
+            );
+
+        crate::ripple::RippleElement::new(button_element.into_element(), ripple_state)
+            .corner_radii(radii)
+            .color(normal_style.fg)
     }
 }
 

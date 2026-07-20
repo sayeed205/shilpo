@@ -58,6 +58,7 @@ pub mod popover;
 pub mod progress;
 pub mod radio;
 pub mod rating;
+pub mod ripple;
 pub mod resizable;
 pub mod scroll;
 pub mod searchable_list;
