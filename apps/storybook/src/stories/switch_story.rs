@@ -4,7 +4,7 @@ use gpui::{
 };
 
 use gpui_component::{
-    ActiveTheme, Disableable as _, Sizable, h_flex, label::Label, switch::Switch, v_flex,
+    ActiveTheme, Disableable as _, Sizable, h_flex, label::Label, switch::Switch, v_flex, IconName,
 };
 
 use crate::section;
@@ -175,6 +175,33 @@ impl Render for SwitchStory {
                             view.switch3 = *checked;
                             cx.notify();
                         })),
+                ),
+            )
+            .child(
+                section("With Thumb Icons").child(
+                    h_flex()
+                        .gap_4()
+                        .child(
+                            Switch::new("switch_icons_1")
+                                .checked(self.switch4)
+                                .label("Checked Icon Only (Standard M3)")
+                                .show_icons(true)
+                                .on_click(cx.listener(|view, checked, _, cx| {
+                                    view.switch4 = *checked;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Switch::new("switch_icons_2")
+                                .checked(self.switch5)
+                                .label("Both On/Off Icons")
+                                .checked_icon(IconName::Check)
+                                .unchecked_icon(IconName::Close)
+                                .on_click(cx.listener(|view, checked, _, cx| {
+                                    view.switch5 = *checked;
+                                    cx.notify();
+                                })),
+                        ),
                 ),
             )
     }

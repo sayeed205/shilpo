@@ -1,9 +1,9 @@
 use crate::{
-    ActiveTheme, Disableable, Side, Sizable, Size, StyledExt, h_flex, text::Text,
-    tooltip::ComponentTooltip,
+    animation::cubic_bezier, ActiveTheme, Disableable, Side, Sizable, Size, StyledExt, h_flex, text::Text,
+    tooltip::ComponentTooltip, Icon, IconName,
 };
 use gpui::{
-    Animation, AnimationExt as _, App, Background, ElementId, Hsla, InteractiveElement,
+    Animation, AnimationExt as _, App, ElementId, Hsla, InteractiveElement,
     IntoElement, ParentElement as _, RenderOnce, SharedString, StyleRefinement, Styled, Window,
     div, prelude::FluentBuilder as _, px,
 };
@@ -22,6 +22,8 @@ pub struct Switch {
     size: Size,
     color: Option<Hsla>,
     tooltip: ComponentTooltip,
+    checked_icon: Option<IconName>,
+    unchecked_icon: Option<IconName>,
 }
 
 impl Switch {
@@ -39,7 +41,34 @@ impl Switch {
             size: Size::Medium,
             color: None,
             tooltip: ComponentTooltip::default(),
+            checked_icon: None,
+            unchecked_icon: None,
         }
+    }
+
+    /// Convenience builder to toggle default icon behavior.
+    /// When set to `true`, sets `checked_icon = Some(IconName::Check)` and `unchecked_icon = None`.
+    pub fn show_icons(mut self, show: bool) -> Self {
+        if show {
+            self.checked_icon = Some(IconName::Check);
+            self.unchecked_icon = None;
+        } else {
+            self.checked_icon = None;
+            self.unchecked_icon = None;
+        }
+        self
+    }
+
+    /// Set an icon to display inside the thumb when checked.
+    pub fn checked_icon(mut self, icon: impl Into<Option<IconName>>) -> Self {
+        self.checked_icon = icon.into();
+        self
+    }
+
+    /// Set an icon to display inside the thumb when unchecked.
+    pub fn unchecked_icon(mut self, icon: impl Into<Option<IconName>>) -> Self {
+        self.unchecked_icon = icon.into();
+        self
     }
 
     /// Set the checked state of the switch.
@@ -102,109 +131,148 @@ impl RenderOnce for Switch {
         let checked = self.checked;
         let on_click = self.on_click.clone();
         let toggle_state = window.use_keyed_state(self.id.clone(), cx, |_, _| checked);
+        let prev_checked = toggle_state.read(cx);
 
-        let checked_bg = self
-            .color
-            .map(Background::from)
-            .unwrap_or(cx.theme().primary.into());
-        let (bg, toggle_bg): (Background, Background) = match checked {
-            true => (checked_bg, cx.theme().on_secondary.into()),
-            false => (cx.theme().secondary.into(), cx.theme().on_secondary.into()),
+        let (bg_width, bg_height, unchecked_thumb_size, checked_thumb_size, icon_size) = match self.size {
+            Size::XSmall => (px(36.), px(20.), px(10.), px(14.), px(8.)),
+            Size::Small => (px(44.), px(24.), px(12.), px(18.), px(10.)),
+            Size::Medium | Size::Large => (px(52.), px(32.), px(16.), px(24.), px(12.)),
+            Size::Size(height) => {
+                let h = height.as_f32();
+                let scale = h / 32.0;
+                (px(52.0 * scale), px(h), px(16.0 * scale), px(24.0 * scale), px(12.0 * scale))
+            }
         };
 
-        let (bg, toggle_bg) = if self.disabled {
-            (
-                if checked { bg.opacity(0.5) } else { bg },
-                toggle_bg.opacity(0.35),
-            )
+        let unchecked_thumb_size = if self.unchecked_icon.is_some() {
+            checked_thumb_size
         } else {
-            (bg, toggle_bg)
+            unchecked_thumb_size
         };
 
-        let (bg_width, bg_height) = match self.size {
-            Size::XSmall | Size::Small => (px(28.), px(16.)),
-            _ => (px(36.), px(20.)),
-        };
-        let bar_width = match self.size {
-            Size::XSmall | Size::Small => px(12.),
-            _ => px(16.),
-        };
-        let inset = px(2.);
-        let radius = if cx.theme().radius >= px(4.) {
-            bg_height
+        let checked_bg = self.color.unwrap_or(cx.theme().primary);
+        let checked_border = checked_bg;
+
+        let (bg, border_color, toggle_bg) = if self.disabled {
+            if checked {
+                (checked_bg.opacity(0.12), checked_border.opacity(0.12), cx.theme().on_primary.opacity(0.38))
+            } else {
+                (cx.theme().surface_container_highest.opacity(0.12), cx.theme().outline.opacity(0.12), cx.theme().outline.opacity(0.38))
+            }
         } else {
-            cx.theme().radius
+            if checked {
+                (checked_bg, checked_border, cx.theme().on_primary)
+            } else {
+                (cx.theme().surface_container_highest, cx.theme().outline, cx.theme().outline)
+            }
         };
+
+        let usable_width = bg_width - px(4.);
+        let usable_height = bg_height - px(4.);
+
+        let x_unchecked = (usable_height - unchecked_thumb_size) / 2.;
+        let y_unchecked = (usable_height - unchecked_thumb_size) / 2.;
+
+        let x_checked = usable_width - checked_thumb_size - (usable_height - checked_thumb_size) / 2.;
+        let y_checked = (usable_height - checked_thumb_size) / 2.;
+
+        let duration = Duration::from_millis(200);
+
+        let active_icon = if checked { self.checked_icon } else { self.unchecked_icon };
+        let icon_color = if checked { cx.theme().primary } else { cx.theme().surface_container_highest };
+        let icon_element = active_icon.map(|icon_name| {
+            Icon::new(icon_name)
+                .size(icon_size)
+                .text_color(icon_color)
+        });
+
+        let thumb_element = div()
+            .absolute()
+            .rounded_full()
+            .bg(toggle_bg)
+            .shadow_md()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when_some(icon_element, |this, icon| this.child(icon))
+            .map(|this| {
+                let static_size = if checked { checked_thumb_size } else { unchecked_thumb_size };
+                let static_x = if checked { x_checked } else { x_unchecked };
+                let static_y = if checked { y_checked } else { y_unchecked };
+                let this = this.size(static_size).left(static_x).top(static_y);
+
+                if !self.disabled && *prev_checked != checked {
+                    cx.spawn({
+                        let toggle_state = toggle_state.clone();
+                        async move |cx| {
+                            cx.background_executor().timer(duration).await;
+                            _ = toggle_state.update(cx, |this, cx| {
+                                *this = checked;
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .detach();
+
+                    let animation = Animation::new(duration).with_easing(cubic_bezier(0.2, 0.0, 0.0, 1.0));
+                    this.with_animation(
+                        ElementId::NamedInteger("move_thumb".into(), checked as u64),
+                        animation,
+                        move |this, delta| {
+                            let size_from = if checked { unchecked_thumb_size } else { checked_thumb_size };
+                            let size_to = if checked { checked_thumb_size } else { unchecked_thumb_size };
+                            let x_from = if checked { x_unchecked } else { x_checked };
+                            let x_to = if checked { x_checked } else { x_unchecked };
+                            let y_from = if checked { y_unchecked } else { y_checked };
+                            let y_to = if checked { y_checked } else { y_unchecked };
+
+                            let current_size = size_from + (size_to - size_from) * delta;
+                            let current_x = x_from + (x_to - x_from) * delta;
+                            let current_y = y_from + (y_to - y_from) * delta;
+                            this.size(current_size).left(current_x).top(current_y)
+                        },
+                    )
+                    .into_any_element()
+                } else {
+                    this.into_any_element()
+                }
+            });
 
         div().refine_style(&self.style).child(
             h_flex()
                 .id(self.id.clone())
                 .gap_2()
-                .items_start()
+                .items_center()
+                .when(!self.disabled, |this| this.cursor_pointer())
                 .when(self.label_side.is_left(), |this| this.flex_row_reverse())
                 .child(
-                    // Switch Bar
+                    // Switch Track
                     div()
-                        .id(self.id.clone())
+                        .relative()
                         .w(bg_width)
                         .h(bg_height)
-                        .rounded(radius)
-                        .flex()
-                        .items_center()
-                        .border(inset)
-                        .border_color(cx.theme().transparent)
+                        .rounded_full()
+                        .border_2()
+                        .border_color(border_color)
                         .bg(bg)
-                        .map(|this| self.tooltip.apply(this))
-                        .child(
-                            // Switch Toggle
-                            div()
-                                .rounded(radius)
-                                .bg(toggle_bg)
-                                .shadow_md()
-                                .size(bar_width)
-                                .map(|this| {
-                                    let prev_checked = toggle_state.read(cx);
-                                    if !self.disabled && *prev_checked != checked {
-                                        let duration = Duration::from_secs_f64(0.15);
-                                        cx.spawn({
-                                            let toggle_state = toggle_state.clone();
-                                            async move |cx| {
-                                                cx.background_executor().timer(duration).await;
-                                                _ = toggle_state
-                                                    .update(cx, |this, _| *this = checked);
-                                            }
-                                        })
-                                        .detach();
-
-                                        this.with_animation(
-                                            ElementId::NamedInteger("move".into(), checked as u64),
-                                            Animation::new(duration),
-                                            move |this, delta| {
-                                                let max_x = bg_width - bar_width - inset * 2;
-                                                let x = if checked {
-                                                    max_x * delta
-                                                } else {
-                                                    max_x - max_x * delta
-                                                };
-                                                this.left(x)
-                                            },
-                                        )
-                                        .into_any_element()
-                                    } else {
-                                        let max_x = bg_width - bar_width - inset * 2;
-                                        let x = if checked { max_x } else { px(0.) };
-                                        this.left(x).into_any_element()
-                                    }
-                                }),
-                        ),
+                        .child(thumb_element)
                 )
                 .when_some(self.label, |this, label| {
-                    this.child(div().line_height(bg_height).child(label).map(
-                        |this| match self.size {
-                            Size::XSmall | Size::Small => this.text_sm(),
-                            _ => this.text_base(),
-                        },
-                    ))
+                    let label_color = if self.disabled {
+                        cx.theme().on_surface.opacity(0.38)
+                    } else {
+                        cx.theme().on_surface
+                    };
+                    this.child(
+                        div()
+                            .text_color(label_color)
+                            .child(label)
+                            .map(|this| match self.size {
+                                Size::XSmall => this.text_xs(),
+                                Size::Small => this.text_sm(),
+                                _ => this.text_base(),
+                            })
+                    )
                 })
                 .when_some(
                     on_click
