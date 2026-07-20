@@ -9,13 +9,13 @@ An interactive desktop gallery for exploring, testing, and reviewing all UI comp
 To start the interactive Storybook application:
 
 ```bash
-rtk cargo run -p storybook
+cargo run -p storybook
 ```
 
 You can also run a specific component story directly by passing its name:
 
 ```bash
-rtk cargo run -p storybook -- switch
+cargo run -p storybook -- switch
 ```
 
 ---

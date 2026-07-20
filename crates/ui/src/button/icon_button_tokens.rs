@@ -9,6 +9,7 @@ pub(crate) fn resolve_width(size: IconButtonSize, width: IconButtonWidth) -> Pix
     match width {
         IconButtonWidth::Default => container,
         IconButtonWidth::Narrow => match size {
+            IconButtonSize::XXSmall => px(14.),
             IconButtonSize::XSmall => px(24.),
             IconButtonSize::Small => px(30.),
             IconButtonSize::Medium => px(36.),
@@ -16,6 +17,7 @@ pub(crate) fn resolve_width(size: IconButtonSize, width: IconButtonWidth) -> Pix
             IconButtonSize::XLarge => px(54.),
         },
         IconButtonWidth::Wide => match size {
+            IconButtonSize::XXSmall => px(24.),
             IconButtonSize::XSmall => px(42.),
             IconButtonSize::Small => px(54.),
             IconButtonSize::Medium => px(64.),
@@ -45,6 +47,10 @@ pub struct IconButtonShapes {
 
 pub(crate) fn dimensions(size: IconButtonSize) -> IconButtonDimensions {
     match size {
+        IconButtonSize::XXSmall => IconButtonDimensions {
+            container: px(18.),
+            icon: px(12.),
+        },
         IconButtonSize::XSmall => IconButtonDimensions {
             container: px(32.),
             icon: px(16.),
@@ -81,6 +87,7 @@ pub(crate) fn shapes(size: IconButtonSize, shape: IconButtonShape) -> IconButton
         },
         IconButtonShape::Square => IconButtonShapes {
             shape: IconButtonCorner::Square(match size {
+                IconButtonSize::XXSmall => px(6.),
                 IconButtonSize::XSmall => px(12.),
                 IconButtonSize::Small => px(12.),
                 IconButtonSize::Medium => px(16.),

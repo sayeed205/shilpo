@@ -20,6 +20,7 @@ pub enum IconButtonVariant {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum IconButtonSize {
+    XXSmall,
     XSmall,
     Small,
     #[default]
@@ -110,6 +111,10 @@ impl IconButton {
     pub fn size(mut self, size: IconButtonSize) -> Self {
         self.size = size;
         self
+    }
+
+    pub fn xxsmall(self) -> Self {
+        self.size(IconButtonSize::XXSmall)
     }
 
     pub fn shape(mut self, shape: IconButtonShape) -> Self {
@@ -295,6 +300,9 @@ impl RenderOnce for IconButton {
                     colors.content,
                     state.focus,
                 ))
+            })
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
             })
             .when_some(self.on_click.filter(|_| !disabled), |this, on_click| {
                 this.on_click(move |event, window, cx| on_click(event, window, cx))

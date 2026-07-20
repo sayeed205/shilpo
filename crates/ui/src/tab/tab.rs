@@ -1,7 +1,7 @@
 use std::{rc::Rc, time::Duration};
 
 use crate::animation::{Lerp, ease_in_out_cubic};
-use crate::{ActiveTheme, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
+use crate::{ActiveTheme, ElementExt as _, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, Background, ClickEvent, Div, Edges, ElementId,
@@ -156,7 +156,7 @@ impl TabVariant {
                 ..Default::default()
             },
             TabVariant::Underline => TabStyle {
-                fg: cx.theme().on_surface,
+                fg: cx.theme().on_surface_variant,
                 bg: cx.theme().transparent.into(),
                 inner_bg: cx.theme().transparent.into(),
                 borders: Edges {
@@ -205,7 +205,7 @@ impl TabVariant {
                 ..Default::default()
             },
             TabVariant::Underline => TabStyle {
-                fg: cx.theme().on_secondary_container,
+                fg: cx.theme().on_surface,
                 bg: cx.theme().transparent.into(),
                 inner_bg: cx.theme().transparent.into(),
                 borders: Edges {
@@ -251,7 +251,7 @@ impl TabVariant {
                 ..Default::default()
             },
             TabVariant::Underline => TabStyle {
-                fg: cx.theme().on_secondary_container,
+                fg: cx.theme().primary,
                 bg: cx.theme().transparent.into(),
                 borders: Edges {
                     bottom: px(2.),
@@ -389,6 +389,12 @@ impl Default for TabStyle {
     }
 }
 
+/// Badge contents for [`Tab`].
+pub enum TabBadge {
+    Count(usize),
+    Element(AnyElement),
+}
+
 /// A Tab element for the [`super::TabBar`].
 #[derive(IntoElement)]
 pub struct Tab {
@@ -397,6 +403,10 @@ pub struct Tab {
     pub(super) label: Option<SharedString>,
     aria_label: Option<SharedString>,
     pub(super) icon: Option<Icon>,
+    pub(super) selected_icon: Option<Icon>,
+    pub(super) badge: Option<TabBadge>,
+    pub(super) stacked: bool,
+    pub(crate) content_bounds_cb: Option<Rc<dyn Fn(gpui::Bounds<Pixels>) + 'static>>,
     prefix: Option<AnyElement>,
     pub(super) tab_bar_prefix: Option<bool>,
     suffix: Option<AnyElement>,
@@ -452,6 +462,10 @@ impl Default for Tab {
             label: None,
             aria_label: None,
             icon: None,
+            selected_icon: None,
+            badge: None,
+            stacked: false,
+            content_bounds_cb: None,
             tab_bar_prefix: None,
             children: Vec::new(),
             disabled: false,
@@ -493,6 +507,38 @@ impl Tab {
     /// Set icon for the tab.
     pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    /// Set icon to render when the tab is selected/active.
+    pub fn selected_icon(mut self, icon: impl Into<Icon>) -> Self {
+        self.selected_icon = Some(icon.into());
+        self
+    }
+
+    /// Set a custom badge element (e.g. unread count or dot).
+    pub fn badge(mut self, badge: impl IntoElement) -> Self {
+        self.badge = Some(TabBadge::Element(badge.into_any_element()));
+        self
+    }
+
+    /// Set a numerical badge count.
+    pub fn badge_count(mut self, count: usize) -> Self {
+        self.badge = Some(TabBadge::Count(count));
+        self
+    }
+
+    /// Set stacked layout mode (icon above label).
+    pub fn stacked(mut self, stacked: bool) -> Self {
+        self.stacked = stacked;
+        self
+    }
+
+    pub(crate) fn on_content_prepaint(
+        mut self,
+        cb: impl Fn(gpui::Bounds<Pixels>) + 'static,
+    ) -> Self {
+        self.content_bounds_cb = Some(Rc::new(cb));
         self
     }
 
@@ -681,37 +727,103 @@ impl RenderOnce for Tab {
         let fg_from = self.variant.normal(cx).fg;
         let fg_to = tab_style.fg;
 
-        let inner_content = h_flex()
-            .flex_1()
-            .h(inner_height)
-            .line_height(relative(1.))
-            .whitespace_nowrap()
-            .items_center()
-            .justify_center()
-            .overflow_hidden()
-            .margins(inner_margins)
-            .flex_shrink_0()
-            .map(|this| match self.icon {
-                Some(icon) => this
-                    .w(inner_height * 1.25)
-                    .child(icon.map(|this| match self.size {
+        let active_icon = if self.selected {
+            self.selected_icon.clone().or_else(|| self.icon.clone())
+        } else {
+            self.icon.clone()
+        };
+
+        let render_badge = |badge: TabBadge, cx: &App| match badge {
+            TabBadge::Count(count) if count > 0 => {
+                let count_str = if count > 99 {
+                    "99+".to_string()
+                } else {
+                    count.to_string()
+                };
+                h_flex()
+                    .items_center()
+                    .justify_center()
+                    .px(px(5.))
+                    .h(px(16.))
+                    .min_w(px(16.))
+                    .rounded_full()
+                    .bg(cx.theme().error)
+                    .text_color(gpui::white())
+                    .text_size(px(10.))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(count_str)
+                    .into_any_element()
+            }
+            TabBadge::Element(elem) => elem,
+            _ => div().into_any_element(),
+        };
+
+        let inner_content = if self.stacked {
+            crate::v_flex()
+                .flex_1()
+                .h(inner_height)
+                .line_height(relative(1.))
+                .whitespace_nowrap()
+                .items_center()
+                .justify_center()
+                .gap_1()
+                .overflow_hidden()
+                .margins(inner_margins)
+                .paddings(inner_paddings)
+                .flex_shrink_0()
+                .when_some(active_icon, |this, icon| {
+                    this.child(icon.map(|this| match self.size {
                         Size::XSmall => this.size_2p5(),
                         Size::Small => this.size_3p5(),
                         Size::Large => this.size_4(),
                         _ => this.size_4(),
-                    })),
-                None => this
-                    .paddings(inner_paddings)
-                    .map(|this| match self.label {
-                        Some(label) => this.child(label),
-                        None => this,
+                    }))
+                })
+                .when_some(self.label, |this, label| this.child(label))
+                .children(self.children)
+                .when_some(self.badge, |this, badge| this.child(render_badge(badge, cx)))
+                .bg(inner_bg)
+                .rounded(inner_radius)
+                .when(inner_shadow, |this| this.shadow_xs())
+                .hover(|this| this.bg(hover_inner_bg).rounded(inner_radius))
+                .when_some(self.content_bounds_cb.clone(), |this, cb| {
+                    this.on_prepaint(move |bounds, _, _| {
+                        cb(bounds);
                     })
-                    .children(self.children),
-            })
-            .bg(inner_bg)
-            .rounded(inner_radius)
-            .when(inner_shadow, |this| this.shadow_xs())
-            .hover(|this| this.bg(hover_inner_bg).rounded(inner_radius));
+                })
+        } else {
+            h_flex()
+                .flex_1()
+                .h(inner_height)
+                .line_height(relative(1.))
+                .whitespace_nowrap()
+                .items_center()
+                .justify_center()
+                .gap_1p5()
+                .margins(inner_margins)
+                .flex_shrink_0()
+                .paddings(inner_paddings)
+                .when_some(active_icon, |this, icon| {
+                    this.child(icon.map(|this| match self.size {
+                        Size::XSmall => this.size_2p5(),
+                        Size::Small => this.size_3p5(),
+                        Size::Large => this.size_4(),
+                        _ => this.size_4(),
+                    }))
+                })
+                .when_some(self.label, |this, label| this.child(label))
+                .children(self.children)
+                .when_some(self.badge, |this, badge| this.child(render_badge(badge, cx)))
+                .bg(inner_bg)
+                .rounded(inner_radius)
+                .when(inner_shadow, |this| this.shadow_xs())
+                .hover(|this| this.bg(hover_inner_bg).rounded(inner_radius))
+                .when_some(self.content_bounds_cb.clone(), |this, cb| {
+                    this.on_prepaint(move |bounds, _, _| {
+                        cb(bounds);
+                    })
+                })
+        };
 
         let inner_element = if animate_fg {
             inner_content
@@ -791,6 +903,8 @@ impl RenderOnce for Tab {
                 // https://github.com/longbridge/shilpo-ui/issues/1836
                 cx.stop_propagation();
             })
+            .when(!self.disabled, |this| this.cursor_pointer())
+            .when(self.disabled, |this| this.cursor_not_allowed())
             .when(!self.disabled, |this| {
                 this.when_some(self.on_click.clone(), |this, on_click| {
                     this.on_click(move |event, window, cx| on_click(event, window, cx))

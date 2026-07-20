@@ -10,16 +10,27 @@ use rust_i18n::t;
 use smallvec::SmallVec;
 
 use super::{Tab, TabVariant};
-use crate::animation::{Lerp, ease_in_out_cubic};
+use crate::animation::Lerp;
 use crate::button::{Button, ButtonVariants as _};
 use crate::menu::{DropdownMenu as _, PopupMenuItem};
 use crate::{
     ActiveTheme, ElementExt, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex,
 };
 
+/// Tab indicator alignment for [`TabBar`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IndicatorAlignment {
+    /// Align indicator to full tab container bounds (M3 Secondary Tab).
+    #[default]
+    Container,
+    /// Align indicator to inner content bounds (M3 Primary Tab).
+    Content,
+}
+
 struct TabIndicatorBounds {
     container: Bounds<Pixels>,
     tabs: Vec<Bounds<Pixels>>,
+    tab_contents: Vec<Bounds<Pixels>>,
 }
 
 impl TabIndicatorBounds {
@@ -27,11 +38,13 @@ impl TabIndicatorBounds {
         Self {
             container: Bounds::default(),
             tabs: vec![Bounds::default(); num_tabs],
+            tab_contents: vec![Bounds::default(); num_tabs],
         }
     }
 
     fn resize(&mut self, num_tabs: usize) {
         self.tabs.resize(num_tabs, Bounds::default());
+        self.tab_contents.resize(num_tabs, Bounds::default());
     }
 }
 
@@ -48,6 +61,7 @@ pub struct TabBar {
     last_empty_space: AnyElement,
     selected_index: Option<usize>,
     variant: TabVariant,
+    indicator_alignment: IndicatorAlignment,
     size: Size,
     menu: bool,
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
@@ -66,6 +80,7 @@ impl TabBar {
             prefix: None,
             suffix: None,
             variant: TabVariant::default(),
+            indicator_alignment: IndicatorAlignment::default(),
             size: Size::default(),
             last_empty_space: div().w_3().into_any_element(),
             selected_index: None,
@@ -77,6 +92,26 @@ impl TabBar {
     /// Set the Tab variant, all children will inherit the variant.
     pub fn with_variant(mut self, variant: TabVariant) -> Self {
         self.variant = variant;
+        self
+    }
+
+    /// Set indicator alignment (`Content` for M3 Primary Tab, `Container` for M3 Secondary Tab).
+    pub fn indicator_alignment(mut self, alignment: IndicatorAlignment) -> Self {
+        self.indicator_alignment = alignment;
+        self
+    }
+
+    /// Configure TabBar as M3 Primary Tab with Underline variant and Content indicator alignment.
+    pub fn primary_tab(mut self) -> Self {
+        self.variant = TabVariant::Underline;
+        self.indicator_alignment = IndicatorAlignment::Content;
+        self
+    }
+
+    /// Configure TabBar as M3 Secondary Tab with Underline variant and Container indicator alignment.
+    pub fn secondary_tab(mut self) -> Self {
+        self.variant = TabVariant::Underline;
+        self.indicator_alignment = IndicatorAlignment::Container;
         self
     }
 
@@ -213,6 +248,7 @@ impl TabBar {
         let inner_height = variant.inner_height(size);
         let inner_radius = variant.inner_radius(size, cx);
 
+        let indicator_alignment = self.indicator_alignment;
         let indicator = div()
             .absolute()
             .top_0()
@@ -230,20 +266,32 @@ impl TabBar {
                     .flex()
                     .items_center()
                     .child(div().size_full().bg(cx.theme().primary).rounded(px(99.))),
-                TabVariant::Underline => el.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .bottom_0()
-                        .h(px(2.))
-                        .bg(cx.theme().primary),
-                ),
+                TabVariant::Underline => match indicator_alignment {
+                    IndicatorAlignment::Content => el.flex().justify_center().child(
+                        div()
+                            .absolute()
+                            .bottom_0()
+                            .h(px(3.))
+                            .w_full()
+                            .bg(cx.theme().primary)
+                            .rounded_full(),
+                    ),
+                    IndicatorAlignment::Container => el.child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .h(px(2.))
+                            .bg(cx.theme().primary),
+                    ),
+                },
                 _ => el,
             })
             .with_animation(
                 ElementId::NamedInteger("tab-ind".into(), epoch),
-                Animation::new(Duration::from_millis(200)).with_easing(ease_in_out_cubic),
+                Animation::new(Duration::from_millis(250))
+                    .with_easing(crate::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0)),
                 move |el, delta| {
                     let left = Lerp::lerp(&from_left, &to_left, delta);
                     let width = Lerp::lerp(&from_width, &to_width, delta);
@@ -279,9 +327,20 @@ impl TabBar {
             return;
         }
 
+        let get_bounds = |ix: usize| -> Option<Bounds<Pixels>> {
+            if self.indicator_alignment == IndicatorAlignment::Content {
+                if let Some(cb) = bounds.tab_contents.get(ix) {
+                    if cb.size.width > px(0.) {
+                        return Some(*cb);
+                    }
+                }
+            }
+            bounds.tabs.get(ix).copied()
+        };
+
         if prev_ix != selected_ix {
-            let from_b = bounds.tabs.get(prev_ix);
-            let to_b = bounds.tabs.get(selected_ix);
+            let from_b = get_bounds(prev_ix);
+            let to_b = get_bounds(selected_ix);
             match (from_b, to_b) {
                 (Some(from_b), Some(to_b)) => {
                     let from_left = from_b.origin.x - container.origin.x;
@@ -305,7 +364,7 @@ impl TabBar {
             return;
         }
 
-        if let Some(to_b) = bounds.tabs.get(selected_ix) {
+        if let Some(to_b) = get_bounds(selected_ix) {
             let left = to_b.origin.x - container.origin.x;
             let width = to_b.size.width;
             let (_, _, to_left, to_width, epoch) = *anim_params.read(cx);
@@ -480,6 +539,12 @@ impl RenderOnce for TabBar {
                                 });
 
                             if let Some(ref rc) = bounds_rc {
+                                let rc_content = rc.clone();
+                                let tab = tab.on_content_prepaint(move |bounds| {
+                                    if let Some(slot) = rc_content.borrow_mut().tab_contents.get_mut(ix) {
+                                        *slot = bounds;
+                                    }
+                                });
                                 let rc = rc.clone();
                                 div()
                                     .flex_shrink_0()

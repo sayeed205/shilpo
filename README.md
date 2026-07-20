@@ -21,8 +21,14 @@ featuring Material Design 3 (M3) & Material Expressive design inspirations.
 To launch the interactive Storybook component gallery:
 
 ```bash
-rtk cargo run -p storybook
+cargo run -p storybook
 ```
+
+---
+
+## Guidelines for AI Assistants & Contributors
+
+If you are an AI coding assistant or open-source contributor working on this repository, please consult [`AGENTS.md`](AGENTS.md) for architecture layout, `rtk` command execution guidelines, clippy/nextest standards, and design system rules.
 
 ---
 

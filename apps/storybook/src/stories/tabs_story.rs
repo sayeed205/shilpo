@@ -5,7 +5,7 @@ use gpui::{
 
 use shilpo_ui::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Sizable, Size,
-    button::{Button, ButtonGroup, ButtonVariants as _},
+    button::{Button, ButtonGroup, ButtonVariants as _, IconButton, IconButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
     tab::{Tab, TabBar},
@@ -84,6 +84,23 @@ impl TabsStory {
         }
 
         self.dynamic_tabs.pop();
+        if self.dynamic_active_tab_ix >= self.dynamic_tabs.len() {
+            self.dynamic_active_tab_ix = self.dynamic_tabs.len() - 1;
+        }
+        cx.notify();
+    }
+
+    fn remove_dynamic_tab_at_index(
+        &mut self,
+        remove_ix: usize,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dynamic_tabs.len() <= 1 || remove_ix >= self.dynamic_tabs.len() {
+            return;
+        }
+
+        self.dynamic_tabs.remove(remove_ix);
         if self.dynamic_active_tab_ix >= self.dynamic_tabs.len() {
             self.dynamic_active_tab_ix = self.dynamic_tabs.len() - 1;
         }
@@ -193,6 +210,82 @@ impl Render for TabsStory {
                                 .child(
                                     Button::new("more").text().xsmall().icon(IconName::Ellipsis),
                                 ),
+                        ),
+                ),
+            )
+            .child(
+                section("Material 3 Primary Tabs").max_w_md().child(
+                    TabBar::new("m3-primary")
+                        .w_full()
+                        .primary_tab()
+                        .with_size(self.size)
+                        .menu(self.menu)
+                        .selected_index(self.active_tab_ix)
+                        .on_click(cx.listener(|this, ix: &usize, window, cx| {
+                            this.set_active_tab(*ix, window, cx);
+                        }))
+                        .child(
+                            Tab::new()
+                                .label("Mail")
+                                .icon(IconName::Inbox)
+                                .selected_icon(IconName::Star)
+                                .badge_count(12),
+                        )
+                        .child(
+                            Tab::new()
+                                .label("Calendar")
+                                .icon(IconName::Calendar)
+                                .badge_count(3),
+                        )
+                        .child(Tab::new().label("Documents").icon(IconName::BookOpen))
+                        .child(Tab::new().label("Settings").icon(IconName::Settings)),
+                ),
+            )
+            .child(
+                section("Material 3 Secondary Tabs").max_w_md().child(
+                    TabBar::new("m3-secondary")
+                        .w_full()
+                        .secondary_tab()
+                        .with_size(self.size)
+                        .menu(self.menu)
+                        .selected_index(self.active_tab_ix)
+                        .on_click(cx.listener(|this, ix: &usize, window, cx| {
+                            this.set_active_tab(*ix, window, cx);
+                        }))
+                        .child(Tab::new().label("Overview"))
+                        .child(Tab::new().label("Specifications"))
+                        .child(Tab::new().label("Reviews"))
+                        .child(Tab::new().label("Support")),
+                ),
+            )
+            .child(
+                section("Material 3 Stacked Tabs").max_w_md().child(
+                    TabBar::new("m3-stacked")
+                        .w_full()
+                        .primary_tab()
+                        .large()
+                        .selected_index(self.active_tab_ix)
+                        .on_click(cx.listener(|this, ix: &usize, window, cx| {
+                            this.set_active_tab(*ix, window, cx);
+                        }))
+                        .child(
+                            Tab::new()
+                                .label("Inbox")
+                                .icon(IconName::Inbox)
+                                .stacked(true),
+                        )
+                        .child(
+                            Tab::new()
+                                .label("Search")
+                                .icon(IconName::Search)
+                                .stacked(true),
+                        )
+                        .child(
+                            Tab::new()
+                                .label("Library")
+                                .icon(IconName::BookOpen)
+                                .badge_count(5)
+                                .stacked(true),
                         ),
                 ),
             )
@@ -317,10 +410,17 @@ impl Render for TabsStory {
                                     .prefix(Icon::new(IconName::BookOpen))
                                     .label(label)
                                     .suffix(
-                                        Button::new(format!("dynamic-tab-close-{id}"))
-                                            .text()
-                                            .xsmall()
-                                            .icon(IconName::Close),
+                                        IconButton::new(format!(
+                                            "dynamic-tab-close-{id}"
+                                        ))
+                                        .icon(IconName::Close)
+                                        .standard()
+                                        .xxsmall()
+                                        .on_click(cx.listener(
+                                            move |this, _, window, cx| {
+                                                this.remove_dynamic_tab_at_index(ix, window, cx);
+                                            },
+                                        )),
                                     )
                                     .selected(self.dynamic_active_tab_ix == ix)
                             })),
