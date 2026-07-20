@@ -1,13 +1,13 @@
 use gpui::{Action, App};
-use gpui_component::ThemeMode;
+use shilpo_ui::ThemeMode;
 
 pub fn init(cx: &mut App) {
     // Follow OS appearance by default while retaining Theme's source color.
-    gpui_component::Theme::change(ThemeMode::System, None, cx);
+    shilpo_ui::Theme::change(ThemeMode::System, None, cx);
 
     cx.on_action(|switch: &SwitchThemeMode, cx| {
         let mode = switch.0;
-        gpui_component::Theme::change(mode, None, cx);
+        shilpo_ui::Theme::change(mode, None, cx);
         cx.refresh_windows();
     });
 }

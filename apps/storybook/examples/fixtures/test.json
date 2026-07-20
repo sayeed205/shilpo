@@ -1,6 +1,6 @@
 [
   {
-    "name": "GPUI Component",
+    "name": "Shilpo UI",
     "description": "UI components for building fantastic desktop application by using GPUI.",
     "license": "Apache-2.0",
     "keywords": ["UI", "desktop", "application"],
@@ -10,6 +10,6 @@
     "hsl": "hsl(225, 100%, 70%)",
     "中文": "#EEAAFF",
     "public": true,
-    "repository": "https://github.com/longbridge/gpui-component"
+    "repository": "https://github.com/sayeed205/shilpo"
   }
 ]

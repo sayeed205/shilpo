@@ -5,7 +5,7 @@ use gpui::{
     Styled, Window, actions, prelude::FluentBuilder as _, px,
 };
 
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme as _, IconName,
     button::Button,
     dock::PanelControl,
@@ -39,39 +39,39 @@ pub struct TreeStory {
 #[cfg(target_family = "wasm")]
 fn example_file_items() -> Vec<TreeItem> {
     vec![
-        TreeItem::new("gpui-component", "gpui-component")
+        TreeItem::new("shilpo", "shilpo")
             .expanded(true)
             .children([
-                TreeItem::new("gpui-component/crates", "crates")
+                TreeItem::new("shilpo/crates", "crates")
                     .expanded(true)
                     .children([
-                        TreeItem::new("gpui-component/crates/ui", "ui")
+                        TreeItem::new("shilpo/crates/ui", "ui")
                             .expanded(true)
                             .children([
-                                TreeItem::new("gpui-component/crates/ui/src", "src").children([
+                                TreeItem::new("shilpo/crates/ui/src", "src").children([
                                     TreeItem::new(
-                                        "gpui-component/crates/ui/src/tree.rs",
+                                        "shilpo/crates/ui/src/tree.rs",
                                         "tree.rs",
                                     ),
                                     TreeItem::new(
-                                        "gpui-component/crates/ui/src/list/mod.rs",
+                                        "shilpo/crates/ui/src/list/mod.rs",
                                         "mod.rs",
                                     ),
                                 ]),
-                                TreeItem::new("gpui-component/crates/ui/Cargo.toml", "Cargo.toml"),
+                                TreeItem::new("shilpo/crates/ui/Cargo.toml", "Cargo.toml"),
                             ]),
-                        TreeItem::new("gpui-component/crates/story", "story").children([
+                        TreeItem::new("shilpo/crates/story", "story").children([
                             TreeItem::new(
-                                "gpui-component/crates/story/src/stories/tree_story.rs",
+                                "shilpo/crates/story/src/stories/tree_story.rs",
                                 "tree_story.rs",
                             ),
                             TreeItem::new(
-                                "gpui-component/crates/story/src/gallery.rs",
+                                "shilpo/crates/story/src/gallery.rs",
                                 "gallery.rs",
                             ),
                         ]),
                     ]),
-                TreeItem::new("gpui-component/README.md", "README.md"),
+                TreeItem::new("shilpo/README.md", "README.md"),
             ]),
     ]
 }

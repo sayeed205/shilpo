@@ -1,7 +1,7 @@
 use gpui::{
     App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled, Window,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, IconName, Selectable as _, Sizable as _, Size,
     button::{Button, ButtonGroup},
     h_flex,

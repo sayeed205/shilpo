@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use gpui::{App, Bounds, Hsla, PathBuilder, Pixels, SharedString, Window, fill, px};
-use gpui_component_macros::IntoPlot;
+use shilpo_macros::IntoPlot;
 use num_traits::{Num, ToPrimitive};
 
 use crate::{

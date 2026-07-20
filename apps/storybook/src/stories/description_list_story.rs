@@ -3,8 +3,8 @@ use gpui::{
     Action, App, AppContext, Axis, Context, Entity, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, Styled, Window,
 };
-use gpui_component::{AxisExt, h_flex, menu::DropdownMenu as _};
-use gpui_component::{
+use shilpo_ui::{AxisExt, h_flex, menu::DropdownMenu as _};
+use shilpo_ui::{
     Sizable as _, Size,
     button::Button,
     checkbox::Checkbox,
@@ -47,7 +47,7 @@ impl DescriptionListStory {
             ("--", "--", 1),
             (
                 "Repository",
-                "https://github.com/longbridge/gpui-component",
+                "https://github.com/sayeed205/shilpo",
                 2,
             ),
             (

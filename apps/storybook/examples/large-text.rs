@@ -1,12 +1,12 @@
 use gpui::*;
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, Selectable, Sizable, WindowExt,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{self, Input, InputEvent, InputState, TabSize},
     v_flex,
 };
-use gpui_component_assets::Assets;
+use shilpo_assets::Assets;
 
 pub struct Example {
     editor: Entity<InputState>,
@@ -156,9 +156,9 @@ fn main() {
     let app = gpui_platform::application().with_assets(Assets);
 
     app.run(move |cx| {
-        gpui_component_story::init(cx);
+        storybook::init(cx);
         cx.activate(true);
 
-        gpui_component_story::create_new_window("Large Text Editor", Example::view, cx);
+        storybook::create_new_window("Large Text Editor", Example::view, cx);
     });
 }

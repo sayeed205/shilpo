@@ -2,7 +2,7 @@ use gpui::{
     App, AppContext, Axis, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement as _, Render, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, AxisExt, IndexPath, Selectable, Sizable, Size,
     button::{Button, ButtonGroup},
     checkbox::Checkbox,

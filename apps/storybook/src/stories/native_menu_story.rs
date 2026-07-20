@@ -6,7 +6,7 @@ use gpui::{
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels,
     Point, Render, SharedString, Styled as _, Window, div, px,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme as _, ElementExt, IconName, button::Button, native_menu::NativeMenu, v_flex,
 };
 use serde::Deserialize;

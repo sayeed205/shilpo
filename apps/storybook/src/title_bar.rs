@@ -5,7 +5,7 @@ use gpui::{
     IntoElement, MouseButton, ParentElement as _, Render, SharedString, Styled as _, Subscription,
     Window, div, px,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme as _, IconName, Side, Sizable as _, Theme, TitleBar, WindowExt as _,
     badge::Badge,
     button::{Button, ButtonVariants as _},
@@ -108,7 +108,7 @@ impl Render for AppTitleBar {
                                 .icon(IconName::Github)
                                 .small()
                                 .on_click(|_, _, cx| {
-                                    cx.open_url("https://github.com/longbridge/gpui-component")
+                                    cx.open_url("https://github.com/sayeed205/shilpo")
                                 }),
                         )
                         .child(

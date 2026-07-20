@@ -2,7 +2,7 @@ use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     Styled, Window, px,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, IconName, Sizable as _, StyledExt,
     avatar::{Avatar, AvatarGroup},
     dock::PanelControl,

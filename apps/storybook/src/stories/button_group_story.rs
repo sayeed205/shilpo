@@ -2,7 +2,7 @@ use gpui::{
     AnyElement, App, AppContext as _, Axis, Context, Entity, Focusable, IntoElement,
     ParentElement as _, Render, Styled as _, Window, div, px,
 };
-use gpui_component::{
+use shilpo_ui::{
     Disableable as _, Selectable as _, Sizable as _, Size,
     button::{Button, ButtonGroup, ButtonGroupMode, ButtonVariants as _},
     h_flex, v_flex,

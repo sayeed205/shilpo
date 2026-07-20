@@ -3,7 +3,7 @@ use gpui::{
     StyleRefinement, Styled, Window, relative,
 };
 
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme as _, StyledExt,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,

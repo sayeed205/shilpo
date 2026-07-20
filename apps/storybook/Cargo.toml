@@ -1,20 +1,20 @@
 [package]
-name = "gpui-component-story"
-version = "0.5.1"
+name = "storybook"
+version = "0.1.0"
 publish = false
 edition.workspace = true
 
 [features]
-inspector = ["gpui-component/inspector"]
-tree-sitter = ["gpui-component/tree-sitter-languages"]
+inspector = ["shilpo-ui/inspector"]
+tree-sitter = ["shilpo-ui/tree-sitter-languages"]
 default = ["tree-sitter"]
 
 [dependencies]
 anyhow.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
-gpui-component = { workspace = true }
-gpui-component-assets.workspace = true
+shilpo-ui = { workspace = true }
+shilpo-assets = { workspace = true }
 
 autocorrect = "2.14.2"
 chrono = "0.4"

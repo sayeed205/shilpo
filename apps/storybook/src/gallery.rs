@@ -1,5 +1,5 @@
 use gpui::{prelude::*, *};
-use gpui_component::{
+use shilpo_ui::{
     Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
@@ -290,7 +290,7 @@ impl Render for Gallery {
                             .icon(IconName::Github)
                             .tooltip("GPUI Component GitHub repository")
                             .on_click(|_, _, cx| {
-                                cx.open_url("https://github.com/longbridge/gpui-component")
+                                cx.open_url("https://github.com/sayeed205/shilpo")
                             }),
                     ),
             )

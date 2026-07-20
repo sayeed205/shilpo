@@ -5,7 +5,8 @@ use gpui::{
     Subscription, Window, WindowBounds, WindowKind, WindowOptions, actions, div,
     prelude::FluentBuilder as _, px, rems, size,
 };
-use gpui_component::{
+
+use shilpo_ui::{
     ActiveTheme, IconName, Root, TitleBar, WindowControlsMode, WindowExt,
     button::Button,
     dock::{Panel, PanelControl, PanelEvent, PanelInfo, PanelState, TitleStyle, register_panel},
@@ -140,7 +141,7 @@ pub fn create_new_window_with_size<F, E>(
                     story_root.appearance_subscription =
                         Some(cx.observe_window_appearance(window, |_, window, cx| {
                             window.defer(cx, |window, cx| {
-                                gpui_component::Theme::sync_system_appearance(Some(window), cx);
+                                shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
                             });
                         }));
                 });
@@ -178,7 +179,7 @@ pub fn init(cx: &mut App) {
             .with(tracing_subscriber::fmt::layer())
             .with(
                 tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("gpui_component=trace".parse().unwrap()),
+                    .add_directive("shilpo_ui=trace".parse().unwrap()),
             )
             .try_init();
     }
@@ -191,14 +192,14 @@ pub fn init(cx: &mut App) {
             .with(tracing_subscriber::fmt::layer().without_time())
             .with(
                 tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("gpui_component=trace".parse().unwrap()),
+                    .add_directive("shilpo_ui=trace".parse().unwrap()),
             )
             .try_init();
     }
 
-    rust_i18n::extend!(gpui_component);
-    gpui_component::init(cx);
-    *gpui_component::Theme::global_mut(cx) = gpui_component::Theme::new(0xff6750a4);
+    rust_i18n::extend!(shilpo_ui);
+    shilpo_ui::init(cx);
+    *shilpo_ui::Theme::global_mut(cx) = shilpo_ui::Theme::new(0xff6750a4);
     AppState::init(cx);
     themes::init(cx);
     stories::init(cx);
@@ -206,7 +207,7 @@ pub fn init(cx: &mut App) {
     #[cfg(not(target_family = "wasm"))]
     {
         let http_client =
-            reqwest_client::ReqwestClient::user_agent("gpui-component/story").unwrap();
+            reqwest_client::ReqwestClient::user_agent("shilpo-storybook").unwrap();
         cx.set_http_client(std::sync::Arc::new(http_client));
     }
 
@@ -215,7 +216,7 @@ pub fn init(cx: &mut App) {
         // Safety: the web examples run single-threaded; the client is
         // created and used exclusively on the main thread.
         let http_client = unsafe {
-            gpui_web::FetchHttpClient::with_user_agent("gpui-component/story")
+            gpui_web::FetchHttpClient::with_user_agent("shilpo-storybook")
                 .expect("failed to create FetchHttpClient")
         };
         cx.set_http_client(std::sync::Arc::new(http_client));
@@ -247,7 +248,7 @@ pub fn init(cx: &mut App) {
                                 alert.title("About").description(markdown(
                                     "GPUI Component Storybook\n\n\
                                     Version 0.1.0\n\n\
-                                    https://longbridge.github.io/gpui-component",
+                                    https://github.com/sayeed205/shilpo",
                                 ))
                             });
                         });
@@ -746,14 +747,14 @@ impl Render for StoryRoot {
 mod tests {
     #[test]
     fn extends_component_translations_with_story_locales() {
-        rust_i18n::extend!(gpui_component);
+        rust_i18n::extend!(shilpo_ui);
 
         assert_eq!(
-            gpui_component::_rust_i18n_try_translate("fr", "Calendar.month.January"),
+            shilpo_ui::_rust_i18n_try_translate("fr", "Calendar.month.January"),
             Some("Janvier".into())
         );
         assert_eq!(
-            gpui_component::_rust_i18n_try_translate("en", "Calendar.month.January"),
+            shilpo_ui::_rust_i18n_try_translate("en", "Calendar.month.January"),
             Some("January".into())
         );
     }

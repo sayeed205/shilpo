@@ -2,7 +2,7 @@ use gpui::{
     Anchor, App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
     Styled as _, Window, div, px, relative,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, StyledExt, avatar::Avatar, button::Button, h_flex, hover_card::HoverCard, v_flex,
 };
 use std::time::Duration;

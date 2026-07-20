@@ -3,7 +3,7 @@ use gpui::{
     ParentElement, Render, Styled, Window, div, px,
 };
 
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, Icon, IconName, StyledExt, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{
@@ -99,7 +99,7 @@ impl Render for AlertDialogStory {
                 .child(section("With open_alert_dialog").child(
                     Button::new("confirm-alert").outline().label("Show Confirmation").on_click(cx.listener(
                         |_, _, window, cx| {
-                            use gpui_component::dialog::DialogButtonProps;
+                            use shilpo_ui::dialog::DialogButtonProps;
 
                             window.open_alert_dialog(cx, |alert, _, cx| {
                                 alert

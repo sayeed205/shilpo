@@ -3,7 +3,7 @@ use gpui::{
     App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled,
     Window, px,
 };
-use gpui_component::{ActiveTheme, h_flex, label::Label, separator::Separator, v_flex};
+use shilpo_ui::{ActiveTheme, h_flex, label::Label, separator::Separator, v_flex};
 
 const DESCRIPTION: &str = "GPUI Component is a Rust GUI components for building fantastic cross-platform desktop application by using GPUI.";
 

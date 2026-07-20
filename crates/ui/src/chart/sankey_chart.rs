@@ -4,7 +4,7 @@ use gpui::{
     App, Bounds, Corners, Hsla, Pixels, SharedString, TextAlign, Window, fill, linear_color_stop,
     linear_gradient, point, px,
 };
-use gpui_component_macros::IntoPlot;
+use shilpo_macros::IntoPlot;
 
 use crate::{
     ActiveTheme,

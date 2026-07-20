@@ -1,12 +1,12 @@
 use gpui::*;
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme as _,
     highlighter::Language,
     input::{Input, InputState, TabSize},
     resizable::h_resizable,
     text::html,
 };
-use gpui_component_assets::Assets;
+use shilpo_assets::Assets;
 
 pub struct Example {
     input_state: Entity<InputState>,
@@ -30,7 +30,7 @@ impl Example {
 
         let _subscribe = cx.subscribe(
             &input_state,
-            |_, _, _: &gpui_component::input::InputEvent, cx| {
+            |_, _, _: &shilpo_ui::input::InputEvent, cx| {
                 cx.notify();
             },
         );
@@ -77,9 +77,9 @@ fn main() {
     let app = gpui_platform::application().with_assets(Assets);
 
     app.run(move |cx| {
-        gpui_component_story::init(cx);
+        storybook::init(cx);
         cx.activate(true);
 
-        gpui_component_story::create_new_window("HTML Render (native)", Example::view, cx);
+        storybook::create_new_window("HTML Render (native)", Example::view, cx);
     });
 }

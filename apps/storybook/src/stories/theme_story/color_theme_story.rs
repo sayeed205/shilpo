@@ -1,5 +1,5 @@
 use gpui::*;
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme as _, ThemeColor, h_flex,
     input::{Input, InputEvent, InputState},
     v_flex,

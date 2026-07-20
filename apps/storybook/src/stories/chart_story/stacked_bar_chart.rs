@@ -3,7 +3,7 @@
 use gpui::{
     AnyElement, App, Bounds, ElementId, IntoElement, Pixels, Point, TextAlign, Window, point, px,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme,
     plot::{
         AXIS_GAP, AxisText, Grid, IntoPlot, Plot, PlotAxis,

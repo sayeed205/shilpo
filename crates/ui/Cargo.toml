@@ -2,12 +2,12 @@
 description = "UI components for building fantastic desktop application by using GPUI."
 keywords = ["desktop", "gpui", "shadcn", "ui", "uikit"]
 license = "Apache-2.0"
-name = "gpui-component"
-documentation = "https://docs.rs/gpui-component"
-homepage = "https://longbridge.github.io/gpui-component"
-repository = "https://github.com/longbridge/gpui-component"
+name = "shilpo-ui"
+documentation = "https://docs.rs/shilpo-ui"
+homepage = "https://github.com/sayeed205/shilpo"
+repository = "https://github.com/sayeed205/shilpo"
 readme = "../../README.md"
-version = "0.5.2"
+version = "0.1.0"
 publish = true
 edition.workspace = true
 
@@ -98,8 +98,8 @@ tree-sitter-zig = ["tree-sitter", "dep:tree-sitter-zig"]
 anyhow.workspace = true
 gpui = { workspace = true }
 gpui_macros.workspace = true
-gpui-component-macros = { workspace = true }
-gpui-component-assets = { workspace = true }
+shilpo-macros = { workspace = true }
+shilpo-assets = { workspace = true }
 mcu-material-color = { version = "0.2.2", default-features = false }
 notify.workspace = true
 ropey.workspace = true
@@ -224,11 +224,11 @@ indoc = "2"
 [lints]
 workspace = true
 
-# `gpui-component-assets` ships the canonical icon set whose variants we
+# `shilpo-ui-assets` ships the canonical icon set whose variants we
 # enumerate to generate `IconName` at build time. Cargo's
 # `DEP_<links>_<key>` propagation (the bridge that hands the icons-dir
 # path from the assets crate's build.rs into our own) only works through
 # *regular* dependencies, not build-deps, so this has to live here even
 # though our use is entirely build-time.
 [package.metadata.cargo-machete]
-ignored = ["gpui-component-assets"]
+ignored = ["shilpo-ui-assets"]

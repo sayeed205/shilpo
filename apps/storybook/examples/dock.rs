@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result};
 use gpui::*;
-use gpui_component::{
+use shilpo_ui::{
     IconName, Root, Sizable,
     button::{Button, ButtonVariants as _},
     dock::{ClosePanel, DockArea, DockAreaState, DockEvent, DockItem, DockPlacement, ToggleZoom},
@@ -8,8 +8,8 @@ use gpui_component::{
     status_bar::StatusBar,
 };
 
-use gpui_component_assets::Assets;
-use gpui_component_story::{
+use shilpo_assets::Assets;
+use storybook::{
     AccordionStory, AppState, AppTitleBar, ButtonStory, CalendarStory, DataTableStory, DialogStory,
     FormStory, IconStory, ImageStory, InputStory, LabelStory, ListStory, NotificationStory, Open,
     PopoverStory, ProgressStory, ResizableStory, ScrollbarStory, SelectStory, SidebarStory,
@@ -40,7 +40,7 @@ const STATE_FILE: &str = "docks.json";
 
 pub fn init(cx: &mut App) {
     cx.on_action(|_action: &Open, _cx: &mut App| {});
-    gpui_component_story::init(cx);
+    storybook::init(cx);
 
     cx.bind_keys(vec![
         KeyBinding::new("shift-escape", ToggleZoom, None),
@@ -384,7 +384,7 @@ impl StoryWorkspace {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(window_bounds)),
                 #[cfg(not(target_os = "linux"))]
-                titlebar: Some(gpui_component::TitleBar::title_bar_options()),
+                titlebar: Some(shilpo_ui::TitleBar::title_bar_options()),
                 window_min_size: Some(gpui::Size {
                     width: px(640.),
                     height: px(480.),

@@ -5,7 +5,7 @@ use gpui::{
 use regex::Regex;
 
 use crate::section;
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, Disableable, IconName, Sizable,
     button::{Button, ButtonVariants as _},
     input::{InputEvent, InputState, MaskPattern, NumberInput, NumberInputEvent, StepAction},

@@ -1,15 +1,10 @@
 use gpui::{px, Axis, Corners, Pixels};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ButtonGroupMode {
     Standard,
+    #[default]
     Connected,
-}
-
-impl Default for ButtonGroupMode {
-    fn default() -> Self {
-        Self::Connected
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

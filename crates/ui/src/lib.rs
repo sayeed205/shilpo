@@ -86,7 +86,7 @@ pub use event::InteractiveElementExt;
 pub use focus_trap::FocusTrapElement;
 pub use geometry::*;
 pub use global_state::GlobalState;
-pub use gpui_component_macros::icon_named;
+pub use shilpo_macros::icon_named;
 pub use icon::*;
 pub use index_path::IndexPath;
 pub use input::{Rope, RopeExt, RopeLines};

@@ -2,7 +2,7 @@ use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, Styled, Window, div, px,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme as _, Disableable as _, IconName,
     button::{IconButton, IconButtonSize, IconButtonVariants as _},
     h_flex, v_flex,
@@ -237,7 +237,7 @@ impl Render for IconButtonStory {
                         IconButton::new("square")
                             .icon(IconName::Plus)
                             .filled_tonal()
-                            .shape(gpui_component::button::IconButtonShape::Square)
+                            .shape(shilpo_ui::button::IconButtonShape::Square)
                             .into_any_element(),
                         "Square",
                         "override",

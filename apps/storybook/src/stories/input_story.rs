@@ -4,7 +4,7 @@ use gpui::{
 };
 
 use crate::section;
-use gpui_component::{button::*, input::*, label::Label, *};
+use shilpo_ui::{button::*, input::*, label::Label, *};
 
 const CODE_EXAMPLE: &str = r#"{"single_line":"code editor"}"#;
 

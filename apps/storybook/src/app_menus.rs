@@ -1,12 +1,12 @@
 use gpui::{App, Entity, Menu, MenuItem, SharedString};
-use gpui_component::{ActiveTheme as _, GlobalState, Theme, ThemeMode, menu::AppMenuBar};
+use shilpo_ui::{ActiveTheme as _, GlobalState, Theme, ThemeMode, menu::AppMenuBar};
 use std::cell::Cell;
 
 use crate::{
     About, AppState, Open, Quit, SelectLocale, SelectWindowControls, ToggleSearch,
     themes::SwitchThemeMode,
 };
-use gpui_component::WindowControlsMode;
+use shilpo_ui::WindowControlsMode;
 
 pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> {
     let app_menu_bar = AppMenuBar::new(cx);
@@ -95,26 +95,26 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
         Menu {
             name: "Edit".into(),
             items: vec![
-                MenuItem::action("Undo", gpui_component::input::Undo),
-                MenuItem::action("Redo", gpui_component::input::Redo),
+                MenuItem::action("Undo", shilpo_ui::input::Undo),
+                MenuItem::action("Redo", shilpo_ui::input::Redo),
                 MenuItem::separator(),
-                MenuItem::action("Cut", gpui_component::input::Cut),
-                MenuItem::action("Copy", gpui_component::input::Copy),
-                MenuItem::action("Paste", gpui_component::input::Paste),
+                MenuItem::action("Cut", shilpo_ui::input::Cut),
+                MenuItem::action("Copy", shilpo_ui::input::Copy),
+                MenuItem::action("Paste", shilpo_ui::input::Paste),
                 MenuItem::separator(),
-                MenuItem::action("Delete", gpui_component::input::Delete),
+                MenuItem::action("Delete", shilpo_ui::input::Delete),
                 MenuItem::action(
                     "Delete Previous Word",
-                    gpui_component::input::DeleteToPreviousWordStart,
+                    shilpo_ui::input::DeleteToPreviousWordStart,
                 ),
                 MenuItem::action(
                     "Delete Next Word",
-                    gpui_component::input::DeleteToNextWordEnd,
+                    shilpo_ui::input::DeleteToNextWordEnd,
                 ),
                 MenuItem::separator(),
-                MenuItem::action("Find", gpui_component::input::Search),
+                MenuItem::action("Find", shilpo_ui::input::Search),
                 MenuItem::separator(),
-                MenuItem::action("Select All", gpui_component::input::SelectAll),
+                MenuItem::action("Select All", shilpo_ui::input::SelectAll),
             ],
             disabled: false,
         },

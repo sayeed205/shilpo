@@ -337,11 +337,11 @@ impl Render for ButtonRoot {
     }
 }
 
-fn button_root<'a>(
-    cx: &'a mut TestAppContext,
+fn button_root(
+    cx: &mut TestAppContext,
     disabled: bool,
     loading: bool,
-) -> (Entity<CountState>, &'a mut VisualTestContext) {
+) -> (Entity<CountState>, &mut VisualTestContext) {
     cx.update(crate::init);
     let state = cx.new(|_| CountState {
         count: 0,

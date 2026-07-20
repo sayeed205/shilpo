@@ -1,6 +1,6 @@
 # Hello, **World**!
 
-Build Status [![Build Status](https://github.com/longbridge/gpui-component/actions/workflows/ci.yml/badge.svg)](https://github.com/longbridge/gpui-component/actions/workflows/ci.yml) of [GPUI Component](https://github.com/longbridge/gpui-component).
+Build Status of [Shilpo UI](https://github.com/sayeed205/shilpo).
 
 Inline image mix: larger PNG avatars <img src="https://avatars.githubusercontent.com/u/5518" alt="Jason Lee avatar" width="32" height="32" /> and <img src="https://avatars.githubusercontent.com/u/28998859" alt="GitHub avatar" width="32" height="32" /> stay inside the same text flow, and another SVG badge ![Rust](https://rust-lang.org/static/images/rust-logo-blk.svg) should wrap with nearby text when the window is resized.
 
@@ -70,7 +70,7 @@ struct Repository {
 
 fn main() {
     let _ = Repository {
-        name: "GPUI Component".to_string(),
+        name: "Shilpo UI".to_string(),
     };
 
     println!("Hello, World!");

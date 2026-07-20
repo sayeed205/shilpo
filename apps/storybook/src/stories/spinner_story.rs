@@ -2,7 +2,7 @@ use gpui::{
     App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled,
     Window, bounce, ease_in_out, ease_out_quint, linear, px,
 };
-use gpui_component::{ActiveTheme as _, IconName, Sizable, spinner::Spinner, v_flex};
+use shilpo_ui::{ActiveTheme as _, IconName, Sizable, spinner::Spinner, v_flex};
 
 use crate::section;
 

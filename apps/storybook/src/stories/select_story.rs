@@ -1,5 +1,5 @@
 use gpui::*;
-use gpui_component::{button::*, checkbox::*, input::*, select::*, separator::*, *};
+use shilpo_ui::{button::*, checkbox::*, input::*, select::*, separator::*, *};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 

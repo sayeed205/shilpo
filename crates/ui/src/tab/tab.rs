@@ -788,7 +788,7 @@ impl RenderOnce for Tab {
             .when_some(self.suffix, |this, suffix| this.child(suffix))
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 // Stop propagation behavior, for works on TitleBar.
-                // https://github.com/longbridge/gpui-component/issues/1836
+                // https://github.com/longbridge/shilpo-ui/issues/1836
                 cx.stop_propagation();
             })
             .when(!self.disabled, |this| {

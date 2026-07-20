@@ -3,7 +3,7 @@ use gpui::{
     Render, SharedString, Styled, Window, px,
 };
 
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, Disableable as _, Sizable, h_flex, label::Label, switch::Switch, v_flex, IconName,
 };
 

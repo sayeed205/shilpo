@@ -5,7 +5,7 @@ use gpui::{
     Render, SharedString, Styled, Window, div, prelude::FluentBuilder, px, relative,
 };
 
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, Icon, IconName, Selectable as _, Side, Sizable,
     badge::Badge,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
@@ -423,7 +423,7 @@ impl Render for SidebarStory {
                                             move |this, _, _| {
                                                 this.link(
                                                     "About",
-                                                    "https://github.com/longbridge/gpui-component",
+                                                    "https://github.com/sayeed205/shilpo",
                                                 )
                                             }
                                         })

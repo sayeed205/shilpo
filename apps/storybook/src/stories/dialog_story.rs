@@ -3,7 +3,7 @@ use gpui::{
     ParentElement, Render, SharedString, Styled, Window, div, px,
 };
 
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, Icon, IconName, WindowExt as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
@@ -358,7 +358,7 @@ impl DialogStory {
                             .overlay(dialog_overlay)
                             .overlay_closable(overlay_closable)
                             .title("Dialog with scrollbar")
-                            .child(markdown(include_str!("../../../../README.md")))
+                            .child(markdown(include_str!("../../README.md")))
                             .footer(
                                 DialogFooter::new()
                                     .gap_2()

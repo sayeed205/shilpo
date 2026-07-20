@@ -2,7 +2,7 @@ use gpui::{
     Action, Anchor, App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding,
     ParentElement as _, Render, SharedString, Styled as _, Window, actions, div, px,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme as _, IconName, Side, StyledExt,
     button::Button,
     h_flex,
@@ -136,7 +136,7 @@ impl Render for MenuStory {
                             .label("Edit")
                             .dropdown_menu(move |this, window, cx| {
                                 this.min_w(250.)
-                                    .link("About", "https://github.com/longbridge/gpui-component")
+                                    .link("About", "https://github.com/sayeed205/shilpo")
                                     .check_side(check_side.unwrap_or(Side::Left))
                                     .separator()
                                     .item(PopupMenuItem::new("Handle Click").on_click(
@@ -207,7 +207,7 @@ impl Render for MenuStory {
                                         menu.link_with_icon(
                                             "GPUI Component",
                                             IconName::Github,
-                                            "https://github.com/longbridge/gpui-component",
+                                            "https://github.com/sayeed205/shilpo",
                                         )
                                         .separator()
                                         .link("GPUI", "https://gpui.rs")
@@ -244,7 +244,7 @@ impl Render for MenuStory {
                                         .external_link_icon(false)
                                         .link(
                                             "About",
-                                            "https://github.com/longbridge/gpui-component",
+                                            "https://github.com/sayeed205/shilpo",
                                         )
                                         .separator()
                                         .menu("Cut", Box::new(Cut))
@@ -297,7 +297,7 @@ impl Render for MenuStory {
                                 move |this, _, _| {
                                     this.link(
                                         "About",
-                                        "https://github.com/longbridge/gpui-component",
+                                        "https://github.com/sayeed205/shilpo",
                                     )
                                     .separator()
                                     .menu("Item 1", Box::new(Info(1)))
@@ -322,7 +322,7 @@ impl Render for MenuStory {
                                 move |this, _, _| {
                                     this.link(
                                         "About",
-                                        "https://github.com/longbridge/gpui-component",
+                                        "https://github.com/sayeed205/shilpo",
                                     )
                                     .separator()
                                     .menu("Item 1", Box::new(Info(1)))

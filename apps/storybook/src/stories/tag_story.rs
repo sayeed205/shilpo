@@ -3,7 +3,7 @@ use gpui::{
     Styled, Window, px,
 };
 
-use gpui_component::{ActiveTheme as _, Sizable, h_flex, tag::Tag, v_flex};
+use shilpo_ui::{ActiveTheme as _, Sizable, h_flex, tag::Tag, v_flex};
 
 use crate::section;
 

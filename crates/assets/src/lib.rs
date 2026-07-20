@@ -1,12 +1,12 @@
 /// Embed application assets for GPUI Component.
 ///
-/// This assets provides icons svg files for [IconName](https://docs.rs/gpui-component/latest/gpui_component/enum.IconName.html).
+/// This assets provides icons svg files for [IconName](https://docs.rs/shilpo-ui/latest/shilpo_ui/enum.IconName.html).
 ///
 /// ## Usage
 ///
 /// ```rust,no_run
 /// use gpui::*;
-/// use gpui_component_assets::Assets;
+/// use shilpo_assets::Assets;
 ///
 /// let app = gpui_platform::application().with_assets(Assets);
 /// ```

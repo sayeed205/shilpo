@@ -3,7 +3,7 @@ use gpui::{
     Render, Rgba, SharedString, Styled, Window, div, linear_color_stop, linear_gradient,
     prelude::FluentBuilder, px,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, StyledExt,
     chart::{AreaChart, BarChart, CandlestickChart, LineChart, PieChart, SankeyChart, SankeyLabel},
     dock::PanelControl,

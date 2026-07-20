@@ -11,7 +11,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, Task, TextAlign, Window, div,
     prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme as _, Selectable, Sizable as _, Size, StyleSized as _, StyledExt,
     button::Button,
     checkbox::Checkbox,

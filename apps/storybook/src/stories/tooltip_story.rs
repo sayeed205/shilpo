@@ -4,7 +4,7 @@ use gpui::{
     prelude::FluentBuilder as _,
 };
 
-use gpui_component::{
+use shilpo_ui::{
     IconName,
     button::{Button, ButtonVariant, ButtonVariants},
     checkbox::Checkbox,

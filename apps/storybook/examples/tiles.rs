@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result};
 use gpui::*;
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, Root, Sizable, TitleBar,
     dock::{
         DockArea, DockAreaState, DockEvent, DockItem, Panel, PanelEvent, PanelInfo, PanelRegistry,
@@ -9,8 +9,8 @@ use gpui_component::{
     input::{Input, InputState},
     scroll::ScrollbarShow,
 };
-use gpui_component_assets::Assets;
-use gpui_component_story::{ButtonStory, IconStory, StoryContainer};
+use shilpo_assets::Assets;
+use storybook::{ButtonStory, IconStory, StoryContainer};
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 
@@ -139,8 +139,8 @@ actions!(workspace, [Open, CloseWindow]);
 pub fn init(cx: &mut App) {
     cx.on_action(|_action: &Open, _cx: &mut App| {});
 
-    gpui_component::init(cx);
-    gpui_component_story::init(cx);
+    shilpo_ui::init(cx);
+    storybook::init(cx);
 }
 
 pub struct StoryTiles {
@@ -437,8 +437,8 @@ fn main() {
     let app = gpui_platform::application().with_assets(Assets);
 
     app.run(move |cx| {
-        gpui_component::init(cx);
-        gpui_component_story::init(cx);
+        shilpo_ui::init(cx);
+        storybook::init(cx);
         ContainerPanel::init(cx);
 
         cx.on_action(quit);

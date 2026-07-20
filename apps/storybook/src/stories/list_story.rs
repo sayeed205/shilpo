@@ -7,7 +7,7 @@ use gpui::{
     Subscription, Task, Window, actions, div, px,
 };
 
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, Icon, IconName, IndexPath, Selectable, Sizable,
     button::Button,
     checkbox::Checkbox,

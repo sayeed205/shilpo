@@ -156,7 +156,7 @@ pub enum SliderScale {
     /// # For example
     ///
     /// ```
-    /// use gpui_component::slider::{SliderState, SliderScale};
+    /// use shilpo_ui::slider::{SliderState, SliderScale};
     ///
     /// let slider = SliderState::new()
     ///     .min(1.0)    // Must be > 0 for logarithmic scale
@@ -792,52 +792,52 @@ impl RenderOnce for Slider {
         if centered {
             let val = percentage.end;
             if val < 0.5 {
-                if let Some(s) = create_segment(0.0, val, inactive_color.clone()) {
+                if let Some(s) = create_segment(0.0, val, inactive_color) {
                     segments.push(s);
                 }
-                if let Some(s) = create_segment(val, 0.5, active_color.clone()) {
+                if let Some(s) = create_segment(val, 0.5, active_color) {
                     segments.push(s);
                 }
-                if let Some(s) = create_segment(0.5, 1.0, inactive_color.clone()) {
+                if let Some(s) = create_segment(0.5, 1.0, inactive_color) {
                     segments.push(s);
                 }
             } else {
-                if let Some(s) = create_segment(0.0, 0.5, inactive_color.clone()) {
+                if let Some(s) = create_segment(0.0, 0.5, inactive_color) {
                     segments.push(s);
                 }
-                if let Some(s) = create_segment(0.5, val, active_color.clone()) {
+                if let Some(s) = create_segment(0.5, val, active_color) {
                     segments.push(s);
                 }
-                if let Some(s) = create_segment(val, 1.0, inactive_color.clone()) {
+                if let Some(s) = create_segment(val, 1.0, inactive_color) {
                     segments.push(s);
                 }
             }
         } else if is_range {
             let start = percentage.start;
             let end = percentage.end;
-            if let Some(s) = create_segment(0.0, start, inactive_color.clone()) {
+            if let Some(s) = create_segment(0.0, start, inactive_color) {
                 segments.push(s);
             }
-            if let Some(s) = create_segment(start, end, active_color.clone()) {
+            if let Some(s) = create_segment(start, end, active_color) {
                 segments.push(s);
             }
-            if let Some(s) = create_segment(end, 1.0, inactive_color.clone()) {
+            if let Some(s) = create_segment(end, 1.0, inactive_color) {
                 segments.push(s);
             }
         } else if self.reverse {
             let val = percentage.end;
-            if let Some(s) = create_segment(0.0, val, inactive_color.clone()) {
+            if let Some(s) = create_segment(0.0, val, inactive_color) {
                 segments.push(s);
             }
-            if let Some(s) = create_segment(val, 1.0, active_color.clone()) {
+            if let Some(s) = create_segment(val, 1.0, active_color) {
                 segments.push(s);
             }
         } else {
             let val = percentage.end;
-            if let Some(s) = create_segment(0.0, val, active_color.clone()) {
+            if let Some(s) = create_segment(0.0, val, active_color) {
                 segments.push(s);
             }
-            if let Some(s) = create_segment(val, 1.0, inactive_color.clone()) {
+            if let Some(s) = create_segment(val, 1.0, inactive_color) {
                 segments.push(s);
             }
         }

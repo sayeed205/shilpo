@@ -3,7 +3,7 @@ use gpui::{
     ParentElement as _, Render, SharedString, Styled, Window, prelude::FluentBuilder, px,
 };
 
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, Theme, ThemeMode,
     button::{Button, ButtonVariants as _},
     group_box::GroupBoxVariant,
@@ -145,7 +145,7 @@ impl SettingsStory {
                         .text()
                         .xsmall()
                         .on_click(|_, _, cx| {
-                            cx.open_url("https://longbridge.github.io/gpui-component/")
+                            cx.open_url("https://github.com/sayeed205/shilpo/")
                         })
                 })
                 .groups(vec![
@@ -356,7 +356,7 @@ impl SettingsStory {
                                         .disabled(options.disabled)
                                         .on_click(|_, _, cx| {
                                             cx.open_url(
-                                                "https://github.com/longbridge/gpui-component",
+                                                "https://github.com/sayeed205/shilpo",
                                             );
                                         }),
                                 )
@@ -482,7 +482,7 @@ impl SettingsStory {
                             "GitHub Repository",
                             SettingField::element(OpenURLSettingField::new(
                                 "Repository...",
-                                "https://github.com/longbridge/gpui-component",
+                                "https://github.com/sayeed205/shilpo",
                             )),
                         )
                         .description("Open the GitHub repository in your default browser."),
@@ -490,11 +490,11 @@ impl SettingsStory {
                             "Documentation",
                             SettingField::element(OpenURLSettingField::new(
                                 "Rust Docs...",
-                                "https://docs.rs/gpui-component"
+                                "https://docs.rs/shilpo-ui"
                             )),
                         )
                         .description(markdown(
-                            "Rust doc for the `gpui-component` crate.",
+                            "Rust doc for the `shilpo` crate.",
                         )),
                         SettingItem::new(
                             "Website",
@@ -504,7 +504,7 @@ impl SettingsStory {
                                     .label("Website...")
                                     .with_size(options.size)
                                     .on_click(|_, _window, cx| {
-                                        cx.open_url("https://longbridge.github.io/gpui-component/");
+                                        cx.open_url("https://github.com/sayeed205/shilpo/");
                                     })
                             }),
                         )

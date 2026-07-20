@@ -2,7 +2,7 @@ use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
     Render, Styled, Window, prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, Selectable as _, Sizable, Size,
     button::{Button, ButtonGroup},
     h_flex,

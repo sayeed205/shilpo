@@ -8,7 +8,7 @@ use std::{
 };
 
 use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme as _, Icon, IconName, Sizable as _,
     avatar::Avatar,
     button::{Button, ButtonVariants as _},
@@ -25,8 +25,8 @@ use gpui_component::{
     },
     v_flex,
 };
-use gpui_component_assets::Assets;
-use gpui_component_story::Open;
+use shilpo_assets::Assets;
+use storybook::Open;
 use lsp_types::{SemanticToken, SemanticTokenType, SemanticTokens, SemanticTokensLegend};
 use regex::{Captures, Regex};
 
@@ -1314,10 +1314,10 @@ fn main() {
     let app = gpui_platform::application().with_assets(Assets);
 
     app.run(move |cx| {
-        gpui_component_story::init(cx);
+        storybook::init(cx);
         cx.activate(true);
 
-        gpui_component_story::create_new_window("Markdown Editor", Example::view, cx);
+        storybook::create_new_window("Markdown Editor", Example::view, cx);
     });
 }
 

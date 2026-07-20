@@ -3,7 +3,7 @@ use gpui::{
     Window, div, px,
 };
 
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme, Sizable, h_flex,
     radio::{Radio, RadioGroup},
     v_flex,

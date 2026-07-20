@@ -377,11 +377,11 @@ mod tests {
         }
     }
 
-    fn click_root<'a>(
-        cx: &'a mut TestAppContext,
+    fn click_root(
+        cx: &mut TestAppContext,
         disabled: bool,
         loading: bool,
-    ) -> (Entity<ClickState>, &'a mut VisualTestContext) {
+    ) -> (Entity<ClickState>, &mut VisualTestContext) {
         cx.update(crate::init);
         let state = cx.new(|_| ClickState { count: 0 });
         let state_for_root = state.clone();

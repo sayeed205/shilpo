@@ -2,7 +2,7 @@ use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     Styled, Window,
 };
-use gpui_component::{
+use shilpo_ui::{
     ActiveTheme as _, Icon, IconName, Sizable as _, avatar::Avatar, badge::Badge,
     dock::PanelControl, v_flex,
 };

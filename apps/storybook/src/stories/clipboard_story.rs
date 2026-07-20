@@ -3,7 +3,7 @@ use gpui::{
     Styled, Window,
 };
 
-use gpui_component::{
+use shilpo_ui::{
     WindowExt,
     clipboard::Clipboard,
     h_flex,
