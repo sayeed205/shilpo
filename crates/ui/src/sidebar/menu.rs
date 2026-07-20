@@ -245,6 +245,11 @@ impl SidebarItem for SidebarMenuItem {
         } else {
             None
         };
+        let ripple_state = window.use_keyed_state(
+            format!("{}-ripple", id),
+            cx,
+            |_, _| crate::ripple::RippleState::new(),
+        );
         let handler = self.handler.clone();
         let is_collapsed = self.collapsed;
         let is_active = self.active;
@@ -383,7 +388,26 @@ impl SidebarItem for SidebarMenuItem {
                             })
                     })
                     .when(!is_disabled, |this| {
-                        this.on_click({
+                        let ripple_state = ripple_state.clone();
+                        this.on_mouse_down(gpui::MouseButton::Left, {
+                            let ripple_state = ripple_state.clone();
+                            move |ev, _, cx| {
+                                crate::ripple::RippleState::start_ripple(
+                                    ripple_state.clone(),
+                                    ev.position,
+                                    cx,
+                                );
+                            }
+                        })
+                        .on_mouse_up(gpui::MouseButton::Left, {
+                            move |_, _, cx| {
+                                crate::ripple::RippleState::handle_mouse_up(
+                                    ripple_state.clone(),
+                                    cx,
+                                );
+                            }
+                        })
+                        .on_click({
                             let open_state = open_state.clone();
                             move |ev, window, cx| {
                                 if click_to_open {
@@ -406,14 +430,30 @@ impl SidebarItem for SidebarMenuItem {
                         })
                     })
                     .map(|this| {
-                        if let Some(context_menu) = self.context_menu {
+                        let corner_radii = if is_collapsed {
+                            gpui::Corners::all(cx.theme().radius)
+                        } else {
+                            gpui::Corners::all(gpui::px(18.0))
+                        };
+                        let ripple_color = if is_active {
+                            cx.theme().on_secondary_container
+                        } else {
+                            cx.theme().on_surface_variant
+                        };
+
+                        let item_element = if let Some(context_menu) = self.context_menu {
                             this.context_menu(move |menu, window, cx| {
                                 context_menu(menu, window, cx)
                             })
                             .into_any_element()
                         } else {
                             this.into_any_element()
-                        }
+                        };
+
+                        crate::ripple::RippleElement::new(item_element, ripple_state)
+                            .corner_radii(corner_radii)
+                            .color(ripple_color)
+                            .into_any_element()
                     }),
             )
             .when(is_open, |this| {

@@ -488,6 +488,14 @@ impl RenderOnce for Button {
         button_geometry::record_render_geometry(resolved_geometry);
         let terminal_geometry = self.slot_geometry.map(|_| resolved_geometry);
         let radii = resolved_geometry.corners;
+        let spring_progress = ripple_state.read(cx).current_spring_progress();
+        let pressed_rounding = button_shape_tokens::resolve_pressed(self.rounded, self.size, Some(dimensions.height));
+        let pressed_radii = Corners::all(pressed_rounding);
+        let active_radii = if spring_progress > 0.0 && !self.disabled {
+            crate::motion::lerp_corners(radii, pressed_radii, spring_progress)
+        } else {
+            radii
+        };
 
         let button_element = self.base
             .role(Role::Button)
@@ -537,10 +545,10 @@ impl RenderOnce for Button {
                     this.shadow_xs()
                 }
             })
-            .rounded_tl(radii.top_left)
-            .rounded_tr(radii.top_right)
-            .rounded_bl(radii.bottom_left)
-            .rounded_br(radii.bottom_right)
+            .rounded_tl(active_radii.top_left)
+            .rounded_tr(active_radii.top_right)
+            .rounded_bl(active_radii.bottom_left)
+            .rounded_br(active_radii.bottom_right)
             .when(style == ButtonVariant::Outlined, |this| {
                 this.when(self.border_edges.left, |this| {
                     this.border_l(dimensions.outline)
@@ -672,7 +680,7 @@ impl RenderOnce for Button {
                 move |event, window, cx| {
                     // Stop handle any click event when disabled.
                     // To avoid handle dropdown menu open when button is disabled.
-                    if is_disabled {
+                    if is_disabled || !ripple_state.read(cx).is_point_inside(event.position) {
                         cx.stop_propagation();
                         return;
                     }
@@ -683,15 +691,21 @@ impl RenderOnce for Button {
                     // Pressing a button must not start the window-level text selection.
                     crate::global_state::GlobalState::suppress_text_selection(cx);
 
-                    // Trigger ripple!
+                    // Trigger ripple & press hold!
                     crate::ripple::RippleState::start_ripple(ripple_state.clone(), event.position, cx);
                 }
             })
+            .on_mouse_up(gpui::MouseButton::Left, {
+                let ripple_state = ripple_state.clone();
+                move |_, _, cx| {
+                    crate::ripple::RippleState::handle_mouse_up(ripple_state.clone(), cx);
+                }
+            })
             .when_some(self.on_click, |this, on_click| {
+                let ripple_state = ripple_state.clone();
                 this.on_click(move |event, window, cx| {
-                    // Stop handle any click event when disabled.
-                    // To avoid handle dropdown menu open when button is disabled.
-                    if !clickable {
+                    // Stop handle any click event when disabled or outside rounded curve.
+                    if !clickable || !ripple_state.read(cx).is_point_inside(event.position()) {
                         cx.stop_propagation();
                         return;
                     }
@@ -765,7 +779,7 @@ impl RenderOnce for Button {
             );
 
         crate::ripple::RippleElement::new(button_element.into_element(), ripple_state)
-            .corner_radii(radii)
+            .corner_radii(active_radii)
             .color(normal_style.fg)
     }
 }

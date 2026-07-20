@@ -60,6 +60,19 @@ pub(crate) fn resolve(rounding: ButtonRounded, size: Size, final_height: Option<
     }
 }
 
+pub(crate) fn resolve_pressed(rounding: ButtonRounded, size: Size, final_height: Option<Pixels>) -> Pixels {
+    let shapes = button_shapes(size);
+    match rounding {
+        ButtonRounded::Token => corner_radius(
+            shapes.pressed_shape,
+            final_height.unwrap_or_else(|| button_dimension_tokens::height(size)),
+        ),
+        ButtonRounded::None => Pixels::ZERO,
+        ButtonRounded::Size(value) => value * 0.5,
+        other => resolve(other, size, final_height),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

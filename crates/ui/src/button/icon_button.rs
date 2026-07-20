@@ -248,6 +248,21 @@ impl RenderOnce for IconButton {
             icon_button_tokens::IconButtonCorner::Full => dimensions.container * 0.5,
             icon_button_tokens::IconButtonCorner::Square(value) => value,
         };
+        let pressed_radius = match shapes.pressed_shape {
+            icon_button_tokens::IconButtonCorner::Full => dimensions.container * 0.5,
+            icon_button_tokens::IconButtonCorner::Square(value) => value,
+        };
+
+        let spring_progress = ripple_state.read(cx).current_spring_progress();
+        let active_radii = if spring_progress > 0.0 && !disabled {
+            crate::motion::lerp_corners(
+                gpui::Corners::all(radius),
+                gpui::Corners::all(pressed_radius),
+                spring_progress,
+            )
+        } else {
+            gpui::Corners::all(radius)
+        };
 
         let width = icon_button_tokens::resolve_width(self.size, self.width_type);
 
@@ -269,7 +284,7 @@ impl RenderOnce for IconButton {
             .h(dimensions.container)
             .items_center()
             .justify_center()
-            .rounded(radius)
+            .rounded(active_radii.top_left)
             .bg(colors.container)
             .border_color(colors.border)
             .when(self.variant == IconButtonVariant::Outlined, |this| {
@@ -311,14 +326,31 @@ impl RenderOnce for IconButton {
             .on_mouse_down(gpui::MouseButton::Left, {
                 let ripple_state = ripple_state.clone();
                 move |event, _, cx| {
+                    if disabled || !ripple_state.read(cx).is_point_inside(event.position) {
+                        cx.stop_propagation();
+                        return;
+                    }
                     cx.stop_propagation();
+                    crate::ripple::RippleState::start_ripple(ripple_state.clone(), event.position, cx);
+                }
+            })
+            .on_mouse_up(gpui::MouseButton::Left, {
+                let ripple_state = ripple_state.clone();
+                move |_, _, cx| {
                     if !disabled {
-                        crate::ripple::RippleState::start_ripple(ripple_state.clone(), event.position, cx);
+                        crate::ripple::RippleState::handle_mouse_up(ripple_state.clone(), cx);
                     }
                 }
             })
             .when_some(self.on_click.filter(|_| !disabled), |this, on_click| {
-                this.on_click(move |event, window, cx| on_click(event, window, cx))
+                let ripple_state = ripple_state.clone();
+                this.on_click(move |event, window, cx| {
+                    if !ripple_state.read(cx).is_point_inside(event.position()) {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    on_click(event, window, cx);
+                })
             })
             .refine_style(&self.style)
             .cursor(shared::interaction::cursor(
@@ -358,7 +390,7 @@ impl RenderOnce for IconButton {
             );
 
         crate::ripple::RippleElement::new(icon_button_element.into_element(), ripple_state)
-            .corner_radii(gpui::Corners::all(radius))
+            .corner_radii(active_radii)
             .color(colors.content)
     }
 }
