@@ -368,6 +368,7 @@ pub struct InputState {
     pub(super) selecting: bool,
     pub(super) size: Size,
     pub(super) disabled: bool,
+    pub(super) invalid: bool,
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
     pub(super) submit_on_enter: bool,
@@ -498,6 +499,7 @@ impl InputState {
             input_bounds: Bounds::default(),
             selecting: false,
             disabled: false,
+            invalid: false,
             masked: false,
             clean_on_escape: false,
             submit_on_enter: false,
@@ -927,6 +929,12 @@ impl InputState {
     pub fn set_masked(&mut self, masked: bool, _: &mut Window, cx: &mut Context<Self>) {
         debug_assert!(self.mode.is_single_line());
         self.masked = masked;
+        cx.notify();
+    }
+
+    /// Set the invalid (error) state of the input field.
+    pub fn set_invalid(&mut self, invalid: bool, _: &mut Window, cx: &mut Context<Self>) {
+        self.invalid = invalid;
         cx.notify();
     }
 

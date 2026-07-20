@@ -208,6 +208,7 @@ impl Button {
     }
 
     /// Set the border edges of the Button.
+    #[allow(dead_code)]
     pub(crate) fn border_edges(mut self, edges: impl Into<Edges<bool>>) -> Self {
         self.border_edges = edges.into();
         self

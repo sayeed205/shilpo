@@ -34,12 +34,22 @@ pub(crate) fn input_style(disabled: bool, cx: &App) -> (Hsla, Hsla) {
     }
 }
 
+/// The visual variant of the [`Input`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputVariant {
+    #[default]
+    Outlined,
+    Filled,
+}
+
 /// A text input element bind to an [`InputState`].
 #[derive(IntoElement)]
 pub struct Input {
     state: Entity<InputState>,
     style: StyleRefinement,
     size: Size,
+    variant: InputVariant,
+    invalid: bool,
     prefix: Option<AnyElement>,
     suffix: Option<AnyElement>,
     height: Option<DefiniteLength>,
@@ -84,6 +94,8 @@ impl Input {
         Self {
             state: state.clone(),
             size: Size::default(),
+            variant: InputVariant::default(),
+            invalid: false,
             style: StyleRefinement::default(),
             prefix: None,
             suffix: None,
@@ -174,6 +186,18 @@ impl Input {
     /// Set to disable the input field.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// Set the visual variant of the input field.
+    pub fn variant(mut self, variant: InputVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    /// Set whether the input field is in invalid (error) state.
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.invalid = invalid;
         self
     }
 
@@ -350,6 +374,7 @@ impl RenderOnce for Input {
             state.context_menu_builder = self.context_menu_builder.clone();
             state.disabled = self.disabled;
             state.size = self.size;
+            state.invalid = self.invalid;
 
             // Only for single line mode
             if state.mode.is_single_line() {
@@ -376,12 +401,16 @@ impl RenderOnce for Input {
         let (bg, _) = input_style(state.disabled, cx);
         let bg = if state.mode.is_code_editor() {
             cx.theme().editor_background()
+        } else if self.variant == InputVariant::Filled {
+            cx.theme().surface_container_highest
         } else {
             bg
         };
         let bg = if state.disabled { bg.opacity(0.5) } else { bg };
         let border_color = if state.disabled {
             cx.theme().outline_variant.opacity(0.5)
+        } else if state.invalid {
+            cx.theme().error
         } else {
             cx.theme().outline_variant
         };
@@ -495,15 +524,46 @@ impl RenderOnce for Input {
             })
             .when(self.appearance, |this| {
                 this.bg(bg)
-                    .rounded(cx.theme().radius)
-                    .when(self.bordered, |this| {
-                        this.border_color(border_color)
-                            .border_1()
-                            .when(cx.theme().shadow, |this| this.shadow_xs())
-                            .when(focused && self.focus_bordered, |this| {
-                                this.focused_border(cx)
-                            })
+                    .map(|this| match self.variant {
+                        InputVariant::Outlined => {
+                            this.rounded(cx.theme().radius)
+                                .when(self.bordered, |this| {
+                                    this.border_color(border_color)
+                                        .when(focused && self.focus_bordered, |this| {
+                                            this.border(px(2.))
+                                                .border_color(if self.invalid {
+                                                    cx.theme().error
+                                                } else {
+                                                    cx.theme().primary
+                                                })
+                                        })
+                                        .when(!focused || !self.focus_bordered, |this| {
+                                            this.border_1()
+                                        })
+                                })
+                        }
+                        InputVariant::Filled => {
+                            this.rounded_tl(cx.theme().radius)
+                                .rounded_tr(cx.theme().radius)
+                                .rounded_bl(px(0.))
+                                .rounded_br(px(0.))
+                                .when(self.bordered, |this| {
+                                    this.border_color(border_color)
+                                        .when(focused && self.focus_bordered, |this| {
+                                            this.border_b(px(2.))
+                                                .border_color(if self.invalid {
+                                                    cx.theme().error
+                                                } else {
+                                                    cx.theme().primary
+                                                })
+                                        })
+                                        .when(!focused || !self.focus_bordered, |this| {
+                                            this.border_b_1()
+                                        })
+                                })
+                        }
                     })
+                    .when(!focused && cx.theme().shadow, |this| this.shadow_xs())
             })
             .items_center()
             .gap(gap_x)
@@ -553,6 +613,7 @@ impl RenderOnce for Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::AppContext;
 
     #[test]
     fn content_types_map_to_accessibility_roles() {
@@ -660,5 +721,36 @@ mod tests {
             ),
             Role::TextInput
         );
+    }
+
+    #[gpui::test]
+    fn test_input_variant_and_invalid(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            let state = cx.new(|cx| InputState::new(window, cx));
+            let input = Input::new(&state)
+                .variant(InputVariant::Filled)
+                .invalid(true);
+
+            assert_eq!(input.get_variant(), InputVariant::Filled);
+            assert!(input.is_invalid());
+
+            // Render to sync fields
+            let _rendered = gpui::RenderOnce::render(input, window, cx);
+            drop(_rendered);
+            assert!(state.read(cx).invalid);
+        });
+    }
+}
+
+#[cfg(test)]
+impl Input {
+    pub(crate) fn get_variant(&self) -> InputVariant {
+        self.variant
+    }
+
+    pub(crate) fn is_invalid(&self) -> bool {
+        self.invalid
     }
 }

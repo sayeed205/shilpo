@@ -1,13 +1,12 @@
 use std::rc::Rc;
 
 use crate::theme::ActiveTheme;
-use gpui::Corners;
 use gpui::Window;
-use gpui::{AnyElement, App, Context, Edges, Entity, EventEmitter, FocusHandle, Focusable};
+use gpui::{AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable};
 use gpui::{
     InteractiveElement, IntoElement, KeyBinding, ParentElement, RenderOnce, Role, SharedString,
     StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, actions,
-    prelude::FluentBuilder as _,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::{
@@ -16,7 +15,7 @@ use crate::{
     h_flex,
 };
 
-use super::{Input, InputState, MaskPattern};
+use super::{Input, InputState, MaskPattern, InputVariant};
 
 actions!(number_input, [Increment, Decrement]);
 
@@ -34,6 +33,8 @@ pub struct NumberInput {
     state: Entity<InputState>,
     placeholder: SharedString,
     size: Size,
+    variant: InputVariant,
+    invalid: bool,
     prefix: Option<AnyElement>,
     suffix: Option<AnyElement>,
     appearance: bool,
@@ -47,6 +48,8 @@ impl NumberInput {
         Self {
             state: state.clone(),
             size: Size::default(),
+            variant: InputVariant::default(),
+            invalid: false,
             placeholder: SharedString::default(),
             prefix: None,
             suffix: None,
@@ -77,6 +80,18 @@ impl NumberInput {
     /// Set the appearance of the number input, if false will no border and background.
     pub fn appearance(mut self, appearance: bool) -> Self {
         self.appearance = appearance;
+        self
+    }
+
+    /// Set the visual variant of the number input.
+    pub fn variant(mut self, variant: InputVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    /// Set whether the number input is in invalid (error) state.
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.invalid = invalid;
         self
     }
 
@@ -297,7 +312,27 @@ impl RenderOnce for NumberInput {
             });
         }
 
-        let numeric_value = self.state.read(cx).value().parse::<f64>().ok();
+        let state = self.state.read(cx);
+        let numeric_value = state.value().parse::<f64>().ok();
+        let disabled = self.disabled || state.disabled;
+        let focused = state.focus_handle.is_focused(window) && !disabled;
+        let invalid = self.invalid || state.invalid;
+
+        // Resolve background and border colors
+        let (bg, _) = super::input_style(disabled, cx);
+        let bg = if self.variant == InputVariant::Filled {
+            cx.theme().surface_container_highest
+        } else {
+            bg
+        };
+        let bg = if disabled { bg.opacity(0.5) } else { bg };
+        let border_color = if disabled {
+            cx.theme().outline_variant.opacity(0.5)
+        } else if invalid {
+            cx.theme().error
+        } else {
+            cx.theme().outline_variant
+        };
 
         h_flex()
             .id(("number-input", self.state.entity_id()))
@@ -306,37 +341,48 @@ impl RenderOnce for NumberInput {
             .key_context(CONTEXT)
             .on_action(window.listener_for(&self.state, InputState::on_action_increment))
             .on_action(window.listener_for(&self.state, InputState::on_action_decrement))
-            .flex_1()
-            .rounded(cx.theme().radius)
+            .w_full()
+            .items_stretch()
             .refine_style(&self.style)
-            .when(self.disabled, |this| this.opacity(0.5))
-            .child(
-                Button::new("minus")
-                    .map(|this| {
-                        if self.appearance {
-                            this.outlined()
-                        } else {
-                            this.plain()
+            .when(disabled, |this| this.opacity(0.5))
+            .when(self.appearance, |this| {
+                this.bg(bg)
+                    .map(|this| match self.variant {
+                        InputVariant::Outlined => {
+                            this.rounded_full()
+                                .when(focused, |this| {
+                                    this.border(px(2.))
+                                        .border_color(if invalid { cx.theme().error } else { cx.theme().primary })
+                                })
+                                .when(!focused, |this| {
+                                    this.border_1().border_color(border_color)
+                                })
+                        }
+                        InputVariant::Filled => {
+                            this.rounded_tl(cx.theme().radius)
+                                .rounded_tr(cx.theme().radius)
+                                .rounded_bl(px(0.))
+                                .rounded_br(px(0.))
+                                .when(focused, |this| {
+                                    this.border_b(px(2.))
+                                        .border_color(if invalid { cx.theme().error } else { cx.theme().primary })
+                                })
+                                .when(!focused, |this| {
+                                    this.border_b_1().border_color(border_color)
+                                })
                         }
                     })
+                    .px(px(4.))
+            })
+            .child(
+                Button::new("minus")
+                    .plain()
+                    .rounded_full()
                     .with_size(self.size)
                     .icon(IconName::Minus)
                     .compact()
                     .tab_stop(false)
-                    .disabled(self.disabled)
-                    .border_color(cx.theme().outline_variant)
-                    .border_corners(Corners {
-                        top_left: true,
-                        top_right: false,
-                        bottom_right: false,
-                        bottom_left: true,
-                    })
-                    .border_edges(Edges {
-                        top: self.appearance,
-                        right: false,
-                        bottom: self.appearance,
-                        left: self.appearance,
-                    })
+                    .disabled(disabled)
                     .on_click({
                         let state = self.state.clone();
                         move |_, window, cx| {
@@ -346,42 +392,27 @@ impl RenderOnce for NumberInput {
             )
             .child(
                 Input::new(&self.state)
-                    .appearance(self.appearance)
+                    .appearance(false)
                     .with_size(self.size)
-                    .disabled(self.disabled)
+                    .disabled(disabled)
+                    .variant(self.variant)
+                    .invalid(invalid)
                     .gap_0()
                     .rounded_none()
+                    .flex_grow_1()
                     .text_align(TextAlign::Center)
                     .when_some(self.prefix, |this, prefix| this.prefix(prefix))
                     .when_some(self.suffix, |this, suffix| this.suffix(suffix)),
             )
             .child(
                 Button::new("plus")
-                    .map(|this| {
-                        if self.appearance {
-                            this.outlined()
-                        } else {
-                            this.plain()
-                        }
-                    })
+                    .plain()
+                    .rounded_full()
                     .with_size(self.size)
                     .icon(IconName::Plus)
                     .compact()
                     .tab_stop(false)
-                    .disabled(self.disabled)
-                    .border_color(cx.theme().outline_variant)
-                    .border_corners(Corners {
-                        top_left: false,
-                        top_right: true,
-                        bottom_right: true,
-                        bottom_left: false,
-                    })
-                    .border_edges(Edges {
-                        top: self.appearance,
-                        right: self.appearance,
-                        bottom: self.appearance,
-                        left: false,
-                    })
+                    .disabled(disabled)
                     .on_click({
                         let state = self.state.clone();
                         move |_, window, cx| {
@@ -394,7 +425,8 @@ impl RenderOnce for NumberInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{StepAction, step_value};
+    use super::{StepAction, step_value, InputState, NumberInput};
+    use gpui::{AppContext, IntoElement};
 
     // `test_number_step` lives in `state::tests` because `NumberStep::value`
     // now needs a `Context<InputState>` to invoke the `by_value` closure.
@@ -487,5 +519,33 @@ mod tests {
             step_value("1000", StepAction::Increment, 1., None, Some(100.)),
             None
         );
+    }
+
+    #[gpui::test]
+    fn test_number_input_variant_and_invalid(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            let state = cx.new(|cx| InputState::new(window, cx));
+            let input = NumberInput::new(&state)
+                .variant(super::InputVariant::Filled)
+                .invalid(true);
+
+            assert_eq!(input.get_variant(), super::InputVariant::Filled);
+            assert!(input.is_invalid());
+
+            let _element = input.into_element();
+        });
+    }
+}
+
+#[cfg(test)]
+impl NumberInput {
+    pub(crate) fn get_variant(&self) -> super::InputVariant {
+        self.variant
+    }
+
+    pub(crate) fn is_invalid(&self) -> bool {
+        self.invalid
     }
 }

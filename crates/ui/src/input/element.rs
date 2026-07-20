@@ -1914,13 +1914,14 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let (focus_handle, show_cursor, disabled, selected_range) = {
+        let (focus_handle, show_cursor, disabled, selected_range, invalid) = {
             let state = self.state.read(cx);
             (
                 state.focus_handle.clone(),
                 state.show_cursor(window, cx),
                 state.disabled,
                 state.selected_range,
+                state.invalid,
             )
         };
         let focused = focus_handle.is_focused(window);
@@ -2017,7 +2018,12 @@ impl Element for TextElement {
             }
 
             if let Some(path) = prepaint.selection_path.take() {
-                window.paint_path(path, cx.theme().primary_container);
+                let selection_color = if invalid {
+                    cx.theme().error.mix_oklab(cx.theme().transparent, 0.8)
+                } else {
+                    cx.theme().primary_container
+                };
+                window.paint_path(path, selection_color);
             }
 
             // Paint hover highlight
@@ -2113,7 +2119,8 @@ impl Element for TextElement {
         // Paint blinking cursor
         if focused && show_cursor {
             if let Some(cursor_bounds) = prepaint.cursor_bounds_with_scroll() {
-                window.paint_quad(fill(cursor_bounds, cx.theme().primary));
+                let caret_color = if invalid { cx.theme().error } else { cx.theme().primary };
+                window.paint_quad(fill(cursor_bounds, caret_color));
             }
         }
 

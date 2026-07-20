@@ -30,6 +30,7 @@ impl Default for FieldProps {
     }
 }
 
+#[derive(Clone)]
 pub enum FieldBuilder {
     String(SharedString),
     Element(Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>),
@@ -85,6 +86,8 @@ pub struct Field {
     label: Option<FieldBuilder>,
     label_indent: bool,
     description: Option<FieldBuilder>,
+    invalid: bool,
+    error_message: Option<FieldBuilder>,
     /// Used to render the actual form field, e.g.: Input, Switch...
     children: Vec<AnyElement>,
     visible: bool,
@@ -104,6 +107,8 @@ impl Field {
             style: StyleRefinement::default(),
             label: None,
             description: None,
+            invalid: false,
+            error_message: None,
             children: Vec::new(),
             visible: true,
             required: false,
@@ -118,6 +123,30 @@ impl Field {
     /// Sets the label for the form field.
     pub fn label(mut self, label: impl Into<FieldBuilder>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    /// Sets whether the form field is in invalid (error) state.
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        self.invalid = invalid;
+        self
+    }
+
+    /// Sets the error message to display when the field is invalid.
+    pub fn error_message(mut self, error_message: impl Into<FieldBuilder>) -> Self {
+        self.error_message = Some(error_message.into());
+        self
+    }
+
+    /// Sets the error message to display when the field is invalid, using a function.
+    pub fn error_message_fn<F, E>(mut self, error_message: F) -> Self
+    where
+        E: IntoElement,
+        F: Fn(&mut Window, &mut App) -> E + 'static,
+    {
+        self.error_message = Some(FieldBuilder::Element(Rc::new(move |window, cx| {
+            error_message(window, cx).into_any_element()
+        })));
         self
     }
 
@@ -295,6 +324,7 @@ impl RenderOnce for Field {
                         this.child(
                             wrap_label(label_width)
                                 .text_sm()
+                                .when(self.invalid, |this| this.text_color(cx.theme().error))
                                 .when_some(self.props.label_text_size, |this, size| {
                                     this.text_size(size)
                                 })
@@ -337,14 +367,53 @@ impl RenderOnce for Field {
                             wrap_label(label_width),
                         )
                     })
-                    .when_some(self.description, |this, builder| {
-                        this.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().on_surface_variant)
-                                .child(builder.render(window, cx)),
-                        )
+                    .when(self.invalid && self.error_message.is_some(), |this| {
+                        this.when_some(self.error_message.clone(), |this, builder| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().error)
+                                    .child(builder.render(window, cx)),
+                            )
+                        })
+                    })
+                    .when(!self.invalid || self.error_message.is_none(), |this| {
+                        this.when_some(self.description.clone(), |this, builder| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().on_surface_variant)
+                                    .child(builder.render(window, cx)),
+                            )
+                        })
                     }),
             )
+    }
+}
+
+#[cfg(test)]
+impl Field {
+    pub(crate) fn is_invalid(&self) -> bool {
+        self.invalid
+    }
+
+    pub(crate) fn has_error_message(&self) -> bool {
+        self.error_message.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_field_invalid_and_error_message() {
+        let field = Field::new()
+            .invalid(true)
+            .error_message("Required field")
+            .error_message_fn(|_, _| div());
+
+        assert!(field.is_invalid());
+        assert!(field.has_error_message());
     }
 }
