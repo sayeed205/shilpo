@@ -311,3 +311,137 @@ impl RenderOnce for AccordionItem {
         )
     }
 }
+
+#[cfg(test)]
+impl Accordion {
+    pub(crate) fn is_multiple(&self) -> bool {
+        self.multiple
+    }
+
+    pub(crate) fn is_bordered(&self) -> bool {
+        self.bordered
+    }
+
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    pub(crate) fn get_size(&self) -> Size {
+        self.size
+    }
+
+    pub(crate) fn children_count(&self) -> usize {
+        self.children.len()
+    }
+
+    pub(crate) fn get_child(&self, ix: usize) -> &AccordionItem {
+        &self.children[ix]
+    }
+
+    pub(crate) fn has_on_toggle_click(&self) -> bool {
+        self.on_toggle_click.is_some()
+    }
+}
+
+#[cfg(test)]
+impl AccordionItem {
+    pub(crate) fn get_index(&self) -> usize {
+        self.index
+    }
+
+    pub(crate) fn get_icon_path(&self) -> Option<gpui::SharedString> {
+        self.icon.as_ref().map(|i| i.path_ref().clone())
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.open
+    }
+
+    pub(crate) fn is_bordered(&self) -> bool {
+        self.bordered
+    }
+
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    pub(crate) fn get_size(&self) -> Size {
+        self.size
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn has_on_toggle_click(&self) -> bool {
+        self.on_toggle_click.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::IconNamed;
+
+    #[test]
+    fn test_accordion_builder() {
+        let acc = Accordion::new("test-accordion")
+            .multiple(true)
+            .bordered(false)
+            .disabled(true)
+            .with_size(Size::Small)
+            .item(|item| item.open(true))
+            .on_toggle_click(|_, _, _| {});
+
+        assert!(acc.is_multiple());
+        assert!(!acc.is_bordered());
+        assert!(acc.is_disabled());
+        assert_eq!(acc.get_size(), Size::Small);
+        assert_eq!(acc.children_count(), 1);
+        assert!(acc.get_child(0).is_open());
+        assert!(acc.has_on_toggle_click());
+    }
+
+    #[test]
+    fn test_accordion_item_builder() {
+        let item = AccordionItem::new()
+            .icon(IconName::Check)
+            .bordered(false)
+            .open(true)
+            .disabled(true)
+            .with_size(Size::Large);
+
+        assert_eq!(item.get_icon_path(), Some(IconName::Check.path()));
+        assert!(!item.is_bordered());
+        assert!(item.is_open());
+        assert!(item.is_disabled());
+        assert_eq!(item.get_size(), Size::Large);
+        assert_eq!(item.get_index(), 0);
+    }
+
+    #[gpui::test]
+    fn test_accordion_click_handlers(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        let group_toggled = Arc::new(std::sync::Mutex::new(false));
+        let item_toggled = Arc::new(std::sync::Mutex::new(false));
+
+        let group_toggled_clone = group_toggled.clone();
+        let acc = Accordion::new("group").on_toggle_click(move |ixs, _, _| {
+            *group_toggled_clone.lock().unwrap() = true;
+            assert_eq!(ixs, &[1]);
+        });
+
+        let item_toggled_clone = item_toggled.clone();
+        let item = AccordionItem::new().on_toggle_click(move |open, _, _| {
+            *item_toggled_clone.lock().unwrap() = true;
+            assert!(*open);
+        });
+
+        cx.update(|window, cx| {
+            let on_group_toggle = acc.on_toggle_click.unwrap();
+            on_group_toggle(&[1], window, cx);
+            assert!(*group_toggled.lock().unwrap());
+
+            let on_item_toggle = item.on_toggle_click.unwrap();
+            on_item_toggle(&true, window, cx);
+            assert!(*item_toggled.lock().unwrap());
+        });
+    }
+}

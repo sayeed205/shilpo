@@ -411,3 +411,136 @@ impl RenderOnce for RadioGroup {
         )
     }
 }
+
+#[cfg(test)]
+impl Radio {
+    pub(crate) fn is_checked(&self) -> bool {
+        self.checked
+    }
+
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    pub(crate) fn current_size(&self) -> Size {
+        self.size
+    }
+
+    pub(crate) fn is_tab_stop(&self) -> bool {
+        self.tab_stop
+    }
+
+    pub(crate) fn current_tab_index(&self) -> isize {
+        self.tab_index
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn current_position_in_set(&self) -> Option<usize> {
+        self.position_in_set
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn current_size_of_set(&self) -> Option<usize> {
+        self.size_of_set
+    }
+}
+
+#[cfg(test)]
+impl RadioGroup {
+    pub(crate) fn get_layout(&self) -> Axis {
+        self.layout
+    }
+
+    pub(crate) fn get_selected_index(&self) -> Option<usize> {
+        self.selected_index
+    }
+
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    pub(crate) fn radios_count(&self) -> usize {
+        self.radios.len()
+    }
+
+    pub(crate) fn get_radio(&self, ix: usize) -> &Radio {
+        &self.radios[ix]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn test_radio_builder() {
+        let radio = Radio::new("test-r")
+            .checked(true)
+            .disabled(true)
+            .tab_stop(false)
+            .tab_index(2)
+            .with_size(Size::Large);
+
+        assert!(radio.is_checked());
+        assert!(radio.is_disabled());
+        assert!(!radio.is_tab_stop());
+        assert_eq!(radio.current_tab_index(), 2);
+        assert_eq!(radio.current_size(), Size::Large);
+    }
+
+    #[test]
+    fn test_radio_conversions() {
+        // From<&'static str>
+        let r1: Radio = "label-1".into();
+        assert_eq!(r1.id.to_string(), "label-1");
+
+        // From<SharedString>
+        let s = SharedString::from("label-2");
+        let r2: Radio = s.into();
+        assert_eq!(r2.id.to_string(), "label-2");
+
+        // From<String>
+        let r3: Radio = String::from("label-3").into();
+        assert_eq!(r3.id.to_string(), "label-3");
+    }
+
+    #[test]
+    fn test_radio_group_builder() {
+        let group = RadioGroup::vertical("test-rg")
+            .selected_index(Some(1))
+            .disabled(true)
+            .child("Option A")
+            .children(vec!["Option B", "Option C"]);
+
+        assert_eq!(group.get_layout(), Axis::Vertical);
+        assert_eq!(group.get_selected_index(), Some(1));
+        assert!(group.is_disabled());
+        assert_eq!(group.radios_count(), 3);
+        assert_eq!(group.get_radio(0).id.to_string(), "Option A");
+        assert_eq!(group.get_radio(1).id.to_string(), "Option B");
+
+        let h_group = RadioGroup::horizontal("test-h");
+        assert_eq!(h_group.get_layout(), Axis::Horizontal);
+    }
+
+    #[gpui::test]
+    fn test_radio_handle_click(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        let clicked = Arc::new(Mutex::new(false));
+        let clicked_val = Arc::new(Mutex::new(false));
+
+        let clicked_clone = clicked.clone();
+        let clicked_val_clone = clicked_val.clone();
+        let radio = Radio::new("test-r").on_click(move |val, _, _| {
+            *clicked_clone.lock().unwrap() = true;
+            *clicked_val_clone.lock().unwrap() = *val;
+        });
+
+        cx.update(|window, cx| {
+            Radio::handle_click(&radio.on_click, false, window, cx);
+            assert!(*clicked.lock().unwrap());
+            assert!(*clicked_val.lock().unwrap()); // !false -> true
+        });
+    }
+}

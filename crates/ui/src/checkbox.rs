@@ -327,3 +327,93 @@ impl RenderOnce for Checkbox {
             .map(|this| self.tooltip.apply(this))
     }
 }
+
+#[cfg(test)]
+impl Checkbox {
+    pub(crate) fn is_checked(&self) -> bool {
+        self.checked
+    }
+
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    pub(crate) fn current_size(&self) -> Size {
+        self.size
+    }
+
+    pub(crate) fn is_tab_stop(&self) -> bool {
+        self.tab_stop
+    }
+
+    pub(crate) fn current_tab_index(&self) -> isize {
+        self.tab_index
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn test_checkbox_builder() {
+        let cb = Checkbox::new("test-cb")
+            .checked(true)
+            .disabled(true)
+            .tab_stop(false)
+            .tab_index(5)
+            .with_size(Size::Large);
+
+        assert!(cb.is_checked());
+        assert!(cb.is_disabled());
+        assert!(!cb.is_tab_stop());
+        assert_eq!(cb.current_tab_index(), 5);
+        assert_eq!(cb.current_size(), Size::Large);
+    }
+
+    #[test]
+    fn test_checkbox_selectable_trait() {
+        let cb = Checkbox::new("test-cb").selected(true);
+        assert!(cb.is_selected());
+        assert!(cb.is_checked());
+
+        let cb = cb.selected(false);
+        assert!(!cb.is_selected());
+        assert!(!cb.is_checked());
+    }
+
+    #[test]
+    fn test_checkbox_sizable_trait() {
+        let cb = Checkbox::new("test-cb").with_size(Size::Small);
+        assert_eq!(cb.current_size(), Size::Small);
+    }
+
+    #[gpui::test]
+    fn test_checkbox_handle_click(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        let clicked = Arc::new(Mutex::new(false));
+        let clicked_val = Arc::new(Mutex::new(false));
+
+        let clicked_clone = clicked.clone();
+        let clicked_val_clone = clicked_val.clone();
+        let cb = Checkbox::new("test-cb").on_click(move |val, _, _| {
+            *clicked_clone.lock().unwrap() = true;
+            *clicked_val_clone.lock().unwrap() = *val;
+        });
+
+        cx.update(|window, cx| {
+            Checkbox::handle_click(&cb.on_click, false, window, cx);
+            assert!(*clicked.lock().unwrap());
+            assert!(*clicked_val.lock().unwrap()); // !false -> true
+        });
+
+        // Test clicking when checked
+        *clicked.lock().unwrap() = false;
+        cx.update(|window, cx| {
+            Checkbox::handle_click(&cb.on_click, true, window, cx);
+            assert!(*clicked.lock().unwrap());
+            assert!(!*clicked_val.lock().unwrap()); // !true -> false
+        });
+    }
+}

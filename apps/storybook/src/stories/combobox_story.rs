@@ -87,7 +87,7 @@ impl SearchableListItem for Industry {
             .gap_2()
             .items_center()
             .child(
-                Icon::new(self.icon.clone())
+                Icon::new(self.icon)
                     .small()
                     .text_color(cx.theme().on_surface_variant),
             )
@@ -556,7 +556,7 @@ impl Render for ComboboxStory {
                             let (icon, title) = match &ctx.selection {
                                 [] => (None, None),
                                 [(_index, item)] => {
-                                    (Some(item.icon.clone()), Some(item.title().clone()))
+                                    (Some(item.icon), Some(item.title().clone()))
                                 }
                                 items => (
                                     None,

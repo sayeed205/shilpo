@@ -326,3 +326,100 @@ impl RenderOnce for Switch {
         )
     }
 }
+
+#[cfg(test)]
+impl Switch {
+    pub(crate) fn is_checked(&self) -> bool {
+        self.checked
+    }
+
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    pub(crate) fn current_size(&self) -> Size {
+        self.size
+    }
+
+    pub(crate) fn get_label_side(&self) -> Side {
+        self.label_side
+    }
+
+    pub(crate) fn get_checked_icon(&self) -> Option<IconName> {
+        self.checked_icon
+    }
+
+    pub(crate) fn get_unchecked_icon(&self) -> Option<IconName> {
+        self.unchecked_icon
+    }
+
+    pub(crate) fn get_color(&self) -> Option<Hsla> {
+        self.color
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn test_switch_builder() {
+        let switch = Switch::new("test-sw")
+            .checked(true)
+            .disabled(true)
+            .color(gpui::red())
+            .with_size(Size::Small);
+
+        assert!(switch.is_checked());
+        assert!(switch.is_disabled());
+        assert_eq!(switch.current_size(), Size::Small);
+        assert_eq!(switch.get_color(), Some(gpui::red()));
+        assert_eq!(switch.get_label_side(), Side::Right);
+    }
+
+    #[test]
+    fn test_switch_show_icons() {
+        // show_icons(true) -> checked_icon: Check, unchecked_icon: None
+        let switch = Switch::new("test-sw").show_icons(true);
+        assert_eq!(switch.get_checked_icon(), Some(IconName::Check));
+        assert_eq!(switch.get_unchecked_icon(), None);
+
+        // show_icons(false) -> checked_icon: None, unchecked_icon: None
+        let switch = switch.show_icons(false);
+        assert_eq!(switch.get_checked_icon(), None);
+        assert_eq!(switch.get_unchecked_icon(), None);
+    }
+
+    #[test]
+    fn test_switch_checked_unchecked_icons() {
+        let switch = Switch::new("test-sw")
+            .checked_icon(IconName::Check)
+            .unchecked_icon(IconName::Minus);
+
+        assert_eq!(switch.get_checked_icon(), Some(IconName::Check));
+        assert_eq!(switch.get_unchecked_icon(), Some(IconName::Minus));
+    }
+
+    #[gpui::test]
+    fn test_switch_click_handler(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        let clicked = Arc::new(Mutex::new(false));
+        let clicked_val = Arc::new(Mutex::new(false));
+
+        let clicked_clone = clicked.clone();
+        let clicked_val_clone = clicked_val.clone();
+        let switch = Switch::new("test-sw").on_click(move |val, _, _| {
+            *clicked_clone.lock().unwrap() = true;
+            *clicked_val_clone.lock().unwrap() = *val;
+        });
+
+        // Simulating the action on click handler closure directly
+        let on_click = switch.on_click.unwrap();
+        cx.update(|window, cx| {
+            on_click(&true, window, cx);
+            assert!(*clicked.lock().unwrap());
+            assert!(*clicked_val.lock().unwrap());
+        });
+    }
+}

@@ -36,3 +36,19 @@ impl ProgressState {
         self.target.set(value);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_progress_state() {
+        let state = ProgressState::new(25.0);
+        assert_eq!(state.value, 25.0);
+        assert_eq!(state.target(), 25.0);
+
+        state.set_target(75.0);
+        assert_eq!(state.value, 25.0); // value should be unchanged until animation resolves
+        assert_eq!(state.target(), 75.0);
+    }
+}

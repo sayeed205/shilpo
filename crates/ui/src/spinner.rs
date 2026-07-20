@@ -73,3 +73,51 @@ impl RenderOnce for Spinner {
             .into_element()
     }
 }
+
+#[cfg(test)]
+impl Spinner {
+    pub(crate) fn get_size(&self) -> Size {
+        self.size
+    }
+
+    pub(crate) fn get_icon_path(&self) -> &gpui::SharedString {
+        self.icon.path_ref()
+    }
+
+    pub(crate) fn get_speed(&self) -> Duration {
+        self.speed
+    }
+
+    pub(crate) fn get_color(&self) -> Option<Hsla> {
+        self.color
+    }
+
+    pub(crate) fn run_easing(&self, val: f32) -> f32 {
+        (self.easing)(val)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::IconNamed;
+
+    #[test]
+    fn test_spinner_builder() {
+        let sp = Spinner::new()
+            .color(gpui::blue())
+            .with_size(Size::Large)
+            .icon(IconName::Check);
+
+        assert_eq!(sp.get_size(), Size::Large);
+        assert_eq!(sp.get_color(), Some(gpui::blue()));
+        assert_eq!(sp.get_icon_path().as_ref(), IconName::Check.path().as_ref());
+        assert_eq!(sp.get_speed(), Duration::from_secs_f64(0.8));
+    }
+
+    #[test]
+    fn test_spinner_custom_ease() {
+        let sp = Spinner::new().ease(|x| x * 2.0);
+        assert_eq!(sp.run_easing(3.0), 6.0);
+    }
+}

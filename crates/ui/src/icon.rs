@@ -26,7 +26,7 @@ impl<T: IconNamed> From<T> for Icon {
 // crate's `build.rs` (via cargo's `links` mechanism) and re-exported by
 // our own `build.rs`. See `shilpo_macros::icon_named!`'s doc
 // comment for the full mechanism.
-icon_named!(IconName, "$SHILPO_DEFAULT_ICONS_DIR");
+icon_named!(IconName, "$SHILPO_DEFAULT_ICONS_DIR", [Debug, Copy, PartialEq, Eq]);
 
 impl IconName {
     /// Return the icon as a Entity<Icon>

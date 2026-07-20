@@ -166,3 +166,50 @@ impl RenderOnce for Progress {
             )
     }
 }
+
+#[cfg(test)]
+impl Progress {
+    pub(crate) fn is_loading(&self) -> bool {
+        self.loading
+    }
+
+    pub(crate) fn get_value(&self) -> f32 {
+        self.value
+    }
+
+    pub(crate) fn get_color(&self) -> Option<Hsla> {
+        self.color
+    }
+
+    pub(crate) fn get_size(&self) -> Size {
+        self.size
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_progress_builder() {
+        let p = Progress::new("test-progress")
+            .loading(true)
+            .color(gpui::blue())
+            .value(45.5)
+            .with_size(Size::Large);
+
+        assert!(p.is_loading());
+        assert_eq!(p.get_value(), 45.5);
+        assert_eq!(p.get_color(), Some(gpui::blue()));
+        assert_eq!(p.get_size(), Size::Large);
+    }
+
+    #[test]
+    fn test_progress_value_clamping() {
+        let p_under = Progress::new("test-p").value(-10.0);
+        assert_eq!(p_under.get_value(), 0.0);
+
+        let p_over = Progress::new("test-p").value(150.0);
+        assert_eq!(p_over.get_value(), 100.0);
+    }
+}

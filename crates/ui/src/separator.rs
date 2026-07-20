@@ -5,7 +5,7 @@ use gpui::{
 };
 
 /// The style of the separator line.
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum SeparatorStyle {
     #[default]
     Solid,
@@ -151,5 +151,60 @@ impl RenderOnce for Separator {
                         .child(label),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+impl Separator {
+    pub(crate) fn get_axis(&self) -> Axis {
+        self.axis
+    }
+
+    pub(crate) fn get_label(&self) -> Option<SharedString> {
+        self.label.clone()
+    }
+
+    pub(crate) fn get_color(&self) -> Option<Hsla> {
+        self.color
+    }
+
+    pub(crate) fn get_line_style(&self) -> SeparatorStyle {
+        self.line_style
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_separator_constructors() {
+        let sep_vert = Separator::vertical();
+        assert_eq!(sep_vert.get_axis(), Axis::Vertical);
+        assert_eq!(sep_vert.get_line_style(), SeparatorStyle::Solid);
+
+        let sep_horiz = Separator::horizontal();
+        assert_eq!(sep_horiz.get_axis(), Axis::Horizontal);
+        assert_eq!(sep_horiz.get_line_style(), SeparatorStyle::Solid);
+
+        let sep_vert_dash = Separator::vertical_dashed();
+        assert_eq!(sep_vert_dash.get_axis(), Axis::Vertical);
+        assert_eq!(sep_vert_dash.get_line_style(), SeparatorStyle::Dashed);
+
+        let sep_horiz_dash = Separator::horizontal_dashed();
+        assert_eq!(sep_horiz_dash.get_axis(), Axis::Horizontal);
+        assert_eq!(sep_horiz_dash.get_line_style(), SeparatorStyle::Dashed);
+    }
+
+    #[test]
+    fn test_separator_builder() {
+        let sep = Separator::horizontal()
+            .label("OR")
+            .color(gpui::blue())
+            .dashed();
+
+        assert_eq!(sep.get_label(), Some("OR".into()));
+        assert_eq!(sep.get_color(), Some(gpui::blue()));
+        assert_eq!(sep.get_line_style(), SeparatorStyle::Dashed);
     }
 }

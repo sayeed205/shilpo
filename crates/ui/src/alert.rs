@@ -253,3 +253,97 @@ impl RenderOnce for Alert {
             .into_any_element()
     }
 }
+
+#[cfg(test)]
+impl Alert {
+    #[allow(dead_code)]
+    pub(crate) fn get_id(&self) -> &ElementId {
+        &self.id
+    }
+
+    pub(crate) fn get_variant(&self) -> AlertVariant {
+        self.variant
+    }
+
+    pub(crate) fn get_icon_path(&self) -> &gpui::SharedString {
+        self.icon.path_ref()
+    }
+
+    pub(crate) fn get_title(&self) -> Option<SharedString> {
+        self.title.clone()
+    }
+
+    pub(crate) fn get_size(&self) -> Size {
+        self.size
+    }
+
+    pub(crate) fn is_banner(&self) -> bool {
+        self.banner
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    pub(crate) fn has_on_close(&self) -> bool {
+        self.on_close.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::IconNamed;
+
+    #[test]
+    fn test_alert_constructors() {
+        let msg = "alert message";
+        let alt = Alert::new("a1", msg);
+        assert_eq!(alt.get_variant(), AlertVariant::Default);
+        assert_eq!(alt.get_icon_path().as_ref(), IconName::Info.path().as_ref());
+
+        let alt = Alert::info("a1", msg);
+        assert_eq!(alt.get_variant(), AlertVariant::Info);
+
+        let alt = Alert::success("a1", msg);
+        assert_eq!(alt.get_variant(), AlertVariant::Success);
+        assert_eq!(alt.get_icon_path().as_ref(), IconName::CircleCheck.path().as_ref());
+
+        let alt = Alert::warning("a1", msg);
+        assert_eq!(alt.get_variant(), AlertVariant::Warning);
+
+        let alt = Alert::error("a1", msg);
+        assert_eq!(alt.get_variant(), AlertVariant::Error);
+    }
+
+    #[test]
+    fn test_alert_builder() {
+        let alt = Alert::new("a1", "msg")
+            .title("Title")
+            .banner()
+            .icon(IconName::Check)
+            .with_size(Size::Large)
+            .on_close(|_, _, _| {});
+
+        assert_eq!(alt.get_title(), Some("Title".into()));
+        assert!(alt.is_banner());
+        assert_eq!(alt.get_icon_path().as_ref(), IconName::Check.path().as_ref());
+        assert_eq!(alt.get_size(), Size::Large);
+        assert!(alt.has_on_close());
+    }
+
+    #[gpui::test]
+    fn test_alert_variant_colors(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        cx.update(|cx| {
+            let variant = AlertVariant::Info;
+            assert_eq!(variant.fg(cx), cx.theme().primary);
+            assert_eq!(variant.bg(cx), cx.theme().primary.mix_oklab(transparent_white(), 0.04));
+            assert_eq!(variant.border_color(cx), cx.theme().primary.mix_oklab(transparent_white(), 0.3));
+
+            let variant_err = AlertVariant::Error;
+            assert_eq!(variant_err.fg(cx), cx.theme().error);
+        });
+    }
+}

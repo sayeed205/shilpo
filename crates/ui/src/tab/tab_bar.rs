@@ -597,3 +597,112 @@ impl RenderOnce for TabBar {
             .when_some(self.suffix, |this, suffix| this.child(suffix))
     }
 }
+
+#[cfg(test)]
+impl TabBar {
+    pub(crate) fn get_id(&self) -> &ElementId {
+        &self.id
+    }
+
+    pub(crate) fn get_variant(&self) -> TabVariant {
+        self.variant
+    }
+
+    pub(crate) fn get_indicator_alignment(&self) -> IndicatorAlignment {
+        self.indicator_alignment
+    }
+
+    pub(crate) fn get_size(&self) -> Size {
+        self.size
+    }
+
+    pub(crate) fn has_menu(&self) -> bool {
+        self.menu
+    }
+
+    pub(crate) fn children_count(&self) -> usize {
+        self.children.len()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn get_child(&self, ix: usize) -> &Tab {
+        &self.children[ix]
+    }
+
+    pub(crate) fn get_selected_index(&self) -> Option<usize> {
+        self.selected_index
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tab_bar_builder() {
+        let bar = TabBar::new("test-bar")
+            .selected_index(2)
+            .menu(true)
+            .with_size(Size::Large)
+            .child(Tab::new().label("Tab 1"))
+            .children(vec![Tab::new().label("Tab 2"), Tab::new().label("Tab 3")]);
+
+        assert_eq!(bar.get_id().to_string(), "test-bar");
+        assert_eq!(bar.get_selected_index(), Some(2));
+        assert!(bar.has_menu());
+        assert_eq!(bar.get_size(), Size::Large);
+        assert_eq!(bar.children_count(), 3);
+        assert_eq!(bar.get_variant(), TabVariant::default());
+        assert_eq!(bar.get_indicator_alignment(), IndicatorAlignment::default());
+    }
+
+    #[test]
+    fn test_tab_bar_variants() {
+        // Underline + Content (primary_tab)
+        let bar = TabBar::new("test-bar").primary_tab();
+        assert_eq!(bar.get_variant(), TabVariant::Underline);
+        assert_eq!(bar.get_indicator_alignment(), IndicatorAlignment::Content);
+
+        // Underline + Container (secondary_tab)
+        let bar = TabBar::new("test-bar").secondary_tab();
+        assert_eq!(bar.get_variant(), TabVariant::Underline);
+        assert_eq!(bar.get_indicator_alignment(), IndicatorAlignment::Container);
+
+        // Pill
+        let bar = TabBar::new("test-bar").pill();
+        assert_eq!(bar.get_variant(), TabVariant::Pill);
+
+        // Outline
+        let bar = TabBar::new("test-bar").outline();
+        assert_eq!(bar.get_variant(), TabVariant::Outline);
+
+        // Segmented
+        let bar = TabBar::new("test-bar").segmented();
+        assert_eq!(bar.get_variant(), TabVariant::Segmented);
+
+        // Underline
+        let bar = TabBar::new("test-bar").underline();
+        assert_eq!(bar.get_variant(), TabVariant::Underline);
+    }
+
+    #[gpui::test]
+    fn test_tab_bar_click_handler(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        let clicked = std::sync::Arc::new(std::sync::Mutex::new(false));
+        let clicked_idx = std::sync::Arc::new(std::sync::Mutex::new(999));
+
+        let clicked_clone = clicked.clone();
+        let clicked_idx_clone = clicked_idx.clone();
+        let bar = TabBar::new("test-bar").on_click(move |idx, _, _| {
+            *clicked_clone.lock().unwrap() = true;
+            *clicked_idx_clone.lock().unwrap() = *idx;
+        });
+
+        let on_click = bar.on_click.unwrap();
+        cx.update(|window, cx| {
+            on_click(&3, window, cx);
+            assert!(*clicked.lock().unwrap());
+            assert_eq!(*clicked_idx.lock().unwrap(), 3);
+        });
+    }
+}

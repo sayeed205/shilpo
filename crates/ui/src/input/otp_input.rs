@@ -379,3 +379,86 @@ impl RenderOnce for OtpInput {
             )
     }
 }
+
+#[cfg(test)]
+impl OtpState {
+    pub(crate) fn get_value(&self) -> &SharedString {
+        &self.value
+    }
+
+    pub(crate) fn get_length(&self) -> usize {
+        self.length
+    }
+
+    pub(crate) fn is_masked(&self) -> bool {
+        self.masked
+    }
+}
+
+#[cfg(test)]
+impl OtpInput {
+    pub(crate) fn get_groups(&self) -> usize {
+        self.number_of_groups
+    }
+
+    pub(crate) fn get_size(&self) -> Size {
+        self.size
+    }
+
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    fn test_otp_state_builder(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            let state = cx.new(|cx| OtpState::new(6, window, cx).default_value("1234").masked(true));
+            let s = state.read(cx);
+            assert_eq!(s.get_length(), 6);
+            assert_eq!(s.get_value().as_ref(), "1234");
+            assert!(s.is_masked());
+        });
+    }
+
+    #[gpui::test]
+    fn test_otp_state_mutators(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            let state_entity = cx.new(|cx| OtpState::new(4, window, cx));
+            
+            state_entity.update(cx, |state, cx| {
+                state.set_value("5678", window, cx);
+                state.set_masked(true, window, cx);
+            });
+
+            let s = state_entity.read(cx);
+            assert_eq!(s.get_value().as_ref(), "5678");
+            assert!(s.is_masked());
+        });
+    }
+
+    #[gpui::test]
+    fn test_otp_input_builder(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            let state = cx.new(|cx| OtpState::new(6, window, cx));
+            let input = OtpInput::new(&state)
+                .groups(3)
+                .disabled(true)
+                .with_size(Size::Large);
+
+            assert_eq!(input.get_groups(), 3);
+            assert!(input.is_disabled());
+            assert_eq!(input.get_size(), Size::Large);
+        });
+    }
+}

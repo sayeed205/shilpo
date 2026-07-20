@@ -220,3 +220,50 @@ impl RenderOnce for ProgressCircle {
             })
     }
 }
+
+#[cfg(test)]
+impl ProgressCircle {
+    pub(crate) fn is_loading(&self) -> bool {
+        self.loading
+    }
+
+    pub(crate) fn get_value(&self) -> f32 {
+        self.value
+    }
+
+    pub(crate) fn get_color(&self) -> Option<Hsla> {
+        self.color
+    }
+
+    pub(crate) fn get_size(&self) -> Size {
+        self.size
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_progress_circle_builder() {
+        let pc = ProgressCircle::new("test-progress-circle")
+            .loading(true)
+            .color(gpui::green())
+            .value(75.2)
+            .with_size(Size::Small);
+
+        assert!(pc.is_loading());
+        assert_eq!(pc.get_value(), 75.2);
+        assert_eq!(pc.get_color(), Some(gpui::green()));
+        assert_eq!(pc.get_size(), Size::Small);
+    }
+
+    #[test]
+    fn test_progress_circle_value_clamping() {
+        let pc_under = ProgressCircle::new("test-pc").value(-5.0);
+        assert_eq!(pc_under.get_value(), 0.0);
+
+        let pc_over = ProgressCircle::new("test-pc").value(120.0);
+        assert_eq!(pc_over.get_value(), 100.0);
+    }
+}

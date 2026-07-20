@@ -323,3 +323,52 @@ impl RenderOnce for Settings {
             )
     }
 }
+
+#[cfg(test)]
+impl Settings {
+    pub(crate) fn get_sidebar_width(&self) -> Pixels {
+        self.sidebar_width
+    }
+
+    pub(crate) fn get_sidebar_size_range(&self) -> Range<Pixels> {
+        self.sidebar_size_range.clone()
+    }
+
+    pub(crate) fn get_pages_count(&self) -> usize {
+        self.pages.len()
+    }
+
+    pub(crate) fn get_group_variant(&self) -> GroupBoxVariant {
+        self.group_variant
+    }
+
+    pub(crate) fn get_default_selected_index(&self) -> SelectIndex {
+        self.default_selected_index
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_settings_builder() {
+        let settings = Settings::new("test-settings")
+            .sidebar_width(px(300.))
+            .sidebar_size_range(px(200.)..px(400.))
+            .with_group_variant(GroupBoxVariant::Outline)
+            .default_selected_index(SelectIndex { page_ix: 1, group_ix: Some(2) })
+            .page(SettingPage::new("Page 1").icon(IconName::Check))
+            .pages(vec![
+                SettingPage::new("Page 2").icon(IconName::ChevronDown),
+                SettingPage::new("Page 3").icon(IconName::Close)
+            ]);
+
+        assert_eq!(settings.get_sidebar_width(), px(300.));
+        assert_eq!(settings.get_sidebar_size_range(), px(200.)..px(400.));
+        assert_eq!(settings.get_group_variant(), GroupBoxVariant::Outline);
+        assert_eq!(settings.get_default_selected_index().page_ix, 1);
+        assert_eq!(settings.get_default_selected_index().group_ix, Some(2));
+        assert_eq!(settings.get_pages_count(), 3);
+    }
+}

@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum ListItemMode {
+pub(crate) enum ListItemMode {
     #[default]
     Entry,
     Separator,
@@ -248,5 +248,88 @@ impl RenderOnce for ListItem {
                     this
                 }
             })
+    }
+}
+
+#[cfg(test)]
+impl ListItem {
+    pub(crate) fn get_mode(&self) -> ListItemMode {
+        self.mode
+    }
+
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    pub(crate) fn is_selected(&self) -> bool {
+        self.selected
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn is_secondary_selected(&self) -> bool {
+        self.secondary_selected
+    }
+
+    pub(crate) fn is_confirmed(&self) -> bool {
+        self.confirmed
+    }
+
+    pub(crate) fn get_check_icon_path(&self) -> Option<gpui::SharedString> {
+        self.check_icon.as_ref().map(|i| i.path_ref().clone())
+    }
+
+    pub(crate) fn has_suffix(&self) -> bool {
+        self.suffix.is_some()
+    }
+
+    pub(crate) fn has_on_click(&self) -> bool {
+        self.on_click.is_some()
+    }
+
+    pub(crate) fn has_on_mouse_down(&self) -> bool {
+        !self.on_mouse_down.is_empty()
+    }
+
+    pub(crate) fn has_on_mouse_enter(&self) -> bool {
+        self.on_mouse_enter.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{IconName, IconNamed};
+
+    #[test]
+    fn test_list_item_mode() {
+        let entry = ListItemMode::Entry;
+        assert!(!entry.is_separator());
+
+        let sep = ListItemMode::Separator;
+        assert!(sep.is_separator());
+    }
+
+    #[test]
+    fn test_list_item_builder() {
+        let item = ListItem::new("item1")
+            .separator()
+            .disabled(true)
+            .selected(true)
+            .confirmed(true)
+            .check_icon(IconName::Check)
+            .suffix(|_, _| div())
+            .on_click(|_, _, _| {})
+            .on_mouse_down(MouseButton::Left, |_, _, _| {})
+            .on_mouse_enter(|_, _, _| {});
+
+        assert_eq!(item.get_mode(), ListItemMode::Separator);
+        assert!(item.is_disabled());
+        assert!(item.is_selected());
+        assert!(item.is_confirmed());
+        assert_eq!(item.get_check_icon_path(), Some(IconName::Check.path()));
+        assert!(item.has_suffix());
+        assert!(item.has_on_click());
+        assert!(item.has_on_mouse_down());
+        assert!(item.has_on_mouse_enter());
     }
 }

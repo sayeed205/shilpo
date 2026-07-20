@@ -163,3 +163,85 @@ impl RenderOnce for Badge {
             })
     }
 }
+
+#[cfg(test)]
+impl Badge {
+    pub(crate) fn get_count(&self) -> usize {
+        self.count
+    }
+
+    pub(crate) fn get_max(&self) -> usize {
+        self.max
+    }
+
+    pub(crate) fn get_color(&self) -> Option<Hsla> {
+        self.color
+    }
+
+    pub(crate) fn get_size(&self) -> Size {
+        self.size
+    }
+
+    pub(crate) fn is_dot(&self) -> bool {
+        matches!(self.variant, BadgeVariant::Dot)
+    }
+
+    pub(crate) fn is_number(&self) -> bool {
+        matches!(self.variant, BadgeVariant::Number)
+    }
+
+    pub(crate) fn is_icon(&self) -> bool {
+        matches!(self.variant, BadgeVariant::Icon(_))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_badge_variant_helpers() {
+        let v_num = BadgeVariant::Number;
+        assert!(v_num.is_number());
+        assert!(!v_num.is_icon());
+
+        let v_dot = BadgeVariant::Dot;
+        assert!(!v_dot.is_number());
+        assert!(!v_dot.is_icon());
+
+        let v_icon = BadgeVariant::Icon(Box::new(Icon::empty()));
+        assert!(!v_icon.is_number());
+        assert!(v_icon.is_icon());
+    }
+
+    #[test]
+    fn test_badge_builder() {
+        let badge = Badge::new()
+            .count(10)
+            .max(50)
+            .color(gpui::blue())
+            .with_size(Size::Large);
+
+        assert_eq!(badge.get_count(), 10);
+        assert_eq!(badge.get_max(), 50);
+        assert_eq!(badge.get_color(), Some(gpui::blue()));
+        assert_eq!(badge.get_size(), Size::Large);
+        assert!(badge.is_number());
+    }
+
+    #[test]
+    fn test_badge_dot_variant() {
+        let badge = Badge::new().dot();
+        assert!(badge.is_dot());
+        assert!(!badge.is_number());
+        assert!(!badge.is_icon());
+    }
+
+    #[test]
+    fn test_badge_icon_variant() {
+        let badge = Badge::new().icon(Icon::empty());
+        assert!(badge.is_icon());
+        assert!(!badge.is_number());
+        assert!(!badge.is_dot());
+    }
+}

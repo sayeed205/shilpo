@@ -57,3 +57,24 @@ impl RenderOnce for Skeleton {
             )
     }
 }
+
+#[cfg(test)]
+impl Skeleton {
+    pub(crate) fn is_secondary(&self) -> bool {
+        self.secondary
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_skeleton_builder() {
+        let sk = Skeleton::new();
+        assert!(!sk.is_secondary());
+
+        let sk_sec = Skeleton::new().secondary();
+        assert!(sk_sec.is_secondary());
+    }
+}

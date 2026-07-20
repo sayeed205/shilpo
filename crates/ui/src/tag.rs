@@ -267,3 +267,97 @@ impl RenderOnce for Tag {
             .children(self.children)
     }
 }
+
+#[cfg(test)]
+impl Tag {
+    pub(crate) fn get_variant(&self) -> TagVariant {
+        self.variant
+    }
+
+    pub(crate) fn is_outline(&self) -> bool {
+        self.outline
+    }
+
+    pub(crate) fn current_size(&self) -> Size {
+        self.size
+    }
+
+    pub(crate) fn get_rounded(&self) -> Option<AbsoluteLength> {
+        self.rounded
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tag_constructors() {
+        let tag = Tag::primary();
+        assert_eq!(tag.get_variant(), TagVariant::Primary);
+
+        let tag = Tag::secondary();
+        assert_eq!(tag.get_variant(), TagVariant::Secondary);
+
+        let tag = Tag::danger();
+        assert_eq!(tag.get_variant(), TagVariant::Danger);
+
+        let tag = Tag::success();
+        assert_eq!(tag.get_variant(), TagVariant::Success);
+
+        let tag = Tag::warning();
+        assert_eq!(tag.get_variant(), TagVariant::Warning);
+
+        let tag = Tag::info();
+        assert_eq!(tag.get_variant(), TagVariant::Info);
+
+        let tag = Tag::custom(gpui::red(), gpui::blue(), gpui::green());
+        assert_eq!(
+            tag.get_variant(),
+            TagVariant::Custom {
+                color: gpui::red(),
+                foreground: gpui::blue(),
+                border: gpui::green(),
+            }
+        );
+
+        let tag = Tag::color(ColorName::Blue);
+        assert_eq!(tag.get_variant(), TagVariant::Color(ColorName::Blue));
+    }
+
+    #[test]
+    fn test_tag_builder() {
+        let tag = Tag::new()
+            .outline()
+            .rounded_full()
+            .with_size(Size::Small);
+
+        assert!(tag.is_outline());
+        assert_eq!(tag.current_size(), Size::Small);
+        assert_eq!(tag.get_rounded(), Some(rems(1.).into()));
+
+        let tag_custom_rounded = Tag::new().rounded(gpui::px(5.));
+        assert_eq!(tag_custom_rounded.get_rounded(), Some(gpui::px(5.).into()));
+    }
+
+    #[gpui::test]
+    fn test_tag_variant_colors(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        cx.update(|cx| {
+            let variant = TagVariant::Primary;
+            assert_eq!(variant.bg(cx), cx.theme().primary);
+            assert_eq!(variant.border(cx), cx.theme().primary);
+            assert_eq!(variant.fg(false, cx), cx.theme().on_primary);
+            assert_eq!(variant.fg(true, cx), cx.theme().primary);
+
+            let custom_v = TagVariant::Custom {
+                color: gpui::red(),
+                foreground: gpui::blue(),
+                border: gpui::green(),
+            };
+            assert_eq!(custom_v.bg(cx), gpui::red());
+            assert_eq!(custom_v.border(cx), gpui::green());
+            assert_eq!(custom_v.fg(false, cx), gpui::blue());
+        });
+    }
+}
