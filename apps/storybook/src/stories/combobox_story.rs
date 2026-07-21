@@ -555,9 +555,7 @@ impl Render for ComboboxStory {
                         .render_trigger(|ctx, _, cx| {
                             let (icon, title) = match &ctx.selection {
                                 [] => (None, None),
-                                [(_index, item)] => {
-                                    (Some(item.icon), Some(item.title().clone()))
-                                }
+                                [(_index, item)] => (Some(item.icon), Some(item.title().clone())),
                                 items => (
                                     None,
                                     Some(SharedString::new(format!("{} selected", items.len()))),

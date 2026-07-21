@@ -2,7 +2,7 @@ use crate::{
     highlighter::HighlightTheme, list::ListSettings, notification::NotificationSettings,
     scroll::ScrollbarShow, sheet::SheetSettings,
 };
-use gpui::{px, App, Global, Hsla, Pixels, SharedString, Window, WindowAppearance};
+use gpui::{App, Global, Hsla, Pixels, SharedString, Window, WindowAppearance, px};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
@@ -220,9 +220,10 @@ impl Theme {
 pub fn observe_system_accent_color(cx: &mut App) {
     let (tx, rx) = smol::channel::unbounded::<u32>();
 
-    if let Some(prefs) =
-        mundy::Preferences::once_blocking(mundy::Interest::All, std::time::Duration::from_millis(500))
-    {
+    if let Some(prefs) = mundy::Preferences::once_blocking(
+        mundy::Interest::All,
+        std::time::Duration::from_millis(500),
+    ) {
         if let Some(accent) = prefs.accent_color.0 {
             let r = (accent.red * 255.0) as u32;
             let g = (accent.green * 255.0) as u32;

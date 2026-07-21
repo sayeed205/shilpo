@@ -245,11 +245,9 @@ impl SidebarItem for SidebarMenuItem {
         } else {
             None
         };
-        let ripple_state = window.use_keyed_state(
-            format!("{}-ripple", id),
-            cx,
-            |_, _| crate::ripple::RippleState::new(),
-        );
+        let ripple_state = window.use_keyed_state(format!("{}-ripple", id), cx, |_, _| {
+            crate::ripple::RippleState::new()
+        });
         let handler = self.handler.clone();
         let is_collapsed = self.collapsed;
         let is_active = self.active;

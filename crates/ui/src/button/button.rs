@@ -422,12 +422,9 @@ impl RenderOnce for Button {
             .clone();
         let is_focused = focus_handle.is_focused(window);
 
-        let ripple_state = window
-            .use_keyed_state(
-                format!("{}-ripple", self.id),
-                cx,
-                |_, _| crate::ripple::RippleState::new(),
-            );
+        let ripple_state = window.use_keyed_state(format!("{}-ripple", self.id), cx, |_, _| {
+            crate::ripple::RippleState::new()
+        });
 
         let rounding =
             button_shape_tokens::resolve(self.rounded, self.size, Some(dimensions.height));
@@ -489,7 +486,8 @@ impl RenderOnce for Button {
         let terminal_geometry = self.slot_geometry.map(|_| resolved_geometry);
         let radii = resolved_geometry.corners;
         let spring_progress = ripple_state.read(cx).current_spring_progress();
-        let pressed_rounding = button_shape_tokens::resolve_pressed(self.rounded, self.size, Some(dimensions.height));
+        let pressed_rounding =
+            button_shape_tokens::resolve_pressed(self.rounded, self.size, Some(dimensions.height));
         let pressed_radii = Corners::all(pressed_rounding);
         let active_radii = if spring_progress > 0.0 && !self.disabled {
             crate::motion::lerp_corners(radii, pressed_radii, spring_progress)
@@ -497,7 +495,8 @@ impl RenderOnce for Button {
             radii
         };
 
-        let button_element = self.base
+        let button_element = self
+            .base
             .role(Role::Button)
             .when_some(self.label.as_ref(), |this, label| {
                 this.aria_label(label.clone())
@@ -692,7 +691,11 @@ impl RenderOnce for Button {
                     crate::global_state::GlobalState::suppress_text_selection(cx);
 
                     // Trigger ripple & press hold!
-                    crate::ripple::RippleState::start_ripple(ripple_state.clone(), event.position, cx);
+                    crate::ripple::RippleState::start_ripple(
+                        ripple_state.clone(),
+                        event.position,
+                        cx,
+                    );
                 }
             })
             .on_mouse_up(gpui::MouseButton::Left, {

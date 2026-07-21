@@ -2119,7 +2119,11 @@ impl Element for TextElement {
         // Paint blinking cursor
         if focused && show_cursor {
             if let Some(cursor_bounds) = prepaint.cursor_bounds_with_scroll() {
-                let caret_color = if invalid { cx.theme().error } else { cx.theme().primary };
+                let caret_color = if invalid {
+                    cx.theme().error
+                } else {
+                    cx.theme().primary
+                };
                 window.paint_quad(fill(cursor_bounds, caret_color));
             }
         }

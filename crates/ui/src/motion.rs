@@ -64,7 +64,8 @@ impl ExpressiveSpring {
             let alpha = zeta * omega_n;
             let beta = alpha / omega_d;
             // x(t) = 1 - exp(-alpha * t) * (cos(omega_d * t) + beta * sin(omega_d * t))
-            1.0 - (-alpha * t_seconds).exp() * ((omega_d * t_seconds).cos() + beta * (omega_d * t_seconds).sin())
+            1.0 - (-alpha * t_seconds).exp()
+                * ((omega_d * t_seconds).cos() + beta * (omega_d * t_seconds).sin())
         } else {
             // Overdamped (zeta > 1.0)
             let gamma = (zeta * zeta - 1.0).sqrt();
@@ -76,7 +77,11 @@ impl ExpressiveSpring {
 }
 
 /// Linearly interpolates between two corner radii specs based on spring `progress`
-pub fn lerp_corners(start: Corners<Pixels>, target: Corners<Pixels>, progress: f32) -> Corners<Pixels> {
+pub fn lerp_corners(
+    start: Corners<Pixels>,
+    target: Corners<Pixels>,
+    progress: f32,
+) -> Corners<Pixels> {
     let lerp_val = |a: Pixels, b: Pixels| -> Pixels {
         let a_f = f32::from(a);
         let b_f = f32::from(b);
@@ -99,7 +104,7 @@ mod tests {
     fn test_expressive_spring_fast_spatial() {
         let spring = ExpressiveSpring::fast_spatial();
         assert_eq!(spring.evaluate(0.0), 0.0);
-        
+
         let p_mid = spring.evaluate(0.05);
         assert!(p_mid > 0.4 && p_mid < 0.7);
 

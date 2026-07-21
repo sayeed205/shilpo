@@ -1,7 +1,9 @@
 use std::{rc::Rc, time::Duration};
 
 use crate::animation::{Lerp, ease_in_out_cubic};
-use crate::{ActiveTheme, ElementExt as _, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
+use crate::{
+    ActiveTheme, ElementExt as _, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex,
+};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, Background, ClickEvent, Div, Edges, ElementId,
@@ -652,12 +654,9 @@ impl Sizable for Tab {
 
 impl RenderOnce for Tab {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let ripple_state = window
-            .use_keyed_state(
-                format!("{}-ripple", self.ix),
-                cx,
-                |_, _| crate::ripple::RippleState::new(),
-            );
+        let ripple_state = window.use_keyed_state(format!("{}-ripple", self.ix), cx, |_, _| {
+            crate::ripple::RippleState::new()
+        });
 
         let mut tab_style = if self.selected {
             self.variant.selected(cx)
@@ -788,7 +787,9 @@ impl RenderOnce for Tab {
                 })
                 .when_some(self.label, |this, label| this.child(label))
                 .children(self.children)
-                .when_some(self.badge, |this, badge| this.child(render_badge(badge, cx)))
+                .when_some(self.badge, |this, badge| {
+                    this.child(render_badge(badge, cx))
+                })
                 .bg(inner_bg)
                 .rounded(inner_radius)
                 .when(inner_shadow, |this| this.shadow_xs())
@@ -820,7 +821,9 @@ impl RenderOnce for Tab {
                 })
                 .when_some(self.label, |this, label| this.child(label))
                 .children(self.children)
-                .when_some(self.badge, |this, badge| this.child(render_badge(badge, cx)))
+                .when_some(self.badge, |this, badge| {
+                    this.child(render_badge(badge, cx))
+                })
                 .bg(inner_bg)
                 .rounded(inner_radius)
                 .when(inner_shadow, |this| this.shadow_xs())
@@ -844,7 +847,8 @@ impl RenderOnce for Tab {
             inner_content.into_any_element()
         };
 
-        let tab_element = self.base
+        let tab_element = self
+            .base
             .id(self.ix)
             .role(Role::Tab)
             .when_some(aria_label, |this, label| this.aria_label(label))
@@ -913,7 +917,11 @@ impl RenderOnce for Tab {
                     // https://github.com/longbridge/shilpo-ui/issues/1836
                     cx.stop_propagation();
                     if !disabled {
-                        crate::ripple::RippleState::start_ripple(ripple_state.clone(), event.position, cx);
+                        crate::ripple::RippleState::start_ripple(
+                            ripple_state.clone(),
+                            event.position,
+                            cx,
+                        );
                     }
                 }
             })

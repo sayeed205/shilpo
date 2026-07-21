@@ -842,21 +842,42 @@ pub fn update_desktop_icon_for_theme(cx: &App) {
         cx.background_executor()
             .spawn(async move {
                 for size in [512, 256, 128, 64, 48, 32] {
-                    let size_dir = home.join(format!(".local/share/icons/hicolor/{size}x{size}/apps"));
+                    let size_dir =
+                        home.join(format!(".local/share/icons/hicolor/{size}x{size}/apps"));
                     let _ = std::fs::create_dir_all(&size_dir);
                     let png_file = size_dir.join("com.shilpo.storybook.png");
                     let _ = std::process::Command::new("rsvg-convert")
-                        .args(["-w", &size.to_string(), "-h", &size.to_string(), icon_svg_file.to_str().unwrap(), "-o", png_file.to_str().unwrap()])
+                        .args([
+                            "-w",
+                            &size.to_string(),
+                            "-h",
+                            &size.to_string(),
+                            icon_svg_file.to_str().unwrap(),
+                            "-o",
+                            png_file.to_str().unwrap(),
+                        ])
                         .status();
                 }
 
                 let pixmap_png = pixmaps_dir.join("com.shilpo.storybook.png");
                 let _ = std::process::Command::new("rsvg-convert")
-                    .args(["-w", "512", "-h", "512", icon_svg_file.to_str().unwrap(), "-o", pixmap_png.to_str().unwrap()])
+                    .args([
+                        "-w",
+                        "512",
+                        "-h",
+                        "512",
+                        icon_svg_file.to_str().unwrap(),
+                        "-o",
+                        pixmap_png.to_str().unwrap(),
+                    ])
                     .status();
 
                 let _ = std::process::Command::new("gtk-update-icon-cache")
-                    .args(["-f", "-t", home.join(".local/share/icons/hicolor").to_str().unwrap()])
+                    .args([
+                        "-f",
+                        "-t",
+                        home.join(".local/share/icons/hicolor").to_str().unwrap(),
+                    ])
                     .status();
             })
             .detach();

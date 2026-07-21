@@ -308,7 +308,10 @@ mod tests {
 
         let alt = Alert::success("a1", msg);
         assert_eq!(alt.get_variant(), AlertVariant::Success);
-        assert_eq!(alt.get_icon_path().as_ref(), IconName::CircleCheck.path().as_ref());
+        assert_eq!(
+            alt.get_icon_path().as_ref(),
+            IconName::CircleCheck.path().as_ref()
+        );
 
         let alt = Alert::warning("a1", msg);
         assert_eq!(alt.get_variant(), AlertVariant::Warning);
@@ -328,7 +331,10 @@ mod tests {
 
         assert_eq!(alt.get_title(), Some("Title".into()));
         assert!(alt.is_banner());
-        assert_eq!(alt.get_icon_path().as_ref(), IconName::Check.path().as_ref());
+        assert_eq!(
+            alt.get_icon_path().as_ref(),
+            IconName::Check.path().as_ref()
+        );
         assert_eq!(alt.get_size(), Size::Large);
         assert!(alt.has_on_close());
     }
@@ -339,8 +345,14 @@ mod tests {
         cx.update(|cx| {
             let variant = AlertVariant::Info;
             assert_eq!(variant.fg(cx), cx.theme().primary);
-            assert_eq!(variant.bg(cx), cx.theme().primary.mix_oklab(transparent_white(), 0.04));
-            assert_eq!(variant.border_color(cx), cx.theme().primary.mix_oklab(transparent_white(), 0.3));
+            assert_eq!(
+                variant.bg(cx),
+                cx.theme().primary.mix_oklab(transparent_white(), 0.04)
+            );
+            assert_eq!(
+                variant.border_color(cx),
+                cx.theme().primary.mix_oklab(transparent_white(), 0.3)
+            );
 
             let variant_err = AlertVariant::Error;
             assert_eq!(variant_err.fg(cx), cx.theme().error);

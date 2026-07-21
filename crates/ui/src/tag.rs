@@ -327,10 +327,7 @@ mod tests {
 
     #[test]
     fn test_tag_builder() {
-        let tag = Tag::new()
-            .outline()
-            .rounded_full()
-            .with_size(Size::Small);
+        let tag = Tag::new().outline().rounded_full().with_size(Size::Small);
 
         assert!(tag.is_outline());
         assert_eq!(tag.current_size(), Size::Small);

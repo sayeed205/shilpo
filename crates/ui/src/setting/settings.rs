@@ -357,11 +357,14 @@ mod tests {
             .sidebar_width(px(300.))
             .sidebar_size_range(px(200.)..px(400.))
             .with_group_variant(GroupBoxVariant::Outline)
-            .default_selected_index(SelectIndex { page_ix: 1, group_ix: Some(2) })
+            .default_selected_index(SelectIndex {
+                page_ix: 1,
+                group_ix: Some(2),
+            })
             .page(SettingPage::new("Page 1").icon(IconName::Check))
             .pages(vec![
                 SettingPage::new("Page 2").icon(IconName::ChevronDown),
-                SettingPage::new("Page 3").icon(IconName::Close)
+                SettingPage::new("Page 3").icon(IconName::Close),
             ]);
 
         assert_eq!(settings.get_sidebar_width(), px(300.));

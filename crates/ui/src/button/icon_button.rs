@@ -236,12 +236,9 @@ impl RenderOnce for IconButton {
             .clone();
         let focused = focus_handle.is_focused(window);
 
-        let ripple_state = window
-            .use_keyed_state(
-                format!("{}-ripple", self.id),
-                cx,
-                |_, _| crate::ripple::RippleState::new(),
-            );
+        let ripple_state = window.use_keyed_state(format!("{}-ripple", self.id), cx, |_, _| {
+            crate::ripple::RippleState::new()
+        });
         let disabled = self.disabled || self.loading;
         let cursor = self.cursor.or(self.style.mouse_cursor);
         let radius = match shapes.shape {
@@ -266,7 +263,8 @@ impl RenderOnce for IconButton {
 
         let width = icon_button_tokens::resolve_width(self.size, self.width_type);
 
-        let icon_button_element = self.base
+        let icon_button_element = self
+            .base
             .role(Role::Button)
             .when(self.checkable, |this| {
                 this.aria_toggled(if self.checked {
@@ -331,7 +329,11 @@ impl RenderOnce for IconButton {
                         return;
                     }
                     cx.stop_propagation();
-                    crate::ripple::RippleState::start_ripple(ripple_state.clone(), event.position, cx);
+                    crate::ripple::RippleState::start_ripple(
+                        ripple_state.clone(),
+                        event.position,
+                        cx,
+                    );
                 }
             })
             .on_mouse_up(gpui::MouseButton::Left, {

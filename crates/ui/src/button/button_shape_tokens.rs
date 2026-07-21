@@ -60,7 +60,11 @@ pub(crate) fn resolve(rounding: ButtonRounded, size: Size, final_height: Option<
     }
 }
 
-pub(crate) fn resolve_pressed(rounding: ButtonRounded, size: Size, final_height: Option<Pixels>) -> Pixels {
+pub(crate) fn resolve_pressed(
+    rounding: ButtonRounded,
+    size: Size,
+    final_height: Option<Pixels>,
+) -> Pixels {
     let shapes = button_shapes(size);
     match rounding {
         ButtonRounded::Token => corner_radius(

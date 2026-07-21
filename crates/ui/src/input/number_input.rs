@@ -15,7 +15,7 @@ use crate::{
     h_flex,
 };
 
-use super::{Input, InputState, MaskPattern, InputVariant};
+use super::{Input, InputState, InputVariant, MaskPattern};
 
 actions!(number_input, [Increment, Decrement]);
 
@@ -348,29 +348,31 @@ impl RenderOnce for NumberInput {
             .when(self.appearance, |this| {
                 this.bg(bg)
                     .map(|this| match self.variant {
-                        InputVariant::Outlined => {
-                            this.rounded_full()
-                                .when(focused, |this| {
-                                    this.border(px(2.))
-                                        .border_color(if invalid { cx.theme().error } else { cx.theme().primary })
+                        InputVariant::Outlined => this
+                            .rounded_full()
+                            .when(focused, |this| {
+                                this.border(px(2.)).border_color(if invalid {
+                                    cx.theme().error
+                                } else {
+                                    cx.theme().primary
                                 })
-                                .when(!focused, |this| {
-                                    this.border_1().border_color(border_color)
+                            })
+                            .when(!focused, |this| this.border_1().border_color(border_color)),
+                        InputVariant::Filled => this
+                            .rounded_tl(cx.theme().radius)
+                            .rounded_tr(cx.theme().radius)
+                            .rounded_bl(px(0.))
+                            .rounded_br(px(0.))
+                            .when(focused, |this| {
+                                this.border_b(px(2.)).border_color(if invalid {
+                                    cx.theme().error
+                                } else {
+                                    cx.theme().primary
                                 })
-                        }
-                        InputVariant::Filled => {
-                            this.rounded_tl(cx.theme().radius)
-                                .rounded_tr(cx.theme().radius)
-                                .rounded_bl(px(0.))
-                                .rounded_br(px(0.))
-                                .when(focused, |this| {
-                                    this.border_b(px(2.))
-                                        .border_color(if invalid { cx.theme().error } else { cx.theme().primary })
-                                })
-                                .when(!focused, |this| {
-                                    this.border_b_1().border_color(border_color)
-                                })
-                        }
+                            })
+                            .when(!focused, |this| {
+                                this.border_b_1().border_color(border_color)
+                            }),
                     })
                     .px(px(4.))
             })
@@ -425,7 +427,7 @@ impl RenderOnce for NumberInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{StepAction, step_value, InputState, NumberInput};
+    use super::{InputState, NumberInput, StepAction, step_value};
     use gpui::{AppContext, IntoElement};
 
     // `test_number_step` lives in `state::tests` because `NumberStep::value`

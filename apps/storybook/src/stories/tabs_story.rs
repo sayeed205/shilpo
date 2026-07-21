@@ -410,17 +410,13 @@ impl Render for TabsStory {
                                     .prefix(Icon::new(IconName::BookOpen))
                                     .label(label)
                                     .suffix(
-                                        IconButton::new(format!(
-                                            "dynamic-tab-close-{id}"
-                                        ))
-                                        .icon(IconName::Close)
-                                        .standard()
-                                        .xxsmall()
-                                        .on_click(cx.listener(
-                                            move |this, _, window, cx| {
+                                        IconButton::new(format!("dynamic-tab-close-{id}"))
+                                            .icon(IconName::Close)
+                                            .standard()
+                                            .xxsmall()
+                                            .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.remove_dynamic_tab_at_index(ix, window, cx);
-                                            },
-                                        )),
+                                            })),
                                     )
                                     .selected(self.dynamic_active_tab_ix == ix)
                             })),

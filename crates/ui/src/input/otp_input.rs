@@ -419,7 +419,11 @@ mod tests {
         cx.update(crate::init);
         let cx = cx.add_empty_window();
         cx.update(|window, cx| {
-            let state = cx.new(|cx| OtpState::new(6, window, cx).default_value("1234").masked(true));
+            let state = cx.new(|cx| {
+                OtpState::new(6, window, cx)
+                    .default_value("1234")
+                    .masked(true)
+            });
             let s = state.read(cx);
             assert_eq!(s.get_length(), 6);
             assert_eq!(s.get_value().as_ref(), "1234");
@@ -433,7 +437,7 @@ mod tests {
         let cx = cx.add_empty_window();
         cx.update(|window, cx| {
             let state_entity = cx.new(|cx| OtpState::new(4, window, cx));
-            
+
             state_entity.update(cx, |state, cx| {
                 state.set_value("5678", window, cx);
                 state.set_masked(true, window, cx);

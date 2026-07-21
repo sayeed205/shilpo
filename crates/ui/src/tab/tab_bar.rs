@@ -541,7 +541,9 @@ impl RenderOnce for TabBar {
                             if let Some(ref rc) = bounds_rc {
                                 let rc_content = rc.clone();
                                 let tab = tab.on_content_prepaint(move |bounds| {
-                                    if let Some(slot) = rc_content.borrow_mut().tab_contents.get_mut(ix) {
+                                    if let Some(slot) =
+                                        rc_content.borrow_mut().tab_contents.get_mut(ix)
+                                    {
                                         *slot = bounds;
                                     }
                                 });

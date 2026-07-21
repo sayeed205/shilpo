@@ -526,42 +526,36 @@ impl RenderOnce for Input {
                 this.bg(bg)
                     .map(|this| match self.variant {
                         InputVariant::Outlined => {
-                            this.rounded(cx.theme().radius)
-                                .when(self.bordered, |this| {
-                                    this.border_color(border_color)
-                                        .when(focused && self.focus_bordered, |this| {
-                                            this.border(px(2.))
-                                                .border_color(if self.invalid {
-                                                    cx.theme().error
-                                                } else {
-                                                    cx.theme().primary
-                                                })
+                            this.rounded(cx.theme().radius).when(self.bordered, |this| {
+                                this.border_color(border_color)
+                                    .when(focused && self.focus_bordered, |this| {
+                                        this.border(px(2.)).border_color(if self.invalid {
+                                            cx.theme().error
+                                        } else {
+                                            cx.theme().primary
                                         })
-                                        .when(!focused || !self.focus_bordered, |this| {
-                                            this.border_1()
-                                        })
-                                })
+                                    })
+                                    .when(!focused || !self.focus_bordered, |this| this.border_1())
+                            })
                         }
-                        InputVariant::Filled => {
-                            this.rounded_tl(cx.theme().radius)
-                                .rounded_tr(cx.theme().radius)
-                                .rounded_bl(px(0.))
-                                .rounded_br(px(0.))
-                                .when(self.bordered, |this| {
-                                    this.border_color(border_color)
-                                        .when(focused && self.focus_bordered, |this| {
-                                            this.border_b(px(2.))
-                                                .border_color(if self.invalid {
-                                                    cx.theme().error
-                                                } else {
-                                                    cx.theme().primary
-                                                })
+                        InputVariant::Filled => this
+                            .rounded_tl(cx.theme().radius)
+                            .rounded_tr(cx.theme().radius)
+                            .rounded_bl(px(0.))
+                            .rounded_br(px(0.))
+                            .when(self.bordered, |this| {
+                                this.border_color(border_color)
+                                    .when(focused && self.focus_bordered, |this| {
+                                        this.border_b(px(2.)).border_color(if self.invalid {
+                                            cx.theme().error
+                                        } else {
+                                            cx.theme().primary
                                         })
-                                        .when(!focused || !self.focus_bordered, |this| {
-                                            this.border_b_1()
-                                        })
-                                })
-                        }
+                                    })
+                                    .when(!focused || !self.focus_bordered, |this| {
+                                        this.border_b_1()
+                                    })
+                            }),
                     })
                     .when(!focused && cx.theme().shadow, |this| this.shadow_xs())
             })

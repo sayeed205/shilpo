@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, Corners, Element, ElementId, Entity, Hsla, IntoElement,
-    LayoutId, PaintQuad, Pixels, Point, Window, px,
+    App, Bounds, Corners, Element, ElementId, Entity, Hsla, IntoElement, LayoutId, PaintQuad,
+    Pixels, Point, Window, px,
 };
 
 pub fn is_point_in_rounded_bounds(
@@ -121,11 +121,7 @@ impl RippleState {
         0.0
     }
 
-    pub fn handle_mouse_down(
-        state: Entity<Self>,
-        press_position: Point<Pixels>,
-        cx: &mut App,
-    ) {
+    pub fn handle_mouse_down(state: Entity<Self>, press_position: Point<Pixels>, cx: &mut App) {
         if !state.read(cx).is_point_inside(press_position) {
             return;
         }
@@ -145,7 +141,9 @@ impl RippleState {
             let state = state.clone();
             async move |cx| {
                 loop {
-                    cx.background_executor().timer(Duration::from_millis(16)).await;
+                    cx.background_executor()
+                        .timer(Duration::from_millis(16))
+                        .await;
                     let finished = cx.update(|cx| {
                         state.update(cx, |this, cx| {
                             // Retain ripples until release + fadeout is completed
@@ -186,11 +184,7 @@ impl RippleState {
         });
     }
 
-    pub fn start_ripple(
-        state: Entity<Self>,
-        press_position: Point<Pixels>,
-        cx: &mut App,
-    ) {
+    pub fn start_ripple(state: Entity<Self>, press_position: Point<Pixels>, cx: &mut App) {
         Self::handle_mouse_down(state, press_position, cx);
     }
 }
@@ -250,7 +244,8 @@ impl<E: Element + 'static> Element for RippleElement<E> {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        self.child.request_layout(global_id, inspector_id, window, cx)
+        self.child
+            .request_layout(global_id, inspector_id, window, cx)
     }
 
     fn prepaint(
@@ -262,7 +257,8 @@ impl<E: Element + 'static> Element for RippleElement<E> {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        self.child.prepaint(global_id, inspector_id, bounds, request_layout, window, cx)
+        self.child
+            .prepaint(global_id, inspector_id, bounds, request_layout, window, cx)
     }
 
     fn paint(
@@ -282,7 +278,15 @@ impl<E: Element + 'static> Element for RippleElement<E> {
         });
 
         // Paint the child first, so the ripple is overlaid on top of it.
-        self.child.paint(global_id, inspector_id, bounds, request_layout, prepaint, window, cx);
+        self.child.paint(
+            global_id,
+            inspector_id,
+            bounds,
+            request_layout,
+            prepaint,
+            window,
+            cx,
+        );
 
         // Retrieve active ripples and press state
         let (ripples, is_pressed, release_time) = {
@@ -304,7 +308,7 @@ impl<E: Element + 'static> Element for RippleElement<E> {
                     // - FadeOutDuration = 150ms (linear, starting on release)
                     let radius_progress = (elapsed / 0.225).clamp(0.0, 1.0);
                     let fade_in_progress = (elapsed / 0.075).clamp(0.0, 1.0);
-                    
+
                     let fade_out_progress = if !is_pressed {
                         if let Some(rel) = release_time {
                             (rel.elapsed().as_secs_f32() / 0.150).clamp(0.0, 1.0)
@@ -335,7 +339,8 @@ impl<E: Element + 'static> Element for RippleElement<E> {
                     let diagonal = (w * w + h * h).sqrt();
                     let end_radius = diagonal * 0.5 + 10.0;
 
-                    let current_radius_f32 = start_radius + (end_radius - start_radius) * eased_radius_progress;
+                    let current_radius_f32 =
+                        start_radius + (end_radius - start_radius) * eased_radius_progress;
                     let current_radius = px(current_radius_f32);
 
                     // Center shifts towards the exact center of the bounding box
@@ -345,8 +350,10 @@ impl<E: Element + 'static> Element for RippleElement<E> {
                         y: bounds.origin.y + bounds.size.height * 0.5,
                     };
                     let current_center = Point {
-                        x: ripple.press_position.x + (target_center.x - ripple.press_position.x) * center_progress,
-                        y: ripple.press_position.y + (target_center.y - ripple.press_position.y) * center_progress,
+                        x: ripple.press_position.x
+                            + (target_center.x - ripple.press_position.x) * center_progress,
+                        y: ripple.press_position.y
+                            + (target_center.y - ripple.press_position.y) * center_progress,
                     };
 
                     let unclipped_ripple_bounds = Bounds {
@@ -380,7 +387,7 @@ impl<E: Element + 'static> Element for RippleElement<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{point, AppContext, TestAppContext};
+    use gpui::{AppContext, TestAppContext, point};
 
     #[test]
     fn test_is_point_in_rounded_bounds() {
@@ -394,13 +401,25 @@ mod tests {
         let corners = Corners::all(px(20.0));
 
         // Center point -> inside
-        assert!(is_point_in_rounded_bounds(point(px(150.0), px(120.0)), bounds, corners));
+        assert!(is_point_in_rounded_bounds(
+            point(px(150.0), px(120.0)),
+            bounds,
+            corners
+        ));
 
         // Top-right corner outside curve -> outside
-        assert!(!is_point_in_rounded_bounds(point(px(198.0), px(102.0)), bounds, corners));
+        assert!(!is_point_in_rounded_bounds(
+            point(px(198.0), px(102.0)),
+            bounds,
+            corners
+        ));
 
         // Top-right corner inside curve -> inside
-        assert!(is_point_in_rounded_bounds(point(px(185.0), px(115.0)), bounds, corners));
+        assert!(is_point_in_rounded_bounds(
+            point(px(185.0), px(115.0)),
+            bounds,
+            corners
+        ));
     }
 
     #[gpui::test]
