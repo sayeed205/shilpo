@@ -10,7 +10,7 @@ use gpui::{
 use crate::button::{Button, ButtonVariants as _};
 use crate::input::clear_button;
 use crate::native_menu::NativeMenu;
-use crate::spinner::Spinner;
+use crate::progress::ProgressCircle;
 use crate::{ActiveTheme, Colorize, v_flex};
 use crate::{IconName, Size};
 use crate::{Selectable, StyledExt, h_flex};
@@ -582,7 +582,13 @@ impl RenderOnce for Input {
                         .items_center()
                         .when(state.disabled, |this| this.opacity(0.5))
                         .when(state.loading, |this| {
-                            this.child(Spinner::new().color(cx.theme().on_surface_variant))
+                            this.child(
+                                ProgressCircle::new(gpui::ElementId::Name(
+                                    format!("{}-loading", self.state.entity_id()).into(),
+                                ))
+                                .color(cx.theme().on_surface_variant)
+                                .loading(true),
+                            )
                         })
                         .when(self.mask_toggle, |this| {
                             this.child(Self::render_toggle_mask_button(&self.state, cx))

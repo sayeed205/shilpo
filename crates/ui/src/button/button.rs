@@ -753,7 +753,8 @@ impl RenderOnce for Button {
                     .gap(dimensions.gap)
                     .when_some(self.icon, |this, icon| {
                         this.child(
-                            icon.loading_icon(self.loading_icon)
+                            icon.id(self.id.clone())
+                                .loading_icon(self.loading_icon)
                                 .loading(self.loading)
                                 .with_size(Size::Size(
                                     self.dropdown_caret_size.unwrap_or(dimensions.icon),

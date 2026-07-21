@@ -1,6 +1,9 @@
 use std::rc::Rc;
 
-use crate::{ActiveTheme, Disableable, Selectable, Sizable, Size, StyledExt, button::ButtonIcon};
+use crate::{
+    ActiveTheme, Disableable, Selectable, Sizable, Size, StyledExt, button::ButtonIcon,
+    progress::ProgressCircle,
+};
 use gpui::{
     App, ClickEvent, CursorStyle, Div, ElementId, InteractiveElement, Interactivity, IntoElement,
     ParentElement, RenderOnce, Role, Stateful, StatefulInteractiveElement as _, StyleRefinement,
@@ -363,14 +366,17 @@ impl RenderOnce for IconButton {
             .when_some(
                 self.icon
                     .map(|icon| {
-                        icon.loading(self.loading)
+                        icon.id(self.id.clone())
+                            .loading(self.loading)
                             .loading_icon(self.loading_icon.clone())
                             .with_size(Size::Size(dimensions.icon))
                     })
                     .or_else(|| {
                         if self.loading {
+                            let loading_id = ElementId::Name(format!("{}-loading", self.id).into());
                             Some(
-                                ButtonIcon::new(crate::spinner::Spinner::new())
+                                ButtonIcon::new(ProgressCircle::new(loading_id).loading(true))
+                                    .id(self.id.clone())
                                     .loading(true)
                                     .loading_icon(self.loading_icon.clone())
                                     .with_size(Size::Size(dimensions.icon)),

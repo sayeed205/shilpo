@@ -1,10 +1,11 @@
-use crate::{Icon, Sizable, Size, progress::ProgressCircle, spinner::Spinner};
-use gpui::{App, IntoElement, RenderOnce, Window, prelude::FluentBuilder};
+use crate::{Icon, Sizable, Size, progress::ProgressCircle};
+use gpui::{App, IntoElement, RenderOnce, Window};
 
-/// Button icon which can be an Icon, Spinner, or Progress use for `icon` method of Button.
+/// Button icon which can be an Icon or Progress use for `icon` method of Button.
 #[doc(hidden)]
 #[derive(IntoElement)]
 pub struct ButtonIcon {
+    id: Option<gpui::ElementId>,
     icon: ButtonIconVariant,
     loading_icon: Option<Icon>,
     loading: bool,
@@ -24,11 +25,17 @@ impl ButtonIcon {
     /// Creates a new ButtonIcon with the given icon.
     pub fn new(icon: impl Into<ButtonIconVariant>) -> Self {
         Self {
+            id: None,
             icon: icon.into(),
             loading_icon: None,
             loading: false,
             size: Size::Medium,
         }
+    }
+
+    pub(crate) fn id(mut self, id: gpui::ElementId) -> Self {
+        self.id = Some(id);
+        self
     }
 
     pub(crate) fn loading_icon(mut self, icon: Option<Icon>) -> Self {
@@ -49,13 +56,12 @@ impl Sizable for ButtonIcon {
     }
 }
 
-/// Button icon which can be an Icon, Spinner, Progress, or ProgressCircle use for `icon` method of Button.
+/// Button icon which can be an Icon, Progress, or ProgressCircle use for `icon` method of Button.
 #[doc(hidden)]
 #[derive(IntoElement)]
 pub enum ButtonIconVariant {
-    Icon(Icon),
-    Spinner(Spinner),
-    Progress(ProgressCircle),
+    Icon(Box<Icon>),
+    Progress(Box<ProgressCircle>),
 }
 
 impl<T> From<T> for ButtonIconVariant
@@ -63,29 +69,17 @@ where
     T: Into<Icon>,
 {
     fn from(icon: T) -> Self {
-        Self::Icon(icon.into())
-    }
-}
-
-impl From<Spinner> for ButtonIconVariant {
-    fn from(spinner: Spinner) -> Self {
-        Self::Spinner(spinner)
+        Self::Icon(Box::new(icon.into()))
     }
 }
 
 impl From<ProgressCircle> for ButtonIconVariant {
     fn from(progress: ProgressCircle) -> Self {
-        Self::Progress(progress)
+        Self::Progress(Box::new(progress))
     }
 }
 
 impl ButtonIconVariant {
-    /// Returns true if the ButtonIconKind is an Icon.
-    #[inline]
-    pub(crate) fn is_spinner(&self) -> bool {
-        matches!(self, Self::Spinner(_))
-    }
-
     /// Returns true if the ButtonIconKind is a Progress or ProgressCircle.
     #[inline]
     pub(crate) fn is_progress(&self) -> bool {
@@ -96,9 +90,8 @@ impl ButtonIconVariant {
 impl Sizable for ButtonIconVariant {
     fn with_size(self, size: impl Into<crate::Size>) -> Self {
         match self {
-            Self::Icon(icon) => Self::Icon(icon.with_size(size)),
-            Self::Spinner(spinner) => Self::Spinner(spinner.with_size(size)),
-            Self::Progress(progress) => Self::Progress(progress.with_size(size)),
+            Self::Icon(icon) => Self::Icon(Box::new(icon.with_size(size))),
+            Self::Progress(progress) => Self::Progress(Box::new(progress.with_size(size))),
         }
     }
 }
@@ -107,7 +100,6 @@ impl RenderOnce for ButtonIconVariant {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         match self {
             Self::Icon(icon) => icon.into_any_element(),
-            Self::Spinner(spinner) => spinner.into_any_element(),
             Self::Progress(progress) => progress.into_any_element(),
         }
     }
@@ -116,11 +108,15 @@ impl RenderOnce for ButtonIconVariant {
 impl RenderOnce for ButtonIcon {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         if self.loading {
-            if self.icon.is_spinner() || self.icon.is_progress() {
+            if self.icon.is_progress() {
                 self.icon.with_size(self.size).into_any_element()
             } else {
-                Spinner::new()
-                    .when_some(self.loading_icon, |this, icon| this.icon(icon))
+                let spinner_id = match &self.id {
+                    Some(id) => gpui::ElementId::Name(format!("{}-loading", id).into()),
+                    None => gpui::ElementId::Name("button-loading".into()),
+                };
+                ProgressCircle::new(spinner_id)
+                    .loading(true)
                     .with_size(self.size)
                     .into_any_element()
             }
@@ -151,18 +147,12 @@ mod tests {
     #[gpui::test]
     fn test_button_icon_variant_types(_cx: &mut gpui::TestAppContext) {
         // Test Icon variant
-        let icon_variant = ButtonIconVariant::Icon(Icon::new(IconName::Plus));
-        assert!(!icon_variant.is_spinner());
+        let icon_variant = ButtonIconVariant::Icon(Box::new(Icon::new(IconName::Plus)));
         assert!(!icon_variant.is_progress());
 
-        // Test Spinner variant
-        let spinner_variant = ButtonIconVariant::Spinner(Spinner::new());
-        assert!(spinner_variant.is_spinner());
-        assert!(!spinner_variant.is_progress());
-
         // Test Progress variant
-        let progress_variant = ButtonIconVariant::Progress(ProgressCircle::new(75));
-        assert!(!progress_variant.is_spinner());
+        let progress_variant =
+            ButtonIconVariant::Progress(Box::new(ProgressCircle::new("test-progress")));
         assert!(progress_variant.is_progress());
     }
 }

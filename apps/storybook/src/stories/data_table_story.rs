@@ -20,7 +20,7 @@ use shilpo_ui::{
     input::{Input, InputEvent, InputState},
     label::Label,
     menu::{DropdownMenu, PopupMenu},
-    spinner::Spinner,
+    progress::ProgressCircle,
     table::{
         Column, ColumnFixed, ColumnGroup, ColumnSort, DataTable, TableDelegate, TableEvent,
         TableState,
@@ -1294,7 +1294,13 @@ impl Render for DataTableStory {
                                 )
                                 .when(delegate.loading, |this| {
                                     this.child(
-                                        h_flex().gap_1().child(Spinner::new()).child("Loading..."),
+                                        h_flex()
+                                            .gap_1()
+                                            .child(
+                                                ProgressCircle::new("data-table-loading")
+                                                    .loading(true),
+                                            )
+                                            .child("Loading..."),
                                     )
                                 })
                                 .child(

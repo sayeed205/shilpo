@@ -70,7 +70,6 @@ pub mod sheet;
 pub mod sidebar;
 pub mod skeleton;
 pub mod slider;
-pub mod spinner;
 pub mod status_bar;
 pub mod stepper;
 pub mod switch;
