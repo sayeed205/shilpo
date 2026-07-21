@@ -1,6 +1,8 @@
+mod loading_indicator;
 mod progress;
 mod progress_circle;
 
+pub use loading_indicator::LoadingIndicator;
 pub use progress::Progress;
 pub use progress_circle::ProgressCircle;
 

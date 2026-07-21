@@ -1,12 +1,12 @@
 use gpui::{
     App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled, Task,
-    Window, div, prelude::FluentBuilder as _, px,
+    Window, div, prelude::FluentBuilder as _,
 };
 use shilpo_ui::{
-    ActiveTheme, IconName, Selectable, Sizable,
+    ActiveTheme, IconName, Selectable, Sizable, Size,
     button::Button,
     h_flex,
-    progress::{Progress, ProgressCircle},
+    progress::{LoadingIndicator, Progress, ProgressCircle},
     v_flex,
 };
 use std::time::Duration;
@@ -168,15 +168,11 @@ impl Render for ProgressStory {
                 ),
             )
             .child(
-                section("Custom Style").max_w_md().child(
-                    Progress::new("progress-2")
-                        .value(32.)
+                section("M3 Expressive Wavy Progress Bar").max_w_md().child(
+                    Progress::new("wavy-progress-1")
+                        .value(self.value)
                         .loading(self.loading)
-                        .h(px(16.))
-                        .rounded(px(2.))
-                        .color(cx.theme().primary)
-                        .border_2()
-                        .border_color(cx.theme().primary),
+                        .wavy(true),
                 ),
             )
             .child(
@@ -201,6 +197,51 @@ impl Render for ProgressStory {
                             )
                         }),
                 ),
+            )
+            .child(
+                section("M3 Expressive Wavy Circle Progress")
+                    .max_w_md()
+                    .child(
+                        h_flex()
+                            .gap_4()
+                            .child(
+                                ProgressCircle::new("wavy-circle-progress-1")
+                                    .value(self.value)
+                                    .loading(self.loading)
+                                    .size_20()
+                                    .wavy(true),
+                            )
+                            .child(
+                                ProgressCircle::new("wavy-circle-progress-2")
+                                    .value(self.value)
+                                    .loading(self.loading)
+                                    .size_12()
+                                    .wavy(true),
+                            ),
+                    ),
+            )
+            .child(
+                section("M3 Expressive Loading Indicator (Contained & Uncontained)")
+                    .max_w_md()
+                    .child(
+                        h_flex()
+                            .gap_4()
+                            .items_center()
+                            .child(
+                                LoadingIndicator::new("uncontained-loading-1")
+                                    .with_size(Size::Medium),
+                            )
+                            .child(
+                                LoadingIndicator::new("contained-loading-1")
+                                    .with_size(Size::Medium)
+                                    .contained(true),
+                            )
+                            .child(
+                                LoadingIndicator::new("contained-loading-large")
+                                    .with_size(Size::Large)
+                                    .contained(true),
+                            ),
+                    ),
             )
             .child(
                 section("With size").max_w_md().child(
