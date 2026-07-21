@@ -6,7 +6,8 @@ use gpui::{
 use shilpo_assets::Assets;
 use shilpo_shell::bar::BarView;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let app = gpui_platform::application().with_assets(Assets);
 
     app.run(move |cx| {

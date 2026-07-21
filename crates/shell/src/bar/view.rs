@@ -1,15 +1,24 @@
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div, px,
 };
-use shilpo_services::{NiriCompositorService, NiriWorkspaceInfo};
+use shilpo_services::{
+    AudioInfo, AudioService, BatteryInfo, BatteryService, NetworkInfo, NetworkService,
+    NiriCompositorService, NiriWorkspaceInfo,
+};
 use shilpo_ui::{floating_toolbar::FloatingToolbar, h_flex};
 
-use super::widgets::{ClockWidget, WorkspacesWidget};
+use super::widgets::{AudioWidget, BatteryWidget, ClockWidget, NetworkWidget, WorkspacesWidget};
 
 /// Status Bar GPUI View.
 pub struct BarView {
     pub niri_service: NiriCompositorService,
+    pub battery_service: BatteryService,
+    pub audio_service: AudioService,
+    pub network_service: NetworkService,
     workspaces: Vec<NiriWorkspaceInfo>,
+    battery: BatteryInfo,
+    audio: AudioInfo,
+    network: NetworkInfo,
     clock_time: String,
 }
 
@@ -17,6 +26,15 @@ impl BarView {
     pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
         let niri_service =
             NiriCompositorService::new().unwrap_or_else(|_| NiriCompositorService::new().unwrap());
+
+        let battery_service = BatteryService::new().unwrap();
+        let battery = battery_service.battery_info();
+
+        let audio_service = AudioService::new().unwrap();
+        let audio = audio_service.audio_info();
+
+        let network_service = NetworkService::new().unwrap();
+        let network = network_service.network_info();
 
         let workspaces = niri_service.workspaces();
         let fallback_ws = if workspaces.is_empty() {
@@ -49,7 +67,13 @@ impl BarView {
 
         Self {
             niri_service,
+            battery_service,
+            audio_service,
+            network_service,
             workspaces: fallback_ws,
+            battery,
+            audio,
+            network,
             clock_time: "16:45".into(),
         }
     }
@@ -79,7 +103,18 @@ impl Render for BarView {
                             .gap_6()
                             .px_3()
                             .child(WorkspacesWidget::new("ws-widget", self.workspaces.clone()))
-                            .child(ClockWidget::new("clock-widget", self.clock_time.clone())),
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(NetworkWidget::new("net-widget", self.network.clone()))
+                                    .child(AudioWidget::new("audio-widget", self.audio.clone()))
+                                    .child(BatteryWidget::new("bat-widget", self.battery.clone()))
+                                    .child(ClockWidget::new(
+                                        "clock-widget",
+                                        self.clock_time.clone(),
+                                    )),
+                            ),
                     ),
             )
     }
