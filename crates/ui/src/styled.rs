@@ -178,7 +178,7 @@ pub trait StyledExt: Styled + Sized {
     fn popover_style(self, cx: &App) -> Self {
         self.bg(cx.theme().surface_container)
             .text_color(cx.theme().on_surface)
-            .shadow_lg()
+            .shadow_md()
             .rounded(cx.theme().radius_lg)
     }
 
