@@ -1,8 +1,10 @@
 use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
-    Styled, Window, div, px,
+    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
 };
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex};
+use shilpo_ui::{ActiveTheme, Colorize, Icon, IconName, StyledExt, h_flex};
+
+pub type ClickHandler = Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static>;
 
 /// Module 1: Window Info Capsule (Sparkle icon + App ID + Window Title).
 #[derive(IntoElement)]
@@ -11,6 +13,7 @@ pub struct WindowInfoCapsule {
     app_id: String,
     title: String,
     style: StyleRefinement,
+    on_click: Option<ClickHandler>,
 }
 
 impl WindowInfoCapsule {
@@ -24,7 +27,16 @@ impl WindowInfoCapsule {
             app_id: app_id.into(),
             title: title.into(),
             style: StyleRefinement::default(),
+            on_click: None,
         }
+    }
+
+    pub fn on_click(
+        mut self,
+        handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_click = Some(Box::new(handler));
+        self
     }
 }
 
@@ -36,6 +48,26 @@ impl Styled for WindowInfoCapsule {
 
 impl RenderOnce for WindowInfoCapsule {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let star_btn = div()
+            .id("star-btn")
+            .w(px(20.))
+            .h(px(20.))
+            .rounded_full()
+            .bg(cx.theme().primary)
+            .text_color(cx.theme().on_primary)
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|s| s.bg(cx.theme().primary.darken(0.1)))
+            .child(Icon::new(IconName::Star).size(px(12.)));
+
+        let star_btn = if let Some(handler) = self.on_click {
+            star_btn.on_click(handler)
+        } else {
+            star_btn
+        };
+
         h_flex()
             .id(self.id)
             .h(px(32.))
@@ -48,18 +80,7 @@ impl RenderOnce for WindowInfoCapsule {
             .border_color(cx.theme().outline_variant.opacity(0.3))
             .text_color(cx.theme().on_surface)
             .shadow_sm()
-            .child(
-                div()
-                    .w(px(20.))
-                    .h(px(20.))
-                    .rounded_full()
-                    .bg(cx.theme().primary)
-                    .text_color(cx.theme().on_primary)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(Icon::new(IconName::Star).size(px(12.))),
-            )
+            .child(star_btn)
             .child(
                 h_flex()
                     .gap_1_5()

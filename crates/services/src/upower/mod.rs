@@ -46,21 +46,26 @@ impl BatteryService {
         let info = Arc::new(Mutex::new(BatteryInfo::default()));
         let service = Self { info };
 
-        // Attempt async connection to UPower D-Bus
+        // Attempt async connection and polling of UPower D-Bus
         let info_clone = service.info.clone();
         tokio::spawn(async move {
             if let Ok(connection) = Connection::system().await
                 && let Ok(proxy) = UPowerDisplayDeviceProxy::new(&connection).await
             {
-                let pct = proxy.percentage().await.unwrap_or(85.0) as u8;
-                let st = proxy.state().await.unwrap_or(2);
-                let pres = proxy.is_present().await.unwrap_or(true);
-                let mut lock = info_clone.lock().unwrap();
-                *lock = BatteryInfo {
-                    percentage: pct,
-                    is_charging: st == 1,
-                    is_present: pres,
-                };
+                loop {
+                    let pct = proxy.percentage().await.unwrap_or(85.0) as u8;
+                    let st = proxy.state().await.unwrap_or(2);
+                    let pres = proxy.is_present().await.unwrap_or(true);
+                    {
+                        let mut lock = info_clone.lock().unwrap();
+                        *lock = BatteryInfo {
+                            percentage: pct,
+                            is_charging: st == 1,
+                            is_present: pres,
+                        };
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                }
             }
         });
 

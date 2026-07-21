@@ -30,20 +30,24 @@ impl NetworkService {
 
         let info_clone = service.info.clone();
         tokio::spawn(async move {
-            if let Ok(connection) = Connection::system().await
-                && let Ok(reply) = connection
-                    .call_method(
-                        Some("org.freedesktop.NetworkManager"),
-                        "/org/freedesktop/NetworkManager",
-                        Some("org.freedesktop.NetworkManager"),
-                        "state",
-                        &(),
-                    )
-                    .await
-                && let Ok(state) = reply.body().deserialize::<u32>()
-            {
-                let mut lock = info_clone.lock().unwrap();
-                lock.is_connected = state == 70; // NM_STATE_CONNECTED_GLOBAL
+            if let Ok(connection) = Connection::system().await {
+                loop {
+                    if let Ok(reply) = connection
+                        .call_method(
+                            Some("org.freedesktop.NetworkManager"),
+                            "/org/freedesktop/NetworkManager",
+                            Some("org.freedesktop.NetworkManager"),
+                            "state",
+                            &(),
+                        )
+                        .await
+                        && let Ok(state) = reply.body().deserialize::<u32>()
+                    {
+                        let mut lock = info_clone.lock().unwrap();
+                        lock.is_connected = state == 70; // NM_STATE_CONNECTED_GLOBAL
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                }
             }
         });
 

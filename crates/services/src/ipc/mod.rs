@@ -16,6 +16,8 @@ pub enum IpcRequest {
     FocusWorkspace(u64),
     ReloadConfig,
     ToggleBar,
+    ToggleLauncher,
+    SetTheme { source_argb: u32, is_dark: bool },
     GetStatus,
 }
 

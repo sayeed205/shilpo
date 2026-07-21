@@ -55,6 +55,14 @@ impl BarView {
             ShellIpcServer::new().unwrap()
         });
 
+        // Dynamic theme synchronization with OS appearance
+        shilpo_ui::Theme::sync_system_appearance(Some(_window), cx);
+        cx.observe_window_appearance(_window, |_, window, cx| {
+            shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
+            window.refresh();
+        })
+        .detach();
+
         let workspaces = niri_service.workspaces();
         let fallback_ws = if workspaces.is_empty() {
             vec![
@@ -101,6 +109,22 @@ impl BarView {
                             }
                             IpcRequest::ReloadConfig => {
                                 this.config = ShellConfig::default();
+                                cx.notify();
+                            }
+                            IpcRequest::ToggleLauncher => {
+                                open_launcher(cx);
+                            }
+                            IpcRequest::SetTheme {
+                                source_argb,
+                                is_dark,
+                            } => {
+                                let mode = if is_dark {
+                                    shilpo_ui::ThemeMode::Dark
+                                } else {
+                                    shilpo_ui::ThemeMode::Light
+                                };
+                                shilpo_ui::Theme::global_mut(cx).set_source_argb(source_argb);
+                                shilpo_ui::Theme::global_mut(cx).set_mode(mode);
                                 cx.notify();
                             }
                             _ => {}
@@ -196,11 +220,10 @@ impl Render for BarView {
             .justify_between()
             .px_3()
             // Far Left Module
-            .child(WindowInfoCapsule::new(
-                "mod-win",
-                self.app_id.clone(),
-                self.active_title.clone(),
-            ))
+            .child(
+                WindowInfoCapsule::new("mod-win", self.app_id.clone(), self.active_title.clone())
+                    .on_click(|_, _, cx| open_launcher(cx)),
+            )
             // Center Modules (Perf & Workspaces)
             .child(
                 h_flex()
@@ -232,4 +255,34 @@ impl Render for BarView {
                     )),
             )
     }
+}
+
+pub fn open_launcher(cx: &mut App) {
+    use crate::launcher::LauncherView;
+    use gpui::{
+        Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
+        layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
+        point, px, size,
+    };
+
+    let window_size = size(px(640.), px(480.));
+    let options = WindowOptions {
+        titlebar: None,
+        window_bounds: Some(WindowBounds::Windowed(Bounds {
+            origin: point(px(0.), px(0.)),
+            size: window_size,
+        })),
+        app_id: Some("shilpo-launcher".to_string()),
+        window_background: WindowBackgroundAppearance::Transparent,
+        kind: WindowKind::LayerShell(LayerShellOptions {
+            namespace: "launcher".to_string(),
+            layer: Layer::Overlay,
+            anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+            keyboard_interactivity: KeyboardInteractivity::Exclusive,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    cx.open_window(options, LauncherView::view).ok();
 }
