@@ -1,5 +1,15 @@
 [workspace]
-members = ["crates/ui", "crates/macros", "crates/assets", "dotfiles/shilpo-dotfiles", "apps/storybook"]
+members = [
+    "crates/ui",
+    "crates/macros",
+    "crates/assets",
+    "crates/services",
+    "crates/config",
+    "crates/ext",
+    "crates/shell",
+    "dotfiles/shilpo-dotfiles",
+    "apps/storybook",
+]
 resolver = "2"
 
 [workspace.package]
@@ -10,6 +20,13 @@ edition = "2024"
 shilpo-ui = { path = "crates/ui" }
 shilpo-assets = { path = "crates/assets" }
 shilpo-macros = { path = "crates/macros" }
+shilpo-services = { path = "crates/services" }
+shilpo-config = { path = "crates/config" }
+shilpo-ext = { path = "crates/ext" }
+
+niri-ipc = "26"
+zbus = "5"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }

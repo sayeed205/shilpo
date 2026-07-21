@@ -72,11 +72,18 @@ with `rtk`**.
       `cx.theme().on_surface_variant`, etc.) instead of hardcoded colors.
     - Support M3 motion curves (e.g. M3 Emphasized Easing `cubic_bezier(0.2, 0.0, 0.0, 1.0)`)
       over $200\text{ms}$–$300\text{ms}$.
+    - **Desktop Target Adaptations**: Focus on native desktop UI patterns. Use full stadium pill shapes (`rounded_full`,
+      `shadow_lg`) for `FloatingToolbar` and `rounded_3xl` for `Carousel`. Omit mobile-only screen headers (`TopAppBar`,
+      mobile search overlays) when desktop window titlebars serve the layout.
 2. **GPUI Element Patterns**:
     - Implement GPUI traits (`IntoElement`, `RenderOnce`, `Sizable`, `Selectable`, `Disabled`) consistently.
     - Support mouse interaction safety (e.g. `cx.stop_propagation()` on mouse down for draggable titlebars).
 3. **Interactive Documentation**:
     - When introducing or modifying UI components, add interactive stories in `apps/storybook/src/stories/`.
+    - **Full Event Handler Wiring**: Ensure all component interactive events (`on_click`, `on_index_change`,
+      `on_change`)
+      are explicitly wired in Storybook stories using `cx.entity().clone()` / `entity.update(cx, ...)` so all toggles,
+      slides, and selections are testable live.
 
 ---
 
