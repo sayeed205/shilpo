@@ -1,9 +1,11 @@
 use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
-    Styled, Window, div, px,
+    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
 };
 use shilpo_services::{AudioInfo, NetworkInfo};
-use shilpo_ui::{ActiveTheme, Icon, IconName, h_flex};
+use shilpo_ui::{ActiveTheme, Colorize, Icon, IconName, h_flex};
+
+pub type ClickHandler = Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static>;
 
 /// Module 5: Quick System Toggles Capsule (Keyboard, Mic, Bell/DND, WiFi, Settings).
 #[derive(IntoElement)]
@@ -12,6 +14,7 @@ pub struct StatusTogglesCapsule {
     _audio: AudioInfo,
     _network: NetworkInfo,
     style: StyleRefinement,
+    on_click: Option<ClickHandler>,
 }
 
 impl StatusTogglesCapsule {
@@ -21,7 +24,16 @@ impl StatusTogglesCapsule {
             _audio: audio,
             _network: network,
             style: StyleRefinement::default(),
+            on_click: None,
         }
+    }
+
+    pub fn on_click(
+        mut self,
+        handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_click = Some(Box::new(handler));
+        self
     }
 }
 
@@ -40,7 +52,7 @@ impl RenderOnce for StatusTogglesCapsule {
                 .child("·")
         };
 
-        h_flex()
+        let el = h_flex()
             .id(self.id)
             .h(px(32.))
             .px_3()
@@ -52,6 +64,8 @@ impl RenderOnce for StatusTogglesCapsule {
             .border_color(cx.theme().outline_variant.opacity(0.3))
             .text_color(cx.theme().on_surface)
             .shadow_sm()
+            .cursor_pointer()
+            .hover(|s| s.bg(cx.theme().surface_container_high.opacity(0.98).darken(0.05)))
             .child(Icon::new(IconName::KeyboardArrowDown).size(px(14.)))
             .child(dot())
             .child(Icon::new(IconName::Heart).size(px(14.)))
@@ -60,6 +74,12 @@ impl RenderOnce for StatusTogglesCapsule {
             .child(dot())
             .child(Icon::new(IconName::Network).size(px(14.)))
             .child(dot())
-            .child(Icon::new(IconName::Settings).size(px(14.)))
+            .child(Icon::new(IconName::Settings).size(px(14.)));
+
+        if let Some(handler) = self.on_click {
+            el.on_click(handler)
+        } else {
+            el
+        }
     }
 }

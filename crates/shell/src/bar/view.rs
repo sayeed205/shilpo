@@ -114,6 +114,9 @@ impl BarView {
                             IpcRequest::ToggleLauncher => {
                                 open_launcher(cx);
                             }
+                            IpcRequest::ToggleControlCenter => {
+                                open_control_center(cx);
+                            }
                             IpcRequest::SetTheme {
                                 source_argb,
                                 is_dark,
@@ -248,11 +251,14 @@ impl Render for BarView {
                         self.datetime_str.clone(),
                         self.battery.clone(),
                     ))
-                    .child(StatusTogglesCapsule::new(
-                        "mod-toggles",
-                        self.audio.clone(),
-                        self.network.clone(),
-                    )),
+                    .child(
+                        StatusTogglesCapsule::new(
+                            "mod-toggles",
+                            self.audio.clone(),
+                            self.network.clone(),
+                        )
+                        .on_click(|_, _, cx| open_control_center(cx)),
+                    ),
             )
     }
 }
@@ -285,4 +291,34 @@ pub fn open_launcher(cx: &mut App) {
     };
 
     cx.open_window(options, LauncherView::view).ok();
+}
+
+pub fn open_control_center(cx: &mut App) {
+    use crate::control_center::ControlCenterView;
+    use gpui::{
+        Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
+        layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
+        point, px, size,
+    };
+
+    let window_size = size(px(340.), px(380.));
+    let options = WindowOptions {
+        titlebar: None,
+        window_bounds: Some(WindowBounds::Windowed(Bounds {
+            origin: point(px(1920. - 360.), px(54.)),
+            size: window_size,
+        })),
+        app_id: Some("shilpo-control-center".to_string()),
+        window_background: WindowBackgroundAppearance::Transparent,
+        kind: WindowKind::LayerShell(LayerShellOptions {
+            namespace: "control-center".to_string(),
+            layer: Layer::Overlay,
+            anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+            keyboard_interactivity: KeyboardInteractivity::Exclusive,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    cx.open_window(options, ControlCenterView::view).ok();
 }

@@ -17,6 +17,7 @@ pub enum IpcRequest {
     ReloadConfig,
     ToggleBar,
     ToggleLauncher,
+    ToggleControlCenter,
     SetTheme { source_argb: u32, is_dark: bool },
     GetStatus,
 }

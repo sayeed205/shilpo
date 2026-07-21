@@ -14,6 +14,7 @@ async fn main() {
             let cmd = &args[2];
             let req = match cmd.as_str() {
                 "toggle-launcher" => shilpo_services::IpcRequest::ToggleLauncher,
+                "toggle-control-center" => shilpo_services::IpcRequest::ToggleControlCenter,
                 "reload-config" => shilpo_services::IpcRequest::ReloadConfig,
                 "toggle-bar" => shilpo_services::IpcRequest::ToggleBar,
                 "focus-workspace" => {
