@@ -34,12 +34,12 @@ impl RenderOnce for WorkspacesWidget {
         let items = self.workspaces.into_iter().map(|ws| {
             let is_active = ws.is_active || ws.is_focused;
             let (bg, fg, w) = if is_active {
-                (cx.theme().primary, cx.theme().on_primary, px(28.))
+                (cx.theme().primary, cx.theme().on_primary, px(24.))
             } else {
                 (
                     cx.theme().surface_container_highest,
                     cx.theme().on_surface_variant,
-                    px(12.),
+                    px(18.),
                 )
             };
 
@@ -47,9 +47,9 @@ impl RenderOnce for WorkspacesWidget {
 
             div()
                 .id(("ws", ws.id))
-                .h(px(24.))
+                .h(px(20.))
                 .min_w(w)
-                .px_2()
+                .px_1_5()
                 .rounded_full()
                 .bg(bg)
                 .text_color(fg)
@@ -61,6 +61,17 @@ impl RenderOnce for WorkspacesWidget {
                 .child(label)
         });
 
-        h_flex().id(self.id).gap_2().items_center().children(items)
+        h_flex()
+            .id(self.id)
+            .h(px(32.))
+            .px_2()
+            .items_center()
+            .gap_1_5()
+            .rounded_full()
+            .bg(cx.theme().surface_container_high.opacity(0.92))
+            .border_1()
+            .border_color(cx.theme().outline_variant.opacity(0.3))
+            .shadow_sm()
+            .children(items)
     }
 }

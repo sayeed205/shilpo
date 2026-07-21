@@ -1,16 +1,21 @@
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div, px,
 };
+use shilpo_config::ShellConfig;
 use shilpo_services::{
     AudioInfo, AudioService, BatteryInfo, BatteryService, NetworkInfo, NetworkService,
     NiriCompositorService, NiriWorkspaceInfo,
 };
-use shilpo_ui::{floating_toolbar::FloatingToolbar, h_flex};
+use shilpo_ui::h_flex;
 
-use super::widgets::{AudioWidget, BatteryWidget, ClockWidget, NetworkWidget, WorkspacesWidget};
+use super::widgets::{
+    ClockBatteryCapsule, PerfMediaCapsule, StatusTogglesCapsule, WindowInfoCapsule,
+    WorkspacesWidget,
+};
 
-/// Status Bar GPUI View.
+/// Status Bar GPUI View (Multi-Capsule Segmented Bar).
 pub struct BarView {
+    pub config: ShellConfig,
     pub niri_service: NiriCompositorService,
     pub battery_service: BatteryService,
     pub audio_service: AudioService,
@@ -19,11 +24,16 @@ pub struct BarView {
     battery: BatteryInfo,
     audio: AudioInfo,
     network: NetworkInfo,
-    clock_time: String,
+    app_id: String,
+    active_title: String,
+    media_track: String,
+    datetime_str: String,
 }
 
 impl BarView {
     pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
+        let config = ShellConfig::default();
+
         let niri_service =
             NiriCompositorService::new().unwrap_or_else(|_| NiriCompositorService::new().unwrap());
 
@@ -60,12 +70,20 @@ impl BarView {
                     is_active: false,
                     is_focused: false,
                 },
+                NiriWorkspaceInfo {
+                    id: 4,
+                    name: Some("4".into()),
+                    idx: 4,
+                    is_active: false,
+                    is_focused: false,
+                },
             ]
         } else {
             workspaces
         };
 
         Self {
+            config,
             niri_service,
             battery_service,
             audio_service,
@@ -74,7 +92,10 @@ impl BarView {
             battery,
             audio,
             network,
-            clock_time: "16:45".into(),
+            app_id: "shilpo.shell".into(),
+            active_title: "Shilpo Shell".into(),
+            media_track: "KK - Police ke hathiyar".into(),
+            datetime_str: "17:44 · Tue, 21/07".into(),
         }
     }
 
@@ -90,32 +111,43 @@ impl Render for BarView {
             .h(px(48.))
             .flex()
             .items_center()
-            .justify_center()
-            .px_4()
+            .justify_between()
+            .px_3()
+            // Far Left Module
+            .child(WindowInfoCapsule::new(
+                "mod-win",
+                self.app_id.clone(),
+                self.active_title.clone(),
+            ))
+            // Center Modules (Perf & Workspaces)
             .child(
-                FloatingToolbar::horizontal("status-bar")
-                    .vibrant(true)
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .items_center()
-                            .justify_between()
-                            .gap_6()
-                            .px_3()
-                            .child(WorkspacesWidget::new("ws-widget", self.workspaces.clone()))
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .items_center()
-                                    .child(NetworkWidget::new("net-widget", self.network.clone()))
-                                    .child(AudioWidget::new("audio-widget", self.audio.clone()))
-                                    .child(BatteryWidget::new("bat-widget", self.battery.clone()))
-                                    .child(ClockWidget::new(
-                                        "clock-widget",
-                                        self.clock_time.clone(),
-                                    )),
-                            ),
-                    ),
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .child(PerfMediaCapsule::new(
+                        "mod-perf",
+                        40,
+                        66,
+                        3,
+                        self.media_track.clone(),
+                    ))
+                    .child(WorkspacesWidget::new("mod-ws", self.workspaces.clone())),
+            )
+            // Far Right Modules (Clock/Power & Status Toggles)
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .child(ClockBatteryCapsule::new(
+                        "mod-clock",
+                        self.datetime_str.clone(),
+                        self.battery.clone(),
+                    ))
+                    .child(StatusTogglesCapsule::new(
+                        "mod-toggles",
+                        self.audio.clone(),
+                        self.network.clone(),
+                    )),
             )
     }
 }

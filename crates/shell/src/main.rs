@@ -15,7 +15,7 @@ async fn main() {
         shilpo_ui::init(cx);
         cx.activate(true);
 
-        let window_size = size(px(800.), px(56.));
+        let window_size = size(px(1920.), px(48.));
         let options = WindowOptions {
             titlebar: None,
             window_bounds: Some(WindowBounds::Windowed(Bounds {
@@ -28,7 +28,7 @@ async fn main() {
                 namespace: "bar".to_string(),
                 layer: Layer::Top,
                 anchor: Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
-                exclusive_zone: Some(px(56.)),
+                exclusive_zone: Some(px(40.)),
                 margin: None,
                 keyboard_interactivity: KeyboardInteractivity::None,
                 ..Default::default()
