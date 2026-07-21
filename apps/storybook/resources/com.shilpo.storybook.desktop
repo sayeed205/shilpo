@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Shilpo Storybook
+GenericName=M3 Expressive UI Catalogue
+Comment=Interactive Material 3 Expressive UI component gallery and design system inspector
+Exec=storybook
+Icon=com.shilpo.storybook
+Terminal=false
+Categories=Development;Documentation;
+StartupWMClass=com.shilpo.storybook

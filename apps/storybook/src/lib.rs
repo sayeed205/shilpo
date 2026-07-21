@@ -125,6 +125,7 @@ pub fn create_new_window_with_size<F, E>(
                 height: px(320.),
             }),
             kind: WindowKind::Normal,
+            app_id: Some("com.shilpo.storybook".into()),
             #[cfg(target_os = "linux")]
             window_background: gpui::WindowBackgroundAppearance::Transparent,
             #[cfg(target_os = "linux")]
@@ -203,6 +204,17 @@ pub fn init(cx: &mut App) {
     AppState::init(cx);
     themes::init(cx);
     stories::init(cx);
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        shilpo_ui::observe_system_accent_color(cx);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        register_desktop_entry();
+        update_desktop_icon_for_theme(cx);
+    }
 
     #[cfg(not(target_family = "wasm"))]
     {
@@ -756,5 +768,97 @@ mod tests {
             shilpo_ui::_rust_i18n_try_translate("en", "Calendar.month.January"),
             Some("January".into())
         );
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn register_desktop_entry() {
+    if let Some(home) = dirs::home_dir() {
+        let apps_dir = home.join(".local/share/applications");
+        let icons_scalable_dir = home.join(".local/share/icons/hicolor/scalable/apps");
+
+        let _ = std::fs::create_dir_all(&apps_dir);
+        let _ = std::fs::create_dir_all(&icons_scalable_dir);
+
+        let desktop_file = apps_dir.join("com.shilpo.storybook.desktop");
+        let icon_svg_file = icons_scalable_dir.join("com.shilpo.storybook.svg");
+
+        let desktop_content = include_str!("../resources/com.shilpo.storybook.desktop");
+        let icon_svg_content = include_bytes!("../resources/com.shilpo.storybook.svg");
+
+        let _ = std::fs::write(&desktop_file, desktop_content);
+        let _ = std::fs::write(&icon_svg_file, icon_svg_content);
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn update_desktop_icon_for_theme(cx: &App) {
+    if let Some(home) = dirs::home_dir() {
+        let icons_scalable_dir = home.join(".local/share/icons/hicolor/scalable/apps");
+        let pixmaps_dir = home.join(".local/share/pixmaps");
+        let _ = std::fs::create_dir_all(&icons_scalable_dir);
+        let _ = std::fs::create_dir_all(&pixmaps_dir);
+
+        let icon_svg_file = icons_scalable_dir.join("com.shilpo.storybook.svg");
+
+        let is_dark = cx.theme().mode.is_dark();
+        let bg_hsla = if is_dark {
+            cx.theme().surface_container_high
+        } else {
+            cx.theme().primary_container
+        };
+        let bg_rgb = bg_hsla.to_rgb();
+        let bg_color = format!(
+            "#{:02x}{:02x}{:02x}",
+            (bg_rgb.r * 255.0) as u8,
+            (bg_rgb.g * 255.0) as u8,
+            (bg_rgb.b * 255.0) as u8
+        );
+
+        let primary_rgb = cx.theme().primary.to_rgb();
+        let glyph_color = format!(
+            "#{:02x}{:02x}{:02x}",
+            (primary_rgb.r * 255.0) as u8,
+            (primary_rgb.g * 255.0) as u8,
+            (primary_rgb.b * 255.0) as u8
+        );
+
+        let svg_content = format!(
+            r#"<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect width="512" height="512" rx="160" fill="{bg_color}"/>
+    <g transform="translate(64, 64) scale(16)">
+        <path fill="{glyph_color}" d="M11.6,2.16a0.64 0.64 ,0,0,1,0.82,0,6.61,6.61,0,0,1,2.14,2.74A5.75,5.75,0,0,0,12,8.1,6.42,6.42,0,0,0,9.49,4.9,7.65,7.65,0,0,1,11.6,2.16Z" />
+        <path fill="{glyph_color}" d="M4.89,4.79a6,6,0,0,1,2.54,0A5.44,5.44,0,0,1,11.59,9.5c0.07 0.28 ,0,0.73 0.35 0.81a0.39 0.39 ,0,0,0,0.44-0.43A5.63,5.63,0,0,1,14.26,6,6.35,6.35,0,0,1,19,4.79c0.18,0,0.2 0.26 0.22 0.42 a6.31,6.31,0,0,1-0.58,3.53,5.57,5.57,0,0,1-3.44,2.73c-0.43 0.13 -0.89 0.15 -1.32 0.28 a0.36 0.36 ,0,0,0,0.2 0.67 ,5.79,5.79,0,0,1,3.5,1.46A6.13,6.13,0,0,1,19.19,19c0,0.18-0.24 0.23 -0.4 0.24 a5.86,5.86,0,0,1-4.19-1,5.49,5.49,0,0,1-2.26-4.17 0.36 0.36,0,0,0-0.6-0.3c-0.19 0.23 -0.16 0.56 -0.24 0.84 a5.27,5.27,0,0,1-2.14,3.61,6.57,6.57,0,0,1-4.29 0.95 A0.32 0.32 ,0,0,1,4.75,19,5.75,5.75,0,0,1,6,14.19a5.81,5.81,0,0,1,3.82-1.88 0.36 0.36,0,0,0,0.09-0.69c-0.45-0.11-0.91-0.14-1.35-0.27A4.94,4.94,0,0,1,5.51,9.07,6.83,6.83,0,0,1,4.74,5.2c0-0.14,0-0.33 0.15 -0.41m6.71,6.43a0.87 0.87 ,0,1,0,1.25 0.85 A0.87 0.87 ,0,0,0,11.6,11.22Z" />
+        <path fill="{glyph_color}" d="M2.14,11.58A6.61,6.61,0,0,1,4.88,9.44,5.7,5.7,0,0,0,8.08,12a6.51,6.51,0,0,0-3.2,2.54,7.64,7.64,0,0,1-2.72-2.1A0.62 0.62 ,0,0,1,2.14,11.58Z" />
+        <path fill="{glyph_color}" d="M19.08,9.48a7.55,7.55,0,0,1,2.76,2.12 0.64 0.64,0,0,1,0,0.82,6.52,6.52,0,0,1-2.77,2.15A5.72,5.72,0,0,0,15.87,12,6.44,6.44,0,0,0,19.08,9.48Z" />
+        <path fill="{glyph_color}" d="M9.44,19.1A5.82,5.82,0,0,0,12,15.89a6.3,6.3,0,0,0,2.56,3.23,7.69,7.69,0,0,1-2.11,2.72 0.64 0.64,0,0,1-0.82,0A6.59,6.59,0,0,1,9.44,19.1Z" />
+    </g>
+</svg>"#
+        );
+
+        let _ = std::fs::write(&icon_svg_file, &svg_content);
+
+        // Async background task for raster conversion & icon cache update (0ms main thread latency!)
+        cx.background_executor()
+            .spawn(async move {
+                for size in [512, 256, 128, 64, 48, 32] {
+                    let size_dir = home.join(format!(".local/share/icons/hicolor/{size}x{size}/apps"));
+                    let _ = std::fs::create_dir_all(&size_dir);
+                    let png_file = size_dir.join("com.shilpo.storybook.png");
+                    let _ = std::process::Command::new("rsvg-convert")
+                        .args(["-w", &size.to_string(), "-h", &size.to_string(), icon_svg_file.to_str().unwrap(), "-o", png_file.to_str().unwrap()])
+                        .status();
+                }
+
+                let pixmap_png = pixmaps_dir.join("com.shilpo.storybook.png");
+                let _ = std::process::Command::new("rsvg-convert")
+                    .args(["-w", "512", "-h", "512", icon_svg_file.to_str().unwrap(), "-o", pixmap_png.to_str().unwrap()])
+                    .status();
+
+                let _ = std::process::Command::new("gtk-update-icon-cache")
+                    .args(["-f", "-t", home.join(".local/share/icons/hicolor").to_str().unwrap()])
+                    .status();
+            })
+            .detach();
     }
 }

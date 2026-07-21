@@ -8,6 +8,8 @@ pub fn init(cx: &mut App) {
     cx.on_action(|switch: &SwitchThemeMode, cx| {
         let mode = switch.0;
         shilpo_ui::Theme::change(mode, None, cx);
+        #[cfg(target_os = "linux")]
+        crate::update_desktop_icon_for_theme(cx);
         cx.refresh_windows();
     });
 }

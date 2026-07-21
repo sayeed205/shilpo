@@ -6,9 +6,10 @@ use gpui::{
     Window, div, px,
 };
 use shilpo_ui::{
-    ActiveTheme as _, IconName, Side, Sizable as _, Theme, TitleBar, WindowExt as _,
+    ActiveTheme as _, Icon, IconName, Side, Sizable as _, Theme, TitleBar, WindowExt as _,
     badge::Badge,
     button::{Button, ButtonVariants as _},
+    h_flex,
     menu::{AppMenuBar, DropdownMenu as _},
     scroll::ScrollbarShow,
 };
@@ -70,10 +71,30 @@ impl Render for AppTitleBar {
                 .flex_1()
                 // leading zone
                 .child(
-                    div()
+                    h_flex()
                         .h_full()
                         .flex_shrink_0()
                         .items_center()
+                        .gap_x_2()
+                        .pl_2()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .size_6()
+                                .rounded_full()
+                                .bg(if cx.theme().mode.is_dark() {
+                                    cx.theme().surface_container_high
+                                } else {
+                                    cx.theme().primary_container
+                                })
+                                .child(
+                                    Icon::new(IconName::Palette)
+                                        .size_4()
+                                        .text_color(cx.theme().primary),
+                                ),
+                        )
                         .child(self.app_menu_bar.clone()),
                 )
                 // centered title zone

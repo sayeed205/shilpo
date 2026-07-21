@@ -2,7 +2,7 @@ use crate::{
     highlighter::HighlightTheme, list::ListSettings, notification::NotificationSettings,
     scroll::ScrollbarShow, sheet::SheetSettings,
 };
-use gpui::{App, Global, Hsla, Pixels, SharedString, Window, WindowAppearance, px};
+use gpui::{px, App, Global, Hsla, Pixels, SharedString, Window, WindowAppearance};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
@@ -14,7 +14,7 @@ mod theme_color;
 pub use color::*;
 pub use theme_color::*;
 
-const DEFAULT_SOURCE_ARGB: u32 = 0xff6750a4;
+const DEFAULT_SOURCE_ARGB: u32 = 0xff006c4c;
 
 pub fn init(cx: &mut App) {
     init_with_source(DEFAULT_SOURCE_ARGB, cx);
@@ -87,7 +87,7 @@ impl Theme {
         Self {
             colors: material_theme(source_argb, false),
             highlight_theme: HighlightTheme::default_light(),
-            mode: ThemeMode::Light,
+            mode: ThemeMode::System,
             effective_mode: ThemeMode::Light,
             source_argb,
             font_family: ".SystemUIFont".into(),
@@ -112,6 +112,11 @@ impl Theme {
             list: ListSettings::default(),
             sheet: SheetSettings::default(),
         }
+    }
+
+    pub fn set_source_argb(&mut self, source_argb: u32) {
+        self.source_argb = source_argb;
+        self.colors = material_theme(source_argb, self.effective_mode.is_dark());
     }
 
     pub fn global(cx: &App) -> &Theme {
@@ -204,6 +209,54 @@ impl Theme {
             .editor_background
             .unwrap_or(self.surface)
     }
+}
+
+/// Observe system accent color changes in real-time and update the active theme.
+///
+/// This queries the initial OS system accent color on startup and sets up a background
+/// subscription listener to reactively update [`Theme`] in real-time whenever the user
+/// changes their OS accent color setting.
+#[cfg(not(target_family = "wasm"))]
+pub fn observe_system_accent_color(cx: &mut App) {
+    let (tx, rx) = smol::channel::unbounded::<u32>();
+
+    if let Some(prefs) =
+        mundy::Preferences::once_blocking(mundy::Interest::All, std::time::Duration::from_millis(500))
+    {
+        if let Some(accent) = prefs.accent_color.0 {
+            let r = (accent.red * 255.0) as u32;
+            let g = (accent.green * 255.0) as u32;
+            let b = (accent.blue * 255.0) as u32;
+            let argb = 0xff000000 | (r << 16) | (g << 8) | b;
+            Theme::global_mut(cx).set_source_argb(argb);
+        }
+    }
+
+    std::thread::spawn(move || {
+        let _sub = mundy::Preferences::subscribe(mundy::Interest::All, move |prefs| {
+            if let Some(accent) = prefs.accent_color.0 {
+                let r = (accent.red * 255.0) as u32;
+                let g = (accent.green * 255.0) as u32;
+                let b = (accent.blue * 255.0) as u32;
+                let argb = 0xff000000 | (r << 16) | (g << 8) | b;
+                let _ = tx.send_blocking(argb);
+            }
+        });
+
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(3600));
+        }
+    });
+
+    cx.spawn(async move |cx| {
+        while let Ok(argb) = rx.recv().await {
+            let _ = cx.update(|cx| {
+                Theme::global_mut(cx).set_source_argb(argb);
+                cx.refresh_windows();
+            });
+        }
+    })
+    .detach();
 }
 
 #[derive(

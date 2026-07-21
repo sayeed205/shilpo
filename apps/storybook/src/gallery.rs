@@ -25,14 +25,22 @@ pub struct Gallery {
 impl Gallery {
     pub fn new(init_story: Option<&str>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
-        let _subscriptions = vec![cx.subscribe(&search_input, |this, _, e, cx| match e {
-            InputEvent::Change => {
-                this.active_group_index = Some(0);
-                this.active_index = Some(0);
-                cx.notify()
-            }
-            _ => {}
-        })];
+        let _subscriptions = vec![
+            cx.subscribe(&search_input, |this, _, e, cx| match e {
+                InputEvent::Change => {
+                    this.active_group_index = Some(0);
+                    this.active_index = Some(0);
+                    cx.notify()
+                }
+                _ => {}
+            }),
+            cx.observe_window_appearance(window, |_, window, cx| {
+                shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
+                #[cfg(target_os = "linux")]
+                crate::update_desktop_icon_for_theme(cx);
+                window.refresh();
+            }),
+        ];
         let stories = vec![
             (
                 "Getting Started",
@@ -184,19 +192,43 @@ impl Render for Gallery {
                             .collapsed(self.collapsed)
                             .header(
                                 v_flex().w_full().pt_2().child(
-                                    div()
-                                        .bg(cx.theme().primary_container)
-                                        .rounded_full()
-                                        .px_1()
-                                        .when(cx.theme().radius.is_zero(), |this| {
-                                            this.rounded(px(0.))
-                                        })
-                                        .flex_1()
-                                        .mx_1()
+                                    h_flex()
+                                        .w_full()
+                                        .items_center()
+                                        .gap_x_2()
+                                        .px_2()
                                         .child(
-                                            Input::new(&self.search_input)
-                                                .appearance(false)
-                                                .cleanable(true),
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .size_8()
+                                                .rounded_full()
+                                                .bg(if cx.theme().mode.is_dark() {
+                                                    cx.theme().surface_container_high
+                                                } else {
+                                                    cx.theme().primary_container
+                                                })
+                                                .child(
+                                                    Icon::new(IconName::Palette)
+                                                        .size_5()
+                                                        .text_color(cx.theme().primary),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .bg(cx.theme().primary_container)
+                                                .rounded_full()
+                                                .px_1()
+                                                .when(cx.theme().radius.is_zero(), |this| {
+                                                    this.rounded(px(0.))
+                                                })
+                                                .flex_1()
+                                                .child(
+                                                    Input::new(&self.search_input)
+                                                        .appearance(false)
+                                                        .cleanable(true),
+                                                ),
                                         ),
                                 ),
                             )
