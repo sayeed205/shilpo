@@ -14,6 +14,7 @@ shilpo-config.workspace = true
 shilpo-ext.workspace = true
 
 anyhow.workspace = true
+chrono.workspace = true
 tokio.workspace = true
 log.workspace = true
 tracing.workspace = true

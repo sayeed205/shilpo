@@ -1,5 +1,6 @@
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div, px,
+    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Task, Window,
+    div, px,
 };
 use shilpo_config::ShellConfig;
 use shilpo_services::{
@@ -7,6 +8,7 @@ use shilpo_services::{
     NiriCompositorService, NiriWorkspaceInfo,
 };
 use shilpo_ui::h_flex;
+use std::time::Duration;
 
 use super::widgets::{
     ClockBatteryCapsule, PerfMediaCapsule, StatusTogglesCapsule, WindowInfoCapsule,
@@ -28,10 +30,11 @@ pub struct BarView {
     active_title: String,
     media_track: String,
     datetime_str: String,
+    _observer_task: Task<()>,
 }
 
 impl BarView {
-    pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let config = ShellConfig::default();
 
         let niri_service =
@@ -70,17 +73,73 @@ impl BarView {
                     is_active: false,
                     is_focused: false,
                 },
-                NiriWorkspaceInfo {
-                    id: 4,
-                    name: Some("4".into()),
-                    idx: 4,
-                    is_active: false,
-                    is_focused: false,
-                },
             ]
         } else {
             workspaces
         };
+
+        // Real-time state observer task
+        let observer_task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+
+                let update_res = this.update(cx, |this, cx| {
+                    let updated_ws = this.niri_service.workspaces();
+                    let updated_title = this
+                        .niri_service
+                        .active_window_title()
+                        .unwrap_or_else(|| "Desktop".into());
+                    let updated_app_id =
+                        this.niri_service.app_id().unwrap_or_else(|| "niri".into());
+                    let updated_bat = this.battery_service.battery_info();
+                    let updated_audio = this.audio_service.audio_info();
+                    let updated_net = this.network_service.network_info();
+
+                    let now = chrono::Local::now();
+                    let updated_dt = now.format("%H:%M · %a, %d/%m").to_string();
+
+                    let mut changed = false;
+                    if !updated_ws.is_empty() && this.workspaces != updated_ws {
+                        this.workspaces = updated_ws;
+                        changed = true;
+                    }
+                    if this.active_title != updated_title {
+                        this.active_title = updated_title;
+                        changed = true;
+                    }
+                    if this.app_id != updated_app_id {
+                        this.app_id = updated_app_id;
+                        changed = true;
+                    }
+                    if this.battery != updated_bat {
+                        this.battery = updated_bat;
+                        changed = true;
+                    }
+                    if this.audio != updated_audio {
+                        this.audio = updated_audio;
+                        changed = true;
+                    }
+                    if this.network != updated_net {
+                        this.network = updated_net;
+                        changed = true;
+                    }
+                    if this.datetime_str != updated_dt {
+                        this.datetime_str = updated_dt;
+                        changed = true;
+                    }
+
+                    if changed {
+                        cx.notify();
+                    }
+                });
+
+                if update_res.is_err() {
+                    break;
+                }
+            }
+        });
 
         Self {
             config,
@@ -95,7 +154,8 @@ impl BarView {
             app_id: "shilpo.shell".into(),
             active_title: "Shilpo Shell".into(),
             media_track: "KK - Police ke hathiyar".into(),
-            datetime_str: "17:44 · Tue, 21/07".into(),
+            datetime_str: "17:53 · Tue, 21/07".into(),
+            _observer_task: observer_task,
         }
     }
 
