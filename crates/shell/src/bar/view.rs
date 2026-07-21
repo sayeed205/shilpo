@@ -4,8 +4,8 @@ use gpui::{
 };
 use shilpo_config::ShellConfig;
 use shilpo_services::{
-    AudioInfo, AudioService, BatteryInfo, BatteryService, NetworkInfo, NetworkService,
-    NiriCompositorService, NiriWorkspaceInfo,
+    AudioInfo, AudioService, BatteryInfo, BatteryService, IpcRequest, NetworkInfo, NetworkService,
+    NiriCompositorService, NiriWorkspaceInfo, ShellIpcServer,
 };
 use shilpo_ui::h_flex;
 use std::time::Duration;
@@ -15,13 +15,14 @@ use super::widgets::{
     WorkspacesWidget,
 };
 
-/// Status Bar GPUI View (Multi-Capsule Segmented Bar).
+/// Status Bar GPUI View (Multi-Capsule Segmented Bar with IPC integration).
 pub struct BarView {
     pub config: ShellConfig,
     pub niri_service: NiriCompositorService,
     pub battery_service: BatteryService,
     pub audio_service: AudioService,
     pub network_service: NetworkService,
+    pub ipc_server: ShellIpcServer,
     workspaces: Vec<NiriWorkspaceInfo>,
     battery: BatteryInfo,
     audio: AudioInfo,
@@ -48,6 +49,11 @@ impl BarView {
 
         let network_service = NetworkService::new().unwrap();
         let network = network_service.network_info();
+
+        let ipc_server = ShellIpcServer::new().unwrap_or_else(|_| {
+            eprintln!("[shilpo-shell] Warning: IPC socket binding fallback");
+            ShellIpcServer::new().unwrap()
+        });
 
         let workspaces = niri_service.workspaces();
         let fallback_ws = if workspaces.is_empty() {
@@ -78,7 +84,7 @@ impl BarView {
             workspaces
         };
 
-        // Real-time state observer task
+        // Real-time state observer and IPC task
         let observer_task = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -86,6 +92,21 @@ impl BarView {
                     .await;
 
                 let update_res = this.update(cx, |this, cx| {
+                    // Process pending IPC commands
+                    let requests = this.ipc_server.pop_pending_requests();
+                    for req in requests {
+                        match req {
+                            IpcRequest::FocusWorkspace(id) => {
+                                let _ = this.niri_service.focus_workspace(id);
+                            }
+                            IpcRequest::ReloadConfig => {
+                                this.config = ShellConfig::default();
+                                cx.notify();
+                            }
+                            _ => {}
+                        }
+                    }
+
                     let updated_ws = this.niri_service.workspaces();
                     let updated_title = this
                         .niri_service
@@ -147,6 +168,7 @@ impl BarView {
             battery_service,
             audio_service,
             network_service,
+            ipc_server,
             workspaces: fallback_ws,
             battery,
             audio,
