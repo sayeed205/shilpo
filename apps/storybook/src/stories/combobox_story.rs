@@ -585,7 +585,7 @@ impl Render for ComboboxStory {
                                         }),
                                 )
                                 .child(
-                                    Icon::new(IconName::ChevronDown)
+                                    Icon::new(IconName::KeyboardArrowDown)
                                         .xsmall()
                                         .text_color(cx.theme().on_surface_variant),
                                 )
@@ -670,7 +670,7 @@ impl Render for ComboboxStory {
                                         }),
                                 )
                                 .child(
-                                    Icon::new(IconName::ChevronDown)
+                                    Icon::new(IconName::KeyboardArrowDown)
                                         .xsmall()
                                         .text_color(cx.theme().on_surface_variant),
                                 )

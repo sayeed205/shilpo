@@ -282,7 +282,7 @@ impl RenderOnce for AccordionItem {
                                     Icon::new(if self.open {
                                         IconName::ChevronUp
                                     } else {
-                                        IconName::ChevronDown
+                                        IconName::KeyboardArrowDown
                                     })
                                     .xsmall()
                                     .text_color(cx.theme().on_surface_variant),

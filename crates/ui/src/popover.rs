@@ -240,14 +240,14 @@ impl PopoverState {
     /// Dismiss the popover if it is open.
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.open {
-            self.toggle_open(window, cx);
+            self.set_open_state(false, window, cx);
         }
     }
 
     /// Open the popover if it is closed.
     pub fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.open {
-            self.toggle_open(window, cx);
+            self.set_open_state(true, window, cx);
         }
     }
 
@@ -260,8 +260,12 @@ impl PopoverState {
         }
     }
 
-    fn toggle_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let opening = !self.open;
+    /// Apply requested state once. Dismiss paths can race with trigger events, so closing must not
+    /// toggle an already closed popover back open.
+    fn set_open_state(&mut self, opening: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open == opening {
+            return;
+        }
         if opening {
             // Save the focused element before opening, so we can restore it on close.
             self.previous_focus_handle = window.focused(cx);
@@ -406,10 +410,7 @@ impl RenderOnce for Popover {
                 move |_, window, cx| {
                     cx.stop_propagation();
                     state.update(cx, |state, cx| {
-                        // We force set open to false to toggle it correctly.
-                        // Because if the mouse down out will toggle open first.
-                        state.set_open(open, cx);
-                        state.toggle_open(window, cx);
+                        state.set_open_state(!open, window, cx);
                     });
                     cx.notify(parent_view_id);
                 }

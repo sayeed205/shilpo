@@ -508,7 +508,7 @@ impl Render for SplitRoot {
                         let state = state.clone();
                         move |_, _, cx| state.update(cx, |state, _| state.count += 1)
                     }),
-                    Button::new("trailing").icon(IconName::ChevronDown),
+                    Button::new("trailing").icon(IconName::KeyboardArrowDown),
                 )
                 .with_size(Size::Medium)
                 .spacing(px(2.)),

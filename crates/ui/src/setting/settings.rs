@@ -363,7 +363,7 @@ mod tests {
             })
             .page(SettingPage::new("Page 1").icon(IconName::Check))
             .pages(vec![
-                SettingPage::new("Page 2").icon(IconName::ChevronDown),
+                SettingPage::new("Page 2").icon(IconName::KeyboardArrowDown),
                 SettingPage::new("Page 3").icon(IconName::Close),
             ]);
 

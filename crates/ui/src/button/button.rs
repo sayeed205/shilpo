@@ -102,6 +102,9 @@ pub struct Button {
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_hover: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
     loading: bool,
+    pressed_corner_shape: bool,
+    dropdown_caret_rotation: Option<gpui::Radians>,
+    dropdown_caret_size: Option<Pixels>,
     loading_icon: Option<Icon>,
     full_width: bool,
     pl: Option<gpui::Pixels>,
@@ -148,6 +151,9 @@ impl Button {
             on_click: None,
             on_hover: None,
             loading: false,
+            pressed_corner_shape: true,
+            dropdown_caret_rotation: None,
+            dropdown_caret_size: None,
             compact: false,
             outline: false,
             children: Vec::new(),
@@ -197,6 +203,22 @@ impl Button {
 
     pub(crate) fn corner_radii(mut self, radii: Corners<Pixels>) -> Self {
         self.corner_radii = Some(radii);
+        self
+    }
+
+    /// Opt out of pressed-state corner interpolation while retaining other press feedback.
+    pub(crate) fn pressed_corner_shape(mut self, enabled: bool) -> Self {
+        self.pressed_corner_shape = enabled;
+        self
+    }
+
+    pub(crate) fn dropdown_caret_rotation(mut self, rotation: gpui::Radians) -> Self {
+        self.dropdown_caret_rotation = Some(rotation);
+        self
+    }
+
+    pub(crate) fn dropdown_caret_size(mut self, size: Pixels) -> Self {
+        self.dropdown_caret_size = Some(size);
         self
     }
 
@@ -489,7 +511,7 @@ impl RenderOnce for Button {
         let pressed_rounding =
             button_shape_tokens::resolve_pressed(self.rounded, self.size, Some(dimensions.height));
         let pressed_radii = Corners::all(pressed_rounding);
-        let active_radii = if spring_progress > 0.0 && !self.disabled {
+        let active_radii = if self.pressed_corner_shape && spring_progress > 0.0 && !self.disabled {
             crate::motion::lerp_corners(radii, pressed_radii, spring_progress)
         } else {
             radii
@@ -733,7 +755,9 @@ impl RenderOnce for Button {
                         this.child(
                             icon.loading_icon(self.loading_icon)
                                 .loading(self.loading)
-                                .with_size(Size::Size(dimensions.icon)),
+                                .with_size(Size::Size(
+                                    self.dropdown_caret_size.unwrap_or(dimensions.icon),
+                                )),
                         )
                     })
                     .when_some(self.label, |this, label| {
@@ -742,12 +766,17 @@ impl RenderOnce for Button {
                     .children(self.children)
                     .when(self.dropdown_caret, |this| {
                         this.justify_between().child(
-                            Icon::new(IconName::ChevronDown).xsmall().text_color(
-                                match self.disabled {
+                            Icon::new(IconName::KeyboardArrowDown)
+                                .with_size(Size::Size(
+                                    self.dropdown_caret_size.unwrap_or(dimensions.icon),
+                                ))
+                                .when_some(self.dropdown_caret_rotation, |this, rotation| {
+                                    this.rotate(rotation)
+                                })
+                                .text_color(match self.disabled {
                                     true => normal_style.fg.opacity(0.3),
                                     false => normal_style.fg.opacity(0.5),
-                                },
-                            ),
+                                }),
                         )
                     })
             })

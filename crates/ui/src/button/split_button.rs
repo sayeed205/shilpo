@@ -1,12 +1,13 @@
-use std::rc::Rc;
-
 use gpui::{
-    Anchor, App, Context, Corners, ElementId, InteractiveElement as _, IntoElement, ParentElement,
-    RenderOnce, SharedString, StyleRefinement, Styled, Window, div, prelude::FluentBuilder,
+    Anchor, Animation, AnimationExt as _, App, Context, Corners, ElementId, InteractiveElement,
+    IntoElement, ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window, div,
+    prelude::FluentBuilder,
 };
+use std::time::Duration;
+use std::{cell::Cell, rc::Rc};
 
 use crate::{
-    Disableable, Sizable, Size, StyledExt as _,
+    Disableable, Selectable, Sizable, Size, StyledExt as _,
     menu::{DropdownMenu, PopupMenu},
     tooltip::ComponentTooltip,
 };
@@ -53,6 +54,7 @@ impl SplitButton {
             rounded: ButtonRounded::Token,
             spacing: None,
             shapes: None,
+            // TopRight anchors popover top-right to trigger top-right: below and right-aligned.
             anchor: Anchor::TopRight,
             menu: None,
             tooltip: ComponentTooltip::default(),
@@ -167,6 +169,151 @@ impl ButtonVariants for SplitButton {
     }
 }
 
+#[derive(IntoElement)]
+pub(crate) struct SplitButtonTrailingTrigger {
+    button: Button,
+    outer_radius: gpui::Pixels,
+    trailing_corners: Corners<gpui::Pixels>,
+    height: gpui::Pixels,
+    selected: bool,
+}
+
+#[derive(Clone)]
+struct CornerMorphState {
+    target: bool,
+    from: Corners<gpui::Pixels>,
+    current: Rc<Cell<Corners<gpui::Pixels>>>,
+    active_generation: Rc<Cell<u64>>,
+    generation: u64,
+    active: bool,
+}
+
+impl Styled for SplitButtonTrailingTrigger {
+    fn style(&mut self) -> &mut StyleRefinement {
+        self.button.style()
+    }
+}
+
+impl InteractiveElement for SplitButtonTrailingTrigger {
+    fn interactivity(&mut self) -> &mut gpui::Interactivity {
+        self.button.interactivity()
+    }
+}
+
+impl DropdownMenu for SplitButtonTrailingTrigger {}
+
+impl Selectable for SplitButtonTrailingTrigger {
+    fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        self.selected
+    }
+}
+
+impl RenderOnce for SplitButtonTrailingTrigger {
+    fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let target = self.selected;
+        let previous_key = self
+            .button
+            .interactivity()
+            .element_id
+            .clone()
+            .map(|id| format!("split-button-morph:{id:?}"))
+            .unwrap_or_else(|| "split-button-morph".into());
+        let closed_corners = self.trailing_corners;
+        let open_corners = Corners::all(self.outer_radius);
+        let morph = window.use_keyed_state(previous_key, cx, |_, _| CornerMorphState {
+            target,
+            from: if target { open_corners } else { closed_corners },
+            current: Rc::new(Cell::new(if target {
+                open_corners
+            } else {
+                closed_corners
+            })),
+            active_generation: Rc::new(Cell::new(0)),
+            generation: 0,
+            active: false,
+        });
+        let state = morph.read(cx).clone();
+        let changed = state.target != target;
+        let generation = if changed {
+            let generation = state.generation.wrapping_add(1);
+            let from = state.current.get();
+            morph.update(cx, |state, _| {
+                state.target = target;
+                state.from = from;
+                state.generation = generation;
+                state.active = true;
+                state.current.set(from);
+                state.active_generation.set(generation);
+            });
+            let morph = morph.clone();
+            cx.spawn(async move |cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+                _ = morph.update(cx, |state, cx| {
+                    if state.generation == generation {
+                        state.active = false;
+                        state
+                            .current
+                            .set(if target { open_corners } else { closed_corners });
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            generation
+        } else {
+            state.generation
+        };
+        let state = morph.read(cx);
+        let active_corners = if target { open_corners } else { closed_corners };
+        let active_rotation = if target { std::f32::consts::PI } else { 0. };
+
+        let button = self
+            .button
+            .rounded(ButtonRounded::Size(self.height))
+            .corner_radii(active_corners)
+            .when(target, |this| this.w(self.height))
+            .dropdown_caret_rotation(gpui::Radians(active_rotation))
+            .selected(target);
+
+        if state.active {
+            let from = state.from;
+            let to = if target { open_corners } else { closed_corners };
+            let current = state.current.clone();
+            let active_generation = state.active_generation.clone();
+            let animation = Animation::new(Duration::from_millis(250))
+                .with_easing(crate::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0));
+            return button
+                .with_animation(
+                    format!("split-button-corner-morph:{generation}"),
+                    animation,
+                    move |button, delta| {
+                        let corners = crate::motion::lerp_corners(from, to, delta);
+                        if active_generation.get() == generation {
+                            current.set(corners);
+                        }
+                        button
+                            .corner_radii(corners)
+                            .dropdown_caret_rotation(gpui::Radians(if target {
+                                std::f32::consts::PI * delta
+                            } else {
+                                std::f32::consts::PI * (1. - delta)
+                            }))
+                    },
+                )
+                .into_any_element();
+        }
+
+        button.into_any_element()
+    }
+}
+
 impl RenderOnce for SplitButton {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let tokens = split_button_tokens::tokens(self.size);
@@ -226,6 +373,7 @@ impl RenderOnce for SplitButton {
             .disabled(self.disabled || self.loading)
             .loading(self.loading)
             .h(height)
+            .rounded(ButtonRounded::Size(height))
             .corner_radii(leading_corners)
             .border_corners(Corners {
                 top_left: true,
@@ -237,34 +385,59 @@ impl RenderOnce for SplitButton {
             .pr(leading_inner)
             .min_w(tokens.min_width);
 
-        let trailing = self
-            .trailing
-            .with_variant(variant)
-            .with_size(self.size)
-            .disabled(self.disabled || self.loading)
-            .loading(self.loading)
-            .h(height)
-            .corner_radii(trailing_corners)
-            .border_corners(Corners {
-                top_left: true,
-                top_right: true,
-                bottom_left: true,
-                bottom_right: true,
-            })
-            .pl(trailing_inner)
-            .pr(trailing_right)
-            .min_w(tokens.min_width);
-
         let trailing_element = if let Some(menu) = self.menu {
             let menu = move |pop: PopupMenu,
                              win: &mut Window,
                              ctx: &mut Context<PopupMenu>|
                   -> PopupMenu { (menu)(pop, win, ctx) };
-            trailing
+
+            let trigger = SplitButtonTrailingTrigger {
+                button: self
+                    .trailing
+                    .with_variant(variant)
+                    .with_size(self.size)
+                    .disabled(self.disabled || self.loading)
+                    .loading(self.loading)
+                    .pressed_corner_shape(false)
+                    .dropdown_caret_size(tokens.icon)
+                    .h(height)
+                    .border_corners(Corners {
+                        top_left: true,
+                        top_right: true,
+                        bottom_left: true,
+                        bottom_right: true,
+                    })
+                    .pl(trailing_inner)
+                    .pr(trailing_right)
+                    .min_w(tokens.min_width),
+                outer_radius,
+                trailing_corners,
+                height,
+                selected: false,
+            };
+
+            trigger
                 .dropdown_menu_with_anchor(self.anchor, menu)
                 .into_any_element()
         } else {
-            trailing.into_any_element()
+            self.trailing
+                .with_variant(variant)
+                .with_size(self.size)
+                .disabled(self.disabled || self.loading)
+                .loading(self.loading)
+                .h(height)
+                .border_corners(Corners {
+                    top_left: true,
+                    top_right: true,
+                    bottom_left: true,
+                    bottom_right: true,
+                })
+                .pl(trailing_inner)
+                .pr(trailing_right)
+                .min_w(tokens.min_width)
+                .rounded(ButtonRounded::Size(height))
+                .corner_radii(trailing_corners)
+                .into_any_element()
         };
 
         div()
@@ -329,5 +502,12 @@ mod tests {
         assert_eq!(split.shape_tokens(), shapes);
         assert!(split.disabled);
         assert!(split.loading);
+    }
+
+    #[test]
+    fn split_button_default_dropdown_anchor_is_below_and_right_aligned() {
+        let split = SplitButton::new("split", Button::new("lead"), Button::new("trail"));
+
+        assert_eq!(split.anchor, Anchor::TopRight);
     }
 }

@@ -1112,7 +1112,7 @@ impl TextElement {
                 .icon(if info.is_folded {
                     IconName::ChevronRight
                 } else {
-                    IconName::ChevronDown
+                    IconName::KeyboardArrowDown
                 })
                 .xsmall()
                 .rounded_xs()
@@ -1150,7 +1150,7 @@ impl TextElement {
     /// Paint fold icons using prepaint hitboxes.
     ///
     /// This handles:
-    /// - Rendering fold icons (chevron-right for folded, chevron-down for expanded)
+    /// - Rendering fold icons (chevron-right for folded, keyboard-arrow-down for expanded)
     /// - Mouse click handling to toggle fold state
     /// - Cursor style changes on hover
     /// - Only show icon on hover or for current line

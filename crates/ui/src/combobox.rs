@@ -589,7 +589,7 @@ where
         let trigger_icon = self
             .trigger_icon
             .clone()
-            .unwrap_or_else(|| Icon::new(IconName::ChevronDown));
+            .unwrap_or_else(|| Icon::new(IconName::KeyboardArrowDown));
 
         let trigger_body = if let Some(render_trigger) = &self.render_trigger {
             let ctx = ComboboxTriggerCtx {

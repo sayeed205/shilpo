@@ -533,7 +533,7 @@ where
                             .when(!show_clean, |this| {
                                 let icon = match self.icon.clone() {
                                     Some(icon) => icon,
-                                    None => Icon::new(IconName::ChevronDown),
+                                    None => Icon::new(IconName::KeyboardArrowDown),
                                 };
 
                                 this.child(icon.xsmall().text_color(cx.theme().on_surface_variant))

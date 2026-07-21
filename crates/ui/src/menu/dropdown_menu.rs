@@ -74,8 +74,8 @@ where
 }
 
 #[derive(Default)]
-struct DropdownMenuState {
-    menu: Option<Entity<PopupMenu>>,
+pub(crate) struct DropdownMenuState {
+    pub(crate) menu: Option<Entity<PopupMenu>>,
 }
 
 impl<T> RenderOnce for DropdownMenuPopover<T>

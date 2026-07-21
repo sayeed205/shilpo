@@ -87,7 +87,7 @@ impl Render for CollapsibleStory {
                         .child(
                             h_flex().justify_center().child(
                                 Button::new("toggle1")
-                                    .icon(IconName::ChevronDown)
+                                    .icon(IconName::KeyboardArrowDown)
                                     .label("Show more")
                                     .when(self.item1_open, |this| {
                                         this.icon(IconName::ChevronUp).label("Show less")
@@ -139,7 +139,7 @@ impl Render for CollapsibleStory {
                                             Button::new("toggle2")
                                                 .small()
                                                 .outline()
-                                                .icon(IconName::ChevronDown)
+                                                .icon(IconName::KeyboardArrowDown)
                                                 .label("Details")
                                                 .when(self.item2_open, |this| {
                                                     this.icon(IconName::ChevronUp)
