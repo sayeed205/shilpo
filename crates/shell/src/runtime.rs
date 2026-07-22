@@ -91,11 +91,35 @@ impl ShellRuntime {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(100))
                     .await;
+                cx.update(Self::sync_displays);
                 cx.update(Self::drain_ipc);
             }
         });
         cx.global_mut::<Self>()._ipc_task = task;
         cx.global::<Self>().publish_status();
+    }
+
+    pub fn sync_displays(cx: &mut App) {
+        let current_displays: Vec<gpui::DisplayId> =
+            cx.displays().into_iter().map(|d| d.id()).collect();
+        let missing_handles: Vec<gpui::AnyWindowHandle> = {
+            let runtime = cx.global_mut::<Self>();
+            let missing_displays: Vec<gpui::DisplayId> = runtime
+                .bars
+                .keys()
+                .copied()
+                .filter(|id| !current_displays.contains(id))
+                .collect();
+            missing_displays
+                .into_iter()
+                .filter_map(|id| runtime.bars.remove(&id))
+                .map(|(handle, _, _)| handle.into())
+                .collect()
+        };
+
+        for handle in missing_handles {
+            let _ = cx.update_window(handle, |_, window, _| window.remove_window());
+        }
     }
 
     fn publish_status(&self) {
