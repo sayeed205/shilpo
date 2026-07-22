@@ -277,18 +277,29 @@ impl BarView {
     }
 }
 
+#[derive(Default)]
+struct RenderedWidgets {
+    win: bool,
+    ws: bool,
+    clock_bat: bool,
+    perf_media: bool,
+    toggles: bool,
+}
+
 impl BarView {
-    fn build_section(&self, widget_names: &[BarWidget], side: bool) -> impl IntoElement {
+    fn build_section(
+        &self,
+        widget_names: &[BarWidget],
+        side: bool,
+        is_floating: bool,
+        rendered: &mut RenderedWidgets,
+        cx: &App,
+    ) -> impl IntoElement {
         let mut elements: Vec<gpui::AnyElement> = Vec::new();
-        let mut rendered_win = false;
-        let mut rendered_ws = false;
-        let mut rendered_clock_bat = false;
-        let mut rendered_perf_media = false;
-        let mut rendered_toggles = false;
 
         for name in widget_names {
             match name {
-                BarWidget::Launcher | BarWidget::ActiveWindow if !rendered_win => {
+                BarWidget::Launcher | BarWidget::ActiveWindow if !rendered.win => {
                     elements.push(
                         WindowInfoCapsule::new(
                             "mod-win",
@@ -298,15 +309,15 @@ impl BarView {
                         .on_click(|_, _, cx| ShellRuntime::open_or_focus_launcher(cx))
                         .into_any_element(),
                     );
-                    rendered_win = true;
+                    rendered.win = true;
                 }
-                BarWidget::Workspaces if !rendered_ws => {
+                BarWidget::Workspaces if !rendered.ws => {
                     elements.push(
                         WorkspacesWidget::new("mod-ws", self.workspaces.clone()).into_any_element(),
                     );
-                    rendered_ws = true;
+                    rendered.ws = true;
                 }
-                BarWidget::Clock | BarWidget::Battery if !rendered_clock_bat => {
+                BarWidget::Clock | BarWidget::Battery if !rendered.clock_bat => {
                     elements.push(
                         ClockBatteryCapsule::new(
                             "mod-clock",
@@ -315,17 +326,17 @@ impl BarView {
                         )
                         .into_any_element(),
                     );
-                    rendered_clock_bat = true;
+                    rendered.clock_bat = true;
                 }
-                BarWidget::Media | BarWidget::Sysinfo if !rendered_perf_media => {
+                BarWidget::Media | BarWidget::Sysinfo if !rendered.perf_media => {
                     elements.push(
                         PerfMediaCapsule::new("mod-perf", 40, 66, 3, self.media_track.clone())
                             .into_any_element(),
                     );
-                    rendered_perf_media = true;
+                    rendered.perf_media = true;
                 }
                 BarWidget::Network | BarWidget::Audio | BarWidget::Settings
-                    if !rendered_toggles =>
+                    if !rendered.toggles =>
                 {
                     elements.push(
                         StatusTogglesCapsule::new(
@@ -336,16 +347,36 @@ impl BarView {
                         .on_click(|_, _, cx| ShellRuntime::open_or_focus_control_center(cx))
                         .into_any_element(),
                     );
-                    rendered_toggles = true;
+                    rendered.toggles = true;
                 }
                 _ => {}
             }
         }
 
+        if elements.is_empty() {
+            return div().into_any_element();
+        }
+
         let flex = if side { v_flex() } else { h_flex() };
-        flex.gap(px(self.config.bar.widget_spacing as f32))
+        let section = flex
+            .gap(px(self.config.bar.widget_spacing as f32))
             .items_center()
-            .children(elements)
+            .children(elements);
+
+        if is_floating {
+            div()
+                .p_1()
+                .px_2()
+                .rounded_full()
+                .bg(cx.theme().surface_container_high.opacity(0.92))
+                .border_1()
+                .border_color(cx.theme().outline_variant.opacity(0.3))
+                .shadow_md()
+                .child(section)
+                .into_any_element()
+        } else {
+            section.into_any_element()
+        }
     }
 }
 
@@ -357,6 +388,7 @@ impl Render for BarView {
             BarPosition::Left | BarPosition::Right
         );
         let bg_color = cx.theme().surface_container_high.opacity(0.92);
+        let mut rendered = RenderedWidgets::default();
 
         div()
             .when(side, |this| {
@@ -371,13 +403,8 @@ impl Render for BarView {
             .when(side, |this| this.py(px(self.config.bar.padding as f32)))
             .when(!side, |this| this.px(px(self.config.bar.padding as f32)))
             .when(is_floating, |this| {
-                this.mx(px(self.config.bar.margin.horizontal as f32))
-                    .my(px(self.config.bar.margin.vertical as f32))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(cx.theme().outline_variant.opacity(0.3))
-                    .bg(bg_color)
-                    .shadow_md()
+                this.px(px(self.config.bar.margin.horizontal as f32))
+                    .py(px(self.config.bar.margin.vertical as f32))
             })
             .when(!is_floating, |this| {
                 this.bg(bg_color)
@@ -400,9 +427,27 @@ impl Render for BarView {
                     .border_color(cx.theme().outline_variant.opacity(0.3))
                     .shadow_sm()
             })
-            .child(self.build_section(&self.config.bar.widgets.start, side))
-            .child(self.build_section(&self.config.bar.widgets.center, side))
-            .child(self.build_section(&self.config.bar.widgets.end, side))
+            .child(self.build_section(
+                &self.config.bar.widgets.start,
+                side,
+                is_floating,
+                &mut rendered,
+                cx,
+            ))
+            .child(self.build_section(
+                &self.config.bar.widgets.center,
+                side,
+                is_floating,
+                &mut rendered,
+                cx,
+            ))
+            .child(self.build_section(
+                &self.config.bar.widgets.end,
+                side,
+                is_floating,
+                &mut rendered,
+                cx,
+            ))
     }
 }
 
@@ -414,13 +459,26 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
         point, px, size,
     };
 
+    let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
+        (display.bounds(), Some(display.id()))
+    } else {
+        (
+            Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
+            None,
+        )
+    };
     let window_size = size(px(320.), px(80.));
+    let origin = point(
+        display_bounds.origin.x + (display_bounds.size.width - px(340.)),
+        display_bounds.origin.y + px(54.),
+    );
     let options = WindowOptions {
         titlebar: None,
         window_bounds: Some(WindowBounds::Windowed(Bounds {
-            origin: point(px(1920. - 340.), px(54.)),
+            origin,
             size: window_size,
         })),
+        display_id,
         app_id: Some("shilpo-notification".to_string()),
         window_background: WindowBackgroundAppearance::Transparent,
         kind: WindowKind::LayerShell(LayerShellOptions {

@@ -41,6 +41,8 @@ pub struct BarConfig {
     pub padding: u32,
     pub margin: BarMargin,
     pub widget_spacing: u32,
+    #[serde(default)]
+    pub exclusive_zone: Option<u32>,
     pub widgets: BarWidgets,
 }
 
@@ -119,10 +121,11 @@ impl Default for BarConfig {
             height: 48,
             padding: 8,
             margin: BarMargin {
-                horizontal: 180,
-                vertical: 8,
+                horizontal: 16,
+                vertical: 6,
             },
             widget_spacing: 6,
+            exclusive_zone: None,
             widgets: BarWidgets {
                 start: vec![
                     BarWidget::Launcher,
@@ -289,13 +292,16 @@ impl ShellConfig {
         if text.trim().is_empty() {
             return Self::write_default(&path);
         }
-        let config: Self = toml::from_str(&text).map_err(|error| ConfigError::Parse {
+        let mut config: Self = toml::from_str(&text).map_err(|error| ConfigError::Parse {
             diagnostic: ConfigDiagnostic {
                 path: path.display().to_string(),
                 message: error.to_string(),
                 span: error.span(),
             },
         })?;
+        if config.bar.margin.horizontal > 32 {
+            config.bar.margin.horizontal = 16;
+        }
         config.validate()?;
         Ok(config)
     }

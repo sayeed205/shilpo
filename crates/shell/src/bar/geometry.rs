@@ -28,7 +28,19 @@ impl BarGeometry {
             (Pixels::ZERO, Pixels::ZERO)
         };
 
-        let (anchor, exclusive_edge, bounds, exclusive_zone, margin) = match config.position {
+        let calculated_exclusive_zone = if let Some(zone) = config.exclusive_zone {
+            px(zone as f32)
+        } else if config.style == BarStyle::FloatingCapsule {
+            if matches!(config.position, BarPosition::Left | BarPosition::Right) {
+                thickness + horizontal_margin
+            } else {
+                thickness + vertical_margin
+            }
+        } else {
+            thickness
+        };
+
+        let (anchor, exclusive_edge, bounds, _, margin) = match config.position {
             BarPosition::Top => (
                 Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
                 Anchor::TOP,
@@ -36,7 +48,7 @@ impl BarGeometry {
                     point(display_bounds.origin.x, display_bounds.origin.y),
                     size(display_bounds.size.width, thickness + vertical_margin * 2.0),
                 ),
-                thickness + vertical_margin * 2.0,
+                calculated_exclusive_zone,
                 (
                     vertical_margin,
                     horizontal_margin,
@@ -56,7 +68,7 @@ impl BarGeometry {
                     ),
                     size(display_bounds.size.width, thickness + vertical_margin * 2.0),
                 ),
-                thickness + vertical_margin * 2.0,
+                calculated_exclusive_zone,
                 (
                     Pixels::ZERO,
                     horizontal_margin,
@@ -74,7 +86,7 @@ impl BarGeometry {
                         display_bounds.size.height,
                     ),
                 ),
-                thickness + horizontal_margin * 2.0,
+                calculated_exclusive_zone,
                 (
                     horizontal_margin,
                     Pixels::ZERO,
@@ -97,7 +109,7 @@ impl BarGeometry {
                         display_bounds.size.height,
                     ),
                 ),
-                thickness + horizontal_margin * 2.0,
+                calculated_exclusive_zone,
                 (
                     horizontal_margin,
                     vertical_margin,
@@ -111,7 +123,7 @@ impl BarGeometry {
             bounds,
             display_id,
             anchor,
-            exclusive_zone,
+            exclusive_zone: calculated_exclusive_zone,
             exclusive_edge,
             margin: (config.style == BarStyle::FloatingCapsule).then_some(margin),
         }
@@ -183,9 +195,9 @@ mod tests {
                 geometry.exclusive_zone,
                 px(
                     if matches!(position, BarPosition::Left | BarPosition::Right) {
-                        60.
+                        50.
                     } else {
-                        52.
+                        46.
                     }
                 )
             );
@@ -215,5 +227,14 @@ mod tests {
             &config(BarPosition::Right, BarStyle::FloatingCapsule),
         );
         assert_eq!(geometry.margin, Some((px(10.), px(6.), px(10.), px(0.))));
+    }
+
+    #[test]
+    fn explicit_exclusive_zone_overrides_calculated_default() {
+        let display = Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.)));
+        let mut cfg = config(BarPosition::Top, BarStyle::FloatingCapsule);
+        cfg.exclusive_zone = Some(48);
+        let geometry = BarGeometry::calculate(DisplayId::new(1), display, &cfg);
+        assert_eq!(geometry.exclusive_zone, px(48.));
     }
 }

@@ -1,5 +1,5 @@
 use gpui::{
-    App, AppContext, Bounds, Focusable, Global, Pixels, Point, Subscription,
+    App, AppContext, Bounds, DisplayId, Focusable, Global, Pixels, Point, Subscription,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
     layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
     point, px, size,
@@ -168,11 +168,25 @@ impl ShellRuntime {
             cx.global::<Self>().publish_status();
             return;
         }
+        let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
+            (display.bounds(), Some(display.id()))
+        } else {
+            (
+                Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
+                None,
+            )
+        };
+        let launcher_size = size(px(640.), px(480.));
+        let origin = point(
+            display_bounds.origin.x + (display_bounds.size.width - launcher_size.width) / 2.0,
+            display_bounds.origin.y + (display_bounds.size.height - launcher_size.height) / 2.0,
+        );
         let options = overlay_options(
             "shilpo-launcher",
             "launcher",
-            size(px(640.), px(480.)),
-            point(px(0.), px(0.)),
+            launcher_size,
+            origin,
+            display_id,
         );
         match cx.open_window(options, LauncherView::view) {
             Ok(handle) => cx.global_mut::<Self>().launcher = Some(handle),
@@ -219,11 +233,25 @@ impl ShellRuntime {
             cx.global::<Self>().publish_status();
             return;
         }
+        let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
+            (display.bounds(), Some(display.id()))
+        } else {
+            (
+                Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
+                None,
+            )
+        };
+        let cc_size = size(px(340.), px(380.));
+        let origin = point(
+            display_bounds.origin.x + (display_bounds.size.width - px(360.)),
+            display_bounds.origin.y + px(54.),
+        );
         let options = overlay_options(
             "shilpo-control-center",
             "control-center",
-            size(px(340.), px(380.)),
-            point(px(1920. - 360.), px(54.)),
+            cc_size,
+            origin,
+            display_id,
         );
         match cx.open_window(options, ControlCenterView::view) {
             Ok(handle) => cx.global_mut::<Self>().control_center = Some(handle),
@@ -404,6 +432,7 @@ fn overlay_options(
     namespace: &str,
     window_size: gpui::Size<Pixels>,
     origin: Point<Pixels>,
+    display_id: Option<DisplayId>,
 ) -> WindowOptions {
     WindowOptions {
         titlebar: None,
@@ -411,6 +440,7 @@ fn overlay_options(
             origin,
             size: window_size,
         })),
+        display_id,
         app_id: Some(app_id.to_string()),
         window_background: WindowBackgroundAppearance::Transparent,
         kind: WindowKind::LayerShell(LayerShellOptions {

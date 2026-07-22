@@ -49,6 +49,15 @@
           "format": "uint32",
           "minimum": 0
         },
+        "exclusive_zone": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
+        },
         "widgets": {
           "$ref": "#/$defs/BarWidgets"
         }
