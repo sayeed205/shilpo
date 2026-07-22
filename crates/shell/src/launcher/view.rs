@@ -1,3 +1,4 @@
+use crate::actions::{ActionDescriptor, ActionRegistry};
 use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
@@ -6,11 +7,17 @@ use gpui::{
 use shilpo_services::{AppScanner, Application};
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
 
+#[derive(Debug, Clone)]
+pub enum LauncherSearchResult {
+    App(Application),
+    Action(ActionDescriptor),
+}
+
 /// M3 Expressive Application Launcher Overlay View.
 pub struct LauncherView {
     pub scanner: AppScanner,
     query: String,
-    results: Vec<Application>,
+    results: Vec<LauncherSearchResult>,
     selected_index: usize,
     focus_handle: FocusHandle,
     pub loading: bool,
@@ -47,7 +54,7 @@ impl LauncherView {
 
             let _ = this.update(cx, |view, cx| {
                 view.scanner = AppScanner::from_applications(scanned);
-                view.results = view.scanner.search(&view.query);
+                view.update_search(view.query.clone(), cx);
                 view.loading = false;
                 cx.notify();
             });
@@ -70,13 +77,27 @@ impl LauncherView {
 
     fn update_search(&mut self, query: String, cx: &mut Context<Self>) {
         self.query = query;
-        self.results = self.scanner.search(&self.query);
+        let q = self.query.trim().to_lowercase();
+        let mut combined = Vec::new();
+
+        for app in self.scanner.search(&self.query) {
+            combined.push(LauncherSearchResult::App(app));
+        }
+
+        for action in ActionRegistry::all() {
+            if q.is_empty() || action.label.to_lowercase().contains(&q) || action.name.contains(&q)
+            {
+                combined.push(LauncherSearchResult::Action(action));
+            }
+        }
+
+        self.results = combined;
         self.selected_index = 0;
         cx.notify();
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let total_items = self.results.len() + 2; // Apps + 2 provider fallbacks
+        let total_items = self.results.len() + 2; // Results + 2 provider fallbacks
         if total_items == 0 {
             return;
         }
@@ -88,10 +109,17 @@ impl LauncherView {
 
     fn launch_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_index < self.results.len() {
-            if let Some(app) = self.results.get(self.selected_index) {
-                app.launch();
-                ShellRuntime::forget_launcher(cx);
-                window.remove_window();
+            match &self.results[self.selected_index] {
+                LauncherSearchResult::App(app) => {
+                    app.launch();
+                    ShellRuntime::forget_launcher(cx);
+                    window.remove_window();
+                }
+                LauncherSearchResult::Action(action) => {
+                    let _ = ShellRuntime::dispatch_action(cx, action.id);
+                    ShellRuntime::forget_launcher(cx);
+                    window.remove_window();
+                }
             }
         } else {
             // Launch terminal command or web search
@@ -156,7 +184,7 @@ impl Render for LauncherView {
         let selected_idx = self.selected_index;
 
         // Render Top Match (First match) prominent card
-        let top_match = if let Some(app) = self.results.first() {
+        let top_match = if let Some(item) = self.results.first() {
             let is_selected = selected_idx == 0;
             let bg = if is_selected {
                 cx.theme().primary_container.opacity(0.24)
@@ -164,65 +192,120 @@ impl Render for LauncherView {
                 cx.theme().surface_container.opacity(0.4)
             };
 
-            let app_icon = if let Some(path) = &app.icon_path {
-                div()
-                    .w(px(42.))
-                    .h(px(42.))
-                    .rounded_xl()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .overflow_hidden()
-                    .child(img(path.clone()).w(px(36.)).h(px(36.)))
-            } else {
-                div()
-                    .w(px(42.))
-                    .h(px(42.))
-                    .rounded_xl()
-                    .bg(cx.theme().primary)
-                    .text_color(cx.theme().on_primary)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(Icon::new(IconName::SquareTerminal).size(px(20.)))
-            };
-
-            Some(
-                h_flex()
-                    .id("top-match")
-                    .px_5()
-                    .py_4()
-                    .rounded_2xl()
-                    .bg(bg)
-                    .border_1()
-                    .border_color(cx.theme().outline_variant.opacity(0.3))
-                    .justify_between()
-                    .items_center()
-                    .child(
-                        h_flex().gap_4().items_center().child(app_icon).child(
-                            v_flex()
-                                .gap_0p5()
-                                .child(div().text_base().font_bold().child(app.name.clone()))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().on_surface_variant)
-                                        .child(app.exec.clone()),
-                                ),
-                        ),
-                    )
-                    .child(
+            match item {
+                LauncherSearchResult::App(app) => {
+                    let app_icon = if let Some(path) = &app.icon_path {
                         div()
-                            .px_3()
-                            .py_1()
-                            .rounded_full()
+                            .w(px(42.))
+                            .h(px(42.))
+                            .rounded_xl()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .overflow_hidden()
+                            .child(img(path.clone()).w(px(36.)).h(px(36.)))
+                    } else {
+                        div()
+                            .w(px(42.))
+                            .h(px(42.))
+                            .rounded_xl()
                             .bg(cx.theme().primary)
                             .text_color(cx.theme().on_primary)
-                            .text_xs()
-                            .font_bold()
-                            .child("Launch"),
-                    ),
-            )
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Icon::new(IconName::SquareTerminal).size(px(20.)))
+                    };
+
+                    Some(
+                        h_flex()
+                            .id("top-match")
+                            .px_5()
+                            .py_4()
+                            .rounded_2xl()
+                            .bg(bg)
+                            .border_1()
+                            .border_color(cx.theme().outline_variant.opacity(0.3))
+                            .justify_between()
+                            .items_center()
+                            .child(
+                                h_flex().gap_4().items_center().child(app_icon).child(
+                                    v_flex()
+                                        .gap_0p5()
+                                        .child(
+                                            div().text_base().font_bold().child(app.name.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().on_surface_variant)
+                                                .child(app.exec.clone()),
+                                        ),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_1()
+                                    .rounded_full()
+                                    .bg(cx.theme().primary)
+                                    .text_color(cx.theme().on_primary)
+                                    .text_xs()
+                                    .font_bold()
+                                    .child("Launch"),
+                            ),
+                    )
+                }
+                LauncherSearchResult::Action(action) => {
+                    let action_icon = div()
+                        .w(px(42.))
+                        .h(px(42.))
+                        .rounded_xl()
+                        .bg(cx.theme().secondary)
+                        .text_color(cx.theme().on_secondary)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Icon::new(IconName::Settings).size(px(20.)));
+
+                    Some(
+                        h_flex()
+                            .id("top-match-action")
+                            .px_5()
+                            .py_4()
+                            .rounded_2xl()
+                            .bg(bg)
+                            .border_1()
+                            .border_color(cx.theme().outline_variant.opacity(0.3))
+                            .justify_between()
+                            .items_center()
+                            .child(
+                                h_flex().gap_4().items_center().child(action_icon).child(
+                                    v_flex()
+                                        .gap_0p5()
+                                        .child(div().text_base().font_bold().child(action.label))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().on_surface_variant)
+                                                .child(format!("Action: {}", action.name)),
+                                        ),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_1()
+                                    .rounded_full()
+                                    .bg(cx.theme().secondary)
+                                    .text_color(cx.theme().on_secondary)
+                                    .text_xs()
+                                    .font_bold()
+                                    .child("Execute"),
+                            ),
+                    )
+                }
+            }
         } else {
             None
         };
@@ -234,7 +317,7 @@ impl Render for LauncherView {
             .enumerate()
             .skip(1)
             .take(3)
-            .map(|(i, app)| {
+            .map(|(i, item)| {
                 let is_selected = i == selected_idx;
                 let (bg, fg) = if is_selected {
                     (
@@ -248,50 +331,88 @@ impl Render for LauncherView {
                     )
                 };
 
-                let app_icon = if let Some(path) = &app.icon_path {
-                    div()
-                        .w(px(32.))
-                        .h(px(32.))
-                        .rounded_lg()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .overflow_hidden()
-                        .child(img(path.clone()).w(px(26.)).h(px(26.)))
-                } else {
-                    div()
-                        .w(px(32.))
-                        .h(px(32.))
-                        .rounded_lg()
-                        .bg(cx.theme().primary)
-                        .text_color(cx.theme().on_primary)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(Icon::new(IconName::SquareTerminal).size(px(16.)))
-                };
+                match item {
+                    LauncherSearchResult::App(app) => {
+                        let app_icon = if let Some(path) = &app.icon_path {
+                            div()
+                                .w(px(32.))
+                                .h(px(32.))
+                                .rounded_lg()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .overflow_hidden()
+                                .child(img(path.clone()).w(px(26.)).h(px(26.)))
+                        } else {
+                            div()
+                                .w(px(32.))
+                                .h(px(32.))
+                                .rounded_lg()
+                                .bg(cx.theme().primary)
+                                .text_color(cx.theme().on_primary)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(Icon::new(IconName::SquareTerminal).size(px(16.)))
+                        };
 
-                h_flex()
-                    .id(("app-item", i))
-                    .px_4()
-                    .py_2()
-                    .rounded_xl()
-                    .bg(bg)
-                    .text_color(fg)
-                    .gap_3()
-                    .items_center()
-                    .child(app_icon)
-                    .child(
-                        v_flex()
-                            .gap_0p5()
-                            .child(div().text_sm().font_semibold().child(app.name.clone()))
+                        h_flex()
+                            .id(("app-item", i))
+                            .px_4()
+                            .py_2()
+                            .rounded_xl()
+                            .bg(bg)
+                            .text_color(fg)
+                            .gap_3()
+                            .items_center()
+                            .child(app_icon)
                             .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().on_surface_variant)
-                                    .child(app.exec.clone()),
-                            ),
-                    )
+                                v_flex()
+                                    .gap_0p5()
+                                    .child(div().text_sm().font_semibold().child(app.name.clone()))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().on_surface_variant)
+                                            .child(app.exec.clone()),
+                                    ),
+                            )
+                    }
+                    LauncherSearchResult::Action(action) => {
+                        let action_icon = div()
+                            .w(px(32.))
+                            .h(px(32.))
+                            .rounded_lg()
+                            .bg(cx.theme().secondary)
+                            .text_color(cx.theme().on_secondary)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Icon::new(IconName::Settings).size(px(16.)));
+
+                        h_flex()
+                            .id(("action-item", i))
+                            .px_4()
+                            .py_2()
+                            .rounded_xl()
+                            .bg(bg)
+                            .text_color(fg)
+                            .gap_3()
+                            .items_center()
+                            .child(action_icon)
+                            .child(
+                                v_flex()
+                                    .gap_0p5()
+                                    .child(div().text_sm().font_semibold().child(action.label))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().on_surface_variant)
+                                            .child(format!("Action: {}", action.name)),
+                                    ),
+                            )
+                    }
+                }
             });
 
         // Render provider fallbacks
