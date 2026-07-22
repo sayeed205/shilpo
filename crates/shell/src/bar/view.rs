@@ -392,10 +392,14 @@ impl Render for BarView {
 
         div()
             .when(side, |this| {
-                this.w(px(self.config.bar.height as f32)).h_full()
+                this.w(px(self.config.bar.height as f32))
+                    .h_full()
+                    .flex_col()
             })
             .when(!side, |this| {
-                this.w_full().h(px(self.config.bar.height as f32))
+                this.w_full()
+                    .h(px(self.config.bar.height as f32))
+                    .flex_row()
             })
             .flex()
             .items_center()

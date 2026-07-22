@@ -73,10 +73,41 @@ impl NiriCompositorService {
         let kb_clone = service.keyboard_layout.clone();
 
         thread::spawn(move || {
-            if let Err(e) =
-                run_niri_listener(ws_clone, win_id_clone, app_id_clone, title_clone, kb_clone)
-            {
-                tracing::error!(error = %e, "Niri listener exited");
+            let mut backoff = std::time::Duration::from_millis(100);
+            let max_backoff = std::time::Duration::from_secs(5);
+            let max_attempts = 10;
+            let mut attempts = 0;
+
+            loop {
+                match run_niri_listener(
+                    ws_clone.clone(),
+                    win_id_clone.clone(),
+                    app_id_clone.clone(),
+                    title_clone.clone(),
+                    kb_clone.clone(),
+                ) {
+                    Ok(()) => {
+                        attempts = 0;
+                        backoff = std::time::Duration::from_millis(100);
+                    }
+                    Err(e) => {
+                        attempts += 1;
+                        tracing::warn!(
+                            error = %e,
+                            attempt = attempts,
+                            max = max_attempts,
+                            "Niri listener disconnected or failed; retrying with backoff"
+                        );
+                        if attempts >= max_attempts {
+                            tracing::error!(
+                                "Niri listener failed after max retry attempts; giving up"
+                            );
+                            break;
+                        }
+                        thread::sleep(backoff);
+                        backoff = (backoff * 2).min(max_backoff);
+                    }
+                }
             }
         });
 
