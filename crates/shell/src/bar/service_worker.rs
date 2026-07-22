@@ -4,7 +4,11 @@ use shilpo_services::{
     AudioInfo, AudioService, BatteryInfo, BatteryService, NetworkInfo, NetworkService,
     NiriCompositorService, NiriWorkspaceInfo,
 };
-use std::{path::PathBuf, sync::mpsc, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::mpsc,
+    time::{Duration, Instant},
+};
 
 pub type UpdateSender = mpsc::SyncSender<WorkerUpdate>;
 pub type UpdateReceiver = mpsc::Receiver<WorkerUpdate>;
@@ -92,6 +96,9 @@ async fn run(
     let mut audio_last = None;
     let mut network_last = None;
     let mut device_ticks = 0u8;
+    let mut pending_reload: Option<Instant> = None;
+    let debounce_duration = Duration::from_millis(200);
+
     if !load_config(&updates, &config_path) {
         return;
     }
@@ -105,10 +112,15 @@ async fn run(
                     }
                 }
                 WorkerCommand::ReloadConfig => {
-                    if !load_config(&updates, &config_path) {
-                        return;
-                    }
+                    pending_reload = Some(Instant::now());
                 }
+            }
+        }
+
+        if pending_reload.is_some_and(|req| req.elapsed() >= debounce_duration) {
+            pending_reload = None;
+            if !load_config(&updates, &config_path) {
+                return;
             }
         }
         if let Some(service) = &niri {
