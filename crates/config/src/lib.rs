@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fmt, fs,
     ops::Range,
     path::{Path, PathBuf},
@@ -12,6 +13,27 @@ pub struct ShellConfig {
     pub version: u32,
     pub theme: ThemeConfig,
     pub bar: BarConfig,
+    #[serde(default)]
+    pub outputs: HashMap<String, OutputConfig>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct OutputConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub position: Option<BarPosition>,
+    pub style: Option<BarStyle>,
+    pub height: Option<u32>,
+    pub padding: Option<u32>,
+    pub margin: Option<BarMargin>,
+    pub widget_spacing: Option<u32>,
+    pub exclusive_zone: Option<u32>,
+    pub widgets: Option<BarWidgets>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -100,6 +122,7 @@ impl Default for ShellConfig {
             version: 1,
             theme: ThemeConfig::default(),
             bar: BarConfig::default(),
+            outputs: HashMap::new(),
         }
     }
 }
@@ -202,6 +225,56 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 impl ShellConfig {
+    /// Resolves the effective BarConfig for a specific monitor output name or primary display.
+    /// Returns None if the output is explicitly disabled (`enabled = false`).
+    pub fn bar_for_output(&self, output_name: Option<&str>, is_primary: bool) -> Option<BarConfig> {
+        let override_config = output_name
+            .and_then(|name| self.outputs.get(name))
+            .or_else(|| {
+                if is_primary {
+                    self.outputs.get("primary")
+                } else {
+                    None
+                }
+            });
+
+        let Some(overrides) = override_config else {
+            return Some(self.bar.clone());
+        };
+
+        if !overrides.enabled {
+            return None;
+        }
+
+        let mut bar = self.bar.clone();
+        if let Some(pos) = overrides.position {
+            bar.position = pos;
+        }
+        if let Some(style) = overrides.style {
+            bar.style = style;
+        }
+        if let Some(h) = overrides.height {
+            bar.height = h;
+        }
+        if let Some(p) = overrides.padding {
+            bar.padding = p;
+        }
+        if let Some(m) = &overrides.margin {
+            bar.margin = m.clone();
+        }
+        if let Some(s) = overrides.widget_spacing {
+            bar.widget_spacing = s;
+        }
+        if overrides.exclusive_zone.is_some() {
+            bar.exclusive_zone = overrides.exclusive_zone;
+        }
+        if let Some(w) = &overrides.widgets {
+            bar.widgets = w.clone();
+        }
+
+        Some(bar)
+    }
+
     pub fn validate(&self) -> Result<(), ConfigError> {
         let mut d = Vec::new();
         if self.version != 1 {
@@ -414,5 +487,47 @@ mod tests {
             toml::to_string_pretty(&config).unwrap()
         );
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn per_output_config_overrides_and_disabled() {
+        let toml_text = r##"
+version = 1
+[theme]
+mode = "dark"
+accent = "#6750A4"
+font_family = "sans-serif"
+corner_radius_scale = 1.0
+
+[bar]
+position = "top"
+style = "floating-capsule"
+height = 48
+padding = 8
+widget_spacing = 6
+[bar.margin]
+horizontal = 16
+vertical = 6
+[bar.widgets]
+start = ["launcher"]
+center = ["clock"]
+end = ["settings"]
+
+[outputs."DP-1"]
+position = "bottom"
+style = "full-edge"
+
+[outputs."HDMI-A-1"]
+enabled = false
+"##;
+        let config: ShellConfig = toml::from_str(toml_text).unwrap();
+        let default_bar = config.bar_for_output(Some("DP-2"), false).unwrap();
+        assert_eq!(default_bar.position, BarPosition::Top);
+
+        let dp1_bar = config.bar_for_output(Some("DP-1"), false).unwrap();
+        assert_eq!(dp1_bar.position, BarPosition::Bottom);
+        assert_eq!(dp1_bar.style, BarStyle::FullEdge);
+
+        assert!(config.bar_for_output(Some("HDMI-A-1"), false).is_none());
     }
 }

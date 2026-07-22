@@ -2,9 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ShellConfig",
   "type": "object",
+  "required": [
+    "version",
+    "theme",
+    "bar"
+  ],
   "properties": {
     "bar": {
       "$ref": "#/$defs/BarConfig"
+    },
+    "outputs": {
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/OutputConfig"
+      }
     },
     "theme": {
       "$ref": "#/$defs/ThemeConfig"
@@ -16,15 +28,28 @@
     }
   },
   "additionalProperties": false,
-  "required": [
-    "version",
-    "theme",
-    "bar"
-  ],
   "$defs": {
     "BarConfig": {
       "type": "object",
+      "required": [
+        "position",
+        "style",
+        "height",
+        "padding",
+        "margin",
+        "widget_spacing",
+        "widgets"
+      ],
       "properties": {
+        "exclusive_zone": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
+        },
         "height": {
           "type": "integer",
           "format": "uint32",
@@ -49,32 +74,18 @@
           "format": "uint32",
           "minimum": 0
         },
-        "exclusive_zone": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0,
-          "default": null
-        },
         "widgets": {
           "$ref": "#/$defs/BarWidgets"
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "position",
-        "style",
-        "height",
-        "padding",
-        "margin",
-        "widget_spacing",
-        "widgets"
-      ]
+      "additionalProperties": false
     },
     "BarMargin": {
       "type": "object",
+      "required": [
+        "horizontal",
+        "vertical"
+      ],
       "properties": {
         "horizontal": {
           "type": "integer",
@@ -87,11 +98,7 @@
           "minimum": 0
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "horizontal",
-        "vertical"
-      ]
+      "additionalProperties": false
     },
     "BarPosition": {
       "type": "string",
@@ -126,6 +133,11 @@
     },
     "BarWidgets": {
       "type": "object",
+      "required": [
+        "start",
+        "center",
+        "end"
+      ],
       "properties": {
         "center": {
           "type": "array",
@@ -146,15 +158,98 @@
           }
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "start",
-        "center",
-        "end"
-      ]
+      "additionalProperties": false
+    },
+    "OutputConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "exclusive_zone": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "height": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "margin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BarMargin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "padding": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BarPosition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BarStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "widget_spacing": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "widgets": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BarWidgets"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "ThemeConfig": {
       "type": "object",
+      "required": [
+        "mode",
+        "accent",
+        "font_family",
+        "corner_radius_scale"
+      ],
       "properties": {
         "accent": {
           "type": "string"
@@ -170,13 +265,7 @@
           "$ref": "#/$defs/ThemeMode"
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "mode",
-        "accent",
-        "font_family",
-        "corner_radius_scale"
-      ]
+      "additionalProperties": false
     },
     "ThemeMode": {
       "type": "string",
