@@ -45,15 +45,35 @@ impl Application {
 }
 
 /// Service for scanning and searching installed desktop applications.
+#[derive(Clone)]
 pub struct AppScanner {
     apps: Arc<Mutex<Vec<Application>>>,
 }
 
+impl Default for AppScanner {
+    fn default() -> Self {
+        Self::new_empty()
+    }
+}
+
 impl AppScanner {
+    /// Creates an empty AppScanner without running synchronous disk I/O.
+    pub fn new_empty() -> Self {
+        Self {
+            apps: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Creates an AppScanner initialized with a pre-scanned list of applications.
+    pub fn from_applications(apps: Vec<Application>) -> Self {
+        Self {
+            apps: Arc::new(Mutex::new(apps)),
+        }
+    }
+
     /// Creates a new AppScanner and scans system application directories.
     pub fn new() -> Result<Self> {
-        let apps = Arc::new(Mutex::new(Vec::new()));
-        let scanner = Self { apps };
+        let scanner = Self::new_empty();
         scanner.rescan();
         Ok(scanner)
     }

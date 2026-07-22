@@ -13,12 +13,12 @@ pub struct LauncherView {
     results: Vec<Application>,
     selected_index: usize,
     focus_handle: FocusHandle,
+    pub loading: bool,
 }
 
 impl LauncherView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let scanner = AppScanner::new().unwrap();
-        let results = scanner.applications();
+        let scanner = AppScanner::new_empty();
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
@@ -35,12 +35,32 @@ impl LauncherView {
         })
         .detach();
 
+        // Spawn background scan task so the launcher opens instantly on frame 1
+        cx.spawn(async move |this, cx| {
+            let scanned = cx
+                .background_executor()
+                .spawn(async move {
+                    let scanner = AppScanner::new().unwrap_or_default();
+                    scanner.applications()
+                })
+                .await;
+
+            let _ = this.update(cx, |view, cx| {
+                view.scanner = AppScanner::from_applications(scanned);
+                view.results = view.scanner.search(&view.query);
+                view.loading = false;
+                cx.notify();
+            });
+        })
+        .detach();
+
         Self {
             scanner,
             query: String::new(),
-            results,
+            results: Vec::new(),
             selected_index: 0,
             focus_handle,
+            loading: true,
         }
     }
 
