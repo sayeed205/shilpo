@@ -155,6 +155,7 @@ impl ShellRuntime {
     }
 
     pub fn open_or_focus_launcher(cx: &mut App) {
+        Self::close_control_center(cx);
         let handle = cx.global_mut::<Self>().launcher.take();
         if let Some(handle) = handle
             && handle
@@ -220,6 +221,7 @@ impl ShellRuntime {
     }
 
     pub fn open_or_focus_control_center(cx: &mut App) {
+        Self::close_launcher(cx);
         let handle = cx.global_mut::<Self>().control_center.take();
         if let Some(handle) = handle
             && handle
