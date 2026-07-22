@@ -17,6 +17,7 @@ async fn main() {
                 "toggle-control-center" => IpcRequest::ToggleControlCenter,
                 "reload-config" => IpcRequest::ReloadConfig,
                 "toggle-bar" => IpcRequest::ToggleBar,
+                "quit" => IpcRequest::Quit,
                 "focus-workspace" => {
                     if let Some(id_str) = args.get(3) {
                         if let Ok(id) = id_str.parse::<u64>() {
@@ -110,6 +111,31 @@ async fn main() {
         shilpo_shell::bar::view::apply_config_theme(&config, None, cx);
         cx.activate(true);
         ShellRuntime::install(cx, ipc_server);
+        cx.spawn(async move |cx| {
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut sigint = signal(SignalKind::interrupt()).ok();
+            let mut sigterm = signal(SignalKind::terminate()).ok();
+            tokio::select! {
+                _ = async {
+                    if let Some(s) = sigint.as_mut() {
+                        s.recv().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {},
+                _ = async {
+                    if let Some(s) = sigterm.as_mut() {
+                        s.recv().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {},
+            }
+            tracing::info!("shutdown signal received; stopping shell");
+            cx.update(ShellRuntime::shutdown);
+        })
+        .detach();
+
         if let Some(display) = cx.primary_display() {
             let geometry = BarGeometry::calculate(display.id(), display.bounds(), &config.bar);
             ShellRuntime::open_bar(cx, &geometry, true);

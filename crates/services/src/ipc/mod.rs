@@ -38,6 +38,7 @@ pub enum IpcRequest {
     ToggleControlCenter,
     SetTheme { source_argb: u32, is_dark: bool },
     GetStatus,
+    Quit,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

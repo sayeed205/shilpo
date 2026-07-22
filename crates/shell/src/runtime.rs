@@ -312,6 +312,10 @@ impl ShellRuntime {
                     shilpo_ui::Theme::global_mut(cx).set_source_argb(source_argb);
                     shilpo_ui::Theme::global_mut(cx).set_mode(mode);
                 }
+                IpcRequest::Quit => {
+                    Self::shutdown(cx);
+                    return;
+                }
                 request @ (IpcRequest::FocusWorkspace(_) | IpcRequest::ReloadConfig) => {
                     Self::enqueue_worker(cx, request);
                 }
@@ -319,6 +323,37 @@ impl ShellRuntime {
             }
         }
         cx.global::<Self>().publish_status();
+    }
+
+    pub fn shutdown(cx: &mut App) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let (bar, launcher, control_center, notification) = {
+            let runtime = cx.global_mut::<Self>();
+            (
+                runtime.bar.take(),
+                runtime.launcher.take(),
+                runtime.control_center.take(),
+                runtime.notification.take(),
+            )
+        };
+        if let Some(handle) = bar {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+        if let Some(handle) = launcher {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+        if let Some(handle) = control_center {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+        if let Some((_, handle)) = notification {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+        let runtime = cx.global_mut::<Self>();
+        runtime.bar_state = BarState::Hidden;
+        runtime.publish_status();
+        cx.quit();
     }
 }
 
