@@ -1,14 +1,8 @@
-use gpui::{
-    App, Bounds, DisplayId, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
-    layer_shell::{KeyboardInteractivity, Layer, LayerShellOptions},
-    point, px, size,
-};
+use gpui::{App, Bounds, DisplayId, point, px, size};
 use shilpo_assets::Assets;
 use shilpo_config::ShellConfig;
-use shilpo_shell::{
-    ShellRuntime,
-    bar::{BarView, geometry::BarGeometry},
-};
+use shilpo_services::{IpcRequest, IpcResult, ShellIpcServer};
+use shilpo_shell::{ShellRuntime, bar::geometry::BarGeometry};
 
 #[tokio::main]
 async fn main() {
@@ -18,14 +12,15 @@ async fn main() {
         if args.len() > 2 {
             let cmd = &args[2];
             let req = match cmd.as_str() {
-                "toggle-launcher" => shilpo_services::IpcRequest::ToggleLauncher,
-                "toggle-control-center" => shilpo_services::IpcRequest::ToggleControlCenter,
-                "reload-config" => shilpo_services::IpcRequest::ReloadConfig,
-                "toggle-bar" => shilpo_services::IpcRequest::ToggleBar,
+                "get-status" => IpcRequest::GetStatus,
+                "toggle-launcher" => IpcRequest::ToggleLauncher,
+                "toggle-control-center" => IpcRequest::ToggleControlCenter,
+                "reload-config" => IpcRequest::ReloadConfig,
+                "toggle-bar" => IpcRequest::ToggleBar,
                 "focus-workspace" => {
                     if let Some(id_str) = args.get(3) {
                         if let Ok(id) = id_str.parse::<u64>() {
-                            shilpo_services::IpcRequest::FocusWorkspace(id)
+                            IpcRequest::FocusWorkspace(id)
                         } else {
                             eprintln!("Invalid workspace ID");
                             std::process::exit(1);
@@ -47,7 +42,7 @@ async fn main() {
                         0xff006c4c
                     };
                     let is_dark = args.get(4).map(|s| s == "dark").unwrap_or(true);
-                    shilpo_services::IpcRequest::SetTheme {
+                    IpcRequest::SetTheme {
                         source_argb,
                         is_dark,
                     }
@@ -58,9 +53,27 @@ async fn main() {
                 }
             };
 
-            match shilpo_services::ShellIpcServer::send_command(req) {
+            match ShellIpcServer::send_command(req) {
                 Ok(resp) => {
-                    println!("Success: {}, Message: {}", resp.success, resp.message);
+                    if !resp.ok {
+                        if let Some(error) = resp.error {
+                            eprintln!("{}: {}", error.code, error.message);
+                        } else {
+                            eprintln!("IPC request failed");
+                        }
+                        std::process::exit(1);
+                    }
+                    match resp.result {
+                        Some(IpcResult::Accepted) => println!("Accepted"),
+                        Some(IpcResult::Status(status)) => println!(
+                            "running={} bar={:?} launcher_visible={} control_center_visible={}",
+                            status.running,
+                            status.bar,
+                            status.launcher_visible,
+                            status.control_center_visible
+                        ),
+                        None => println!("Accepted"),
+                    }
                 }
                 Err(e) => {
                     eprintln!("Error sending command: {:?}", e);
@@ -75,6 +88,13 @@ async fn main() {
     }
 
     let app = gpui_platform::application().with_assets(Assets);
+    let ipc_server = match ShellIpcServer::new() {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!("Unable to start secure shell IPC: {error}");
+            std::process::exit(1);
+        }
+    };
 
     app.run(move |cx| {
         // Initialize Shilpo UI theme & global states
@@ -89,10 +109,10 @@ async fn main() {
             });
         shilpo_shell::bar::view::apply_config_theme(&config, None, cx);
         cx.activate(true);
-        ShellRuntime::install(cx);
+        ShellRuntime::install(cx, ipc_server);
         if let Some(display) = cx.primary_display() {
             let geometry = BarGeometry::calculate(display.id(), display.bounds(), &config.bar);
-            open_bar(cx, &geometry, true);
+            ShellRuntime::open_bar(cx, &geometry, true);
         } else {
             schedule_bar_retry(cx, config);
         }
@@ -111,7 +131,7 @@ fn schedule_bar_retry(cx: &App, config: ShellConfig) {
                     return false;
                 };
                 let geometry = BarGeometry::calculate(display.id(), display.bounds(), &config.bar);
-                open_bar(cx, &geometry, true)
+                ShellRuntime::open_bar(cx, &geometry, true)
             });
             if opened {
                 return;
@@ -125,21 +145,10 @@ fn schedule_bar_retry(cx: &App, config: ShellConfig) {
                 Bounds::new(point(px(0.), px(0.)), size(px(0.), px(0.))),
                 &config.bar,
             );
-            open_bar(cx, &geometry, false);
+            ShellRuntime::open_bar(cx, &geometry, false);
         });
     })
     .detach();
-}
-
-fn open_bar(cx: &mut App, geometry: &BarGeometry, with_display_geometry: bool) -> bool {
-    let options = bar_window_options(geometry, with_display_geometry);
-    match cx.open_window(options, BarView::view) {
-        Ok(_) => true,
-        Err(error) => {
-            tracing::error!(error = %error, "failed to open bar window");
-            false
-        }
-    }
 }
 
 fn init_tracing() {
@@ -155,30 +164,4 @@ fn init_tracing() {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .try_init();
-}
-
-fn bar_window_options(geometry: &BarGeometry, with_display_geometry: bool) -> WindowOptions {
-    let bounds = if with_display_geometry {
-        geometry.bounds
-    } else {
-        Bounds::new(point(px(0.), px(0.)), geometry.bounds.size)
-    };
-
-    WindowOptions {
-        titlebar: None,
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        display_id: with_display_geometry.then_some(geometry.display_id),
-        app_id: Some("shilpo-bar".to_string()),
-        window_background: WindowBackgroundAppearance::Transparent,
-        kind: WindowKind::LayerShell(LayerShellOptions {
-            namespace: "bar".to_string(),
-            layer: Layer::Top,
-            anchor: geometry.anchor,
-            exclusive_zone: Some(geometry.exclusive_zone),
-            exclusive_edge: Some(geometry.exclusive_edge),
-            margin: geometry.margin,
-            keyboard_interactivity: KeyboardInteractivity::None,
-        }),
-        ..Default::default()
-    }
 }

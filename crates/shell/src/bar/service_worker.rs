@@ -40,8 +40,11 @@ pub fn channels() -> (UpdateSender, UpdateReceiver, CommandSender, CommandReceiv
     (updates_tx, updates_rx, commands_tx, commands_rx)
 }
 
-pub fn try_send_command(sender: &CommandSender, command: WorkerCommand) {
-    let _ = sender.try_send(command);
+pub fn try_send_command(
+    sender: &CommandSender,
+    command: WorkerCommand,
+) -> Result<(), mpsc::TrySendError<WorkerCommand>> {
+    sender.try_send(command)
 }
 
 #[allow(clippy::too_many_arguments)]

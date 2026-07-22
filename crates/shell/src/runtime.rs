@@ -4,26 +4,57 @@ use gpui::{
     layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
     point, px, size,
 };
+use shilpo_services::{BarState, IpcRequest, IpcStatus, ShellIpcServer};
 
-use crate::{control_center::ControlCenterView, launcher::LauncherView};
+use crate::{
+    bar::{BarView, geometry::BarGeometry},
+    control_center::ControlCenterView,
+    launcher::LauncherView,
+};
 
 pub struct ShellRuntime {
+    ipc_server: ShellIpcServer,
+    bar: Option<WindowHandle<BarView>>,
+    bar_spec: Option<(BarGeometry, bool)>,
+    bar_state: BarState,
     launcher: Option<WindowHandle<LauncherView>>,
     control_center: Option<WindowHandle<ControlCenterView>>,
+    notification: Option<(
+        u64,
+        WindowHandle<crate::notification::NotificationToastView>,
+    )>,
+    notification_generation: u64,
     _window_closed: Option<Subscription>,
+    _ipc_task: gpui::Task<()>,
 }
 
 impl Global for ShellRuntime {}
 
 impl ShellRuntime {
-    pub fn install(cx: &mut App) {
+    pub fn install(cx: &mut App, ipc_server: ShellIpcServer) {
         cx.set_global(Self {
+            ipc_server,
+            bar: None,
+            bar_spec: None,
+            bar_state: BarState::Starting,
             launcher: None,
             control_center: None,
+            notification: None,
+            notification_generation: 0,
             _window_closed: None,
+            _ipc_task: cx.spawn(async |_| {}),
         });
+
         let subscription = cx.on_window_closed(|cx, window_id| {
             let runtime = cx.global_mut::<Self>();
+            if runtime
+                .bar
+                .as_ref()
+                .is_some_and(|handle| handle.window_id() == window_id)
+            {
+                runtime.bar = None;
+                runtime.bar_state = BarState::Hidden;
+            }
             if runtime
                 .launcher
                 .as_ref()
@@ -38,8 +69,89 @@ impl ShellRuntime {
             {
                 runtime.control_center = None;
             }
+            if runtime
+                .notification
+                .as_ref()
+                .is_some_and(|(_, handle)| handle.window_id() == window_id)
+            {
+                runtime.notification = None;
+            }
+            runtime.publish_status();
         });
         cx.global_mut::<Self>()._window_closed = Some(subscription);
+
+        let task = cx.spawn(async move |cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+                cx.update(Self::drain_ipc);
+            }
+        });
+        cx.global_mut::<Self>()._ipc_task = task;
+        cx.global::<Self>().publish_status();
+    }
+
+    fn publish_status(&self) {
+        self.ipc_server.update_status(IpcStatus {
+            running: true,
+            bar: self.bar_state.clone(),
+            launcher_visible: self.launcher.is_some(),
+            control_center_visible: self.control_center.is_some(),
+        });
+    }
+
+    pub fn open_bar(cx: &mut App, geometry: &BarGeometry, with_display_geometry: bool) -> bool {
+        let options = bar_window_options(geometry, with_display_geometry);
+        let result = cx.open_window(options, BarView::view);
+        let runtime = cx.global_mut::<Self>();
+        match result {
+            Ok(handle) => {
+                runtime.bar = Some(handle);
+                runtime.bar_spec = Some((geometry.clone(), with_display_geometry));
+                runtime.bar_state = BarState::Visible;
+                runtime.publish_status();
+                true
+            }
+            Err(error) => {
+                tracing::error!(error = %error, "failed to open bar window");
+                runtime.bar_state = BarState::OpenFailed;
+                runtime.publish_status();
+                false
+            }
+        }
+    }
+
+    pub fn mark_bar_open_failed(cx: &mut App) {
+        let runtime = cx.global_mut::<Self>();
+        runtime.bar_state = BarState::OpenFailed;
+        runtime.publish_status();
+    }
+
+    pub fn toggle_bar(cx: &mut App) {
+        let (handle, spec) = {
+            let runtime = cx.global_mut::<Self>();
+            (runtime.bar.take(), runtime.bar_spec.clone())
+        };
+        if let Some(handle) = handle {
+            let removed = handle
+                .update(cx, |_, window, _| window.remove_window())
+                .is_ok();
+            let runtime = cx.global_mut::<Self>();
+            if removed {
+                runtime.bar_state = BarState::Hidden;
+            } else {
+                runtime.bar_state = BarState::OpenFailed;
+            }
+            runtime.publish_status();
+            return;
+        }
+        if let Some((geometry, with_display_geometry)) = spec {
+            Self::open_bar(cx, &geometry, with_display_geometry);
+        } else {
+            Self::mark_bar_open_failed(cx);
+            tracing::warn!("cannot toggle bar: no valid reopen geometry");
+        }
     }
 
     pub fn open_or_focus_launcher(cx: &mut App) {
@@ -53,6 +165,7 @@ impl ShellRuntime {
                 .is_ok()
         {
             cx.global_mut::<Self>().launcher = Some(handle);
+            cx.global::<Self>().publish_status();
             return;
         }
         let options = overlay_options(
@@ -67,18 +180,27 @@ impl ShellRuntime {
                 tracing::error!(error = %error, overlay = "launcher", "failed to open overlay window")
             }
         }
+        cx.global::<Self>().publish_status();
     }
 
     pub fn toggle_launcher(cx: &mut App) {
-        let handle = cx.global_mut::<Self>().launcher.take();
-        if let Some(handle) = handle
-            && handle
-                .update(cx, |_, window, _| window.remove_window())
-                .is_ok()
-        {
-            return;
+        if cx.global::<Self>().launcher.is_some() {
+            Self::close_launcher(cx);
+        } else {
+            Self::open_or_focus_launcher(cx);
         }
-        Self::open_or_focus_launcher(cx);
+    }
+
+    pub fn close_launcher(cx: &mut App) {
+        let handle = cx.global_mut::<Self>().launcher.take();
+        let Some(handle) = handle else { return };
+        let _ = handle.update(cx, |_, window, _| window.remove_window());
+        cx.global::<Self>().publish_status();
+    }
+
+    pub fn forget_launcher(cx: &mut App) {
+        cx.global_mut::<Self>().launcher = None;
+        cx.global::<Self>().publish_status();
     }
 
     pub fn open_or_focus_control_center(cx: &mut App) {
@@ -92,6 +214,7 @@ impl ShellRuntime {
                 .is_ok()
         {
             cx.global_mut::<Self>().control_center = Some(handle);
+            cx.global::<Self>().publish_status();
             return;
         }
         let options = overlay_options(
@@ -106,18 +229,121 @@ impl ShellRuntime {
                 tracing::error!(error = %error, overlay = "control-center", "failed to open overlay window")
             }
         }
+        cx.global::<Self>().publish_status();
     }
 
     pub fn toggle_control_center(cx: &mut App) {
+        if cx.global::<Self>().control_center.is_some() {
+            Self::close_control_center(cx);
+        } else {
+            Self::open_or_focus_control_center(cx);
+        }
+    }
+
+    pub fn close_control_center(cx: &mut App) {
         let handle = cx.global_mut::<Self>().control_center.take();
-        if let Some(handle) = handle
-            && handle
-                .update(cx, |_, window, _| window.remove_window())
-                .is_ok()
-        {
+        let Some(handle) = handle else { return };
+        let _ = handle.update(cx, |_, window, _| window.remove_window());
+        cx.global::<Self>().publish_status();
+    }
+
+    pub fn forget_control_center(cx: &mut App) {
+        cx.global_mut::<Self>().control_center = None;
+        cx.global::<Self>().publish_status();
+    }
+
+    pub fn register_notification(
+        cx: &mut App,
+        handle: WindowHandle<crate::notification::NotificationToastView>,
+    ) -> u64 {
+        let runtime = cx.global_mut::<Self>();
+        runtime.notification_generation = runtime.notification_generation.wrapping_add(1);
+        let generation = runtime.notification_generation;
+        runtime.notification = Some((generation, handle));
+        generation
+    }
+
+    pub fn expire_notification(cx: &mut App, generation: u64) {
+        let entry = cx.global_mut::<Self>().notification.take();
+        let Some((current_generation, handle)) = entry else {
+            return;
+        };
+        if current_generation != generation {
+            cx.global_mut::<Self>().notification = Some((current_generation, handle));
             return;
         }
-        Self::open_or_focus_control_center(cx);
+        let _ = handle.update(cx, |_, window, _| window.remove_window());
+    }
+
+    fn enqueue_worker(cx: &mut App, request: IpcRequest) {
+        let handle = cx.global_mut::<Self>().bar.take();
+        let Some(handle) = handle else {
+            tracing::warn!(?request, "IPC worker request dropped: bar unavailable");
+            return;
+        };
+        match handle.update(cx, |bar, _, _| bar.enqueue_request(request)) {
+            Ok(Ok(())) => cx.global_mut::<Self>().bar = Some(handle),
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "IPC worker request rejected");
+                cx.global_mut::<Self>().bar = Some(handle);
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "IPC worker request dropped: bar handle unavailable")
+            }
+        }
+    }
+
+    fn drain_ipc(cx: &mut App) {
+        let requests = cx.global_mut::<Self>().ipc_server.pop_pending_requests();
+        for request in requests {
+            match request {
+                IpcRequest::ToggleBar => Self::toggle_bar(cx),
+                IpcRequest::ToggleLauncher => Self::toggle_launcher(cx),
+                IpcRequest::ToggleControlCenter => Self::toggle_control_center(cx),
+                IpcRequest::SetTheme {
+                    source_argb,
+                    is_dark,
+                } => {
+                    let mode = if is_dark {
+                        shilpo_ui::ThemeMode::Dark
+                    } else {
+                        shilpo_ui::ThemeMode::Light
+                    };
+                    shilpo_ui::Theme::global_mut(cx).set_source_argb(source_argb);
+                    shilpo_ui::Theme::global_mut(cx).set_mode(mode);
+                }
+                request @ (IpcRequest::FocusWorkspace(_) | IpcRequest::ReloadConfig) => {
+                    Self::enqueue_worker(cx, request);
+                }
+                IpcRequest::GetStatus => {}
+            }
+        }
+        cx.global::<Self>().publish_status();
+    }
+}
+
+fn bar_window_options(geometry: &BarGeometry, with_display_geometry: bool) -> WindowOptions {
+    let bounds = if with_display_geometry {
+        geometry.bounds
+    } else {
+        Bounds::new(point(px(0.), px(0.)), geometry.bounds.size)
+    };
+    WindowOptions {
+        titlebar: None,
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        display_id: with_display_geometry.then_some(geometry.display_id),
+        app_id: Some("shilpo-bar".to_string()),
+        window_background: WindowBackgroundAppearance::Transparent,
+        kind: WindowKind::LayerShell(LayerShellOptions {
+            namespace: "bar".to_string(),
+            layer: Layer::Top,
+            anchor: geometry.anchor,
+            exclusive_zone: Some(geometry.exclusive_zone),
+            exclusive_edge: Some(geometry.exclusive_edge),
+            margin: geometry.margin,
+            keyboard_interactivity: KeyboardInteractivity::None,
+        }),
+        ..Default::default()
     }
 }
 

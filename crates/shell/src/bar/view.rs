@@ -6,8 +6,8 @@ use gpui::{
 };
 use shilpo_config::{BarPosition, BarWidget, ShellConfig};
 use shilpo_services::{
-    AudioInfo, AudioService, BatteryInfo, BatteryService, IpcRequest, NetworkInfo, NetworkService,
-    NiriCompositorService, NiriWorkspaceInfo, Notification, NotificationService, ShellIpcServer,
+    AudioInfo, AudioService, BatteryInfo, BatteryService, NetworkInfo, NetworkService,
+    NiriCompositorService, NiriWorkspaceInfo, Notification, NotificationService,
 };
 use shilpo_ui::{ActiveTheme, h_flex, v_flex};
 use std::time::Duration;
@@ -46,7 +46,6 @@ pub fn apply_config_theme(config: &ShellConfig, window: Option<&mut Window>, cx:
 pub struct BarView {
     pub config: ShellConfig,
     pub notification_service: Option<NotificationService>,
-    pub ipc_server: Option<ShellIpcServer>,
     service_commands: service_worker::CommandSender,
     workspaces: Vec<NiriWorkspaceInfo>,
     battery: BatteryInfo,
@@ -61,6 +60,16 @@ pub struct BarView {
 }
 
 impl BarView {
+    pub fn enqueue_request(&self, request: shilpo_services::IpcRequest) -> Result<(), String> {
+        let command = match request {
+            shilpo_services::IpcRequest::FocusWorkspace(id) => WorkerCommand::FocusWorkspace(id),
+            shilpo_services::IpcRequest::ReloadConfig => WorkerCommand::ReloadConfig,
+            _ => return Err("request is not a bar worker command".into()),
+        };
+        service_worker::try_send_command(&self.service_commands, command)
+            .map_err(|error| format!("{error:?}"))
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let config_path = std::env::var("HOME")
             .map(|home| std::path::PathBuf::from(home).join(".config/shilpo/config.toml"))
@@ -85,14 +94,6 @@ impl BarView {
         if let Some(service) = &notification_service {
             service.set_new_notification_sender(notif_tx);
         }
-        let ipc_server = match ShellIpcServer::new() {
-            Ok(server) => Some(server),
-            Err(error) => {
-                tracing::warn!(error = %error, "shell IPC unavailable; IPC commands disabled");
-                None
-            }
-        };
-
         // Dynamic theme synchronization with OS appearance and config
         apply_config_theme(&config, Some(window), cx);
         cx.observe_window_appearance(window, |this, window, cx| {
@@ -156,7 +157,7 @@ impl BarView {
         let watcher = match notify::RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
                 if let Some(_event) = res.ok().filter(|e| e.kind.is_modify()) {
-                    service_worker::try_send_command(
+                    let _ = service_worker::try_send_command(
                         &watcher_commands,
                         WorkerCommand::ReloadConfig,
                     );
@@ -230,49 +231,6 @@ impl BarView {
                         }
                     }
 
-                    // Process pending IPC commands
-                    let requests = this
-                        .ipc_server
-                        .as_ref()
-                        .map(ShellIpcServer::pop_pending_requests)
-                        .unwrap_or_default();
-                    for req in requests {
-                        match req {
-                            IpcRequest::FocusWorkspace(id) => {
-                                service_worker::try_send_command(
-                                    &this.service_commands,
-                                    WorkerCommand::FocusWorkspace(id),
-                                );
-                            }
-                            IpcRequest::ReloadConfig => {
-                                service_worker::try_send_command(
-                                    &this.service_commands,
-                                    WorkerCommand::ReloadConfig,
-                                );
-                            }
-                            IpcRequest::ToggleLauncher => {
-                                ShellRuntime::toggle_launcher(cx);
-                            }
-                            IpcRequest::ToggleControlCenter => {
-                                ShellRuntime::toggle_control_center(cx);
-                            }
-                            IpcRequest::SetTheme {
-                                source_argb,
-                                is_dark,
-                            } => {
-                                let mode = if is_dark {
-                                    shilpo_ui::ThemeMode::Dark
-                                } else {
-                                    shilpo_ui::ThemeMode::Light
-                                };
-                                shilpo_ui::Theme::global_mut(cx).set_source_argb(source_argb);
-                                shilpo_ui::Theme::global_mut(cx).set_mode(mode);
-                                cx.notify();
-                            }
-                            _ => {}
-                        }
-                    }
-
                     let now = chrono::Local::now();
                     let updated_dt = now.format("%H:%M · %a, %d/%m").to_string();
 
@@ -295,7 +253,6 @@ impl BarView {
         Self {
             config,
             notification_service,
-            ipc_server,
             service_commands,
             workspaces: fallback_ws,
             battery,
@@ -474,13 +431,10 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
     if let Ok(handle) = cx.open_window(options, move |window, cx| {
         NotificationToastView::view(notification.clone(), window, cx)
     }) {
+        let generation = ShellRuntime::register_notification(cx, handle);
         cx.spawn(async move |cx| {
             cx.background_executor().timer(Duration::from_secs(5)).await;
-            cx.update(|cx| {
-                handle
-                    .update(cx, |_, window, _| window.remove_window())
-                    .ok();
-            });
+            cx.update(|cx| ShellRuntime::expire_notification(cx, generation));
         })
         .detach();
     }

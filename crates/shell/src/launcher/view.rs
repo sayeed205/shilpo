@@ -1,3 +1,4 @@
+use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
     KeyDownEvent, ParentElement, Render, Styled, Window, div, img, px,
@@ -60,10 +61,11 @@ impl LauncherView {
         cx.notify();
     }
 
-    fn launch_selected(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+    fn launch_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_index < self.results.len() {
             if let Some(app) = self.results.get(self.selected_index) {
                 app.launch();
+                ShellRuntime::forget_launcher(cx);
                 window.remove_window();
             }
         } else {
@@ -77,6 +79,7 @@ impl LauncherView {
                     let url = format!("https://www.google.com/search?q={}", query);
                     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
                 }
+                ShellRuntime::forget_launcher(cx);
                 window.remove_window();
             }
         }
@@ -90,6 +93,7 @@ impl LauncherView {
     ) {
         match event.keystroke.key.as_str() {
             "escape" => {
+                ShellRuntime::forget_launcher(cx);
                 window.remove_window();
             }
             "enter" => {
@@ -381,7 +385,8 @@ impl Render for LauncherView {
             .justify_center()
             .bg(cx.theme().scrim.opacity(0.4))
             .id("launcher-backdrop")
-            .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+            .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                ShellRuntime::forget_launcher(cx);
                 window.remove_window();
             })
             .child(

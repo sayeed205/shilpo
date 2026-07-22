@@ -1,3 +1,4 @@
+use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
     KeyDownEvent, ParentElement, Render, StatefulInteractiveElement, Styled, Window, div, px,
@@ -134,9 +135,10 @@ impl ControlCenterView {
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         if event.keystroke.key.as_str() == "escape" {
+            ShellRuntime::forget_control_center(cx);
             window.remove_window();
         }
     }
@@ -223,7 +225,8 @@ impl Render for ControlCenterView {
             .justify_center()
             .bg(cx.theme().scrim.opacity(0.4))
             .id("control-center-backdrop")
-            .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+            .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                ShellRuntime::forget_control_center(cx);
                 window.remove_window();
             })
             .child(
