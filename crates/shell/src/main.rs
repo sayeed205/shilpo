@@ -74,10 +74,9 @@ async fn main() {
     app.run(move |cx| {
         // Initialize Shilpo UI theme & global states
         shilpo_ui::init(cx);
-        shilpo_ui::Theme::change(shilpo_ui::ThemeMode::System, None, cx);
-        cx.activate(true);
-
         let config = shilpo_config::ShellConfig::load();
+        shilpo_shell::bar::view::apply_config_theme(&config, None, cx);
+        cx.activate(true);
         let bar_height = config.bar.height as f32;
         let window_height = if config.bar.style == shilpo_config::BarStyle::FloatingCapsule {
             bar_height + (config.bar.margin_v as f32) * 2.0

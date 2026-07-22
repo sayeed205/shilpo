@@ -15,6 +15,31 @@ use super::widgets::{
     WorkspacesWidget,
 };
 
+pub fn parse_hex_color(hex: &str) -> Option<u32> {
+    let clean = hex.trim_start_matches('#');
+    if clean.len() == 6 {
+        let rgb = u32::from_str_radix(clean, 16).ok()?;
+        Some(0xff000000 | rgb)
+    } else if clean.len() == 8 {
+        u32::from_str_radix(clean, 16).ok()
+    } else {
+        None
+    }
+}
+
+pub fn apply_config_theme(config: &ShellConfig, window: Option<&mut Window>, cx: &mut App) {
+    if let Some(argb) = parse_hex_color(&config.theme.primary_accent) {
+        let theme = shilpo_ui::Theme::global_mut(cx);
+        theme.set_source_argb(argb);
+    }
+    let ui_mode = match config.theme.mode {
+        shilpo_config::ThemeMode::Dark => shilpo_ui::ThemeMode::Dark,
+        shilpo_config::ThemeMode::Light => shilpo_ui::ThemeMode::Light,
+        shilpo_config::ThemeMode::Auto => shilpo_ui::ThemeMode::System,
+    };
+    shilpo_ui::Theme::change(ui_mode, window, cx);
+}
+
 /// Status Bar GPUI View (Multi-Capsule Segmented Bar with IPC integration).
 pub struct BarView {
     pub config: ShellConfig,
@@ -60,10 +85,10 @@ impl BarView {
             ShellIpcServer::new().unwrap()
         });
 
-        // Dynamic theme synchronization with OS appearance
-        shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
-        cx.observe_window_appearance(window, |_, window, cx| {
-            shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
+        // Dynamic theme synchronization with OS appearance and config
+        apply_config_theme(&config, Some(window), cx);
+        cx.observe_window_appearance(window, |this, window, cx| {
+            apply_config_theme(&this.config, Some(window), cx);
             window.refresh();
         })
         .detach();
@@ -134,6 +159,7 @@ impl BarView {
                     // Process configuration changes automatically
                     while config_rx.try_recv().is_ok() {
                         this.config = ShellConfig::load();
+                        apply_config_theme(&this.config, None, cx);
                         cx.notify();
                     }
 
@@ -146,6 +172,7 @@ impl BarView {
                             }
                             IpcRequest::ReloadConfig => {
                                 this.config = ShellConfig::load();
+                                apply_config_theme(&this.config, None, cx);
                                 cx.notify();
                             }
                             IpcRequest::ToggleLauncher => {
