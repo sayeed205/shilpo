@@ -7,8 +7,10 @@ use gpui::{
 use shilpo_services::{BarState, IpcRequest, IpcStatus, ShellIpcServer};
 
 use crate::{
+    actions::{ActionId, ActionRegistry},
     bar::{BarView, geometry::BarGeometry},
     control_center::ControlCenterView,
+    error::ShellError,
     launcher::LauncherView,
 };
 
@@ -449,13 +451,52 @@ impl ShellRuntime {
         }
     }
 
+    pub fn dispatch_action(cx: &mut App, action: ActionId) -> Result<(), ShellError> {
+        let descriptor = ActionRegistry::all()
+            .into_iter()
+            .find(|d| d.id == action)
+            .ok_or_else(|| ShellError::ActionFailed("unknown action id".into()))?;
+
+        if !descriptor.enabled {
+            return Err(ShellError::ActionFailed(format!(
+                "action '{}' is currently disabled",
+                descriptor.name
+            )));
+        }
+
+        match action {
+            ActionId::ToggleLauncher => Self::toggle_launcher(cx),
+            ActionId::ToggleControlCenter => Self::toggle_control_center(cx),
+            ActionId::ToggleBar => Self::toggle_bar(cx),
+            ActionId::ReloadConfig => Self::enqueue_worker(cx, IpcRequest::ReloadConfig),
+            ActionId::Quit => Self::shutdown(cx),
+            ActionId::FocusWorkspace => {
+                Self::enqueue_worker(cx, IpcRequest::FocusWorkspace(1));
+            }
+        }
+        Ok(())
+    }
+
     fn drain_ipc(cx: &mut App) {
         let requests = cx.global_mut::<Self>().ipc_server.pop_pending_requests();
         for request in requests {
             match request {
-                IpcRequest::ToggleBar => Self::toggle_bar(cx),
-                IpcRequest::ToggleLauncher => Self::toggle_launcher(cx),
-                IpcRequest::ToggleControlCenter => Self::toggle_control_center(cx),
+                IpcRequest::ToggleBar => {
+                    let _ = Self::dispatch_action(cx, ActionId::ToggleBar);
+                }
+                IpcRequest::ToggleLauncher => {
+                    let _ = Self::dispatch_action(cx, ActionId::ToggleLauncher);
+                }
+                IpcRequest::ToggleControlCenter => {
+                    let _ = Self::dispatch_action(cx, ActionId::ToggleControlCenter);
+                }
+                IpcRequest::ReloadConfig => {
+                    let _ = Self::dispatch_action(cx, ActionId::ReloadConfig);
+                }
+                IpcRequest::Quit => {
+                    let _ = Self::dispatch_action(cx, ActionId::Quit);
+                    return;
+                }
                 IpcRequest::SetTheme {
                     source_argb,
                     is_dark,
@@ -468,12 +509,8 @@ impl ShellRuntime {
                     shilpo_ui::Theme::global_mut(cx).set_source_argb(source_argb);
                     shilpo_ui::Theme::global_mut(cx).set_mode(mode);
                 }
-                IpcRequest::Quit => {
-                    Self::shutdown(cx);
-                    return;
-                }
-                request @ (IpcRequest::FocusWorkspace(_) | IpcRequest::ReloadConfig) => {
-                    Self::enqueue_worker(cx, request);
+                IpcRequest::FocusWorkspace(id) => {
+                    Self::enqueue_worker(cx, IpcRequest::FocusWorkspace(id));
                 }
                 IpcRequest::GetStatus => {}
             }

@@ -7,6 +7,7 @@ pub enum ShellError {
         surface: &'static str,
         message: String,
     },
+    ActionFailed(String),
     Service(shilpo_services::ServiceError),
     Config(shilpo_config::ConfigError),
 }
@@ -17,6 +18,7 @@ impl fmt::Display for ShellError {
             Self::WindowCreation { surface, message } => {
                 write!(f, "Window creation failed [{surface}]: {message}")
             }
+            Self::ActionFailed(msg) => write!(f, "Shell action failed: {msg}"),
             Self::Service(err) => write!(f, "Shell service error: {err}"),
             Self::Config(err) => write!(f, "Shell config error: {err}"),
         }
@@ -28,7 +30,7 @@ impl std::error::Error for ShellError {
         match self {
             Self::Service(err) => Some(err),
             Self::Config(err) => Some(err),
-            Self::WindowCreation { .. } => None,
+            Self::WindowCreation { .. } | Self::ActionFailed(..) => None,
         }
     }
 }
