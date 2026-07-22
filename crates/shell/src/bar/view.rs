@@ -5,7 +5,7 @@ use gpui::{
 use shilpo_config::ShellConfig;
 use shilpo_services::{
     AudioInfo, AudioService, BatteryInfo, BatteryService, IpcRequest, NetworkInfo, NetworkService,
-    NiriCompositorService, NiriWorkspaceInfo, ShellIpcServer,
+    NiriCompositorService, NiriWorkspaceInfo, Notification, NotificationService, ShellIpcServer,
 };
 use shilpo_ui::h_flex;
 use std::time::Duration;
@@ -22,6 +22,7 @@ pub struct BarView {
     pub battery_service: BatteryService,
     pub audio_service: AudioService,
     pub network_service: NetworkService,
+    pub notification_service: NotificationService,
     pub ipc_server: ShellIpcServer,
     workspaces: Vec<NiriWorkspaceInfo>,
     battery: BatteryInfo,
@@ -35,7 +36,7 @@ pub struct BarView {
 }
 
 impl BarView {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let config = ShellConfig::default();
 
         let niri_service =
@@ -50,14 +51,18 @@ impl BarView {
         let network_service = NetworkService::new().unwrap();
         let network = network_service.network_info();
 
+        let notification_service = NotificationService::new().unwrap();
+        let (notif_tx, notif_rx) = std::sync::mpsc::channel();
+        notification_service.set_new_notification_sender(notif_tx);
+
         let ipc_server = ShellIpcServer::new().unwrap_or_else(|_| {
             eprintln!("[shilpo-shell] Warning: IPC socket binding fallback");
             ShellIpcServer::new().unwrap()
         });
 
         // Dynamic theme synchronization with OS appearance
-        shilpo_ui::Theme::sync_system_appearance(Some(_window), cx);
-        cx.observe_window_appearance(_window, |_, window, cx| {
+        shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
+        cx.observe_window_appearance(window, |_, window, cx| {
             shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
             window.refresh();
         })
@@ -100,6 +105,11 @@ impl BarView {
                     .await;
 
                 let update_res = this.update(cx, |this, cx| {
+                    // Pull and spawn newly arrived system notifications
+                    while let Ok(notif) = notif_rx.try_recv() {
+                        open_notification_toast(cx, notif);
+                    }
+
                     // Process pending IPC commands
                     let requests = this.ipc_server.pop_pending_requests();
                     for req in requests {
@@ -195,6 +205,7 @@ impl BarView {
             battery_service,
             audio_service,
             network_service,
+            notification_service,
             ipc_server,
             workspaces: fallback_ws,
             battery,
@@ -321,4 +332,46 @@ pub fn open_control_center(cx: &mut App) {
     };
 
     cx.open_window(options, ControlCenterView::view).ok();
+}
+
+pub fn open_notification_toast(cx: &mut App, notification: Notification) {
+    use crate::notification::NotificationToastView;
+    use gpui::{
+        Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
+        layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
+        point, px, size,
+    };
+
+    let window_size = size(px(320.), px(80.));
+    let options = WindowOptions {
+        titlebar: None,
+        window_bounds: Some(WindowBounds::Windowed(Bounds {
+            origin: point(px(1920. - 340.), px(54.)),
+            size: window_size,
+        })),
+        app_id: Some("shilpo-notification".to_string()),
+        window_background: WindowBackgroundAppearance::Transparent,
+        kind: WindowKind::LayerShell(LayerShellOptions {
+            namespace: "notification".to_string(),
+            layer: Layer::Overlay,
+            anchor: Anchor::TOP | Anchor::RIGHT,
+            keyboard_interactivity: KeyboardInteractivity::None,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    if let Ok(handle) = cx.open_window(options, move |window, cx| {
+        NotificationToastView::view(notification.clone(), window, cx)
+    }) {
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(Duration::from_secs(5)).await;
+            cx.update(|cx| {
+                handle
+                    .update(cx, |_, window, _| window.remove_window())
+                    .ok();
+            });
+        })
+        .detach();
+    }
 }
