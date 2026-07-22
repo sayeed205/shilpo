@@ -4,7 +4,7 @@ use gpui::{
     point, px, size,
 };
 use shilpo_assets::Assets;
-use shilpo_shell::bar::BarView;
+use shilpo_shell::{ShellRuntime, bar::BarView};
 
 #[tokio::main]
 async fn main() {
@@ -74,17 +74,25 @@ async fn main() {
     app.run(move |cx| {
         // Initialize Shilpo UI theme & global states
         shilpo_ui::init(cx);
-        let config = shilpo_config::ShellConfig::load();
+        let config_path = std::env::var("HOME")
+            .map(|home| std::path::PathBuf::from(home).join(".config/shilpo/config.toml"))
+            .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));
+        let config =
+            shilpo_config::ShellConfig::load_or_create(&config_path).unwrap_or_else(|error| {
+                eprintln!("[shilpo-shell] config error: {error}");
+                shilpo_config::ShellConfig::default()
+            });
         shilpo_shell::bar::view::apply_config_theme(&config, None, cx);
         cx.activate(true);
         let bar_height = config.bar.height as f32;
         let window_height = if config.bar.style == shilpo_config::BarStyle::FloatingCapsule {
-            bar_height + (config.bar.margin_v as f32) * 2.0
+            bar_height + (config.bar.margin.vertical as f32) * 2.0
         } else {
             bar_height
         };
 
         let window_size = size(px(1920.), px(window_height));
+        ShellRuntime::install(cx);
         let options = WindowOptions {
             titlebar: None,
             window_bounds: Some(WindowBounds::Windowed(Bounds {

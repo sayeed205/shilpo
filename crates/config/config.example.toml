@@ -1,0 +1,23 @@
+version = 1
+
+[theme]
+mode = "dark"
+accent = "#6750A4"
+font_family = "sans-serif"
+corner_radius_scale = 1.0
+
+[bar]
+position = "top"
+style = "floating-capsule"
+height = 48
+padding = 8
+widget_spacing = 6
+
+[bar.margin]
+horizontal = 180
+vertical = 8
+
+[bar.widgets]
+start = ["launcher", "workspaces", "active-window"]
+center = ["clock", "media"]
+end = ["sysinfo", "network", "audio", "battery", "settings"]

@@ -1,8 +1,9 @@
+use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Task, Window,
     div, prelude::*, px,
 };
-use shilpo_config::ShellConfig;
+use shilpo_config::{BarWidget, ShellConfig};
 use shilpo_services::{
     AudioInfo, AudioService, BatteryInfo, BatteryService, IpcRequest, NetworkInfo, NetworkService,
     NiriCompositorService, NiriWorkspaceInfo, Notification, NotificationService, ShellIpcServer,
@@ -28,7 +29,7 @@ pub fn parse_hex_color(hex: &str) -> Option<u32> {
 }
 
 pub fn apply_config_theme(config: &ShellConfig, window: Option<&mut Window>, cx: &mut App) {
-    if let Some(argb) = parse_hex_color(&config.theme.primary_accent) {
+    if let Some(argb) = parse_hex_color(&config.theme.accent) {
         let theme = shilpo_ui::Theme::global_mut(cx);
         theme.set_source_argb(argb);
     }
@@ -62,7 +63,13 @@ pub struct BarView {
 
 impl BarView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let config = ShellConfig::load();
+        let config_path = std::env::var("HOME")
+            .map(|home| std::path::PathBuf::from(home).join(".config/shilpo/config.toml"))
+            .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));
+        let config = ShellConfig::load_or_create(&config_path).unwrap_or_else(|error| {
+            eprintln!("[shilpo-shell] config error: {error}");
+            ShellConfig::default()
+        });
 
         let niri_service =
             NiriCompositorService::new().unwrap_or_else(|_| NiriCompositorService::new().unwrap());
@@ -158,9 +165,14 @@ impl BarView {
 
                     // Process configuration changes automatically
                     while config_rx.try_recv().is_ok() {
-                        this.config = ShellConfig::load();
-                        apply_config_theme(&this.config, None, cx);
-                        cx.notify();
+                        match ShellConfig::load_or_create(&config_path) {
+                            Ok(config) => {
+                                this.config = config;
+                                apply_config_theme(&this.config, None, cx);
+                                cx.notify();
+                            }
+                            Err(error) => eprintln!("[shilpo-shell] config reload error: {error}"),
+                        }
                     }
 
                     // Process pending IPC commands
@@ -171,15 +183,22 @@ impl BarView {
                                 let _ = this.niri_service.focus_workspace(id);
                             }
                             IpcRequest::ReloadConfig => {
-                                this.config = ShellConfig::load();
-                                apply_config_theme(&this.config, None, cx);
-                                cx.notify();
+                                match ShellConfig::load_or_create(&config_path) {
+                                    Ok(config) => {
+                                        this.config = config;
+                                        apply_config_theme(&this.config, None, cx);
+                                        cx.notify();
+                                    }
+                                    Err(error) => {
+                                        eprintln!("[shilpo-shell] config reload error: {error}")
+                                    }
+                                }
                             }
                             IpcRequest::ToggleLauncher => {
-                                open_launcher(cx);
+                                ShellRuntime::toggle_launcher(cx);
                             }
                             IpcRequest::ToggleControlCenter => {
-                                open_control_center(cx);
+                                ShellRuntime::toggle_control_center(cx);
                             }
                             IpcRequest::SetTheme {
                                 source_argb,
@@ -279,7 +298,11 @@ impl BarView {
 }
 
 impl BarView {
-    fn build_section(&self, widget_names: &[String], _cx: &mut Context<Self>) -> impl IntoElement {
+    fn build_section(
+        &self,
+        widget_names: &[BarWidget],
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let mut elements: Vec<gpui::AnyElement> = Vec::new();
         let mut rendered_win = false;
         let mut rendered_ws = false;
@@ -288,26 +311,26 @@ impl BarView {
         let mut rendered_toggles = false;
 
         for name in widget_names {
-            match name.as_str() {
-                "launcher" | "active-window" if !rendered_win => {
+            match name {
+                BarWidget::Launcher | BarWidget::ActiveWindow if !rendered_win => {
                     elements.push(
                         WindowInfoCapsule::new(
                             "mod-win",
                             self.app_id.clone(),
                             self.active_title.clone(),
                         )
-                        .on_click(|_, _, cx| open_launcher(cx))
+                        .on_click(|_, _, cx| ShellRuntime::open_or_focus_launcher(cx))
                         .into_any_element(),
                     );
                     rendered_win = true;
                 }
-                "workspaces" if !rendered_ws => {
+                BarWidget::Workspaces if !rendered_ws => {
                     elements.push(
                         WorkspacesWidget::new("mod-ws", self.workspaces.clone()).into_any_element(),
                     );
                     rendered_ws = true;
                 }
-                "clock" | "battery" if !rendered_clock_bat => {
+                BarWidget::Clock | BarWidget::Battery if !rendered_clock_bat => {
                     elements.push(
                         ClockBatteryCapsule::new(
                             "mod-clock",
@@ -318,21 +341,23 @@ impl BarView {
                     );
                     rendered_clock_bat = true;
                 }
-                "media" | "sysinfo" if !rendered_perf_media => {
+                BarWidget::Media | BarWidget::Sysinfo if !rendered_perf_media => {
                     elements.push(
                         PerfMediaCapsule::new("mod-perf", 40, 66, 3, self.media_track.clone())
                             .into_any_element(),
                     );
                     rendered_perf_media = true;
                 }
-                "network" | "audio" | "settings" if !rendered_toggles => {
+                BarWidget::Network | BarWidget::Audio | BarWidget::Settings
+                    if !rendered_toggles =>
+                {
                     elements.push(
                         StatusTogglesCapsule::new(
                             "mod-toggles",
                             self.audio.clone(),
                             self.network.clone(),
                         )
-                        .on_click(|_, _, cx| open_control_center(cx))
+                        .on_click(|_, _, cx| ShellRuntime::open_or_focus_control_center(cx))
                         .into_any_element(),
                     );
                     rendered_toggles = true;
@@ -361,8 +386,8 @@ impl Render for BarView {
             .justify_between()
             .px_3()
             .when(is_floating, |this| {
-                this.mx(px(self.config.bar.margin_h as f32))
-                    .my(px(self.config.bar.margin_v as f32))
+                this.mx(px(self.config.bar.margin.horizontal as f32))
+                    .my(px(self.config.bar.margin.vertical as f32))
                     .rounded_full()
                     .border_1()
                     .border_color(cx.theme().outline_variant.opacity(0.3))
@@ -375,70 +400,10 @@ impl Render for BarView {
                     .border_color(cx.theme().outline_variant.opacity(0.3))
                     .shadow_sm()
             })
-            .child(self.build_section(&self.config.bar.start, cx))
-            .child(self.build_section(&self.config.bar.center, cx))
-            .child(self.build_section(&self.config.bar.end, cx))
+            .child(self.build_section(&self.config.bar.widgets.start, cx))
+            .child(self.build_section(&self.config.bar.widgets.center, cx))
+            .child(self.build_section(&self.config.bar.widgets.end, cx))
     }
-}
-
-pub fn open_launcher(cx: &mut App) {
-    use crate::launcher::LauncherView;
-    use gpui::{
-        Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
-        layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
-        point, px, size,
-    };
-
-    let window_size = size(px(640.), px(480.));
-    let options = WindowOptions {
-        titlebar: None,
-        window_bounds: Some(WindowBounds::Windowed(Bounds {
-            origin: point(px(0.), px(0.)),
-            size: window_size,
-        })),
-        app_id: Some("shilpo-launcher".to_string()),
-        window_background: WindowBackgroundAppearance::Transparent,
-        kind: WindowKind::LayerShell(LayerShellOptions {
-            namespace: "launcher".to_string(),
-            layer: Layer::Overlay,
-            anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-            keyboard_interactivity: KeyboardInteractivity::Exclusive,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    cx.open_window(options, LauncherView::view).ok();
-}
-
-pub fn open_control_center(cx: &mut App) {
-    use crate::control_center::ControlCenterView;
-    use gpui::{
-        Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
-        layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
-        point, px, size,
-    };
-
-    let window_size = size(px(340.), px(380.));
-    let options = WindowOptions {
-        titlebar: None,
-        window_bounds: Some(WindowBounds::Windowed(Bounds {
-            origin: point(px(1920. - 360.), px(54.)),
-            size: window_size,
-        })),
-        app_id: Some("shilpo-control-center".to_string()),
-        window_background: WindowBackgroundAppearance::Transparent,
-        kind: WindowKind::LayerShell(LayerShellOptions {
-            namespace: "control-center".to_string(),
-            layer: Layer::Overlay,
-            anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-            keyboard_interactivity: KeyboardInteractivity::Exclusive,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    cx.open_window(options, ControlCenterView::view).ok();
 }
 
 pub fn open_notification_toast(cx: &mut App, notification: Notification) {

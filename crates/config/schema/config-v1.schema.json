@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ShellConfig",
+  "type": "object",
+  "properties": {
+    "bar": {
+      "$ref": "#/$defs/BarConfig"
+    },
+    "theme": {
+      "$ref": "#/$defs/ThemeConfig"
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "theme",
+    "bar"
+  ],
+  "$defs": {
+    "BarConfig": {
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "margin": {
+          "$ref": "#/$defs/BarMargin"
+        },
+        "padding": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "position": {
+          "$ref": "#/$defs/BarPosition"
+        },
+        "style": {
+          "$ref": "#/$defs/BarStyle"
+        },
+        "widget_spacing": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "widgets": {
+          "$ref": "#/$defs/BarWidgets"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "style",
+        "height",
+        "padding",
+        "margin",
+        "widget_spacing",
+        "widgets"
+      ]
+    },
+    "BarMargin": {
+      "type": "object",
+      "properties": {
+        "horizontal": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "vertical": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "horizontal",
+        "vertical"
+      ]
+    },
+    "BarPosition": {
+      "type": "string",
+      "enum": [
+        "top",
+        "bottom",
+        "left",
+        "right"
+      ]
+    },
+    "BarStyle": {
+      "type": "string",
+      "enum": [
+        "floating-capsule",
+        "full-edge"
+      ]
+    },
+    "BarWidget": {
+      "type": "string",
+      "enum": [
+        "launcher",
+        "workspaces",
+        "active-window",
+        "clock",
+        "media",
+        "sysinfo",
+        "network",
+        "audio",
+        "battery",
+        "settings"
+      ]
+    },
+    "BarWidgets": {
+      "type": "object",
+      "properties": {
+        "center": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BarWidget"
+          }
+        },
+        "end": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BarWidget"
+          }
+        },
+        "start": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BarWidget"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "center",
+        "end"
+      ]
+    },
+    "ThemeConfig": {
+      "type": "object",
+      "properties": {
+        "accent": {
+          "type": "string"
+        },
+        "corner_radius_scale": {
+          "type": "number",
+          "format": "float"
+        },
+        "font_family": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/ThemeMode"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "accent",
+        "font_family",
+        "corner_radius_scale"
+      ]
+    },
+    "ThemeMode": {
+      "type": "string",
+      "enum": [
+        "dark",
+        "light",
+        "auto"
+      ]
+    }
+  }
+}
