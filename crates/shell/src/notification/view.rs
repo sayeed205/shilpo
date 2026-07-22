@@ -1,6 +1,6 @@
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div, img,
-    px,
+    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
+    Styled, Window, div, img, px,
 };
 use shilpo_services::Notification;
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
@@ -74,6 +74,10 @@ impl Render for NotificationToastView {
             .border_color(cx.theme().outline_variant.opacity(0.4))
             .shadow_lg()
             .items_center()
+            .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                ShellRuntime::close_active_notification(cx);
+                window.remove_window();
+            })
             .child(app_icon)
             .child(
                 v_flex()

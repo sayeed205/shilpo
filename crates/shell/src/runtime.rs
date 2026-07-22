@@ -24,6 +24,7 @@ pub struct ShellRuntime {
         WindowHandle<crate::notification::NotificationToastView>,
     )>,
     notification_generation: u64,
+    notification_history: Vec<shilpo_services::Notification>,
     _window_closed: Option<Subscription>,
     _ipc_task: gpui::Task<()>,
 }
@@ -41,6 +42,7 @@ impl ShellRuntime {
             control_center: None,
             notification: None,
             notification_generation: 0,
+            notification_history: Vec::new(),
             _window_closed: None,
             _ipc_task: cx.spawn(async |_| {}),
         });
@@ -286,15 +288,41 @@ impl ShellRuntime {
         cx.global::<Self>().publish_status();
     }
 
+    pub fn push_notification_history(cx: &mut App, notification: shilpo_services::Notification) {
+        let runtime = cx.global_mut::<Self>();
+        runtime.notification_history.push(notification);
+        if runtime.notification_history.len() > 50 {
+            runtime.notification_history.remove(0);
+        }
+    }
+
+    pub fn notification_history(cx: &App) -> &[shilpo_services::Notification] {
+        &cx.global::<Self>().notification_history
+    }
+
     pub fn register_notification(
         cx: &mut App,
         handle: WindowHandle<crate::notification::NotificationToastView>,
     ) -> u64 {
-        let runtime = cx.global_mut::<Self>();
-        runtime.notification_generation = runtime.notification_generation.wrapping_add(1);
-        let generation = runtime.notification_generation;
-        runtime.notification = Some((generation, handle));
+        let (generation, prev) = {
+            let runtime = cx.global_mut::<Self>();
+            runtime.notification_generation = runtime.notification_generation.wrapping_add(1);
+            let generation = runtime.notification_generation;
+            let prev = runtime.notification.take();
+            runtime.notification = Some((generation, handle));
+            (generation, prev)
+        };
+        if let Some((_, prev_handle)) = prev {
+            let _ = cx.update_window(*prev_handle, |_, window, _| window.remove_window());
+        }
         generation
+    }
+
+    pub fn close_active_notification(cx: &mut App) {
+        let entry = cx.global_mut::<Self>().notification.take();
+        if let Some((_, handle)) = entry {
+            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        }
     }
 
     pub fn expire_notification(cx: &mut App, generation: u64) {
