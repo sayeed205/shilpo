@@ -27,6 +27,7 @@ pub struct ShellRuntime {
     )>,
     notification_generation: u64,
     notification_history: Vec<shilpo_services::Notification>,
+    prior_window_id: Option<u64>,
     _window_closed: Option<Subscription>,
     _ipc_task: gpui::Task<()>,
 }
@@ -45,6 +46,7 @@ impl ShellRuntime {
             notification: None,
             notification_generation: 0,
             notification_history: Vec::new(),
+            prior_window_id: None,
             _window_closed: None,
             _ipc_task: cx.spawn(async |_| {}),
         });
@@ -168,7 +170,26 @@ impl ShellRuntime {
         }
     }
 
+    fn capture_prior_focus(cx: &mut App) {
+        if cx.global::<Self>().prior_window_id.is_none()
+            && let Ok(service) = shilpo_services::NiriCompositorService::new()
+            && let Some(win_id) = service.active_window_id()
+        {
+            cx.global_mut::<Self>().prior_window_id = Some(win_id);
+        }
+    }
+
+    fn restore_prior_focus(cx: &mut App) {
+        let prior_id = cx.global_mut::<Self>().prior_window_id.take();
+        if let Some(win_id) = prior_id
+            && let Ok(service) = shilpo_services::NiriCompositorService::new()
+        {
+            let _ = service.focus_window(win_id);
+        }
+    }
+
     pub fn open_or_focus_launcher(cx: &mut App) {
+        Self::capture_prior_focus(cx);
         Self::close_control_center(cx);
         let handle = cx.global_mut::<Self>().launcher.take();
         if let Some(handle) = handle
@@ -226,15 +247,18 @@ impl ShellRuntime {
         // Registry entry is invalidated above. A close racing with this call can
         // leave handle stale; update_window failure is expected in that case.
         let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        Self::restore_prior_focus(cx);
         cx.global::<Self>().publish_status();
     }
 
     pub fn forget_launcher(cx: &mut App) {
         cx.global_mut::<Self>().launcher = None;
+        Self::restore_prior_focus(cx);
         cx.global::<Self>().publish_status();
     }
 
     pub fn open_or_focus_control_center(cx: &mut App) {
+        Self::capture_prior_focus(cx);
         Self::close_launcher(cx);
         let handle = cx.global_mut::<Self>().control_center.take();
         if let Some(handle) = handle
@@ -292,11 +316,13 @@ impl ShellRuntime {
         // Registry entry is invalidated above. A close racing with this call can
         // leave handle stale; update_window failure is expected in that case.
         let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        Self::restore_prior_focus(cx);
         cx.global::<Self>().publish_status();
     }
 
     pub fn forget_control_center(cx: &mut App) {
         cx.global_mut::<Self>().control_center = None;
+        Self::restore_prior_focus(cx);
         cx.global::<Self>().publish_status();
     }
 

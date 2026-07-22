@@ -25,6 +25,7 @@ pub struct NiriWorkspaceInfo {
 /// Niri Compositor IPC service for tracking workspaces and window focus in real time.
 pub struct NiriCompositorService {
     workspaces: Arc<Mutex<Vec<NiriWorkspaceInfo>>>,
+    active_window_id: Arc<Mutex<Option<u64>>>,
     app_id: Arc<Mutex<Option<String>>>,
     active_window_title: Arc<Mutex<Option<String>>>,
     keyboard_layout: Arc<Mutex<String>>,
@@ -34,12 +35,14 @@ impl NiriCompositorService {
     /// Connects to Niri IPC socket, queries initial state, and spawns a background event listener thread.
     pub fn new() -> Result<Self> {
         let workspaces = Arc::new(Mutex::new(Vec::new()));
+        let active_window_id = Arc::new(Mutex::new(None));
         let app_id = Arc::new(Mutex::new(None));
         let active_window_title = Arc::new(Mutex::new(None));
         let keyboard_layout = Arc::new(Mutex::new("us".into()));
 
         let service = Self {
             workspaces,
+            active_window_id,
             app_id,
             active_window_title,
             keyboard_layout,
@@ -64,12 +67,15 @@ impl NiriCompositorService {
 
         // Spawn background thread to stream Niri events
         let ws_clone = service.workspaces.clone();
+        let win_id_clone = service.active_window_id.clone();
         let app_id_clone = service.app_id.clone();
         let title_clone = service.active_window_title.clone();
         let kb_clone = service.keyboard_layout.clone();
 
         thread::spawn(move || {
-            if let Err(e) = run_niri_listener(ws_clone, app_id_clone, title_clone, kb_clone) {
+            if let Err(e) =
+                run_niri_listener(ws_clone, win_id_clone, app_id_clone, title_clone, kb_clone)
+            {
                 tracing::error!(error = %e, "Niri listener exited");
             }
         });
@@ -80,6 +86,11 @@ impl NiriCompositorService {
     /// Returns the current list of Niri workspaces.
     pub fn workspaces(&self) -> Vec<NiriWorkspaceInfo> {
         self.workspaces.lock().unwrap().clone()
+    }
+
+    /// Returns active window ID.
+    pub fn active_window_id(&self) -> Option<u64> {
+        *self.active_window_id.lock().unwrap()
     }
 
     /// Returns active window app ID.
@@ -107,6 +118,15 @@ impl NiriCompositorService {
         }
         Ok(())
     }
+
+    /// Switches focus to the window with the specified ID.
+    pub fn focus_window(&self, id: u64) -> Result<()> {
+        if let Ok(mut socket) = Socket::connect() {
+            let req = Request::Action(niri_ipc::Action::FocusWindow { id });
+            let _ = socket.send(req);
+        }
+        Ok(())
+    }
 }
 
 fn connect_socket() -> Result<UnixStream> {
@@ -118,6 +138,7 @@ fn connect_socket() -> Result<UnixStream> {
 
 fn run_niri_listener(
     workspaces: Arc<Mutex<Vec<NiriWorkspaceInfo>>>,
+    active_window_id: Arc<Mutex<Option<u64>>>,
     app_id: Arc<Mutex<Option<String>>>,
     title: Arc<Mutex<Option<String>>>,
     kb_layout: Arc<Mutex<String>>,
@@ -171,15 +192,18 @@ fn run_niri_listener(
         let mut ws_guard = workspaces.lock().unwrap();
         *ws_guard = list;
 
-        // Update active window title & app ID
+        // Update active window title, app ID & window ID
         let focused_win = state.windows.windows.values().find(|w| w.is_focused);
+        let mut win_id_guard = active_window_id.lock().unwrap();
         let mut app_id_guard = app_id.lock().unwrap();
         let mut title_guard = title.lock().unwrap();
 
         if let Some(win) = focused_win {
+            *win_id_guard = Some(win.id);
             *app_id_guard = win.app_id.clone();
             *title_guard = win.title.clone();
         } else {
+            *win_id_guard = None;
             *app_id_guard = None;
             *title_guard = None;
         }
