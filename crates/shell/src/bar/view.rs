@@ -1,3 +1,4 @@
+use crate::bar::service_worker::{self, ConfigUpdate, WorkerCommand, WorkerUpdate};
 use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Task, Window,
@@ -44,12 +45,9 @@ pub fn apply_config_theme(config: &ShellConfig, window: Option<&mut Window>, cx:
 /// Status Bar GPUI View (Multi-Capsule Segmented Bar with IPC integration).
 pub struct BarView {
     pub config: ShellConfig,
-    pub niri_service: Option<NiriCompositorService>,
-    pub battery_service: Option<BatteryService>,
-    pub audio_service: Option<AudioService>,
-    pub network_service: Option<NetworkService>,
     pub notification_service: Option<NotificationService>,
     pub ipc_server: Option<ShellIpcServer>,
+    service_commands: service_worker::CommandSender,
     workspaces: Vec<NiriWorkspaceInfo>,
     battery: BatteryInfo,
     audio: AudioInfo,
@@ -59,6 +57,7 @@ pub struct BarView {
     media_track: String,
     datetime_str: String,
     _observer_task: Task<()>,
+    _service_task: Task<()>,
 }
 
 impl BarView {
@@ -66,51 +65,15 @@ impl BarView {
         let config_path = std::env::var("HOME")
             .map(|home| std::path::PathBuf::from(home).join(".config/shilpo/config.toml"))
             .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));
-        let config = ShellConfig::load_or_create(&config_path).unwrap_or_else(|error| {
-            tracing::error!(error = %error, "failed to load shell config; using defaults");
-            ShellConfig::default()
-        });
+        let config = ShellConfig::default();
 
-        let niri_service = match NiriCompositorService::new() {
-            Ok(service) => Some(service),
-            Err(error) => {
-                tracing::warn!(error = %error, "Niri service unavailable; using fallback window state");
-                None
-            }
-        };
-        let battery_service = match BatteryService::new() {
-            Ok(service) => Some(service),
-            Err(error) => {
-                tracing::warn!(error = %error, "battery service unavailable");
-                None
-            }
-        };
-        let battery = battery_service
-            .as_ref()
-            .map(BatteryService::battery_info)
-            .unwrap_or_default();
-        let audio_service = match AudioService::new() {
-            Ok(service) => Some(service),
-            Err(error) => {
-                tracing::warn!(error = %error, "audio service unavailable");
-                None
-            }
-        };
-        let audio = audio_service
-            .as_ref()
-            .map(AudioService::audio_info)
-            .unwrap_or_default();
-        let network_service = match NetworkService::new() {
-            Ok(service) => Some(service),
-            Err(error) => {
-                tracing::warn!(error = %error, "network service unavailable");
-                None
-            }
-        };
-        let network = network_service
-            .as_ref()
-            .map(NetworkService::network_info)
-            .unwrap_or_default();
+        let niri = NiriCompositorService::new().ok();
+        let battery_service = BatteryService::new().ok();
+        let audio_service = AudioService::new().ok();
+        let network_service = NetworkService::new().ok();
+        let battery = BatteryInfo::default();
+        let audio = AudioInfo::default();
+        let network = NetworkInfo::default();
         let notification_service = match NotificationService::new() {
             Ok(service) => Some(service),
             Err(error) => {
@@ -138,10 +101,7 @@ impl BarView {
         })
         .detach();
 
-        let workspaces = niri_service
-            .as_ref()
-            .map(NiriCompositorService::workspaces)
-            .unwrap_or_default();
+        let workspaces = Vec::new();
         let fallback_ws = if workspaces.is_empty() {
             vec![
                 NiriWorkspaceInfo {
@@ -170,7 +130,6 @@ impl BarView {
             workspaces
         };
 
-        let (config_tx, config_rx) = std::sync::mpsc::channel();
         let home = std::env::var("HOME")
             .ok()
             .or_else(|| std::env::var("USER").ok().map(|u| format!("/home/{}", u)))
@@ -180,11 +139,27 @@ impl BarView {
             tracing::warn!(error = %error, path = ?config_dir, "config watcher directory unavailable");
         }
 
+        let (updates_tx, updates_rx, service_commands, commands_rx) = service_worker::channels();
+        let service_task = service_worker::spawn(
+            cx.background_executor().clone(),
+            updates_tx,
+            commands_rx,
+            config_path.clone(),
+            niri,
+            battery_service,
+            audio_service,
+            network_service,
+        );
+
         use notify::Watcher;
+        let watcher_commands = service_commands.clone();
         let watcher = match notify::RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
                 if let Some(_event) = res.ok().filter(|e| e.kind.is_modify()) {
-                    let _ = config_tx.send(());
+                    service_worker::try_send_command(
+                        &watcher_commands,
+                        WorkerCommand::ReloadConfig,
+                    );
                 }
             },
             notify::Config::default(),
@@ -216,17 +191,42 @@ impl BarView {
                         open_notification_toast(cx, notif);
                     }
 
-                    // Process configuration changes automatically
-                    while config_rx.try_recv().is_ok() {
-                        match ShellConfig::load_or_create(&config_path) {
-                            Ok(config) => {
+                    let mut changed = false;
+                    while let Ok(update) = updates_rx.try_recv() {
+                        match update {
+                            WorkerUpdate::Workspaces(value) if this.workspaces != value => {
+                                this.workspaces = value;
+                                changed = true;
+                            }
+                            WorkerUpdate::ActiveTitle(value) if this.active_title != value => {
+                                this.active_title = value;
+                                changed = true;
+                            }
+                            WorkerUpdate::AppId(value) if this.app_id != value => {
+                                this.app_id = value;
+                                changed = true;
+                            }
+                            WorkerUpdate::Battery(value) if this.battery != value => {
+                                this.battery = value;
+                                changed = true;
+                            }
+                            WorkerUpdate::Audio(value) if this.audio != value => {
+                                this.audio = value;
+                                changed = true;
+                            }
+                            WorkerUpdate::Network(value) if this.network != value => {
+                                this.network = value;
+                                changed = true;
+                            }
+                            WorkerUpdate::Config(ConfigUpdate::Loaded(config)) => {
                                 this.config = config;
                                 apply_config_theme(&this.config, None, cx);
-                                cx.notify();
+                                changed = true;
                             }
-                            Err(error) => {
-                                tracing::error!(error = %error, "config reload failed")
+                            WorkerUpdate::Config(ConfigUpdate::Failed(error)) => {
+                                tracing::error!(error = %error, "config reload failed");
                             }
+                            _ => {}
                         }
                     }
 
@@ -239,21 +239,16 @@ impl BarView {
                     for req in requests {
                         match req {
                             IpcRequest::FocusWorkspace(id) => {
-                                if let Some(service) = &this.niri_service {
-                                    let _ = service.focus_workspace(id);
-                                }
+                                service_worker::try_send_command(
+                                    &this.service_commands,
+                                    WorkerCommand::FocusWorkspace(id),
+                                );
                             }
                             IpcRequest::ReloadConfig => {
-                                match ShellConfig::load_or_create(&config_path) {
-                                    Ok(config) => {
-                                        this.config = config;
-                                        apply_config_theme(&this.config, None, cx);
-                                        cx.notify();
-                                    }
-                                    Err(error) => {
-                                        tracing::error!(error = %error, "config reload failed")
-                                    }
-                                }
+                                service_worker::try_send_command(
+                                    &this.service_commands,
+                                    WorkerCommand::ReloadConfig,
+                                );
                             }
                             IpcRequest::ToggleLauncher => {
                                 ShellRuntime::toggle_launcher(cx);
@@ -278,65 +273,9 @@ impl BarView {
                         }
                     }
 
-                    let updated_ws = this
-                        .niri_service
-                        .as_ref()
-                        .map(NiriCompositorService::workspaces)
-                        .unwrap_or_default();
-                    let updated_title = this
-                        .niri_service
-                        .as_ref()
-                        .and_then(|service| service.active_window_title())
-                        .unwrap_or_else(|| "Desktop".into());
-                    let updated_app_id = this
-                        .niri_service
-                        .as_ref()
-                        .and_then(|service| service.app_id())
-                        .unwrap_or_else(|| "niri".into());
-                    let updated_bat = this
-                        .battery_service
-                        .as_ref()
-                        .map(BatteryService::battery_info)
-                        .unwrap_or_default();
-                    let updated_audio = this
-                        .audio_service
-                        .as_ref()
-                        .map(AudioService::audio_info)
-                        .unwrap_or_default();
-                    let updated_net = this
-                        .network_service
-                        .as_ref()
-                        .map(NetworkService::network_info)
-                        .unwrap_or_default();
-
                     let now = chrono::Local::now();
                     let updated_dt = now.format("%H:%M · %a, %d/%m").to_string();
 
-                    let mut changed = false;
-                    if !updated_ws.is_empty() && this.workspaces != updated_ws {
-                        this.workspaces = updated_ws;
-                        changed = true;
-                    }
-                    if this.active_title != updated_title {
-                        this.active_title = updated_title;
-                        changed = true;
-                    }
-                    if this.app_id != updated_app_id {
-                        this.app_id = updated_app_id;
-                        changed = true;
-                    }
-                    if this.battery != updated_bat {
-                        this.battery = updated_bat;
-                        changed = true;
-                    }
-                    if this.audio != updated_audio {
-                        this.audio = updated_audio;
-                        changed = true;
-                    }
-                    if this.network != updated_net {
-                        this.network = updated_net;
-                        changed = true;
-                    }
                     if this.datetime_str != updated_dt {
                         this.datetime_str = updated_dt;
                         changed = true;
@@ -355,12 +294,9 @@ impl BarView {
 
         Self {
             config,
-            niri_service,
-            battery_service,
-            audio_service,
-            network_service,
             notification_service,
             ipc_server,
+            service_commands,
             workspaces: fallback_ws,
             battery,
             audio,
@@ -370,6 +306,7 @@ impl BarView {
             media_track: "KK - Police ke hathiyar".into(),
             datetime_str: "17:53 · Tue, 21/07".into(),
             _observer_task: observer_task,
+            _service_task: service_task,
         }
     }
 
