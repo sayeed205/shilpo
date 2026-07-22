@@ -55,6 +55,7 @@ pub struct BarView {
     active_title: String,
     media_track: String,
     datetime_str: String,
+    last_error: Option<String>,
     _observer_task: Task<()>,
     _service_task: Task<()>,
 }
@@ -226,11 +227,18 @@ impl BarView {
                             }
                             WorkerUpdate::Config(ConfigUpdate::Loaded(config)) => {
                                 this.config = config;
+                                this.last_error = None;
                                 apply_config_theme(&this.config, None, cx);
                                 changed = true;
                             }
                             WorkerUpdate::Config(ConfigUpdate::Failed(error)) => {
                                 tracing::error!(error = %error, "config reload failed");
+                                this.last_error = Some(error.clone());
+                                open_notification_toast(
+                                    cx,
+                                    Notification::new("Configuration Warning", error),
+                                );
+                                changed = true;
                             }
                             _ => {}
                         }
@@ -267,6 +275,7 @@ impl BarView {
             active_title: "Shilpo Shell".into(),
             media_track: "KK - Police ke hathiyar".into(),
             datetime_str: "17:53 · Tue, 21/07".into(),
+            last_error: None,
             _observer_task: observer_task,
             _service_task: service_task,
         }

@@ -16,6 +16,19 @@ pub struct Notification {
     pub timestamp: chrono::DateTime<chrono::Local>,
 }
 
+impl Notification {
+    pub fn new(summary: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            id: 0,
+            app_name: "Shilpo Shell".into(),
+            summary: summary.into(),
+            body: body.into(),
+            app_icon: None,
+            timestamp: chrono::Local::now(),
+        }
+    }
+}
+
 /// Dynamic Notification Daemon Service implementing org.freedesktop.Notifications.
 pub struct NotificationService {
     notifications: Arc<Mutex<Vec<Notification>>>,
