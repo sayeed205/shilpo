@@ -1,6 +1,6 @@
 use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
 };
 use shilpo_services::{AudioInfo, NetworkInfo};
 use shilpo_ui::{ActiveTheme, Colorize, Icon, IconName, h_flex};
@@ -52,6 +52,22 @@ impl RenderOnce for StatusTogglesCapsule {
                 .child("·")
         };
 
+        let audio_icon = if self._audio.available {
+            div().child(Icon::new(IconName::Heart).size(px(14.)))
+        } else {
+            div()
+                .opacity(0.35)
+                .child(Icon::new(IconName::Heart).size(px(14.)))
+        };
+
+        let network_icon = if self._network.available {
+            div().child(Icon::new(IconName::Network).size(px(14.)))
+        } else {
+            div()
+                .opacity(0.35)
+                .child(Icon::new(IconName::Network).size(px(14.)))
+        };
+
         let el = h_flex()
             .id(self.id)
             .h(px(32.))
@@ -68,15 +84,11 @@ impl RenderOnce for StatusTogglesCapsule {
             .hover(|s| s.bg(cx.theme().surface_container_high.opacity(0.98).darken(0.05)))
             .child(Icon::new(IconName::KeyboardArrowDown).size(px(14.)))
             .child(dot())
-            .when(self._audio.available, |this| {
-                this.child(Icon::new(IconName::Heart).size(px(14.)))
-            })
+            .child(audio_icon)
             .child(dot())
             .child(Icon::new(IconName::Bell).size(px(14.)))
             .child(dot())
-            .when(self._network.available, |this| {
-                this.child(Icon::new(IconName::Network).size(px(14.)))
-            })
+            .child(network_icon)
             .child(dot())
             .child(Icon::new(IconName::Settings).size(px(14.)));
 

@@ -1,6 +1,6 @@
 use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
-    Styled, Window, div, px,
+    Styled, Window, div, prelude::FluentBuilder, px,
 };
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex};
 
@@ -90,19 +90,21 @@ impl RenderOnce for PerfMediaCapsule {
                             .child(self.disk_percent.to_string()),
                     ),
             )
-            .child(
-                h_flex()
-                    .px_2()
-                    .h(px(22.))
-                    .items_center()
-                    .gap_1_5()
-                    .rounded_full()
-                    .bg(cx.theme().secondary_container)
-                    .text_color(cx.theme().on_secondary_container)
-                    .text_xs()
-                    .font_medium()
-                    .child(Icon::new(IconName::Play).size(px(11.)))
-                    .child(div().max_w(px(140.)).overflow_hidden().child(self.track)),
-            )
+            .when(!self.track.trim().is_empty(), |this| {
+                this.child(
+                    h_flex()
+                        .px_2()
+                        .h(px(22.))
+                        .items_center()
+                        .gap_1_5()
+                        .rounded_full()
+                        .bg(cx.theme().secondary_container)
+                        .text_color(cx.theme().on_secondary_container)
+                        .text_xs()
+                        .font_medium()
+                        .child(Icon::new(IconName::Play).size(px(11.)))
+                        .child(div().max_w(px(140.)).overflow_hidden().child(self.track)),
+                )
+            })
     }
 }

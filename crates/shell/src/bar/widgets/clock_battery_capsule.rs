@@ -1,6 +1,6 @@
 use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
-    Styled, Window, div, prelude::FluentBuilder, px,
+    Styled, Window, div, px,
 };
 use shilpo_services::BatteryInfo;
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex};
@@ -37,13 +37,46 @@ impl Styled for ClockBatteryCapsule {
 
 impl RenderOnce for ClockBatteryCapsule {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let battery_available = self.battery.is_present;
+        let datetime_display = if self.datetime_str.trim().is_empty() {
+            "--:--".to_string()
+        } else {
+            self.datetime_str
+        };
+
         let (bat_icon, bat_fg) = if self.battery.is_charging {
             (IconName::BatteryCharging, cx.theme().primary)
         } else if self.battery.percentage <= 20 {
             (IconName::BatteryWarning, cx.theme().error)
         } else {
             (IconName::BatteryFull, cx.theme().on_surface)
+        };
+
+        let battery_pill = if self.battery.is_present {
+            h_flex()
+                .px_2()
+                .h(px(22.))
+                .items_center()
+                .gap_1()
+                .rounded_full()
+                .bg(cx.theme().surface_container_highest)
+                .text_color(bat_fg)
+                .text_xs()
+                .font_bold()
+                .child(Icon::new(bat_icon).size(px(13.)))
+                .child(format!("{}%", self.battery.percentage))
+        } else {
+            h_flex()
+                .px_2()
+                .h(px(22.))
+                .items_center()
+                .gap_1()
+                .rounded_full()
+                .bg(cx.theme().surface_container_highest.opacity(0.4))
+                .text_color(cx.theme().on_surface_variant.opacity(0.5))
+                .text_xs()
+                .font_medium()
+                .child(Icon::new(IconName::BatteryFull).size(px(13.)))
+                .child("AC")
         };
 
         h_flex()
@@ -58,22 +91,7 @@ impl RenderOnce for ClockBatteryCapsule {
             .border_color(cx.theme().outline_variant.opacity(0.3))
             .text_color(cx.theme().on_surface)
             .shadow_sm()
-            .child(div().text_xs().font_semibold().child(self.datetime_str))
-            .when(battery_available, |this| {
-                this.child(
-                    h_flex()
-                        .px_2()
-                        .h(px(22.))
-                        .items_center()
-                        .gap_1()
-                        .rounded_full()
-                        .bg(cx.theme().surface_container_highest)
-                        .text_color(bat_fg)
-                        .text_xs()
-                        .font_bold()
-                        .child(Icon::new(bat_icon).size(px(13.)))
-                        .child(format!("{}%", self.battery.percentage)),
-                )
-            })
+            .child(div().text_xs().font_semibold().child(datetime_display))
+            .child(battery_pill)
     }
 }
