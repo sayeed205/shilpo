@@ -1,13 +1,13 @@
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Task, Window,
-    div, px,
+    div, prelude::*, px,
 };
 use shilpo_config::ShellConfig;
 use shilpo_services::{
     AudioInfo, AudioService, BatteryInfo, BatteryService, IpcRequest, NetworkInfo, NetworkService,
     NiriCompositorService, NiriWorkspaceInfo, Notification, NotificationService, ShellIpcServer,
 };
-use shilpo_ui::h_flex;
+use shilpo_ui::{ActiveTheme, h_flex};
 use std::time::Duration;
 
 use super::widgets::{
@@ -37,7 +37,7 @@ pub struct BarView {
 
 impl BarView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let config = ShellConfig::default();
+        let config = ShellConfig::load();
 
         let niri_service =
             NiriCompositorService::new().unwrap_or_else(|_| NiriCompositorService::new().unwrap());
@@ -97,8 +97,29 @@ impl BarView {
             workspaces
         };
 
+        let (config_tx, config_rx) = std::sync::mpsc::channel();
+        let home = std::env::var("HOME")
+            .ok()
+            .or_else(|| std::env::var("USER").ok().map(|u| format!("/home/{}", u)))
+            .unwrap_or_else(|| ".".to_string());
+        let config_dir = std::path::PathBuf::from(home).join(".config/shilpo");
+        let _ = std::fs::create_dir_all(&config_dir);
+
+        use notify::Watcher;
+        let mut watcher = notify::RecommendedWatcher::new(
+            move |res: Result<notify::Event, notify::Error>| {
+                if let Some(_event) = res.ok().filter(|e| e.kind.is_modify()) {
+                    let _ = config_tx.send(());
+                }
+            },
+            notify::Config::default(),
+        )
+        .unwrap();
+        let _ = watcher.watch(&config_dir, notify::RecursiveMode::Recursive);
+
         // Real-time state observer and IPC task
         let observer_task = cx.spawn(async move |this, cx| {
+            let _watcher = watcher;
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(100))
@@ -110,6 +131,12 @@ impl BarView {
                         open_notification_toast(cx, notif);
                     }
 
+                    // Process configuration changes automatically
+                    while config_rx.try_recv().is_ok() {
+                        this.config = ShellConfig::load();
+                        cx.notify();
+                    }
+
                     // Process pending IPC commands
                     let requests = this.ipc_server.pop_pending_requests();
                     for req in requests {
@@ -118,7 +145,7 @@ impl BarView {
                                 let _ = this.niri_service.focus_workspace(id);
                             }
                             IpcRequest::ReloadConfig => {
-                                this.config = ShellConfig::default();
+                                this.config = ShellConfig::load();
                                 cx.notify();
                             }
                             IpcRequest::ToggleLauncher => {
@@ -224,53 +251,106 @@ impl BarView {
     }
 }
 
-impl Render for BarView {
-    fn render(&mut self, _: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .w_full()
-            .h(px(48.))
-            .flex()
-            .items_center()
-            .justify_between()
-            .px_3()
-            // Far Left Module
-            .child(
-                WindowInfoCapsule::new("mod-win", self.app_id.clone(), self.active_title.clone())
-                    .on_click(|_, _, cx| open_launcher(cx)),
-            )
-            // Center Modules (Perf & Workspaces)
-            .child(
-                h_flex()
-                    .gap_3()
-                    .items_center()
-                    .child(PerfMediaCapsule::new(
-                        "mod-perf",
-                        40,
-                        66,
-                        3,
-                        self.media_track.clone(),
-                    ))
-                    .child(WorkspacesWidget::new("mod-ws", self.workspaces.clone())),
-            )
-            // Far Right Modules (Clock/Power & Status Toggles)
-            .child(
-                h_flex()
-                    .gap_3()
-                    .items_center()
-                    .child(ClockBatteryCapsule::new(
-                        "mod-clock",
-                        self.datetime_str.clone(),
-                        self.battery.clone(),
-                    ))
-                    .child(
+impl BarView {
+    fn build_section(&self, widget_names: &[String], _cx: &mut Context<Self>) -> impl IntoElement {
+        let mut elements: Vec<gpui::AnyElement> = Vec::new();
+        let mut rendered_win = false;
+        let mut rendered_ws = false;
+        let mut rendered_clock_bat = false;
+        let mut rendered_perf_media = false;
+        let mut rendered_toggles = false;
+
+        for name in widget_names {
+            match name.as_str() {
+                "launcher" | "active-window" if !rendered_win => {
+                    elements.push(
+                        WindowInfoCapsule::new(
+                            "mod-win",
+                            self.app_id.clone(),
+                            self.active_title.clone(),
+                        )
+                        .on_click(|_, _, cx| open_launcher(cx))
+                        .into_any_element(),
+                    );
+                    rendered_win = true;
+                }
+                "workspaces" if !rendered_ws => {
+                    elements.push(
+                        WorkspacesWidget::new("mod-ws", self.workspaces.clone()).into_any_element(),
+                    );
+                    rendered_ws = true;
+                }
+                "clock" | "battery" if !rendered_clock_bat => {
+                    elements.push(
+                        ClockBatteryCapsule::new(
+                            "mod-clock",
+                            self.datetime_str.clone(),
+                            self.battery.clone(),
+                        )
+                        .into_any_element(),
+                    );
+                    rendered_clock_bat = true;
+                }
+                "media" | "sysinfo" if !rendered_perf_media => {
+                    elements.push(
+                        PerfMediaCapsule::new("mod-perf", 40, 66, 3, self.media_track.clone())
+                            .into_any_element(),
+                    );
+                    rendered_perf_media = true;
+                }
+                "network" | "audio" | "settings" if !rendered_toggles => {
+                    elements.push(
                         StatusTogglesCapsule::new(
                             "mod-toggles",
                             self.audio.clone(),
                             self.network.clone(),
                         )
-                        .on_click(|_, _, cx| open_control_center(cx)),
-                    ),
-            )
+                        .on_click(|_, _, cx| open_control_center(cx))
+                        .into_any_element(),
+                    );
+                    rendered_toggles = true;
+                }
+                _ => {}
+            }
+        }
+
+        h_flex()
+            .gap(px(self.config.bar.widget_spacing as f32))
+            .items_center()
+            .children(elements)
+    }
+}
+
+impl Render for BarView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_floating = self.config.bar.style == shilpo_config::BarStyle::FloatingCapsule;
+        let bg_color = cx.theme().surface_container_high.opacity(0.92);
+
+        div()
+            .w_full()
+            .h(px(self.config.bar.height as f32))
+            .flex()
+            .items_center()
+            .justify_between()
+            .px_3()
+            .when(is_floating, |this| {
+                this.mx(px(self.config.bar.margin_h as f32))
+                    .my(px(self.config.bar.margin_v as f32))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(cx.theme().outline_variant.opacity(0.3))
+                    .bg(bg_color)
+                    .shadow_md()
+            })
+            .when(!is_floating, |this| {
+                this.bg(bg_color)
+                    .border_b_1()
+                    .border_color(cx.theme().outline_variant.opacity(0.3))
+                    .shadow_sm()
+            })
+            .child(self.build_section(&self.config.bar.start, cx))
+            .child(self.build_section(&self.config.bar.center, cx))
+            .child(self.build_section(&self.config.bar.end, cx))
     }
 }
 

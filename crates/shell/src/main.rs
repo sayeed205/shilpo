@@ -77,7 +77,15 @@ async fn main() {
         shilpo_ui::Theme::change(shilpo_ui::ThemeMode::System, None, cx);
         cx.activate(true);
 
-        let window_size = size(px(1920.), px(48.));
+        let config = shilpo_config::ShellConfig::load();
+        let bar_height = config.bar.height as f32;
+        let window_height = if config.bar.style == shilpo_config::BarStyle::FloatingCapsule {
+            bar_height + (config.bar.margin_v as f32) * 2.0
+        } else {
+            bar_height
+        };
+
+        let window_size = size(px(1920.), px(window_height));
         let options = WindowOptions {
             titlebar: None,
             window_bounds: Some(WindowBounds::Windowed(Bounds {
@@ -90,7 +98,7 @@ async fn main() {
                 namespace: "bar".to_string(),
                 layer: Layer::Top,
                 anchor: Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
-                exclusive_zone: Some(px(40.)),
+                exclusive_zone: Some(px(window_height)),
                 margin: None,
                 keyboard_interactivity: KeyboardInteractivity::None,
                 ..Default::default()

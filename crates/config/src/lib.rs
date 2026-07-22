@@ -7,6 +7,40 @@ pub struct ShellConfig {
     pub bar: BarConfig,
 }
 
+impl ShellConfig {
+    pub fn load() -> Self {
+        let home = std::env::var("HOME")
+            .ok()
+            .or_else(|| std::env::var("USER").ok().map(|u| format!("/home/{}", u)))
+            .unwrap_or_else(|| ".".to_string());
+        let path = std::path::PathBuf::from(home).join(".config/shilpo/config.toml");
+
+        if !path.exists() {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let default_config = ShellConfig::default();
+            if let Ok(toml_str) = toml::to_string_pretty(&default_config) {
+                let _ = std::fs::write(&path, toml_str);
+            }
+            return default_config;
+        }
+
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(config) = toml::from_str(&content) {
+                return config;
+            } else {
+                eprintln!(
+                    "[shilpo-config] Warning: Failed to parse {}, falling back to default configuration",
+                    path.display()
+                );
+            }
+        }
+
+        ShellConfig::default()
+    }
+}
+
 /// Global UI Theme configuration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThemeConfig {
@@ -104,3 +138,16 @@ impl PartialEq for F32Eq {
 }
 
 impl Eq for F32Eq {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config_serialization() {
+        let default_config = ShellConfig::default();
+        let serialized = toml::to_string(&default_config).unwrap();
+        let deserialized: ShellConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(default_config, deserialized);
+    }
+}
