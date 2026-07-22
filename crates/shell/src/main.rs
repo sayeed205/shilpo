@@ -1,10 +1,14 @@
 use gpui::{
-    Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
-    layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
+    App, Bounds, DisplayId, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
+    layer_shell::{KeyboardInteractivity, Layer, LayerShellOptions},
     point, px, size,
 };
 use shilpo_assets::Assets;
-use shilpo_shell::{ShellRuntime, bar::BarView};
+use shilpo_config::ShellConfig;
+use shilpo_shell::{
+    ShellRuntime,
+    bar::{BarView, geometry::BarGeometry},
+};
 
 #[tokio::main]
 async fn main() {
@@ -84,36 +88,75 @@ async fn main() {
             });
         shilpo_shell::bar::view::apply_config_theme(&config, None, cx);
         cx.activate(true);
-        let bar_height = config.bar.height as f32;
-        let window_height = if config.bar.style == shilpo_config::BarStyle::FloatingCapsule {
-            bar_height + (config.bar.margin.vertical as f32) * 2.0
-        } else {
-            bar_height
-        };
-
-        let window_size = size(px(1920.), px(window_height));
         ShellRuntime::install(cx);
-        let options = WindowOptions {
-            titlebar: None,
-            window_bounds: Some(WindowBounds::Windowed(Bounds {
-                origin: point(px(0.), px(0.)),
-                size: window_size,
-            })),
-            app_id: Some("shilpo-bar".to_string()),
-            window_background: WindowBackgroundAppearance::Transparent,
-            kind: WindowKind::LayerShell(LayerShellOptions {
-                namespace: "bar".to_string(),
-                layer: Layer::Top,
-                anchor: Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
-                exclusive_zone: Some(px(window_height)),
-                margin: None,
-                keyboard_interactivity: KeyboardInteractivity::None,
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        cx.open_window(options, BarView::view)
-            .expect("failed to open status bar window");
+        if let Some(display) = cx.primary_display() {
+            let geometry = BarGeometry::calculate(display.id(), display.bounds(), &config.bar);
+            open_bar(cx, &geometry, true);
+        } else {
+            schedule_bar_retry(cx, config);
+        }
     });
+}
+
+fn schedule_bar_retry(cx: &App, config: ShellConfig) {
+    cx.spawn(async move |cx| {
+        for _ in 0..20 {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(50))
+                .await;
+
+            let opened = cx.update(|cx| {
+                let Some(display) = cx.primary_display() else {
+                    return false;
+                };
+                let geometry = BarGeometry::calculate(display.id(), display.bounds(), &config.bar);
+                open_bar(cx, &geometry, true)
+            });
+            if opened {
+                return;
+            }
+        }
+
+        eprintln!("[shilpo-shell] primary display unavailable after 1s; opening degraded bar");
+        cx.update(|cx| {
+            let geometry = BarGeometry::calculate(
+                DisplayId::new(0),
+                Bounds::new(point(px(0.), px(0.)), size(px(0.), px(0.))),
+                &config.bar,
+            );
+            open_bar(cx, &geometry, false);
+        });
+    })
+    .detach();
+}
+
+fn open_bar(cx: &mut App, geometry: &BarGeometry, with_display_geometry: bool) -> bool {
+    let options = bar_window_options(geometry, with_display_geometry);
+    match cx.open_window(options, BarView::view) {
+        Ok(_) => true,
+        Err(error) => {
+            eprintln!("[shilpo-shell] failed to open bar window: {error}");
+            false
+        }
+    }
+}
+
+fn bar_window_options(geometry: &BarGeometry, with_display_geometry: bool) -> WindowOptions {
+    WindowOptions {
+        titlebar: None,
+        window_bounds: with_display_geometry.then_some(WindowBounds::Windowed(geometry.bounds)),
+        display_id: with_display_geometry.then_some(geometry.display_id),
+        app_id: Some("shilpo-bar".to_string()),
+        window_background: WindowBackgroundAppearance::Transparent,
+        kind: WindowKind::LayerShell(LayerShellOptions {
+            namespace: "bar".to_string(),
+            layer: Layer::Top,
+            anchor: geometry.anchor,
+            exclusive_zone: Some(geometry.exclusive_zone),
+            exclusive_edge: Some(geometry.exclusive_edge),
+            margin: geometry.margin,
+            keyboard_interactivity: KeyboardInteractivity::None,
+        }),
+        ..Default::default()
+    }
 }

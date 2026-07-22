@@ -3,12 +3,12 @@ use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Task, Window,
     div, prelude::*, px,
 };
-use shilpo_config::{BarWidget, ShellConfig};
+use shilpo_config::{BarPosition, BarWidget, ShellConfig};
 use shilpo_services::{
     AudioInfo, AudioService, BatteryInfo, BatteryService, IpcRequest, NetworkInfo, NetworkService,
     NiriCompositorService, NiriWorkspaceInfo, Notification, NotificationService, ShellIpcServer,
 };
-use shilpo_ui::{ActiveTheme, h_flex};
+use shilpo_ui::{ActiveTheme, h_flex, v_flex};
 use std::time::Duration;
 
 use super::widgets::{
@@ -298,11 +298,7 @@ impl BarView {
 }
 
 impl BarView {
-    fn build_section(
-        &self,
-        widget_names: &[BarWidget],
-        _cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn build_section(&self, widget_names: &[BarWidget], side: bool) -> impl IntoElement {
         let mut elements: Vec<gpui::AnyElement> = Vec::new();
         let mut rendered_win = false;
         let mut rendered_ws = false;
@@ -366,8 +362,8 @@ impl BarView {
             }
         }
 
-        h_flex()
-            .gap(px(self.config.bar.widget_spacing as f32))
+        let flex = if side { v_flex() } else { h_flex() };
+        flex.gap(px(self.config.bar.widget_spacing as f32))
             .items_center()
             .children(elements)
     }
@@ -376,15 +372,24 @@ impl BarView {
 impl Render for BarView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_floating = self.config.bar.style == shilpo_config::BarStyle::FloatingCapsule;
+        let side = matches!(
+            self.config.bar.position,
+            BarPosition::Left | BarPosition::Right
+        );
         let bg_color = cx.theme().surface_container_high.opacity(0.92);
 
         div()
-            .w_full()
-            .h(px(self.config.bar.height as f32))
+            .when(side, |this| {
+                this.w(px(self.config.bar.height as f32)).h_full()
+            })
+            .when(!side, |this| {
+                this.w_full().h(px(self.config.bar.height as f32))
+            })
             .flex()
             .items_center()
             .justify_between()
-            .px_3()
+            .when(side, |this| this.py(px(self.config.bar.padding as f32)))
+            .when(!side, |this| this.px(px(self.config.bar.padding as f32)))
             .when(is_floating, |this| {
                 this.mx(px(self.config.bar.margin.horizontal as f32))
                     .my(px(self.config.bar.margin.vertical as f32))
@@ -396,13 +401,28 @@ impl Render for BarView {
             })
             .when(!is_floating, |this| {
                 this.bg(bg_color)
-                    .border_b_1()
+                    .when(
+                        matches!(self.config.bar.position, BarPosition::Top),
+                        |this| this.border_b_1(),
+                    )
+                    .when(
+                        matches!(self.config.bar.position, BarPosition::Bottom),
+                        |this| this.border_t_1(),
+                    )
+                    .when(
+                        matches!(self.config.bar.position, BarPosition::Left),
+                        |this| this.border_r_1(),
+                    )
+                    .when(
+                        matches!(self.config.bar.position, BarPosition::Right),
+                        |this| this.border_l_1(),
+                    )
                     .border_color(cx.theme().outline_variant.opacity(0.3))
                     .shadow_sm()
             })
-            .child(self.build_section(&self.config.bar.widgets.start, cx))
-            .child(self.build_section(&self.config.bar.widgets.center, cx))
-            .child(self.build_section(&self.config.bar.widgets.end, cx))
+            .child(self.build_section(&self.config.bar.widgets.start, side))
+            .child(self.build_section(&self.config.bar.widgets.center, side))
+            .child(self.build_section(&self.config.bar.widgets.end, side))
     }
 }
 
