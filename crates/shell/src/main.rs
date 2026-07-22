@@ -147,6 +147,7 @@ async fn main() {
                     ShellRuntime::open_bar(cx, &geometry, true);
                 }
             }
+            ShellRuntime::mark_ready(cx);
         } else {
             schedule_bar_retry(cx, config);
         }
@@ -174,6 +175,7 @@ fn schedule_bar_retry(cx: &App, config: ShellConfig) {
                         ShellRuntime::open_bar(cx, &geometry, true);
                     }
                 }
+                ShellRuntime::mark_ready(cx);
                 true
             });
             if opened {
@@ -189,6 +191,7 @@ fn schedule_bar_retry(cx: &App, config: ShellConfig) {
                 &config.bar,
             );
             ShellRuntime::open_bar(cx, &geometry, false);
+            ShellRuntime::mark_degraded(cx);
         });
     })
     .detach();

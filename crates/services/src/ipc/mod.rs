@@ -51,9 +51,20 @@ pub enum BarState {
     OpenFailed,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadinessState {
+    #[default]
+    Starting,
+    Ready,
+    Degraded,
+    Failed,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IpcStatus {
     pub running: bool,
+    pub readiness: ReadinessState,
     pub bar: BarState,
     pub launcher_visible: bool,
     pub control_center_visible: bool,
@@ -591,6 +602,7 @@ mod tests {
         let server = ShellIpcServer::new_at(&root, &path).unwrap();
         server.update_status(IpcStatus {
             running: true,
+            readiness: ReadinessState::Ready,
             bar: BarState::Visible,
             launcher_visible: false,
             control_center_visible: false,
@@ -600,6 +612,7 @@ mod tests {
             status.result,
             Some(IpcResult::Status(IpcStatus {
                 running: true,
+                readiness: ReadinessState::Ready,
                 bar: BarState::Visible,
                 launcher_visible: false,
                 control_center_visible: false,
@@ -632,11 +645,13 @@ mod tests {
     fn status_wire_fields_are_stable() {
         let status = IpcStatus {
             running: true,
+            readiness: ReadinessState::Degraded,
             bar: BarState::OpenFailed,
             launcher_visible: false,
             control_center_visible: true,
         };
         let value = serde_json::to_value(&status).unwrap();
+        assert_eq!(value["readiness"], "degraded");
         assert_eq!(value["bar"], "open_failed");
         assert_eq!(value["launcher_visible"], false);
         assert_eq!(value["control_center_visible"], true);

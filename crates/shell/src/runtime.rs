@@ -19,6 +19,7 @@ pub struct ShellRuntime {
     bars: HashMap<DisplayId, (WindowHandle<BarView>, BarGeometry, bool)>,
     last_bar_specs: Vec<(BarGeometry, bool)>,
     bar_state: BarState,
+    readiness: shilpo_services::ipc::ReadinessState,
     launcher: Option<WindowHandle<LauncherView>>,
     control_center: Option<WindowHandle<ControlCenterView>>,
     notification: Option<(
@@ -41,6 +42,7 @@ impl ShellRuntime {
             bars: HashMap::new(),
             last_bar_specs: Vec::new(),
             bar_state: BarState::Starting,
+            readiness: shilpo_services::ipc::ReadinessState::Starting,
             launcher: None,
             control_center: None,
             notification: None,
@@ -99,10 +101,23 @@ impl ShellRuntime {
     fn publish_status(&self) {
         self.ipc_server.update_status(IpcStatus {
             running: true,
+            readiness: self.readiness,
             bar: self.bar_state.clone(),
             launcher_visible: self.launcher.is_some(),
             control_center_visible: self.control_center.is_some(),
         });
+    }
+
+    pub fn mark_ready(cx: &mut App) {
+        let runtime = cx.global_mut::<Self>();
+        runtime.readiness = shilpo_services::ipc::ReadinessState::Ready;
+        runtime.publish_status();
+    }
+
+    pub fn mark_degraded(cx: &mut App) {
+        let runtime = cx.global_mut::<Self>();
+        runtime.readiness = shilpo_services::ipc::ReadinessState::Degraded;
+        runtime.publish_status();
     }
 
     pub fn open_bar(cx: &mut App, geometry: &BarGeometry, with_display_geometry: bool) -> bool {
