@@ -3,19 +3,11 @@ use std::sync::{Arc, Mutex};
 use zbus::Connection;
 
 /// Network connection status.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NetworkInfo {
     pub is_connected: bool,
     pub ssid: Option<String>,
-}
-
-impl Default for NetworkInfo {
-    fn default() -> Self {
-        Self {
-            is_connected: true,
-            ssid: Some("WiFi".into()),
-        }
-    }
+    pub available: bool,
 }
 
 /// NetworkManager service for network status tracking.
@@ -32,7 +24,7 @@ impl NetworkService {
         tokio::spawn(async move {
             if let Ok(connection) = Connection::system().await {
                 loop {
-                    if let Ok(reply) = connection
+                    let info = if let Ok(reply) = connection
                         .call_method(
                             Some("org.freedesktop.NetworkManager"),
                             "/org/freedesktop/NetworkManager",
@@ -43,9 +35,15 @@ impl NetworkService {
                         .await
                         && let Ok(state) = reply.body().deserialize::<u32>()
                     {
-                        let mut lock = info_clone.lock().unwrap();
-                        lock.is_connected = state == 70; // NM_STATE_CONNECTED_GLOBAL
-                    }
+                        NetworkInfo {
+                            is_connected: state == 70,
+                            ssid: None,
+                            available: true,
+                        }
+                    } else {
+                        NetworkInfo::default()
+                    };
+                    *info_clone.lock().unwrap() = info;
                     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                 }
             }
@@ -56,5 +54,22 @@ impl NetworkService {
 
     pub fn network_info(&self) -> NetworkInfo {
         self.info.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_unavailable() {
+        assert_eq!(
+            NetworkInfo::default(),
+            NetworkInfo {
+                is_connected: false,
+                ssid: None,
+                available: false,
+            }
+        );
     }
 }

@@ -19,21 +19,11 @@ pub trait UPowerDisplayDevice {
 }
 
 /// Battery state information.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct BatteryInfo {
     pub percentage: u8,
     pub is_charging: bool,
     pub is_present: bool,
-}
-
-impl Default for BatteryInfo {
-    fn default() -> Self {
-        Self {
-            percentage: 85,
-            is_charging: false,
-            is_present: true,
-        }
-    }
 }
 
 /// UPower battery service for tracking battery percentage and charging state.
@@ -53,17 +43,19 @@ impl BatteryService {
                 && let Ok(proxy) = UPowerDisplayDeviceProxy::new(&connection).await
             {
                 loop {
-                    let pct = proxy.percentage().await.unwrap_or(85.0) as u8;
-                    let st = proxy.state().await.unwrap_or(2);
-                    let pres = proxy.is_present().await.unwrap_or(true);
-                    {
-                        let mut lock = info_clone.lock().unwrap();
-                        *lock = BatteryInfo {
-                            percentage: pct,
-                            is_charging: st == 1,
-                            is_present: pres,
-                        };
-                    }
+                    let next_info = match (
+                        proxy.percentage().await,
+                        proxy.state().await,
+                        proxy.is_present().await,
+                    ) {
+                        (Ok(percentage), Ok(state), Ok(is_present)) => Some(BatteryInfo {
+                            percentage: percentage.clamp(0.0, 100.0) as u8,
+                            is_charging: state == 1,
+                            is_present,
+                        }),
+                        _ => None,
+                    };
+                    *info_clone.lock().unwrap() = next_info.unwrap_or_default();
                     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                 }
             }
@@ -74,5 +66,17 @@ impl BatteryService {
 
     pub fn battery_info(&self) -> BatteryInfo {
         self.info.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_unavailable() {
+        assert_eq!(BatteryInfo::default().percentage, 0);
+        assert!(!BatteryInfo::default().is_charging);
+        assert!(!BatteryInfo::default().is_present);
     }
 }

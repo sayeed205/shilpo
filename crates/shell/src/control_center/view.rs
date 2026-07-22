@@ -9,13 +9,14 @@ use shilpo_ui::{
     slider::{Slider, SliderEvent, SliderState, SliderValue},
     v_flex,
 };
+use std::sync::Arc;
 
 /// M3 Expressive Control Center Panel Overlay View.
 pub struct ControlCenterView {
-    pub battery_service: BatteryService,
-    pub network_service: NetworkService,
-    pub audio_service: AudioService,
-    pub brightness_service: BrightnessService,
+    pub battery_service: Option<BatteryService>,
+    pub network_service: Option<NetworkService>,
+    pub audio_service: Option<AudioService>,
+    pub brightness_service: Option<Arc<BrightnessService>>,
     volume_state: Entity<SliderState>,
     brightness_state: Entity<SliderState>,
     dnd_active: bool,
@@ -25,13 +26,29 @@ pub struct ControlCenterView {
 
 impl ControlCenterView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let battery_service = BatteryService::new().unwrap();
-        let network_service = NetworkService::new().unwrap();
-        let audio_service = AudioService::new().unwrap();
-        let brightness_service = BrightnessService::new().unwrap();
+        let battery_service = service_or_warn(BatteryService::new, "battery");
+        let network_service = service_or_warn(NetworkService::new, "network");
+        let audio_service = service_or_warn(AudioService::new, "audio");
+        let brightness_service = match BrightnessService::new() {
+            Ok(service) => Some(Arc::new(service)),
+            Err(error) => {
+                tracing::warn!(error = %error, "brightness service unavailable");
+                None
+            }
+        };
 
-        let initial_volume = audio_service.audio_info().volume as f32;
-        let initial_brightness = brightness_service.brightness_info().percentage as f32;
+        let audio_available = audio_service
+            .as_ref()
+            .map(|service| service.audio_info().available)
+            .unwrap_or(false);
+        let initial_volume = audio_service
+            .as_ref()
+            .map(|service| service.audio_info().volume as f32)
+            .unwrap_or(0.0);
+        let initial_brightness = brightness_service
+            .as_ref()
+            .map(|service| service.brightness_info().percentage as f32)
+            .unwrap_or(0.0);
 
         let volume_state = cx.new(|_| {
             SliderState::new()
@@ -61,8 +78,8 @@ impl ControlCenterView {
         .detach();
 
         // Subscribe to volume changes
-        cx.subscribe(&volume_state, |_, _, event: &SliderEvent, _| {
-            if let SliderEvent::Change(SliderValue::Single(val)) = event {
+        cx.subscribe(&volume_state, move |_, _, event: &SliderEvent, _| {
+            if audio_available && let SliderEvent::Change(SliderValue::Single(val)) = event {
                 let _ = std::process::Command::new("pactl")
                     .args([
                         "set-sink-volume",
@@ -75,10 +92,13 @@ impl ControlCenterView {
         .detach();
 
         // Subscribe to brightness changes
-        let brightness_srv_clone = BrightnessService::new().unwrap();
+        let brightness_srv_clone = brightness_service.clone();
         cx.subscribe(&brightness_state, move |_, _, event: &SliderEvent, _| {
-            if let SliderEvent::Change(SliderValue::Single(val)) = event {
-                brightness_srv_clone.set_brightness(val.round() as u8);
+            if let Some(service) = &brightness_srv_clone
+                && service.brightness_info().available
+                && let SliderEvent::Change(SliderValue::Single(val)) = event
+            {
+                service.set_brightness(val.round() as u8);
             }
         })
         .detach();
@@ -122,6 +142,16 @@ impl ControlCenterView {
     }
 }
 
+fn service_or_warn<T>(create: impl FnOnce() -> anyhow::Result<T>, name: &str) -> Option<T> {
+    match create() {
+        Ok(service) => Some(service),
+        Err(error) => {
+            tracing::warn!(error = %error, service = name, "control-center service unavailable");
+            None
+        }
+    }
+}
+
 impl Focusable for ControlCenterView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -130,16 +160,34 @@ impl Focusable for ControlCenterView {
 
 impl Render for ControlCenterView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let battery = self.battery_service.battery_info();
-        let network = self.network_service.network_info();
+        let battery = self
+            .battery_service
+            .as_ref()
+            .map(BatteryService::battery_info)
+            .unwrap_or_default();
+        let network = self
+            .network_service
+            .as_ref()
+            .map(NetworkService::network_info)
+            .unwrap_or_default();
+        let audio_available = self
+            .audio_service
+            .as_ref()
+            .map(|service| service.audio_info().available)
+            .unwrap_or(false);
+        let brightness_available = self
+            .brightness_service
+            .as_ref()
+            .map(|service| service.brightness_info().available)
+            .unwrap_or(false);
 
         // Grid toggles
-        let wifi_bg = if network.is_connected {
+        let wifi_bg = if network.available && network.is_connected {
             cx.theme().primary_container
         } else {
             cx.theme().surface_container_highest
         };
-        let wifi_fg = if network.is_connected {
+        let wifi_fg = if network.available && network.is_connected {
             cx.theme().on_primary_container
         } else {
             cx.theme().on_surface_variant
@@ -206,12 +254,13 @@ impl Render for ControlCenterView {
                                     .gap_2()
                                     .items_center()
                                     .child(Icon::new(IconName::Network).size(px(16.)))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_bold()
-                                            .child(network.ssid.unwrap_or_else(|| "WiFi".into())),
-                                    ),
+                                    .child(div().text_sm().font_bold().child(
+                                        if network.available {
+                                            network.ssid.unwrap_or_else(|| "WiFi".into())
+                                        } else {
+                                            "WiFi unavailable".into()
+                                        },
+                                    )),
                             )
                             .child(
                                 h_flex()
@@ -322,6 +371,7 @@ impl Render for ControlCenterView {
                             )
                             .child(
                                 Slider::new(&self.volume_state)
+                                    .disabled(!audio_available)
                                     .horizontal()
                                     .with_size(shilpo_ui::Size::Small),
                             ),
@@ -339,6 +389,7 @@ impl Render for ControlCenterView {
                             )
                             .child(
                                 Slider::new(&self.brightness_state)
+                                    .disabled(!brightness_available)
                                     .horizontal()
                                     .with_size(shilpo_ui::Size::Small),
                             ),

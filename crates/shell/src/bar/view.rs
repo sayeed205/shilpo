@@ -44,12 +44,12 @@ pub fn apply_config_theme(config: &ShellConfig, window: Option<&mut Window>, cx:
 /// Status Bar GPUI View (Multi-Capsule Segmented Bar with IPC integration).
 pub struct BarView {
     pub config: ShellConfig,
-    pub niri_service: NiriCompositorService,
-    pub battery_service: BatteryService,
-    pub audio_service: AudioService,
-    pub network_service: NetworkService,
-    pub notification_service: NotificationService,
-    pub ipc_server: ShellIpcServer,
+    pub niri_service: Option<NiriCompositorService>,
+    pub battery_service: Option<BatteryService>,
+    pub audio_service: Option<AudioService>,
+    pub network_service: Option<NetworkService>,
+    pub notification_service: Option<NotificationService>,
+    pub ipc_server: Option<ShellIpcServer>,
     workspaces: Vec<NiriWorkspaceInfo>,
     battery: BatteryInfo,
     audio: AudioInfo,
@@ -71,26 +71,64 @@ impl BarView {
             ShellConfig::default()
         });
 
-        let niri_service =
-            NiriCompositorService::new().unwrap_or_else(|_| NiriCompositorService::new().unwrap());
-
-        let battery_service = BatteryService::new().unwrap();
-        let battery = battery_service.battery_info();
-
-        let audio_service = AudioService::new().unwrap();
-        let audio = audio_service.audio_info();
-
-        let network_service = NetworkService::new().unwrap();
-        let network = network_service.network_info();
-
-        let notification_service = NotificationService::new().unwrap();
+        let niri_service = match NiriCompositorService::new() {
+            Ok(service) => Some(service),
+            Err(error) => {
+                tracing::warn!(error = %error, "Niri service unavailable; using fallback window state");
+                None
+            }
+        };
+        let battery_service = match BatteryService::new() {
+            Ok(service) => Some(service),
+            Err(error) => {
+                tracing::warn!(error = %error, "battery service unavailable");
+                None
+            }
+        };
+        let battery = battery_service
+            .as_ref()
+            .map(BatteryService::battery_info)
+            .unwrap_or_default();
+        let audio_service = match AudioService::new() {
+            Ok(service) => Some(service),
+            Err(error) => {
+                tracing::warn!(error = %error, "audio service unavailable");
+                None
+            }
+        };
+        let audio = audio_service
+            .as_ref()
+            .map(AudioService::audio_info)
+            .unwrap_or_default();
+        let network_service = match NetworkService::new() {
+            Ok(service) => Some(service),
+            Err(error) => {
+                tracing::warn!(error = %error, "network service unavailable");
+                None
+            }
+        };
+        let network = network_service
+            .as_ref()
+            .map(NetworkService::network_info)
+            .unwrap_or_default();
+        let notification_service = match NotificationService::new() {
+            Ok(service) => Some(service),
+            Err(error) => {
+                tracing::warn!(error = %error, "notification service unavailable; toasts disabled");
+                None
+            }
+        };
         let (notif_tx, notif_rx) = std::sync::mpsc::channel();
-        notification_service.set_new_notification_sender(notif_tx);
-
-        let ipc_server = ShellIpcServer::new().unwrap_or_else(|_| {
-            tracing::warn!("IPC socket binding failed; using fallback");
-            ShellIpcServer::new().unwrap()
-        });
+        if let Some(service) = &notification_service {
+            service.set_new_notification_sender(notif_tx);
+        }
+        let ipc_server = match ShellIpcServer::new() {
+            Ok(server) => Some(server),
+            Err(error) => {
+                tracing::warn!(error = %error, "shell IPC unavailable; IPC commands disabled");
+                None
+            }
+        };
 
         // Dynamic theme synchronization with OS appearance and config
         apply_config_theme(&config, Some(window), cx);
@@ -100,7 +138,10 @@ impl BarView {
         })
         .detach();
 
-        let workspaces = niri_service.workspaces();
+        let workspaces = niri_service
+            .as_ref()
+            .map(NiriCompositorService::workspaces)
+            .unwrap_or_default();
         let fallback_ws = if workspaces.is_empty() {
             vec![
                 NiriWorkspaceInfo {
@@ -135,19 +176,31 @@ impl BarView {
             .or_else(|| std::env::var("USER").ok().map(|u| format!("/home/{}", u)))
             .unwrap_or_else(|| ".".to_string());
         let config_dir = std::path::PathBuf::from(home).join(".config/shilpo");
-        let _ = std::fs::create_dir_all(&config_dir);
+        if let Err(error) = std::fs::create_dir_all(&config_dir) {
+            tracing::warn!(error = %error, path = ?config_dir, "config watcher directory unavailable");
+        }
 
         use notify::Watcher;
-        let mut watcher = notify::RecommendedWatcher::new(
+        let watcher = match notify::RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
                 if let Some(_event) = res.ok().filter(|e| e.kind.is_modify()) {
                     let _ = config_tx.send(());
                 }
             },
             notify::Config::default(),
-        )
-        .unwrap();
-        let _ = watcher.watch(&config_dir, notify::RecursiveMode::Recursive);
+        ) {
+            Ok(mut watcher) => match watcher.watch(&config_dir, notify::RecursiveMode::Recursive) {
+                Ok(()) => Some(watcher),
+                Err(error) => {
+                    tracing::warn!(error = %error, path = ?config_dir, "config watcher watch failed");
+                    None
+                }
+            },
+            Err(error) => {
+                tracing::warn!(error = %error, "config watcher creation failed");
+                None
+            }
+        };
 
         // Real-time state observer and IPC task
         let observer_task = cx.spawn(async move |this, cx| {
@@ -178,11 +231,17 @@ impl BarView {
                     }
 
                     // Process pending IPC commands
-                    let requests = this.ipc_server.pop_pending_requests();
+                    let requests = this
+                        .ipc_server
+                        .as_ref()
+                        .map(ShellIpcServer::pop_pending_requests)
+                        .unwrap_or_default();
                     for req in requests {
                         match req {
                             IpcRequest::FocusWorkspace(id) => {
-                                let _ = this.niri_service.focus_workspace(id);
+                                if let Some(service) = &this.niri_service {
+                                    let _ = service.focus_workspace(id);
+                                }
                             }
                             IpcRequest::ReloadConfig => {
                                 match ShellConfig::load_or_create(&config_path) {
@@ -219,16 +278,36 @@ impl BarView {
                         }
                     }
 
-                    let updated_ws = this.niri_service.workspaces();
+                    let updated_ws = this
+                        .niri_service
+                        .as_ref()
+                        .map(NiriCompositorService::workspaces)
+                        .unwrap_or_default();
                     let updated_title = this
                         .niri_service
-                        .active_window_title()
+                        .as_ref()
+                        .and_then(|service| service.active_window_title())
                         .unwrap_or_else(|| "Desktop".into());
-                    let updated_app_id =
-                        this.niri_service.app_id().unwrap_or_else(|| "niri".into());
-                    let updated_bat = this.battery_service.battery_info();
-                    let updated_audio = this.audio_service.audio_info();
-                    let updated_net = this.network_service.network_info();
+                    let updated_app_id = this
+                        .niri_service
+                        .as_ref()
+                        .and_then(|service| service.app_id())
+                        .unwrap_or_else(|| "niri".into());
+                    let updated_bat = this
+                        .battery_service
+                        .as_ref()
+                        .map(BatteryService::battery_info)
+                        .unwrap_or_default();
+                    let updated_audio = this
+                        .audio_service
+                        .as_ref()
+                        .map(AudioService::audio_info)
+                        .unwrap_or_default();
+                    let updated_net = this
+                        .network_service
+                        .as_ref()
+                        .map(NetworkService::network_info)
+                        .unwrap_or_default();
 
                     let now = chrono::Local::now();
                     let updated_dt = now.format("%H:%M · %a, %d/%m").to_string();

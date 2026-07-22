@@ -40,14 +40,29 @@ impl NotificationService {
         };
 
         tokio::spawn(async move {
-            if let Ok(connection) = Connection::session().await {
-                let _ = connection
-                    .object_server()
-                    .at("/org/freedesktop/Notifications", server)
-                    .await;
-                let _ = connection
-                    .request_name("org.freedesktop.Notifications")
-                    .await;
+            let connection = match Connection::session().await {
+                Ok(connection) => connection,
+                Err(error) => {
+                    tracing::error!(error = %error, "notification service session-bus connection failed");
+                    return;
+                }
+            };
+            if let Err(error) = connection
+                .object_server()
+                .at("/org/freedesktop/Notifications", server)
+                .await
+            {
+                tracing::error!(error = %error, "notification service object registration failed");
+                return;
+            }
+            if let Err(error) = connection
+                .request_name("org.freedesktop.Notifications")
+                .await
+            {
+                tracing::warn!(
+                    error = %error,
+                    "notification daemon unavailable; another daemon may own org.freedesktop.Notifications"
+                );
             }
         });
 

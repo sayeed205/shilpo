@@ -5,15 +5,10 @@ use std::{
 };
 
 /// Screen brightness status.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BrightnessInfo {
     pub percentage: u8,
-}
-
-impl Default for BrightnessInfo {
-    fn default() -> Self {
-        Self { percentage: 70 }
-    }
+    pub available: bool,
 }
 
 /// System screen brightness service.
@@ -29,11 +24,13 @@ impl BrightnessService {
         let info_clone = service.info.clone();
         tokio::spawn(async move {
             loop {
-                let percentage = query_brightness().unwrap_or(70);
-                {
-                    let mut lock = info_clone.lock().unwrap();
-                    *lock = BrightnessInfo { percentage };
-                }
+                let info = query_brightness()
+                    .map(|percentage| BrightnessInfo {
+                        percentage,
+                        available: true,
+                    })
+                    .unwrap_or_default();
+                *info_clone.lock().unwrap() = info;
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
             }
         });
@@ -49,6 +46,10 @@ impl BrightnessService {
         let percentage = percentage.min(100);
         {
             let mut lock = self.info.lock().unwrap();
+            if !lock.available {
+                tracing::warn!("brightness backend unavailable; ignoring brightness change");
+                return;
+            }
             lock.percentage = percentage;
         }
         let _ = Command::new("brightnessctl")
@@ -80,4 +81,15 @@ fn query_brightness() -> Option<u8> {
     }
 
     Some(((curr_str / max_str) * 100.0).round() as u8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_unavailable() {
+        assert_eq!(BrightnessInfo::default().percentage, 0);
+        assert!(!BrightnessInfo::default().available);
+    }
 }

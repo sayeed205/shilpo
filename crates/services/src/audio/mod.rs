@@ -5,19 +5,11 @@ use std::{
 };
 
 /// Audio sink volume & mute status.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AudioInfo {
     pub volume: u8,
     pub is_muted: bool,
-}
-
-impl Default for AudioInfo {
-    fn default() -> Self {
-        Self {
-            volume: 75,
-            is_muted: false,
-        }
-    }
+    pub available: bool,
 }
 
 /// System audio service for volume and mute status.
@@ -33,12 +25,15 @@ impl AudioService {
         let info_clone = service.info.clone();
         tokio::spawn(async move {
             loop {
-                let volume = query_volume().unwrap_or(75);
-                let is_muted = query_mute().unwrap_or(false);
-                {
-                    let mut lock = info_clone.lock().unwrap();
-                    *lock = AudioInfo { volume, is_muted };
-                }
+                let info = match (query_volume(), query_mute()) {
+                    (Some(volume), Some(is_muted)) => AudioInfo {
+                        volume,
+                        is_muted,
+                        available: true,
+                    },
+                    _ => AudioInfo::default(),
+                };
+                *info_clone.lock().unwrap() = info;
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
             }
         });
@@ -83,4 +78,17 @@ fn query_mute() -> Option<bool> {
         return Some(out_str.contains("yes"));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_unavailable() {
+        assert_eq!(AudioInfo::default(), AudioInfo::default());
+        assert_eq!(AudioInfo::default().volume, 0);
+        assert!(!AudioInfo::default().is_muted);
+        assert!(!AudioInfo::default().available);
+    }
 }

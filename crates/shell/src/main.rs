@@ -158,9 +158,15 @@ fn init_tracing() {
 }
 
 fn bar_window_options(geometry: &BarGeometry, with_display_geometry: bool) -> WindowOptions {
+    let bounds = if with_display_geometry {
+        geometry.bounds
+    } else {
+        Bounds::new(point(px(0.), px(0.)), geometry.bounds.size)
+    };
+
     WindowOptions {
         titlebar: None,
-        window_bounds: with_display_geometry.then_some(WindowBounds::Windowed(geometry.bounds)),
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
         display_id: with_display_geometry.then_some(geometry.display_id),
         app_id: Some("shilpo-bar".to_string()),
         window_background: WindowBackgroundAppearance::Transparent,
