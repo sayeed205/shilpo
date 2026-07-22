@@ -540,3 +540,26 @@ fn overlay_options(
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shilpo_services::ipc::ReadinessState;
+
+    #[test]
+    fn runtime_readiness_and_status_tracking() {
+        let mut status = IpcStatus::default();
+        assert_eq!(status.readiness, ReadinessState::Starting);
+        assert!(!status.running);
+
+        status.readiness = ReadinessState::Ready;
+        status.running = true;
+        status.bar = BarState::Visible;
+
+        assert_eq!(status.readiness, ReadinessState::Ready);
+        assert_eq!(status.bar, BarState::Visible);
+
+        status.readiness = ReadinessState::Degraded;
+        assert_eq!(status.readiness, ReadinessState::Degraded);
+    }
+}

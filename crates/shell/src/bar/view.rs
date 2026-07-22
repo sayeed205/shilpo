@@ -56,11 +56,16 @@ pub struct BarView {
     media_track: String,
     datetime_str: String,
     last_error: Option<String>,
+    last_service_update: std::time::Instant,
     _observer_task: Task<()>,
     _service_task: Task<()>,
 }
 
 impl BarView {
+    pub fn is_stale(&self) -> bool {
+        self.last_service_update.elapsed() > std::time::Duration::from_secs(30)
+    }
+
     pub fn enqueue_request(&self, request: shilpo_services::IpcRequest) -> Result<(), String> {
         let command = match request {
             shilpo_services::IpcRequest::FocusWorkspace(id) => WorkerCommand::FocusWorkspace(id),
@@ -200,6 +205,7 @@ impl BarView {
 
                     let mut changed = false;
                     while let Ok(update) = updates_rx.try_recv() {
+                        this.last_service_update = std::time::Instant::now();
                         match update {
                             WorkerUpdate::Workspaces(value) if this.workspaces != value => {
                                 this.workspaces = value;
@@ -276,6 +282,7 @@ impl BarView {
             media_track: "KK - Police ke hathiyar".into(),
             datetime_str: "17:53 · Tue, 21/07".into(),
             last_error: None,
+            last_service_update: std::time::Instant::now(),
             _observer_task: observer_task,
             _service_task: service_task,
         }
