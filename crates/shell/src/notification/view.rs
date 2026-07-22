@@ -5,13 +5,19 @@ use gpui::{
 use shilpo_services::Notification;
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
 
+use crate::runtime::ShellRuntime;
+
 /// OSD Toast Notification View.
 pub struct NotificationToastView {
     pub notification: Notification,
 }
 
 impl NotificationToastView {
-    pub fn new(notification: Notification, _window: &mut Window, _cx: &mut Context<Self>) -> Self {
+    pub fn new(notification: Notification, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        window.on_window_should_close(cx, |_, cx| {
+            ShellRuntime::forget_notification(cx);
+            true
+        });
         Self { notification }
     }
 

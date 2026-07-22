@@ -1,6 +1,6 @@
 use gpui::{
-    App, Bounds, Focusable, Global, Pixels, Point, Subscription, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    App, AppContext, Bounds, Focusable, Global, Pixels, Point, Subscription,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
     layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
     point, px, size,
 };
@@ -134,8 +134,8 @@ impl ShellRuntime {
             (runtime.bar.take(), runtime.bar_spec.clone())
         };
         if let Some(handle) = handle {
-            let removed = handle
-                .update(cx, |_, window, _| window.remove_window())
+            let removed = cx
+                .update_window(*handle, |_, window, _| window.remove_window())
                 .is_ok();
             let runtime = cx.global_mut::<Self>();
             if removed {
@@ -194,7 +194,9 @@ impl ShellRuntime {
     pub fn close_launcher(cx: &mut App) {
         let handle = cx.global_mut::<Self>().launcher.take();
         let Some(handle) = handle else { return };
-        let _ = handle.update(cx, |_, window, _| window.remove_window());
+        // Registry entry is invalidated above. A close racing with this call can
+        // leave handle stale; update_window failure is expected in that case.
+        let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         cx.global::<Self>().publish_status();
     }
 
@@ -243,7 +245,9 @@ impl ShellRuntime {
     pub fn close_control_center(cx: &mut App) {
         let handle = cx.global_mut::<Self>().control_center.take();
         let Some(handle) = handle else { return };
-        let _ = handle.update(cx, |_, window, _| window.remove_window());
+        // Registry entry is invalidated above. A close racing with this call can
+        // leave handle stale; update_window failure is expected in that case.
+        let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         cx.global::<Self>().publish_status();
     }
 
@@ -272,7 +276,20 @@ impl ShellRuntime {
             cx.global_mut::<Self>().notification = Some((current_generation, handle));
             return;
         }
-        let _ = handle.update(cx, |_, window, _| window.remove_window());
+        // Generation check above makes delayed expiry harmless after replacement.
+        // Entry is taken before close so stale expiry cannot retain registry state.
+        let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+    }
+
+    pub fn forget_notification(cx: &mut App) {
+        cx.global_mut::<Self>().notification = None;
+    }
+
+    pub fn forget_bar(cx: &mut App) {
+        let runtime = cx.global_mut::<Self>();
+        runtime.bar = None;
+        runtime.bar_state = BarState::Hidden;
+        runtime.publish_status();
     }
 
     fn enqueue_worker(cx: &mut App, request: IpcRequest) {
@@ -339,16 +356,16 @@ impl ShellRuntime {
             )
         };
         if let Some(handle) = bar {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         }
         if let Some(handle) = launcher {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         }
         if let Some(handle) = control_center {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         }
         if let Some((_, handle)) = notification {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         }
         let runtime = cx.global_mut::<Self>();
         runtime.bar_state = BarState::Hidden;

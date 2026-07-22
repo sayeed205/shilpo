@@ -22,6 +22,11 @@ impl LauncherView {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
+        window.on_window_should_close(cx, |_, cx| {
+            ShellRuntime::forget_launcher(cx);
+            true
+        });
+
         // Dynamic theme synchronization with OS appearance
         shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
         cx.observe_window_appearance(window, |_, window, cx| {

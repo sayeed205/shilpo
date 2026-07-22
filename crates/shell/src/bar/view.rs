@@ -94,6 +94,11 @@ impl BarView {
         if let Some(service) = &notification_service {
             service.set_new_notification_sender(notif_tx);
         }
+        window.on_window_should_close(cx, |_, cx| {
+            ShellRuntime::forget_bar(cx);
+            true
+        });
+
         // Dynamic theme synchronization with OS appearance and config
         apply_config_theme(&config, Some(window), cx);
         cx.observe_window_appearance(window, |this, window, cx| {
