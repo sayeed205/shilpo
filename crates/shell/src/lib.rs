@@ -6,7 +6,9 @@ pub mod launcher;
 pub mod notification;
 pub mod runtime;
 
-pub use actions::{ActionCategory, ActionDescriptor, ActionId, ActionRegistry};
+pub use actions::{
+    ActionCategory, ActionDescriptor, ActionId, ActionRegistry, KeybindingManager, Shortcut,
+};
 pub use bar::BarView;
 pub use control_center::ControlCenterView;
 pub use error::ShellError;

@@ -109,6 +109,101 @@ impl ActionRegistry {
     }
 }
 
+/// Representation of a parsed key combination shortcut (e.g. "super+space").
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Shortcut {
+    pub modifiers: Vec<String>,
+    pub key: String,
+}
+
+impl Shortcut {
+    pub fn parse(spec: &str) -> Option<Self> {
+        let parts: Vec<&str> = spec.split('+').map(|s| s.trim()).collect();
+        if parts.is_empty() || parts.iter().any(|p| p.is_empty()) {
+            return None;
+        }
+        let key = parts.last()?.to_lowercase();
+        let mut modifiers: Vec<String> = parts[..parts.len() - 1]
+            .iter()
+            .map(|m| m.to_lowercase())
+            .collect();
+        modifiers.sort();
+        Some(Self { modifiers, key })
+    }
+
+    pub fn to_spec(&self) -> String {
+        if self.modifiers.is_empty() {
+            self.key.clone()
+        } else {
+            format!("{}+{}", self.modifiers.join("+"), self.key)
+        }
+    }
+}
+
+/// Global lifecycle manager for shell keybindings and shortcut dispatch.
+#[derive(Debug, Clone)]
+pub struct KeybindingManager {
+    bindings: std::collections::HashMap<Shortcut, ActionId>,
+}
+
+impl Default for KeybindingManager {
+    fn default() -> Self {
+        Self::with_defaults()
+    }
+}
+
+impl KeybindingManager {
+    pub fn new() -> Self {
+        Self {
+            bindings: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn with_defaults() -> Self {
+        let mut mgr = Self::new();
+        let defaults = [
+            ("super+space", ActionId::ToggleLauncher),
+            ("super+c", ActionId::ToggleControlCenter),
+            ("super+b", ActionId::ToggleBar),
+            ("super+shift+r", ActionId::ReloadConfig),
+            ("super+shift+q", ActionId::Quit),
+        ];
+
+        for (spec, action) in defaults {
+            if let Some(shortcut) = Shortcut::parse(spec) {
+                let _ = mgr.register(shortcut, action);
+            }
+        }
+        mgr
+    }
+
+    pub fn register(&mut self, shortcut: Shortcut, action: ActionId) -> Result<(), String> {
+        if let Some(existing) = self.bindings.get(&shortcut)
+            && *existing != action
+        {
+            return Err(format!(
+                "shortcut conflict for '{}': already bound to '{:?}'",
+                shortcut.to_spec(),
+                existing
+            ));
+        }
+        self.bindings.insert(shortcut, action);
+        Ok(())
+    }
+
+    pub fn unregister(&mut self, shortcut: &Shortcut) -> Option<ActionId> {
+        self.bindings.remove(shortcut)
+    }
+
+    pub fn action_for(&self, shortcut: &Shortcut) -> Option<ActionId> {
+        self.bindings.get(shortcut).copied()
+    }
+
+    pub fn bindings(&self) -> &std::collections::HashMap<Shortcut, ActionId> {
+        &self.bindings
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +221,33 @@ mod tests {
             let json = serde_json::to_string(desc).unwrap();
             assert!(json.contains(desc.name));
         }
+    }
+
+    #[test]
+    fn shortcut_parsing_and_keybinding_defaults() {
+        let sc = Shortcut::parse("Super + Space").unwrap();
+        assert_eq!(sc.modifiers, vec!["super"]);
+        assert_eq!(sc.key, "space");
+        assert_eq!(sc.to_spec(), "super+space");
+
+        let mgr = KeybindingManager::with_defaults();
+        assert_eq!(mgr.action_for(&sc), Some(ActionId::ToggleLauncher));
+
+        let sc_bar = Shortcut::parse("super+b").unwrap();
+        assert_eq!(mgr.action_for(&sc_bar), Some(ActionId::ToggleBar));
+    }
+
+    #[test]
+    fn shortcut_conflict_detection() {
+        let mut mgr = KeybindingManager::new();
+        let sc = Shortcut::parse("super+c").unwrap();
+        assert!(
+            mgr.register(sc.clone(), ActionId::ToggleControlCenter)
+                .is_ok()
+        );
+
+        // Conflict registration should fail with diagnostic
+        let err = mgr.register(sc, ActionId::Quit).unwrap_err();
+        assert!(err.contains("conflict"));
     }
 }
