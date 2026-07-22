@@ -12,10 +12,12 @@ use crate::{
     launcher::LauncherView,
 };
 
+use std::collections::HashMap;
+
 pub struct ShellRuntime {
     ipc_server: ShellIpcServer,
-    bar: Option<WindowHandle<BarView>>,
-    bar_spec: Option<(BarGeometry, bool)>,
+    bars: HashMap<DisplayId, (WindowHandle<BarView>, BarGeometry, bool)>,
+    last_bar_specs: Vec<(BarGeometry, bool)>,
     bar_state: BarState,
     launcher: Option<WindowHandle<LauncherView>>,
     control_center: Option<WindowHandle<ControlCenterView>>,
@@ -35,8 +37,8 @@ impl ShellRuntime {
     pub fn install(cx: &mut App, ipc_server: ShellIpcServer) {
         cx.set_global(Self {
             ipc_server,
-            bar: None,
-            bar_spec: None,
+            bars: HashMap::new(),
+            last_bar_specs: Vec::new(),
             bar_state: BarState::Starting,
             launcher: None,
             control_center: None,
@@ -49,12 +51,10 @@ impl ShellRuntime {
 
         let subscription = cx.on_window_closed(|cx, window_id| {
             let runtime = cx.global_mut::<Self>();
-            if runtime
-                .bar
-                .as_ref()
-                .is_some_and(|handle| handle.window_id() == window_id)
-            {
-                runtime.bar = None;
+            runtime
+                .bars
+                .retain(|_, (handle, _, _)| handle.window_id() != window_id);
+            if runtime.bars.is_empty() {
                 runtime.bar_state = BarState::Hidden;
             }
             if runtime
@@ -105,19 +105,30 @@ impl ShellRuntime {
 
     pub fn open_bar(cx: &mut App, geometry: &BarGeometry, with_display_geometry: bool) -> bool {
         let options = bar_window_options(geometry, with_display_geometry);
+        let display_id = geometry.display_id;
         let result = cx.open_window(options, BarView::view);
         let runtime = cx.global_mut::<Self>();
         match result {
             Ok(handle) => {
-                runtime.bar = Some(handle);
-                runtime.bar_spec = Some((geometry.clone(), with_display_geometry));
+                runtime.bars.insert(
+                    display_id,
+                    (handle, geometry.clone(), with_display_geometry),
+                );
+                runtime
+                    .last_bar_specs
+                    .retain(|(g, _)| g.display_id != display_id);
+                runtime
+                    .last_bar_specs
+                    .push((geometry.clone(), with_display_geometry));
                 runtime.bar_state = BarState::Visible;
                 runtime.publish_status();
                 true
             }
             Err(error) => {
-                tracing::error!(error = %error, "failed to open bar window");
-                runtime.bar_state = BarState::OpenFailed;
+                tracing::error!(error = %error, ?display_id, "failed to open bar window");
+                if runtime.bars.is_empty() {
+                    runtime.bar_state = BarState::OpenFailed;
+                }
                 runtime.publish_status();
                 false
             }
@@ -131,25 +142,26 @@ impl ShellRuntime {
     }
 
     pub fn toggle_bar(cx: &mut App) {
-        let (handle, spec) = {
+        let (open_handles, specs) = {
             let runtime = cx.global_mut::<Self>();
-            (runtime.bar.take(), runtime.bar_spec.clone())
+            let handles: Vec<_> = runtime.bars.values().map(|(h, _, _)| *h).collect();
+            runtime.bars.clear();
+            let specs = runtime.last_bar_specs.clone();
+            (handles, specs)
         };
-        if let Some(handle) = handle {
-            let removed = cx
-                .update_window(*handle, |_, window, _| window.remove_window())
-                .is_ok();
-            let runtime = cx.global_mut::<Self>();
-            if removed {
-                runtime.bar_state = BarState::Hidden;
-            } else {
-                runtime.bar_state = BarState::OpenFailed;
+        if !open_handles.is_empty() {
+            for handle in open_handles {
+                let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
             }
+            let runtime = cx.global_mut::<Self>();
+            runtime.bar_state = BarState::Hidden;
             runtime.publish_status();
             return;
         }
-        if let Some((geometry, with_display_geometry)) = spec {
-            Self::open_bar(cx, &geometry, with_display_geometry);
+        if !specs.is_empty() {
+            for (geometry, with_display_geometry) in specs {
+                Self::open_bar(cx, &geometry, with_display_geometry);
+            }
         } else {
             Self::mark_bar_open_failed(cx);
             tracing::warn!("cannot toggle bar: no valid reopen geometry");
@@ -345,22 +357,26 @@ impl ShellRuntime {
 
     pub fn forget_bar(cx: &mut App) {
         let runtime = cx.global_mut::<Self>();
-        runtime.bar = None;
+        runtime.bars.clear();
         runtime.bar_state = BarState::Hidden;
         runtime.publish_status();
     }
 
     fn enqueue_worker(cx: &mut App, request: IpcRequest) {
-        let handle = cx.global_mut::<Self>().bar.take();
+        let handle = cx
+            .global_mut::<Self>()
+            .bars
+            .values()
+            .next()
+            .map(|(h, _, _)| *h);
         let Some(handle) = handle else {
             tracing::warn!(?request, "IPC worker request dropped: bar unavailable");
             return;
         };
         match handle.update(cx, |bar, _, _| bar.enqueue_request(request)) {
-            Ok(Ok(())) => cx.global_mut::<Self>().bar = Some(handle),
+            Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 tracing::warn!(error = %error, "IPC worker request rejected");
-                cx.global_mut::<Self>().bar = Some(handle);
             }
             Err(error) => {
                 tracing::warn!(error = %error, "IPC worker request dropped: bar handle unavailable")
@@ -404,16 +420,16 @@ impl ShellRuntime {
         if !cx.has_global::<Self>() {
             return;
         }
-        let (bar, launcher, control_center, notification) = {
+        let (bars, launcher, control_center, notification) = {
             let runtime = cx.global_mut::<Self>();
             (
-                runtime.bar.take(),
+                std::mem::take(&mut runtime.bars),
                 runtime.launcher.take(),
                 runtime.control_center.take(),
                 runtime.notification.take(),
             )
         };
-        if let Some(handle) = bar {
+        for (_, (handle, _, _)) in bars {
             let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         }
         if let Some(handle) = launcher {
