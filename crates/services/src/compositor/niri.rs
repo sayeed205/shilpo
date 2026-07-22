@@ -70,7 +70,7 @@ impl NiriCompositorService {
 
         thread::spawn(move || {
             if let Err(e) = run_niri_listener(ws_clone, app_id_clone, title_clone, kb_clone) {
-                eprintln!("[shilpo-services] Niri listener exited: {:?}", e);
+                tracing::error!(error = %e, "Niri listener exited");
             }
         });
 

@@ -260,7 +260,7 @@ impl Render for PopoverStory {
                         .track_focus(&form.focus_handle(cx))
                         .open(self.form_popover_open)
                         .on_open_change(cx.listener(move |this, open, _, cx| {
-                            println!("Popover form open changed: {}", open);
+                            tracing::info!("Popover form open changed: {}", open);
                             this.form_popover_open = *open;
                             cx.notify();
                         }))

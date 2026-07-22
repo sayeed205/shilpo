@@ -274,7 +274,7 @@ impl Render for NotificationStory {
                                     .id::<NotificationStory>()
                                     .message("This is a unique notification.")
                                     .on_close(|_, _| {
-                                        println!("Notification closed");
+                                        tracing::info!("Notification closed");
                                     }),
                                 cx,
                             )
@@ -327,13 +327,15 @@ impl Render for NotificationStory {
                                     .action(|_, _, cx| {
                                         Button::new("try-again").filled().label("Retry").on_click(
                                             cx.listener(|this, _, window, cx| {
-                                                println!("You have clicked the try again action.");
+                                                tracing::info!(
+                                                    "You have clicked the try again action."
+                                                );
                                                 this.dismiss(window, cx);
                                             }),
                                         )
                                     })
                                     .on_click(cx.listener(|_, _, _, cx| {
-                                        println!("Notification clicked");
+                                        tracing::info!("Notification clicked");
                                         cx.notify();
                                     })),
                                 cx,
@@ -358,10 +360,10 @@ impl Render for NotificationStory {
                                 .title("on_click vs on_close")
                                 .autohide(false)
                                 .on_click(|_, _, _| {
-                                    println!("[notification] on_click fired");
+                                    tracing::info!("[notification] on_click fired");
                                 })
                                 .on_close(|_, _| {
-                                    println!("[notification] on_close fired");
+                                    tracing::info!("[notification] on_close fired");
                                 }),
                                 cx,
                             )

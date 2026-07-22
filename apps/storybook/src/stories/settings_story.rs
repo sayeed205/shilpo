@@ -406,7 +406,7 @@ impl SettingsStory {
                             SettingField::input(
                                 |cx: &App| AppSettings::global(cx).cli_path.clone(),
                                 |val: SharedString, cx: &mut App| {
-                                    println!("cli-path set value: {}", val);
+                                    tracing::info!("cli-path set value: {}", val);
                                     AppSettings::global_mut(cx).cli_path = val;
                                 },
                             )
@@ -433,10 +433,10 @@ impl SettingsStory {
                                 AppSettings::global_mut(cx).notifications_enabled = val;
                             },
                         )
-                        .default_value(default_settings.notifications_enabled),
+                            .default_value(default_settings.notifications_enabled),
                     )
-                    .description("Receive notifications about updates and news.")
-                    .disabled(disabled),
+                        .description("Receive notifications about updates and news.")
+                        .disabled(disabled),
                     SettingItem::new(
                         "Auto Update",
                         SettingField::switch(
@@ -445,10 +445,10 @@ impl SettingsStory {
                                 AppSettings::global_mut(cx).auto_update = val;
                             },
                         )
-                        .default_value(default_settings.auto_update),
+                            .default_value(default_settings.auto_update),
                     )
-                    .description("Automatically download and install updates.")
-                    .disabled(disabled),
+                        .description("Automatically download and install updates.")
+                        .disabled(disabled),
                 ])]),
             SettingPage::new("About")
                 .resettable(resettable)
@@ -474,38 +474,38 @@ impl SettingsStory {
                     })),
                 )
                 .group(SettingGroup::new().title("Links").items(vec![
-                        SettingItem::new(
-                            "GitHub Repository",
-                            SettingField::element(OpenURLSettingField::new(
-                                "Repository...",
-                                "https://github.com/sayeed205/shilpo",
-                            )),
-                        )
+                    SettingItem::new(
+                        "GitHub Repository",
+                        SettingField::element(OpenURLSettingField::new(
+                            "Repository...",
+                            "https://github.com/sayeed205/shilpo",
+                        )),
+                    )
                         .description("Open the GitHub repository in your default browser."),
-                        SettingItem::new(
-                            "Documentation",
-                            SettingField::element(OpenURLSettingField::new(
-                                "Rust Docs...",
-                                "https://docs.rs/shilpo-ui"
-                            )),
-                        )
+                    SettingItem::new(
+                        "Documentation",
+                        SettingField::element(OpenURLSettingField::new(
+                            "Rust Docs...",
+                            "https://docs.rs/shilpo-ui"
+                        )),
+                    )
                         .description(markdown(
                             "Rust doc for the `shilpo` crate.",
                         )),
-                        SettingItem::new(
-                            "Website",
-                            SettingField::render(|options, _window, _cx| {
-                                Button::new("open-url")
-                                    .outline()
-                                    .label("Website...")
-                                    .with_size(options.size)
-                                    .on_click(|_, _window, cx| {
-                                        cx.open_url("https://github.com/sayeed205/shilpo/");
-                                    })
-                            }),
-                        )
+                    SettingItem::new(
+                        "Website",
+                        SettingField::render(|options, _window, _cx| {
+                            Button::new("open-url")
+                                .outline()
+                                .label("Website...")
+                                .with_size(options.size)
+                                .on_click(|_, _window, cx| {
+                                    cx.open_url("https://github.com/sayeed205/shilpo/");
+                                })
+                        }),
+                    )
                         .description("Official website and documentation for the GPUI Component."),
-                    ])),
+                ])),
         ]
     }
 }

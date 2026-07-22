@@ -215,7 +215,7 @@ impl ListDelegate for CompanyListDelegate {
     }
 
     fn confirm(&mut self, secondary: bool, window: &mut Window, cx: &mut Context<ListState<Self>>) {
-        println!("Confirmed with secondary: {}", secondary);
+        tracing::info!("Confirmed with secondary: {}", secondary);
         window.dispatch_action(Box::new(SelectedCompany), cx);
     }
 
@@ -235,7 +235,7 @@ impl ListDelegate for CompanyListDelegate {
         _: &mut Window,
         _: &mut Context<ListState<Self>>,
     ) {
-        println!("right_clicked_index: {:?}", ix);
+        tracing::info!("right_clicked_index: {:?}", ix);
     }
 
     fn render_section_header(
@@ -386,13 +386,13 @@ impl ListStory {
             vec![
                 cx.subscribe(&company_list, |_, _, ev: &ListEvent, _| match ev {
                     ListEvent::Select(ix) => {
-                        println!("List Selected: {:?}", ix);
+                        tracing::info!("List Selected: {:?}", ix);
                     }
                     ListEvent::Confirm(ix) => {
-                        println!("List Confirmed: {:?}", ix);
+                        tracing::info!("List Confirmed: {:?}", ix);
                     }
                     ListEvent::Cancel => {
-                        println!("List Cancelled");
+                        tracing::info!("List Cancelled");
                     }
                 }),
             ];

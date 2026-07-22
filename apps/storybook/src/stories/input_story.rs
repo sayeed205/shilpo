@@ -356,19 +356,19 @@ impl InputStory {
             InputEvent::Change => {
                 let text = state.read(cx).value();
                 if state == &self.input2 {
-                    println!("Set disabled value: {}", text);
+                    tracing::info!("Set disabled value: {}", text);
                     self.disabled_input.update(cx, |this, cx| {
                         this.set_value(text, window, cx);
                     })
                 } else {
-                    println!("Change: {}", text)
+                    tracing::info!("Change: {}", text)
                 }
             }
             InputEvent::PressEnter { secondary, shift } => {
-                println!("PressEnter secondary: {}, shift: {}", secondary, shift)
+                tracing::info!("PressEnter secondary: {}, shift: {}", secondary, shift)
             }
-            InputEvent::Focus => println!("Focus"),
-            InputEvent::Blur => println!("Blur"),
+            InputEvent::Focus => tracing::info!("Focus"),
+            InputEvent::Blur => tracing::info!("Blur"),
         };
     }
 

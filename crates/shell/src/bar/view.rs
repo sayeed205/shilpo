@@ -67,7 +67,7 @@ impl BarView {
             .map(|home| std::path::PathBuf::from(home).join(".config/shilpo/config.toml"))
             .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));
         let config = ShellConfig::load_or_create(&config_path).unwrap_or_else(|error| {
-            eprintln!("[shilpo-shell] config error: {error}");
+            tracing::error!(error = %error, "failed to load shell config; using defaults");
             ShellConfig::default()
         });
 
@@ -88,7 +88,7 @@ impl BarView {
         notification_service.set_new_notification_sender(notif_tx);
 
         let ipc_server = ShellIpcServer::new().unwrap_or_else(|_| {
-            eprintln!("[shilpo-shell] Warning: IPC socket binding fallback");
+            tracing::warn!("IPC socket binding failed; using fallback");
             ShellIpcServer::new().unwrap()
         });
 
@@ -171,7 +171,9 @@ impl BarView {
                                 apply_config_theme(&this.config, None, cx);
                                 cx.notify();
                             }
-                            Err(error) => eprintln!("[shilpo-shell] config reload error: {error}"),
+                            Err(error) => {
+                                tracing::error!(error = %error, "config reload failed")
+                            }
                         }
                     }
 
@@ -190,7 +192,7 @@ impl BarView {
                                         cx.notify();
                                     }
                                     Err(error) => {
-                                        eprintln!("[shilpo-shell] config reload error: {error}")
+                                        tracing::error!(error = %error, "config reload failed")
                                     }
                                 }
                             }

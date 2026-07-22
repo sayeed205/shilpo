@@ -168,10 +168,10 @@ impl StoryTiles {
 
         match Self::load_tiles(dock_area.clone(), window, cx) {
             Ok(_) => {
-                println!("load tiles success");
+                tracing::info!("load tiles success");
             }
             Err(err) => {
-                eprintln!("load tiles error: {:?}", err);
+                tracing::error!("load tiles error: {:?}", err);
                 Self::reset_default_layout(weak_dock_area, window, cx);
             }
         };
@@ -182,7 +182,7 @@ impl StoryTiles {
             |this, dock_area, ev: &DockEvent, window, cx| match ev {
                 DockEvent::LayoutChanged => this.save_layout(dock_area, window, cx),
                 DockEvent::DragDrop(item) => {
-                    println!("drag drop: {:?}", item);
+                    tracing::info!("drag drop: {:?}", item);
                 }
             },
         )
@@ -237,7 +237,7 @@ impl StoryTiles {
     }
 
     fn save_tiles(state: &DockAreaState) -> Result<()> {
-        println!("Save tiles...");
+        tracing::info!("Save tiles...");
         let json = serde_json::to_string_pretty(state)?;
         std::fs::write("target/tiles.json", json)?;
         Ok(())

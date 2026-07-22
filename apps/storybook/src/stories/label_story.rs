@@ -72,7 +72,7 @@ impl LabelStory {
 
     #[allow(unused)]
     fn on_click(checked: &bool, window: &mut Window, cx: &mut App) {
-        println!("Check value changed: {}", checked);
+        tracing::info!("Check value changed: {}", checked);
     }
 
     fn highlights_text(&self) -> HighlightsMatch {

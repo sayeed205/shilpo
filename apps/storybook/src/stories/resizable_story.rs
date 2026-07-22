@@ -73,7 +73,7 @@ impl Render for ResizableStory {
                     .child(
                         v_resizable("resizable-1")
                             .on_resize(|state, _, cx| {
-                                println!("Resized: {:?}", state.read(cx).sizes());
+                                tracing::info!("Resized: {:?}", state.read(cx).sizes());
                             })
                             .child(
                                 h_resizable("resizable-1.1")

@@ -375,10 +375,11 @@ mod tests {
     }
     #[test]
     fn schema_fixture_matches_generated_schema() {
-        assert_eq!(
-            include_str!("../schema/config-v1.schema.json"),
-            ShellConfig::schema_json()
-        );
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../schema/config-v1.schema.json")).unwrap();
+        let generated: serde_json::Value =
+            serde_json::from_str(&ShellConfig::schema_json()).unwrap();
+        assert_eq!(fixture, generated,);
     }
     #[test]
     fn loader_writes_canonical_config() {

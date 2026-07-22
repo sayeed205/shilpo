@@ -458,7 +458,7 @@ impl TableDelegate for StockTableDelegate {
         div()
             .id(row_ix)
             .on_click(cx.listener(move |table, ev: &ClickEvent, _window, cx| {
-                println!(
+                tracing::info!(
                     "You have clicked row with secondary: {}",
                     ev.modifiers().secondary()
                 );
@@ -990,26 +990,26 @@ impl DataTableStory {
     ) {
         match event {
             TableEvent::ColumnWidthsChanged(col_widths) => {
-                println!("Column widths changed: {:?}", col_widths)
+                tracing::info!("Column widths changed: {:?}", col_widths)
             }
-            TableEvent::SelectColumn(ix) => println!("Select col: {}", ix),
+            TableEvent::SelectColumn(ix) => tracing::info!("Select col: {}", ix),
             TableEvent::SelectCell(row_ix, col_ix) => {
-                println!("Select cell: row={}, col={}", row_ix, col_ix)
+                tracing::info!("Select cell: row={}, col={}", row_ix, col_ix)
             }
             TableEvent::DoubleClickedCell(row_ix, col_ix) => {
-                println!("Double clicked cell: row={}, col={}", row_ix, col_ix)
+                tracing::info!("Double clicked cell: row={}, col={}", row_ix, col_ix)
             }
-            TableEvent::DoubleClickedRow(ix) => println!("Double clicked row: {}", ix),
-            TableEvent::SelectRow(ix) => println!("Select row: {}", ix),
+            TableEvent::DoubleClickedRow(ix) => tracing::info!("Double clicked row: {}", ix),
+            TableEvent::SelectRow(ix) => tracing::info!("Select row: {}", ix),
             TableEvent::MoveColumn(origin_idx, target_idx) => {
-                println!("Move col index: {} -> {}", origin_idx, target_idx);
+                tracing::info!("Move col index: {} -> {}", origin_idx, target_idx);
             }
-            TableEvent::RightClickedRow(ix) => println!("Right clicked row: {:?}", ix),
+            TableEvent::RightClickedRow(ix) => tracing::info!("Right clicked row: {:?}", ix),
             TableEvent::RightClickedCell(row_ix, col_ix) => {
-                println!("Right clicked cell: row={}, col={}", row_ix, col_ix)
+                tracing::info!("Right clicked cell: row={}, col={}", row_ix, col_ix)
             }
             TableEvent::ClearSelection => {
-                println!("Selection cleared");
+                tracing::info!("Selection cleared");
             }
         }
     }
@@ -1018,7 +1018,7 @@ impl DataTableStory {
         match self.write_csv(cx) {
             Ok(csv_content) => {
                 let Some(path) = dirs::download_dir() else {
-                    eprintln!("Failed to get download directory");
+                    tracing::error!("Failed to get download directory");
                     return;
                 };
                 let receiver = cx.prompt_for_new_path(&path, Some("export.csv"));
@@ -1026,20 +1026,20 @@ impl DataTableStory {
                     if let Some(path) = receiver.await.ok().into_iter().flatten().flatten().next() {
                         match std::fs::write(&path, csv_content) {
                             Ok(_) => {
-                                println!("CSV exported successfully to: {:?}", path);
+                                tracing::info!("CSV exported successfully to: {:?}", path);
                             }
                             Err(e) => {
-                                eprintln!("Failed to save CSV file: {}", e);
+                                tracing::error!("Failed to save CSV file: {}", e);
                             }
                         }
                     } else {
-                        println!("CSV export cancelled by user");
+                        tracing::info!("CSV export cancelled by user");
                     };
                 })
                 .detach();
             }
             Err(e) => {
-                eprintln!("Failed to export CSV: {}", e);
+                tracing::error!("Failed to export CSV: {}", e);
             }
         }
     }

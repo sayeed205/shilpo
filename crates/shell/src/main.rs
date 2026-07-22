@@ -12,6 +12,7 @@ use shilpo_shell::{
 
 #[tokio::main]
 async fn main() {
+    init_tracing();
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "msg" {
         if args.len() > 2 {
@@ -83,7 +84,7 @@ async fn main() {
             .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));
         let config =
             shilpo_config::ShellConfig::load_or_create(&config_path).unwrap_or_else(|error| {
-                eprintln!("[shilpo-shell] config error: {error}");
+                tracing::error!(error = %error, "failed to load shell config; using defaults");
                 shilpo_config::ShellConfig::default()
             });
         shilpo_shell::bar::view::apply_config_theme(&config, None, cx);
@@ -117,7 +118,7 @@ fn schedule_bar_retry(cx: &App, config: ShellConfig) {
             }
         }
 
-        eprintln!("[shilpo-shell] primary display unavailable after 1s; opening degraded bar");
+        tracing::warn!("primary display unavailable after 1s; opening degraded bar");
         cx.update(|cx| {
             let geometry = BarGeometry::calculate(
                 DisplayId::new(0),
@@ -135,10 +136,25 @@ fn open_bar(cx: &mut App, geometry: &BarGeometry, with_display_geometry: bool) -
     match cx.open_window(options, BarView::view) {
         Ok(_) => true,
         Err(error) => {
-            eprintln!("[shilpo-shell] failed to open bar window: {error}");
+            tracing::error!(error = %error, "failed to open bar window");
             false
         }
     }
+}
+
+fn init_tracing() {
+    let default_filter = "warn,shilpo_shell=info,shilpo_services=info";
+    let filter = std::env::var("RUST_LOG")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(|value| tracing_subscriber::EnvFilter::builder().parse_lossy(value))
+        .unwrap_or_else(|| tracing_subscriber::EnvFilter::builder().parse_lossy(default_filter));
+
+    let _ = tracing_subscriber::fmt()
+        .compact()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 fn bar_window_options(geometry: &BarGeometry, with_display_geometry: bool) -> WindowOptions {

@@ -71,10 +71,10 @@ impl StoryWorkspace {
 
         match Self::load_layout(dock_area.clone(), window, cx) {
             Ok(_) => {
-                println!("load layout success");
+                tracing::info!("load layout success");
             }
             Err(err) => {
-                eprintln!("load layout error: {:?}", err);
+                tracing::error!("load layout error: {:?}", err);
                 Self::reset_default_layout(weak_dock_area, window, cx);
             }
         };
@@ -205,7 +205,7 @@ impl StoryWorkspace {
     }
 
     fn save_state(state: &DockAreaState) -> Result<()> {
-        println!("Save layout...");
+        tracing::info!("Save layout...");
         let json = serde_json::to_string_pretty(state)?;
         std::fs::write(STATE_FILE, json)?;
         Ok(())

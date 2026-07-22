@@ -119,7 +119,7 @@ impl Render for SwitchStory {
             .child(
                 section("Disabled")
                     .child(Switch::new("switch3").disabled(true).on_click(|v, _, _| {
-                        println!("Switch value changed: {:?}", v);
+                        tracing::info!("Switch value changed: {:?}", v);
                     }))
                     .child(
                         Switch::new("switch3_1")
@@ -128,7 +128,7 @@ impl Render for SwitchStory {
                             .checked(true)
                             .disabled(true)
                             .on_click(|ev, _, _| {
-                                println!("Switch value changed: {:?}", ev);
+                                tracing::info!("Switch value changed: {:?}", ev);
                             }),
                     ),
             )

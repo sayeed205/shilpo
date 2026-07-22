@@ -2166,11 +2166,11 @@ where
                 .iter()
                 .fold(Duration::default(), |acc, d| acc + *d);
             let avg = total / self._measure.len() as u32;
-            eprintln!(
-                "last render {} cells total: {:?}, avg: {:?}",
-                self._measure.len(),
-                total,
-                avg,
+            tracing::debug!(
+                cells = self._measure.len(),
+                total = ?total,
+                average = ?avg,
+                "table cell render measurement"
             );
         }
         self._measure.clear();

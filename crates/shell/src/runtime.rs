@@ -63,7 +63,9 @@ impl ShellRuntime {
         );
         match cx.open_window(options, LauncherView::view) {
             Ok(handle) => cx.global_mut::<Self>().launcher = Some(handle),
-            Err(error) => eprintln!("[shilpo-shell] failed to open launcher window: {error}"),
+            Err(error) => {
+                tracing::error!(error = %error, overlay = "launcher", "failed to open overlay window")
+            }
         }
     }
 
@@ -100,7 +102,9 @@ impl ShellRuntime {
         );
         match cx.open_window(options, ControlCenterView::view) {
             Ok(handle) => cx.global_mut::<Self>().control_center = Some(handle),
-            Err(error) => eprintln!("[shilpo-shell] failed to open control-center window: {error}"),
+            Err(error) => {
+                tracing::error!(error = %error, overlay = "control-center", "failed to open overlay window")
+            }
         }
     }
 

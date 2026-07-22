@@ -648,10 +648,7 @@ mod tests {
         }
         let min = totals.iter().cloned().fold(f32::INFINITY, f32::min);
         let max = totals.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        println!(
-            "OUTER_LIST_PROBE min={min:.1} max={max:.1} delta={:.1}",
-            max - min
-        );
+        tracing::debug!(min, max, delta = max - min, "outer list scroll probe");
         assert!(
             (max - min) < 2.0,
             "list content total jittered while scrolling: min={min} max={max} totals={totals:?}"

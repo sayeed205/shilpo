@@ -293,7 +293,7 @@ pub fn init(cx: &mut App) {
                 &container.focus_handle,
                 window,
                 |this: &mut StoryContainer, _, _| {
-                    println!("StoryContainer focus in: {}", this.name);
+                    tracing::info!("StoryContainer focus in: {}", this.name);
                 },
             )
             .detach();
@@ -595,11 +595,11 @@ impl Panel for StoryContainer {
     }
 
     fn set_zoomed(&mut self, zoomed: bool, _window: &mut Window, _cx: &mut Context<Self>) {
-        println!("panel: {} zoomed: {}", self.name, zoomed);
+        tracing::info!("panel: {} zoomed: {}", self.name, zoomed);
     }
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
-        println!("panel: {} active: {}", self.name, active);
+        tracing::info!("panel: {} active: {}", self.name, active);
         if let Some(on_active) = self.on_active {
             if let Some(story) = self.story.clone() {
                 on_active(story, active, _window, cx);

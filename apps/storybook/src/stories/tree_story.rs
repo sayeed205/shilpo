@@ -144,21 +144,21 @@ impl TreeStory {
     fn on_action_rename(&mut self, _: &Rename, _: &mut Window, cx: &mut gpui::Context<Self>) {
         if let Some(entry) = self.tree_state.read(cx).selected_entry() {
             let item = entry.item();
-            println!("Renaming item: {} ({})", item.label, item.id);
+            tracing::info!("Renaming item: {} ({})", item.label, item.id);
         }
     }
 
     fn on_action_open(&mut self, _: &OpenFile, _: &mut Window, cx: &mut gpui::Context<Self>) {
         if let Some(entry) = self.tree_state.read(cx).selected_entry() {
             let item = entry.item();
-            println!("Opening item: {} ({})", item.label, item.id);
+            tracing::info!("Opening item: {} ({})", item.label, item.id);
         }
     }
 
     fn on_action_delete(&mut self, _: &Delete, _: &mut Window, cx: &mut gpui::Context<Self>) {
         if let Some(entry) = self.tree_state.read(cx).selected_entry() {
             let item = entry.item();
-            println!("Deleting item: {} ({})", item.label, item.id);
+            tracing::info!("Deleting item: {} ({})", item.label, item.id);
         }
     }
 }
@@ -242,9 +242,10 @@ impl Render for TreeStory {
                                                 .on_click(cx.listener({
                                                     let item = item.clone();
                                                     move |_, _, _window, _| {
-                                                        println!(
+                                                        tracing::info!(
                                                             "Clicked on item: {} ({})",
-                                                            item.label, item.id
+                                                            item.label,
+                                                            item.id
                                                         );
                                                     }
                                                 }))

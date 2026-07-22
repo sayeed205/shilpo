@@ -1340,11 +1340,7 @@ mod tests {
 
         let left = unique_styles(&range, left);
         if left.len() != right.len() {
-            println!("\n---------------------------------------------");
-            for (range, style) in left.iter() {
-                println!("({:?}, {})", range, color_name(style.color));
-            }
-            println!("---------------------------------------------");
+            tracing::debug!(actual = ?left, expected = ?right, "highlight style count mismatch");
             panic!("left {} styles, right {} styles", left.len(), right.len());
         }
         for (left, right) in left.into_iter().zip(right) {

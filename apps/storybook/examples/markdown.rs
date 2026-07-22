@@ -1254,9 +1254,10 @@ impl Render for Example {
                                                                     .text()
                                                                     .xsmall()
                                                                     .on_click(move |_, _, _cx| {
-                                                                        println!(
+                                                                        tracing::info!(
                                                                             "Running {} code: {}",
-                                                                            lang, code
+                                                                            lang,
+                                                                            code
                                                                         );
                                                                     }),
                                                             )
@@ -1342,7 +1343,7 @@ mod tests {
             Hsla::black(),
             Hsla::white(),
         ) else {
-            eprintln!("skipping MathJax SVG test because mathjax-full is not available");
+            tracing::warn!("skipping MathJax SVG test because mathjax-full is not available");
             return;
         };
 
@@ -1373,7 +1374,7 @@ mod tests {
             Hsla::black(),
             Hsla::white(),
         ) else {
-            eprintln!("skipping MathJax SVG test because mathjax-full is not available");
+            tracing::warn!("skipping MathJax SVG test because mathjax-full is not available");
             return;
         };
 
@@ -1395,7 +1396,7 @@ mod tests {
             Hsla::black(),
             Hsla::white(),
         ) else {
-            eprintln!("skipping MathJax SVG test because mathjax-full is not available");
+            tracing::warn!("skipping MathJax SVG test because mathjax-full is not available");
             return;
         };
 
@@ -1413,7 +1414,7 @@ mod tests {
             Hsla::black(),
             Hsla::white(),
         ) else {
-            eprintln!("skipping MathJax SVG test because mathjax-full is not available");
+            tracing::warn!("skipping MathJax SVG test because mathjax-full is not available");
             return;
         };
 
@@ -1430,7 +1431,7 @@ mod tests {
             Hsla::black(),
             Hsla::white(),
         ) else {
-            eprintln!("skipping MathJax image test because mathjax-full is not available");
+            tracing::warn!("skipping MathJax image test because mathjax-full is not available");
             return;
         };
 

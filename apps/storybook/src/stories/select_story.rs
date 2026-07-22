@@ -179,7 +179,7 @@ impl SelectStory {
         _cx: &mut Context<Self>,
     ) {
         match event {
-            SelectEvent::Confirm(value) => println!("Selected country: {:?}", value),
+            SelectEvent::Confirm(value) => tracing::info!("Selected country: {:?}", value),
         }
     }
 

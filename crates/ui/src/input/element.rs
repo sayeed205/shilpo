@@ -1429,27 +1429,19 @@ fn print_points_as_svg_path(
     points: &Vec<Point<Pixels>>,
 ) {
     for corners in line_corners {
-        println!(
-            "tl: ({}, {}), tr: ({}, {}), bl: ({}, {}), br: ({}, {})",
-            corners.top_left.as_f32() as i32,
-            corners.top_left.as_f32() as i32,
-            corners.top_right.as_f32() as i32,
-            corners.top_right.as_f32() as i32,
-            corners.bottom_left.as_f32() as i32,
-            corners.bottom_left.as_f32() as i32,
-            corners.bottom_right.as_f32() as i32,
-            corners.bottom_right.as_f32() as i32,
+        tracing::trace!(
+            top_left = ?corners.top_left,
+            top_right = ?corners.top_right,
+            bottom_left = ?corners.bottom_left,
+            bottom_right = ?corners.bottom_right,
+            "text element SVG path corners"
         );
     }
 
     if points.len() > 0 {
-        println!(
-            "M{},{}",
-            points[0].x.as_f32() as i32,
-            points[0].y.as_f32() as i32
-        );
+        tracing::trace!(x = ?points[0].x, y = ?points[0].y, "text element SVG path start");
         for p in points.iter().skip(1) {
-            println!("L{},{}", p.x.as_f32() as i32, p.y.as_f32() as i32);
+            tracing::trace!(x = ?p.x, y = ?p.y, "text element SVG path point");
         }
     }
 }

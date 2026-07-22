@@ -284,7 +284,7 @@ impl SubItem {
         let item = *item;
         let subitem = *self;
         move |this, _, _, cx| {
-            println!(
+            tracing::info!(
                 "Clicked on item: {}, child: {}",
                 item.label(),
                 subitem.label()
