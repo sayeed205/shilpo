@@ -5,7 +5,11 @@ use gpui::{
     KeyDownEvent, ParentElement, Render, Styled, Window, div, img, px,
 };
 use shilpo_services::{AppScanner, Application};
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
+use shilpo_ui::{
+    ActiveTheme, Icon, IconName, Sizable, StyledExt, h_flex,
+    input::{Input, InputEvent, InputState},
+    v_flex,
+};
 
 #[derive(Debug, Clone)]
 pub enum LauncherSearchResult {
@@ -13,20 +17,30 @@ pub enum LauncherSearchResult {
     Action(ActionDescriptor),
 }
 
-/// M3 Expressive Application Launcher Overlay View.
+/// M3 Expressive Application Launcher Overlay View powered by shilpo-ui's Input element.
 pub struct LauncherView {
     pub scanner: AppScanner,
-    query: String,
+    input_state: Entity<InputState>,
     results: Vec<LauncherSearchResult>,
     selected_index: usize,
-    focus_handle: FocusHandle,
     pub loading: bool,
 }
 
 impl LauncherView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let scanner = AppScanner::new_empty();
-        let focus_handle = cx.focus_handle();
+
+        let input_state =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search applications..."));
+
+        cx.subscribe(&input_state, |this, _state, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.update_search(cx);
+            }
+        })
+        .detach();
+
+        let focus_handle = input_state.read(cx).focus_handle(cx);
         window.focus(&focus_handle, cx);
 
         window.on_window_should_close(cx, |_, cx| {
@@ -54,7 +68,7 @@ impl LauncherView {
 
             let _ = this.update(cx, |view, cx| {
                 view.scanner = AppScanner::from_applications(scanned);
-                view.update_search(view.query.clone(), cx);
+                view.update_search(cx);
                 view.loading = false;
                 cx.notify();
             });
@@ -63,24 +77,28 @@ impl LauncherView {
 
         Self {
             scanner,
-            query: String::new(),
+            input_state,
             results: Vec::new(),
             selected_index: 0,
-            focus_handle,
             loading: true,
         }
     }
 
-    pub fn view(window: &mut Window, cx: &mut App) -> Entity<Self> {
-        cx.new(|cx| Self::new(window, cx))
+    pub fn view(window: &mut Window, cx: &mut App) -> Entity<shilpo_ui::Root> {
+        let launcher = cx.new(|cx| Self::new(window, cx));
+        cx.new(|cx| {
+            shilpo_ui::Root::new(launcher, window, cx)
+                .bordered(false)
+                .bg(cx.theme().transparent)
+        })
     }
 
-    fn update_search(&mut self, query: String, cx: &mut Context<Self>) {
-        self.query = query;
-        let q = self.query.trim().to_lowercase();
+    fn update_search(&mut self, cx: &mut Context<Self>) {
+        let text = self.input_state.read(cx).value().to_string();
+        let q = text.trim().to_lowercase();
         let mut combined = Vec::new();
 
-        for app in self.scanner.search(&self.query) {
+        for app in self.scanner.search(&text) {
             combined.push(LauncherSearchResult::App(app));
         }
 
@@ -123,7 +141,8 @@ impl LauncherView {
             }
         } else {
             // Launch terminal command or web search
-            let cmd = self.query.trim();
+            let query_val = self.input_state.read(cx).value().to_string();
+            let cmd = query_val.trim();
             if !cmd.is_empty() {
                 if self.selected_index == self.results.len() {
                     let _ = std::process::Command::new("sh").args(["-c", cmd]).spawn();
@@ -158,30 +177,21 @@ impl LauncherView {
             "up" => {
                 self.move_selection(-1, cx);
             }
-            "backspace" => {
-                let mut q = self.query.clone();
-                q.pop();
-                self.update_search(q, cx);
-            }
-            ch if ch.len() == 1 => {
-                let mut q = self.query.clone();
-                q.push_str(ch);
-                self.update_search(q, cx);
-            }
             _ => {}
         }
     }
 }
 
 impl Focusable for LauncherView {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.input_state.read(cx).focus_handle(cx)
     }
 }
 
 impl Render for LauncherView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let selected_idx = self.selected_index;
+        let query_text = self.input_state.read(cx).value().to_string();
 
         // Render Top Match (First match) prominent card
         let top_match = if let Some(item) = self.results.first() {
@@ -198,11 +208,9 @@ impl Render for LauncherView {
                         div()
                             .w(px(42.))
                             .h(px(42.))
-                            .rounded_xl()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .overflow_hidden()
                             .child(img(path.clone()).w(px(36.)).h(px(36.)))
                     } else {
                         div()
@@ -219,40 +227,40 @@ impl Render for LauncherView {
 
                     Some(
                         h_flex()
-                            .id("top-match")
-                            .px_5()
-                            .py_4()
+                            .id("top-match-card")
+                            .px_4()
+                            .py_3()
                             .rounded_2xl()
                             .bg(bg)
                             .border_1()
-                            .border_color(cx.theme().outline_variant.opacity(0.3))
-                            .justify_between()
+                            .border_color(if is_selected {
+                                cx.theme().primary
+                            } else {
+                                cx.theme().outline_variant.opacity(0.3)
+                            })
+                            .gap_4()
                             .items_center()
+                            .child(app_icon)
                             .child(
-                                h_flex().gap_4().items_center().child(app_icon).child(
-                                    v_flex()
-                                        .gap_0p5()
-                                        .child(
-                                            div().text_base().font_bold().child(app.name.clone()),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().on_surface_variant)
-                                                .child(app.exec.clone()),
-                                        ),
-                                ),
-                            )
-                            .child(
-                                div()
-                                    .px_3()
-                                    .py_1()
-                                    .rounded_full()
-                                    .bg(cx.theme().primary)
-                                    .text_color(cx.theme().on_primary)
-                                    .text_xs()
-                                    .font_bold()
-                                    .child("Launch"),
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_base()
+                                            .font_bold()
+                                            .text_color(cx.theme().on_surface)
+                                            .child(app.name.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().on_surface_variant)
+                                            .child(
+                                                app.description
+                                                    .clone()
+                                                    .unwrap_or_else(|| app.exec.clone()),
+                                            ),
+                                    ),
                             ),
                     )
                 }
@@ -270,38 +278,36 @@ impl Render for LauncherView {
 
                     Some(
                         h_flex()
-                            .id("top-match-action")
-                            .px_5()
-                            .py_4()
+                            .id("top-match-card")
+                            .px_4()
+                            .py_3()
                             .rounded_2xl()
                             .bg(bg)
                             .border_1()
-                            .border_color(cx.theme().outline_variant.opacity(0.3))
-                            .justify_between()
+                            .border_color(if is_selected {
+                                cx.theme().secondary
+                            } else {
+                                cx.theme().outline_variant.opacity(0.3)
+                            })
+                            .gap_4()
                             .items_center()
+                            .child(action_icon)
                             .child(
-                                h_flex().gap_4().items_center().child(action_icon).child(
-                                    v_flex()
-                                        .gap_0p5()
-                                        .child(div().text_base().font_bold().child(action.label))
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().on_surface_variant)
-                                                .child(format!("Action: {}", action.name)),
-                                        ),
-                                ),
-                            )
-                            .child(
-                                div()
-                                    .px_3()
-                                    .py_1()
-                                    .rounded_full()
-                                    .bg(cx.theme().secondary)
-                                    .text_color(cx.theme().on_secondary)
-                                    .text_xs()
-                                    .font_bold()
-                                    .child("Execute"),
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_base()
+                                            .font_bold()
+                                            .text_color(cx.theme().on_surface)
+                                            .child(action.label),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().on_surface_variant)
+                                            .child(format!("System Action: {}", action.name)),
+                                    ),
                             ),
                     )
                 }
@@ -310,15 +316,15 @@ impl Render for LauncherView {
             None
         };
 
-        // Render remaining list apps
+        // Render secondary result items
         let other_items = self
             .results
             .iter()
             .enumerate()
             .skip(1)
-            .take(3)
+            .take(5)
             .map(|(i, item)| {
-                let is_selected = i == selected_idx;
+                let is_selected = selected_idx == i;
                 let (bg, fg) = if is_selected {
                     (
                         cx.theme().primary_container.opacity(0.18),
@@ -337,12 +343,10 @@ impl Render for LauncherView {
                             div()
                                 .w(px(32.))
                                 .h(px(32.))
-                                .rounded_lg()
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .overflow_hidden()
-                                .child(img(path.clone()).w(px(26.)).h(px(26.)))
+                                .child(img(path.clone()).w(px(24.)).h(px(24.)))
                         } else {
                             div()
                                 .w(px(32.))
@@ -462,10 +466,10 @@ impl Render for LauncherView {
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().on_surface_variant)
-                                .child(if self.query.is_empty() {
+                                .child(if query_text.is_empty() {
                                     "...".to_string()
                                 } else {
-                                    self.query.clone()
+                                    query_text.clone()
                                 }),
                         ),
                 )
@@ -514,10 +518,10 @@ impl Render for LauncherView {
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().on_surface_variant)
-                                .child(if self.query.is_empty() {
+                                .child(if query_text.is_empty() {
                                     "...".to_string()
                                 } else {
-                                    self.query.clone()
+                                    query_text.clone()
                                 }),
                         ),
                 )
@@ -553,41 +557,22 @@ impl Render for LauncherView {
                     .border_1()
                     .border_color(cx.theme().outline_variant.opacity(0.4))
                     .shadow_2xl()
-                    // Search Input Header
+                    // Search Input Header powered by shilpo_ui::Input
                     .child(
                         h_flex()
                             .px_4()
-                            .py_3()
+                            .py_2()
                             .rounded_2xl()
                             .bg(cx.theme().surface_container_highest)
                             .justify_between()
                             .items_center()
+                            .w_full()
                             .child(
-                                h_flex()
-                                    .gap_3()
-                                    .items_center()
-                                    .child(Icon::new(IconName::Search).size(px(20.)))
-                                    .child(
-                                        div()
-                                            .text_base()
-                                            .font_semibold()
-                                            .text_color(if self.query.is_empty() {
-                                                cx.theme().on_surface_variant
-                                            } else {
-                                                cx.theme().on_surface
-                                            })
-                                            .child(if self.query.is_empty() {
-                                                "Search applications...".to_string()
-                                            } else {
-                                                self.query.clone()
-                                            }),
-                                    ),
-                            )
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .child(Icon::new(IconName::Copy).size(px(18.)))
-                                    .child(Icon::new(IconName::Network).size(px(18.))),
+                                Input::new(&self.input_state)
+                                    .appearance(false)
+                                    .cleanable(true)
+                                    .prefix(Icon::new(IconName::Search).size(px(20.)))
+                                    .with_size(shilpo_ui::Size::Medium),
                             ),
                     )
                     // Prominent Top Result Card

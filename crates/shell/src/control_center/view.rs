@@ -122,8 +122,13 @@ impl ControlCenterView {
         }
     }
 
-    pub fn view(window: &mut Window, cx: &mut App) -> Entity<Self> {
-        cx.new(|cx| Self::new(window, cx))
+    pub fn view(window: &mut Window, cx: &mut App) -> Entity<shilpo_ui::Root> {
+        let control_center = cx.new(|cx| Self::new(window, cx));
+        cx.new(|cx| {
+            shilpo_ui::Root::new(control_center, window, cx)
+                .bordered(false)
+                .bg(cx.theme().transparent)
+        })
     }
 
     fn toggle_dnd(&mut self, cx: &mut Context<Self>) {

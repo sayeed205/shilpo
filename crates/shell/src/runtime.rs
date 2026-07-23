@@ -1,5 +1,5 @@
 use gpui::{
-    App, AppContext, Bounds, DisplayId, Focusable, Global, Pixels, Point, Subscription,
+    App, AppContext, Bounds, DisplayId, Global, Pixels, Point, Subscription,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
     layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
     point, px, size,
@@ -115,8 +115,8 @@ pub struct ShellRuntime {
     last_bar_specs: Vec<(BarGeometry, bool)>,
     bar_state: BarState,
     readiness: shilpo_services::ipc::ReadinessState,
-    launcher: Option<WindowHandle<LauncherView>>,
-    control_center: Option<WindowHandle<ControlCenterView>>,
+    launcher: Option<WindowHandle<shilpo_ui::Root>>,
+    control_center: Option<WindowHandle<shilpo_ui::Root>>,
     notification: Option<(
         u64,
         WindowHandle<crate::notification::NotificationToastView>,
@@ -464,9 +464,8 @@ impl ShellRuntime {
         let handle = cx.global_mut::<Self>().launcher.take();
         if let Some(handle) = handle
             && handle
-                .update(cx, |view, window, cx| {
+                .update(cx, |_, window, _| {
                     window.activate_window();
-                    view.focus_handle(cx).focus(window, cx);
                 })
                 .is_ok()
         {
@@ -533,9 +532,8 @@ impl ShellRuntime {
         let handle = cx.global_mut::<Self>().control_center.take();
         if let Some(handle) = handle
             && handle
-                .update(cx, |view, window, cx| {
+                .update(cx, |_, window, _| {
                     window.activate_window();
-                    view.focus_handle(cx).focus(window, cx);
                 })
                 .is_ok()
         {
