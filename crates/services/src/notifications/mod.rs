@@ -33,10 +33,40 @@ impl Notification {
 pub struct NotificationService {
     notifications: Arc<Mutex<Vec<Notification>>>,
     new_notif_sender: Arc<Mutex<Option<std::sync::mpsc::Sender<Notification>>>>,
+    _connection: Option<Connection>,
 }
 
 impl NotificationService {
+    /// Asynchronously connects to the session bus, registers the Notifications D-Bus object,
+    /// requests name ownership, and returns a service retaining the live connection.
+    pub async fn new_async() -> Result<Self> {
+        let connection = Connection::session().await?;
+        Self::new_with_connection(connection).await
+    }
+
+    /// Synchronously creates a new NotificationService by connecting to the session bus.
     pub fn new() -> Result<Self> {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(Self::new_async()))
+        } else {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(Self::new_async())
+        }
+    }
+
+    /// Creates an offline NotificationService without a D-Bus connection (useful for testing or fallback).
+    pub fn new_offline() -> Self {
+        Self {
+            notifications: Arc::new(Mutex::new(Vec::new())),
+            new_notif_sender: Arc::new(Mutex::new(None)),
+            _connection: None,
+        }
+    }
+
+    /// Registers the notification daemon on an existing zbus Connection.
+    pub async fn new_with_connection(connection: Connection) -> Result<Self> {
         let notifications = Arc::new(Mutex::new(Vec::new()));
         let next_id = Arc::new(Mutex::new(0));
         let new_notif_sender = Arc::new(Mutex::new(None));
@@ -44,6 +74,7 @@ impl NotificationService {
         let service = Self {
             notifications: notifications.clone(),
             new_notif_sender: new_notif_sender.clone(),
+            _connection: Some(connection.clone()),
         };
 
         let server = NotificationServer {
@@ -52,34 +83,21 @@ impl NotificationService {
             new_notif_sender,
         };
 
-        tokio::spawn(async move {
-            let connection = match Connection::session().await {
-                Ok(connection) => connection,
-                Err(error) => {
-                    tracing::error!(error = %error, "notification service session-bus connection failed");
-                    return;
-                }
-            };
-            if let Err(error) = connection
-                .object_server()
-                .at("/org/freedesktop/Notifications", server)
-                .await
-            {
-                tracing::error!(error = %error, "notification service object registration failed");
-                return;
-            }
-            if let Err(error) = connection
-                .request_name("org.freedesktop.Notifications")
-                .await
-            {
-                tracing::warn!(
-                    error = %error,
-                    "notification daemon unavailable; another daemon may own org.freedesktop.Notifications"
-                );
-            }
-        });
+        connection
+            .object_server()
+            .at("/org/freedesktop/Notifications", server)
+            .await?;
+
+        connection
+            .request_name("org.freedesktop.Notifications")
+            .await?;
 
         Ok(service)
+    }
+
+    /// Returns true if this service is connected to a live D-Bus session.
+    pub fn is_dbus_connected(&self) -> bool {
+        self._connection.is_some()
     }
 
     /// Sets up a channel sender to receive newly arrived notifications.
@@ -149,7 +167,13 @@ impl NotificationServer {
 
         {
             let mut list = self.notifications.lock().unwrap();
-            list.push(notification.clone());
+            if replaces_id != 0
+                && let Some(pos) = list.iter().position(|n| n.id == replaces_id)
+            {
+                list[pos] = notification.clone();
+            } else {
+                list.push(notification.clone());
+            }
         }
 
         // Notify subscribers/OSD listeners
@@ -185,7 +209,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_notification_creation_and_dismiss() {
-        let service = NotificationService::new().unwrap();
+        let service = NotificationService::new_offline();
+        assert!(!service.is_dbus_connected());
+
         let (tx, rx) = std::sync::mpsc::channel();
         service.set_new_notification_sender(tx);
 
@@ -217,5 +243,184 @@ mod tests {
 
         service.dismiss(1);
         assert!(service.notifications().is_empty());
+    }
+
+    #[test]
+    fn test_notification_dismiss_all() {
+        let service = NotificationService::new_offline();
+        let server = NotificationServer {
+            notifications: service.notifications.clone(),
+            next_id: Arc::new(Mutex::new(0)),
+            new_notif_sender: service.new_notif_sender.clone(),
+        };
+
+        server.notify(
+            "app1".to_string(),
+            0,
+            "".to_string(),
+            "Title 1".to_string(),
+            "Body 1".to_string(),
+            vec![],
+            HashMap::new(),
+            0,
+        );
+        server.notify(
+            "app2".to_string(),
+            0,
+            "".to_string(),
+            "Title 2".to_string(),
+            "Body 2".to_string(),
+            vec![],
+            HashMap::new(),
+            0,
+        );
+
+        assert_eq!(service.notifications().len(), 2);
+        service.dismiss_all();
+        assert!(service.notifications().is_empty());
+    }
+
+    #[test]
+    fn test_notification_replacement_existing_id() {
+        let service = NotificationService::new_offline();
+        let server = NotificationServer {
+            notifications: service.notifications.clone(),
+            next_id: Arc::new(Mutex::new(0)),
+            new_notif_sender: service.new_notif_sender.clone(),
+        };
+
+        let id1 = server.notify(
+            "app".to_string(),
+            0,
+            "".to_string(),
+            "Initial Summary".to_string(),
+            "Initial Body".to_string(),
+            vec![],
+            HashMap::new(),
+            0,
+        );
+        assert_eq!(id1, 1);
+        assert_eq!(service.notifications().len(), 1);
+        assert_eq!(service.notifications()[0].summary, "Initial Summary");
+
+        // Update notification 1 in place
+        let id_replaced = server.notify(
+            "app".to_string(),
+            1,
+            "".to_string(),
+            "Updated Summary".to_string(),
+            "Updated Body".to_string(),
+            vec![],
+            HashMap::new(),
+            0,
+        );
+        assert_eq!(id_replaced, 1);
+        let list = service.notifications();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].summary, "Updated Summary");
+        assert_eq!(list[0].body, "Updated Body");
+    }
+
+    #[test]
+    fn test_notification_replacement_repeated() {
+        let service = NotificationService::new_offline();
+        let server = NotificationServer {
+            notifications: service.notifications.clone(),
+            next_id: Arc::new(Mutex::new(0)),
+            new_notif_sender: service.new_notif_sender.clone(),
+        };
+
+        server.notify(
+            "app".to_string(),
+            0,
+            "".to_string(),
+            "Base".to_string(),
+            "Base".to_string(),
+            vec![],
+            HashMap::new(),
+            0,
+        );
+
+        for i in 1..=10 {
+            server.notify(
+                "app".to_string(),
+                1,
+                "".to_string(),
+                format!("Summary {}", i),
+                format!("Body {}", i),
+                vec![],
+                HashMap::new(),
+                0,
+            );
+        }
+
+        let list = service.notifications();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].summary, "Summary 10");
+    }
+
+    #[test]
+    fn test_notification_replacement_unknown_nonzero_id() {
+        let service = NotificationService::new_offline();
+        let server = NotificationServer {
+            notifications: service.notifications.clone(),
+            next_id: Arc::new(Mutex::new(0)),
+            new_notif_sender: service.new_notif_sender.clone(),
+        };
+
+        let id = server.notify(
+            "app".to_string(),
+            42,
+            "".to_string(),
+            "Standalone".to_string(),
+            "Body".to_string(),
+            vec![],
+            HashMap::new(),
+            0,
+        );
+        assert_eq!(id, 42);
+        let list = service.notifications();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, 42);
+    }
+
+    #[test]
+    fn test_notification_subscriber_receives_replacement() {
+        let service = NotificationService::new_offline();
+        let (tx, rx) = std::sync::mpsc::channel();
+        service.set_new_notification_sender(tx);
+
+        let server = NotificationServer {
+            notifications: service.notifications.clone(),
+            next_id: Arc::new(Mutex::new(0)),
+            new_notif_sender: service.new_notif_sender.clone(),
+        };
+
+        server.notify(
+            "app".to_string(),
+            0,
+            "".to_string(),
+            "First".to_string(),
+            "Body".to_string(),
+            vec![],
+            HashMap::new(),
+            0,
+        );
+        let first_msg = rx.recv().unwrap();
+        assert_eq!(first_msg.summary, "First");
+
+        server.notify(
+            "app".to_string(),
+            1,
+            "".to_string(),
+            "Second".to_string(),
+            "Body".to_string(),
+            vec![],
+            HashMap::new(),
+            0,
+        );
+        let second_msg = rx.recv().unwrap();
+        assert_eq!(second_msg.summary, "Second");
+        assert_eq!(second_msg.id, 1);
     }
 }

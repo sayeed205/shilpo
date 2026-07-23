@@ -224,6 +224,56 @@ impl fmt::Display for ConfigError {
 }
 impl std::error::Error for ConfigError {}
 
+impl BarConfig {
+    pub fn validate(&self, prefix: &str, d: &mut Vec<ConfigDiagnostic>) {
+        if !(16..=128).contains(&self.height) {
+            d.push(ConfigDiagnostic::new(
+                format!("{prefix}.height"),
+                "must be between 16 and 128",
+            ));
+        }
+        if self.padding > 64 {
+            d.push(ConfigDiagnostic::new(
+                format!("{prefix}.padding"),
+                "must be at most 64",
+            ));
+        }
+        if self.widget_spacing > 64 {
+            d.push(ConfigDiagnostic::new(
+                format!("{prefix}.widget_spacing"),
+                "must be at most 64",
+            ));
+        }
+        if self.margin.horizontal > 512 {
+            d.push(ConfigDiagnostic::new(
+                format!("{prefix}.margin.horizontal"),
+                "must be at most 512",
+            ));
+        }
+        if self.margin.vertical > 512 {
+            d.push(ConfigDiagnostic::new(
+                format!("{prefix}.margin.vertical"),
+                "must be at most 512",
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (section, widgets) in [
+            ("start", &self.widgets.start),
+            ("center", &self.widgets.center),
+            ("end", &self.widgets.end),
+        ] {
+            for widget in widgets {
+                if !seen.insert(*widget) {
+                    d.push(ConfigDiagnostic::new(
+                        format!("{prefix}.widgets.{section}"),
+                        format!("duplicate widget {widget:?}"),
+                    ));
+                }
+            }
+        }
+    }
+}
+
 impl ShellConfig {
     /// Resolves the effective BarConfig for a specific monitor output name or primary display.
     /// Returns None if the output is explicitly disabled (`enabled = false`).
@@ -304,48 +354,14 @@ impl ShellConfig {
                 "must be finite and between 0.0 and 4.0",
             ));
         }
-        if !(16..=128).contains(&self.bar.height) {
-            d.push(ConfigDiagnostic::new(
-                "bar.height",
-                "must be between 16 and 128",
-            ));
-        }
-        if self.bar.padding > 64 {
-            d.push(ConfigDiagnostic::new("bar.padding", "must be at most 64"));
-        }
-        if self.bar.widget_spacing > 64 {
-            d.push(ConfigDiagnostic::new(
-                "bar.widget_spacing",
-                "must be at most 64",
-            ));
-        }
-        if self.bar.margin.horizontal > 512 {
-            d.push(ConfigDiagnostic::new(
-                "bar.margin.horizontal",
-                "must be at most 512",
-            ));
-        }
-        if self.bar.margin.vertical > 512 {
-            d.push(ConfigDiagnostic::new(
-                "bar.margin.vertical",
-                "must be at most 512",
-            ));
-        }
-        let mut seen = std::collections::HashSet::new();
-        for (section, widgets) in [
-            ("start", &self.bar.widgets.start),
-            ("center", &self.bar.widgets.center),
-            ("end", &self.bar.widgets.end),
-        ] {
-            for widget in widgets {
-                if !seen.insert(*widget) {
-                    d.push(ConfigDiagnostic::new(
-                        format!("bar.widgets.{section}"),
-                        format!("duplicate widget {widget:?}"),
-                    ));
-                }
+        self.bar.validate("bar", &mut d);
+
+        for output_name in self.outputs.keys() {
+            if let Some(resolved_bar) = self.bar_for_output(Some(output_name), false) {
+                resolved_bar.validate(&format!("outputs.\"{output_name}\""), &mut d);
             }
         }
+
         if d.is_empty() {
             Ok(())
         } else {
@@ -365,16 +381,13 @@ impl ShellConfig {
         if text.trim().is_empty() {
             return Self::write_default(&path);
         }
-        let mut config: Self = toml::from_str(&text).map_err(|error| ConfigError::Parse {
+        let config: Self = toml::from_str(&text).map_err(|error| ConfigError::Parse {
             diagnostic: ConfigDiagnostic {
                 path: path.display().to_string(),
                 message: error.to_string(),
                 span: error.span(),
             },
         })?;
-        if config.bar.margin.horizontal > 32 {
-            config.bar.margin.horizontal = 16;
-        }
         config.validate()?;
         Ok(config)
     }
@@ -529,5 +542,53 @@ enabled = false
         assert_eq!(dp1_bar.style, BarStyle::FullEdge);
 
         assert!(config.bar_for_output(Some("HDMI-A-1"), false).is_none());
+    }
+
+    #[test]
+    fn test_example_config_roundtrips_without_coercion() {
+        let example_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.example.toml");
+        let config = ShellConfig::load_or_create(&example_path).unwrap();
+        assert_eq!(config.bar.margin.horizontal, 180);
+    }
+
+    #[test]
+    fn test_per_output_override_validation() {
+        let toml_text = r##"
+version = 1
+[theme]
+mode = "dark"
+accent = "#6750A4"
+font_family = "sans-serif"
+corner_radius_scale = 1.0
+
+[bar]
+position = "top"
+style = "floating-capsule"
+height = 48
+padding = 8
+widget_spacing = 6
+[bar.margin]
+horizontal = 16
+vertical = 6
+[bar.widgets]
+start = ["launcher"]
+center = ["clock"]
+end = ["settings"]
+
+[outputs."DP-1"]
+margin = { horizontal = 600, vertical = 6 }
+"##;
+        let config: ShellConfig = toml::from_str(toml_text).unwrap();
+        let err = config.validate().unwrap_err();
+        match err {
+            ConfigError::Validation { diagnostics } => {
+                assert!(
+                    diagnostics
+                        .iter()
+                        .any(|d| d.path == "outputs.\"DP-1\".margin.horizontal")
+                );
+            }
+            _ => panic!("expected validation error"),
+        }
     }
 }

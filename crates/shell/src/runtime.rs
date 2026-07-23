@@ -7,7 +7,7 @@ use gpui::{
 use shilpo_services::{BarState, IpcRequest, IpcStatus, ShellIpcServer};
 
 use crate::{
-    actions::{ActionId, ActionRegistry},
+    actions::{ActionId, ActionInvocation, ActionRegistry},
     bar::{BarView, geometry::BarGeometry},
     control_center::ControlCenterView,
     error::ShellError,
@@ -16,9 +16,102 @@ use crate::{
 
 use std::collections::HashMap;
 
+use crate::bar::service_worker::{self, CommandSender, UpdateReceiver, WorkerCommand};
+use shilpo_services::{
+    AudioService, BatteryService, NetworkService, NiriCompositorService, NotificationService,
+};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, mpsc};
+
+pub struct ServiceHub {
+    pub notification: Option<NotificationService>,
+    pub service_commands: CommandSender,
+    pub notif_rx: Arc<Mutex<mpsc::Receiver<shilpo_services::Notification>>>,
+    pub updates_rx: Arc<Mutex<UpdateReceiver>>,
+    pub _service_task: Option<gpui::Task<()>>,
+    pub _watcher: Option<notify::RecommendedWatcher>,
+}
+
+impl ServiceHub {
+    pub fn new(executor: gpui::BackgroundExecutor, config_path: PathBuf) -> Self {
+        let niri = NiriCompositorService::new().ok();
+        let battery = BatteryService::new().ok();
+        let audio = AudioService::new().ok();
+        let network = NetworkService::new().ok();
+        let notification = match NotificationService::new() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                tracing::warn!(error = %e, "notification service unavailable; toasts disabled");
+                None
+            }
+        };
+
+        let (notif_tx, notif_rx) = mpsc::channel();
+        if let Some(service) = &notification {
+            service.set_new_notification_sender(notif_tx);
+        }
+
+        let (updates_tx, updates_rx, service_commands, commands_rx) = service_worker::channels();
+        let service_task = service_worker::spawn(
+            executor,
+            updates_tx,
+            commands_rx,
+            config_path.clone(),
+            niri,
+            battery,
+            audio,
+            network,
+        );
+
+        let config_dir = config_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from(".config/shilpo"));
+        if let Err(error) = std::fs::create_dir_all(&config_dir) {
+            tracing::warn!(error = %error, path = ?config_dir, "config watcher directory unavailable");
+        }
+
+        use notify::Watcher;
+        let watcher_commands = service_commands.clone();
+        let watcher = match notify::RecommendedWatcher::new(
+            move |res: Result<notify::Event, notify::Error>| {
+                if let Some(_event) = res.ok().filter(|e| e.kind.is_modify()) {
+                    let _ = service_worker::try_send_command(
+                        &watcher_commands,
+                        WorkerCommand::ReloadConfig,
+                    );
+                }
+            },
+            notify::Config::default(),
+        ) {
+            Ok(mut watcher) => match watcher.watch(&config_dir, notify::RecursiveMode::Recursive) {
+                Ok(()) => Some(watcher),
+                Err(error) => {
+                    tracing::warn!(error = %error, path = ?config_dir, "config watcher watch failed");
+                    None
+                }
+            },
+            Err(error) => {
+                tracing::warn!(error = %error, "config watcher creation failed");
+                None
+            }
+        };
+
+        Self {
+            notification,
+            service_commands,
+            notif_rx: Arc::new(Mutex::new(notif_rx)),
+            updates_rx: Arc::new(Mutex::new(updates_rx)),
+            _service_task: Some(service_task),
+            _watcher: watcher,
+        }
+    }
+}
+
 pub struct ShellRuntime {
     ipc_server: ShellIpcServer,
-    bars: HashMap<DisplayId, (WindowHandle<BarView>, BarGeometry, bool)>,
+    active_config: shilpo_config::ShellConfig,
+    bars: HashMap<DisplayId, (WindowHandle<BarView>, crate::bar::BarSpec)>,
     last_bar_specs: Vec<(BarGeometry, bool)>,
     bar_state: BarState,
     readiness: shilpo_services::ipc::ReadinessState,
@@ -31,6 +124,7 @@ pub struct ShellRuntime {
     notification_generation: u64,
     notification_history: Vec<shilpo_services::Notification>,
     prior_window_id: Option<u64>,
+    service_hub: Option<ServiceHub>,
     _window_closed: Option<Subscription>,
     _ipc_task: gpui::Task<()>,
 }
@@ -38,9 +132,28 @@ pub struct ShellRuntime {
 impl Global for ShellRuntime {}
 
 impl ShellRuntime {
+    pub fn service_commands(cx: &App) -> Option<CommandSender> {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>()
+                .service_hub
+                .as_ref()
+                .map(|h| h.service_commands.clone())
+        } else {
+            None
+        }
+    }
+
     pub fn install(cx: &mut App, ipc_server: ShellIpcServer) {
+        let config_path = std::env::var("HOME")
+            .map(|home| std::path::PathBuf::from(home).join(".config/shilpo/config.toml"))
+            .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));
+        let active_config = shilpo_config::ShellConfig::load_or_create(&config_path)
+            .unwrap_or_else(|_| shilpo_config::ShellConfig::default());
+        let hub = ServiceHub::new(cx.background_executor().clone(), config_path);
+
         cx.set_global(Self {
             ipc_server,
+            active_config,
             bars: HashMap::new(),
             last_bar_specs: Vec::new(),
             bar_state: BarState::Starting,
@@ -51,6 +164,7 @@ impl ShellRuntime {
             notification_generation: 0,
             notification_history: Vec::new(),
             prior_window_id: None,
+            service_hub: Some(hub),
             _window_closed: None,
             _ipc_task: cx.spawn(async |_| {}),
         });
@@ -59,7 +173,7 @@ impl ShellRuntime {
             let runtime = cx.global_mut::<Self>();
             runtime
                 .bars
-                .retain(|_, (handle, _, _)| handle.window_id() != window_id);
+                .retain(|_, (handle, _)| handle.window_id() != window_id);
             if runtime.bars.is_empty() {
                 runtime.bar_state = BarState::Hidden;
             }
@@ -94,6 +208,7 @@ impl ShellRuntime {
                     .timer(std::time::Duration::from_millis(100))
                     .await;
                 cx.update(Self::sync_displays);
+                cx.update(Self::drain_service_hub);
                 cx.update(Self::drain_ipc);
             }
         });
@@ -101,26 +216,124 @@ impl ShellRuntime {
         cx.global::<Self>().publish_status();
     }
 
-    pub fn sync_displays(cx: &mut App) {
-        let current_displays: Vec<gpui::DisplayId> =
-            cx.displays().into_iter().map(|d| d.id()).collect();
-        let missing_handles: Vec<gpui::AnyWindowHandle> = {
+    fn drain_service_hub(cx: &mut App) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+
+        let notifs = {
             let runtime = cx.global_mut::<Self>();
-            let missing_displays: Vec<gpui::DisplayId> = runtime
-                .bars
-                .keys()
-                .copied()
-                .filter(|id| !current_displays.contains(id))
-                .collect();
-            missing_displays
-                .into_iter()
-                .filter_map(|id| runtime.bars.remove(&id))
-                .map(|(handle, _, _)| handle.into())
-                .collect()
+            let mut list = Vec::new();
+            if let Some(hub) = &runtime.service_hub
+                && let Ok(rx) = hub.notif_rx.lock()
+            {
+                while let Ok(notif) = rx.try_recv() {
+                    list.push(notif);
+                }
+            }
+            list
         };
 
-        for handle in missing_handles {
-            let _ = cx.update_window(handle, |_, window, _| window.remove_window());
+        for notif in notifs {
+            crate::bar::view::open_notification_toast(cx, notif);
+        }
+
+        let updates = {
+            let runtime = cx.global_mut::<Self>();
+            let mut list = Vec::new();
+            if let Some(hub) = &runtime.service_hub
+                && let Ok(rx) = hub.updates_rx.lock()
+            {
+                while let Ok(upd) = rx.try_recv() {
+                    list.push(upd);
+                }
+            }
+            list
+        };
+
+        if !updates.is_empty() {
+            for upd in &updates {
+                if let crate::bar::service_worker::WorkerUpdate::Config(
+                    crate::bar::service_worker::ConfigUpdate::Loaded(config),
+                ) = upd
+                {
+                    cx.global_mut::<Self>().active_config = config.clone();
+                    Self::sync_displays(cx);
+                }
+            }
+
+            let handles: Vec<_> = cx
+                .global::<Self>()
+                .bars
+                .values()
+                .map(|(handle, _)| *handle)
+                .collect();
+
+            for handle in handles {
+                let updates_clone = updates.clone();
+                let _ = handle.update(cx, |bar_view, _window, cx| {
+                    for upd in &updates_clone {
+                        bar_view.apply_worker_update(upd, cx);
+                    }
+                });
+            }
+        }
+    }
+
+    pub fn sync_displays(cx: &mut App) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+
+        use crate::bar::reconciliation::{
+            BarSpec, OutputDescriptor, ReconciliationOp, reconcile_output_bars,
+        };
+
+        let primary_id = cx.primary_display().map(|d| d.id());
+        let current_outputs: Vec<OutputDescriptor> = cx
+            .displays()
+            .into_iter()
+            .map(|d| OutputDescriptor {
+                display_id: d.id(),
+                bounds: d.bounds(),
+                is_primary: primary_id == Some(d.id()),
+                name: None,
+            })
+            .collect();
+
+        let (config, current_specs) = {
+            let runtime = cx.global::<Self>();
+            let specs: HashMap<DisplayId, BarSpec> = runtime
+                .bars
+                .iter()
+                .map(|(&id, (_, spec))| (id, spec.clone()))
+                .collect();
+            (runtime.active_config.clone(), specs)
+        };
+
+        let ops = reconcile_output_bars(&current_outputs, &config, &current_specs);
+
+        for op in ops {
+            match op {
+                ReconciliationOp::Create(spec) => {
+                    Self::open_bar_with_spec(cx, spec);
+                }
+                ReconciliationOp::Recreate(spec) => {
+                    let display_id = spec.display_id;
+                    if let Some((handle, _)) = cx.global_mut::<Self>().bars.remove(&display_id) {
+                        let _ =
+                            cx.update_window(handle.into(), |_, window, _| window.remove_window());
+                    }
+                    Self::open_bar_with_spec(cx, spec);
+                }
+                ReconciliationOp::Remove(display_id) => {
+                    if let Some((handle, _)) = cx.global_mut::<Self>().bars.remove(&display_id) {
+                        let _ =
+                            cx.update_window(handle.into(), |_, window, _| window.remove_window());
+                    }
+                }
+                ReconciliationOp::Retain(_) => {}
+            }
         }
     }
 
@@ -146,23 +359,23 @@ impl ShellRuntime {
         runtime.publish_status();
     }
 
-    pub fn open_bar(cx: &mut App, geometry: &BarGeometry, with_display_geometry: bool) -> bool {
-        let options = bar_window_options(geometry, with_display_geometry);
-        let display_id = geometry.display_id;
-        let result = cx.open_window(options, BarView::view);
+    pub fn open_bar_with_spec(cx: &mut App, spec: crate::bar::BarSpec) -> bool {
+        let options = bar_window_options(&spec.geometry, spec.with_display_geometry);
+        let display_id = spec.display_id;
+        let bar_config = spec.config.clone();
+
+        let result = cx.open_window(options, move |window, cx| {
+            let shell_config = shilpo_config::ShellConfig {
+                bar: bar_config,
+                ..Default::default()
+            };
+            BarView::view_with_config(window, cx, shell_config)
+        });
+
         let runtime = cx.global_mut::<Self>();
         match result {
             Ok(handle) => {
-                runtime.bars.insert(
-                    display_id,
-                    (handle, geometry.clone(), with_display_geometry),
-                );
-                runtime
-                    .last_bar_specs
-                    .retain(|(g, _)| g.display_id != display_id);
-                runtime
-                    .last_bar_specs
-                    .push((geometry.clone(), with_display_geometry));
+                runtime.bars.insert(display_id, (handle, spec));
                 runtime.bar_state = BarState::Visible;
                 runtime.publish_status();
                 true
@@ -178,6 +391,21 @@ impl ShellRuntime {
         }
     }
 
+    pub fn open_bar(cx: &mut App, geometry: &BarGeometry, with_display_geometry: bool) -> bool {
+        let bar_config = cx
+            .global::<Self>()
+            .active_config
+            .bar_for_output(None, true)
+            .unwrap_or_else(|| shilpo_config::ShellConfig::default().bar);
+        let spec = crate::bar::BarSpec {
+            display_id: geometry.display_id,
+            geometry: geometry.clone(),
+            config: bar_config,
+            with_display_geometry,
+        };
+        Self::open_bar_with_spec(cx, spec)
+    }
+
     pub fn mark_bar_open_failed(cx: &mut App) {
         let runtime = cx.global_mut::<Self>();
         runtime.bar_state = BarState::OpenFailed;
@@ -187,7 +415,7 @@ impl ShellRuntime {
     pub fn toggle_bar(cx: &mut App) {
         let (open_handles, specs) = {
             let runtime = cx.global_mut::<Self>();
-            let handles: Vec<_> = runtime.bars.values().map(|(h, _, _)| *h).collect();
+            let handles: Vec<_> = runtime.bars.values().map(|(h, _)| *h).collect();
             runtime.bars.clear();
             let specs = runtime.last_bar_specs.clone();
             (handles, specs)
@@ -224,8 +452,9 @@ impl ShellRuntime {
         let prior_id = cx.global_mut::<Self>().prior_window_id.take();
         if let Some(win_id) = prior_id
             && let Ok(service) = shilpo_services::NiriCompositorService::new()
+            && let Err(error) = service.focus_window(win_id)
         {
-            let _ = service.focus_window(win_id);
+            tracing::warn!(error = %error, window_id = win_id, "failed to restore prior Niri window focus");
         }
     }
 
@@ -435,7 +664,7 @@ impl ShellRuntime {
             .bars
             .values()
             .next()
-            .map(|(h, _, _)| *h);
+            .map(|(h, _)| *h);
         let Some(handle) = handle else {
             tracing::warn!(?request, "IPC worker request dropped: bar unavailable");
             return;
@@ -451,11 +680,25 @@ impl ShellRuntime {
         }
     }
 
-    pub fn dispatch_action(cx: &mut App, action: ActionId) -> Result<(), ShellError> {
+    pub fn dispatch_action(
+        cx: &mut App,
+        action: impl Into<ActionInvocation>,
+    ) -> Result<(), ShellError> {
+        Self::dispatch_invocation(cx, action.into())
+    }
+
+    pub fn dispatch_invocation(
+        cx: &mut App,
+        invocation: ActionInvocation,
+    ) -> Result<(), ShellError> {
         let descriptor = ActionRegistry::all()
             .into_iter()
-            .find(|d| d.id == action)
+            .find(|d| d.id == invocation.id())
             .ok_or_else(|| ShellError::ActionFailed("unknown action id".into()))?;
+
+        if !invocation.matches_descriptor(&descriptor) {
+            return Err(ShellError::ActionFailed("invocation mismatch".into()));
+        }
 
         if !descriptor.enabled {
             return Err(ShellError::ActionFailed(format!(
@@ -464,14 +707,14 @@ impl ShellRuntime {
             )));
         }
 
-        match action {
-            ActionId::ToggleLauncher => Self::toggle_launcher(cx),
-            ActionId::ToggleControlCenter => Self::toggle_control_center(cx),
-            ActionId::ToggleBar => Self::toggle_bar(cx),
-            ActionId::ReloadConfig => Self::enqueue_worker(cx, IpcRequest::ReloadConfig),
-            ActionId::Quit => Self::shutdown(cx),
-            ActionId::FocusWorkspace => {
-                Self::enqueue_worker(cx, IpcRequest::FocusWorkspace(1));
+        match invocation {
+            ActionInvocation::ToggleLauncher => Self::toggle_launcher(cx),
+            ActionInvocation::ToggleControlCenter => Self::toggle_control_center(cx),
+            ActionInvocation::ToggleBar => Self::toggle_bar(cx),
+            ActionInvocation::ReloadConfig => Self::enqueue_worker(cx, IpcRequest::ReloadConfig),
+            ActionInvocation::Quit => Self::shutdown(cx),
+            ActionInvocation::FocusWorkspace(id) => {
+                Self::enqueue_worker(cx, IpcRequest::FocusWorkspace(id));
             }
         }
         Ok(())
@@ -510,7 +753,7 @@ impl ShellRuntime {
                     shilpo_ui::Theme::global_mut(cx).set_mode(mode);
                 }
                 IpcRequest::FocusWorkspace(id) => {
-                    Self::enqueue_worker(cx, IpcRequest::FocusWorkspace(id));
+                    let _ = Self::dispatch_action(cx, ActionInvocation::FocusWorkspace(id));
                 }
                 IpcRequest::GetStatus => {}
             }
@@ -522,16 +765,17 @@ impl ShellRuntime {
         if !cx.has_global::<Self>() {
             return;
         }
-        let (bars, launcher, control_center, notification) = {
+        let (bars, launcher, control_center, notification, _service_hub) = {
             let runtime = cx.global_mut::<Self>();
             (
                 std::mem::take(&mut runtime.bars),
                 runtime.launcher.take(),
                 runtime.control_center.take(),
                 runtime.notification.take(),
+                runtime.service_hub.take(),
             )
         };
-        for (_, (handle, _, _)) in bars {
+        for (_, (handle, _)) in bars {
             let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         }
         if let Some(handle) = launcher {
@@ -622,5 +866,15 @@ mod tests {
 
         status.readiness = ReadinessState::Degraded;
         assert_eq!(status.readiness, ReadinessState::Degraded);
+    }
+
+    #[tokio::test]
+    async fn service_hub_initialization_and_single_ownership() {
+        let (updates_tx, _updates_rx, service_commands, _commands_rx) = service_worker::channels();
+        assert!(
+            service_worker::try_send_command(&service_commands, WorkerCommand::ReloadConfig)
+                .is_ok()
+        );
+        drop(updates_tx);
     }
 }

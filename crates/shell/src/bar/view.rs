@@ -1,14 +1,11 @@
 use crate::bar::service_worker::{self, ConfigUpdate, WorkerCommand, WorkerUpdate};
 use crate::runtime::ShellRuntime;
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Task, Window,
-    div, prelude::*, px,
+    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div,
+    prelude::*, px,
 };
 use shilpo_config::{BarPosition, BarWidget, ShellConfig};
-use shilpo_services::{
-    AudioInfo, AudioService, BatteryInfo, BatteryService, NetworkInfo, NetworkService,
-    NiriCompositorService, NiriWorkspaceInfo, Notification, NotificationService,
-};
+use shilpo_services::{AudioInfo, BatteryInfo, NetworkInfo, NiriWorkspaceInfo, Notification};
 use shilpo_ui::{ActiveTheme, h_flex, v_flex};
 use std::time::Duration;
 
@@ -45,7 +42,6 @@ pub fn apply_config_theme(config: &ShellConfig, window: Option<&mut Window>, cx:
 /// Status Bar GPUI View (Multi-Capsule Segmented Bar with IPC integration).
 pub struct BarView {
     pub config: ShellConfig,
-    pub notification_service: Option<NotificationService>,
     service_commands: service_worker::CommandSender,
     workspaces: Vec<NiriWorkspaceInfo>,
     battery: BatteryInfo,
@@ -57,8 +53,6 @@ pub struct BarView {
     datetime_str: String,
     last_error: Option<String>,
     last_service_update: std::time::Instant,
-    _observer_task: Task<()>,
-    _service_task: Task<()>,
 }
 
 impl BarView {
@@ -70,36 +64,21 @@ impl BarView {
         let command = match request {
             shilpo_services::IpcRequest::FocusWorkspace(id) => WorkerCommand::FocusWorkspace(id),
             shilpo_services::IpcRequest::ReloadConfig => WorkerCommand::ReloadConfig,
-            _ => return Err("request is not a bar worker command".into()),
+            _ => return Err("Unsupported bar command".into()),
         };
         service_worker::try_send_command(&self.service_commands, command)
-            .map_err(|error| format!("{error:?}"))
+            .map_err(|e| format!("Failed to send worker command: {}", e))
     }
 
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let config_path = std::env::var("HOME")
-            .map(|home| std::path::PathBuf::from(home).join(".config/shilpo/config.toml"))
-            .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));
-        let config = ShellConfig::default();
-
-        let niri = NiriCompositorService::new().ok();
-        let battery_service = BatteryService::new().ok();
-        let audio_service = AudioService::new().ok();
-        let network_service = NetworkService::new().ok();
+    pub fn new_with_config(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        config: ShellConfig,
+    ) -> Self {
         let battery = BatteryInfo::default();
         let audio = AudioInfo::default();
         let network = NetworkInfo::default();
-        let notification_service = match NotificationService::new() {
-            Ok(service) => Some(service),
-            Err(error) => {
-                tracing::warn!(error = %error, "notification service unavailable; toasts disabled");
-                None
-            }
-        };
-        let (notif_tx, notif_rx) = std::sync::mpsc::channel();
-        if let Some(service) = &notification_service {
-            service.set_new_notification_sender(notif_tx);
-        }
+
         window.on_window_should_close(cx, |_, cx| {
             ShellRuntime::forget_bar(cx);
             true
@@ -113,165 +92,37 @@ impl BarView {
         })
         .detach();
 
-        let workspaces = Vec::new();
-        let fallback_ws = if workspaces.is_empty() {
-            vec![
-                NiriWorkspaceInfo {
-                    id: 1,
-                    name: Some("1".into()),
-                    idx: 1,
-                    is_active: true,
-                    is_focused: true,
-                },
-                NiriWorkspaceInfo {
-                    id: 2,
-                    name: Some("2".into()),
-                    idx: 2,
-                    is_active: false,
-                    is_focused: false,
-                },
-                NiriWorkspaceInfo {
-                    id: 3,
-                    name: Some("3".into()),
-                    idx: 3,
-                    is_active: false,
-                    is_focused: false,
-                },
-            ]
-        } else {
-            workspaces
-        };
-
-        let home = std::env::var("HOME")
-            .ok()
-            .or_else(|| std::env::var("USER").ok().map(|u| format!("/home/{}", u)))
-            .unwrap_or_else(|| ".".to_string());
-        let config_dir = std::path::PathBuf::from(home).join(".config/shilpo");
-        if let Err(error) = std::fs::create_dir_all(&config_dir) {
-            tracing::warn!(error = %error, path = ?config_dir, "config watcher directory unavailable");
-        }
-
-        let (updates_tx, updates_rx, service_commands, commands_rx) = service_worker::channels();
-        let service_task = service_worker::spawn(
-            cx.background_executor().clone(),
-            updates_tx,
-            commands_rx,
-            config_path.clone(),
-            niri,
-            battery_service,
-            audio_service,
-            network_service,
-        );
-
-        use notify::Watcher;
-        let watcher_commands = service_commands.clone();
-        let watcher = match notify::RecommendedWatcher::new(
-            move |res: Result<notify::Event, notify::Error>| {
-                if let Some(_event) = res.ok().filter(|e| e.kind.is_modify()) {
-                    let _ = service_worker::try_send_command(
-                        &watcher_commands,
-                        WorkerCommand::ReloadConfig,
-                    );
-                }
+        let fallback_ws = vec![
+            NiriWorkspaceInfo {
+                id: 1,
+                name: Some("1".into()),
+                idx: 1,
+                is_active: true,
+                is_focused: true,
             },
-            notify::Config::default(),
-        ) {
-            Ok(mut watcher) => match watcher.watch(&config_dir, notify::RecursiveMode::Recursive) {
-                Ok(()) => Some(watcher),
-                Err(error) => {
-                    tracing::warn!(error = %error, path = ?config_dir, "config watcher watch failed");
-                    None
-                }
+            NiriWorkspaceInfo {
+                id: 2,
+                name: Some("2".into()),
+                idx: 2,
+                is_active: false,
+                is_focused: false,
             },
-            Err(error) => {
-                tracing::warn!(error = %error, "config watcher creation failed");
-                None
-            }
-        };
+            NiriWorkspaceInfo {
+                id: 3,
+                name: Some("3".into()),
+                idx: 3,
+                is_active: false,
+                is_focused: false,
+            },
+        ];
 
-        // Real-time state observer and IPC task
-        let observer_task = cx.spawn(async move |this, cx| {
-            let _watcher = watcher;
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(100))
-                    .await;
-
-                let update_res = this.update(cx, |this, cx| {
-                    // Pull and spawn newly arrived system notifications
-                    while let Ok(notif) = notif_rx.try_recv() {
-                        open_notification_toast(cx, notif);
-                    }
-
-                    let mut changed = false;
-                    while let Ok(update) = updates_rx.try_recv() {
-                        this.last_service_update = std::time::Instant::now();
-                        match update {
-                            WorkerUpdate::Workspaces(value) if this.workspaces != value => {
-                                this.workspaces = value;
-                                changed = true;
-                            }
-                            WorkerUpdate::ActiveTitle(value) if this.active_title != value => {
-                                this.active_title = value;
-                                changed = true;
-                            }
-                            WorkerUpdate::AppId(value) if this.app_id != value => {
-                                this.app_id = value;
-                                changed = true;
-                            }
-                            WorkerUpdate::Battery(value) if this.battery != value => {
-                                this.battery = value;
-                                changed = true;
-                            }
-                            WorkerUpdate::Audio(value) if this.audio != value => {
-                                this.audio = value;
-                                changed = true;
-                            }
-                            WorkerUpdate::Network(value) if this.network != value => {
-                                this.network = value;
-                                changed = true;
-                            }
-                            WorkerUpdate::Config(ConfigUpdate::Loaded(config)) => {
-                                this.config = config;
-                                this.last_error = None;
-                                apply_config_theme(&this.config, None, cx);
-                                changed = true;
-                            }
-                            WorkerUpdate::Config(ConfigUpdate::Failed(error)) => {
-                                tracing::error!(error = %error, "config reload failed");
-                                this.last_error = Some(error.clone());
-                                open_notification_toast(
-                                    cx,
-                                    Notification::new("Configuration Warning", error),
-                                );
-                                changed = true;
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    let now = chrono::Local::now();
-                    let updated_dt = now.format("%H:%M · %a, %d/%m").to_string();
-
-                    if this.datetime_str != updated_dt {
-                        this.datetime_str = updated_dt;
-                        changed = true;
-                    }
-
-                    if changed {
-                        cx.notify();
-                    }
-                });
-
-                if update_res.is_err() {
-                    break;
-                }
-            }
+        let service_commands = ShellRuntime::service_commands(cx).unwrap_or_else(|| {
+            let (_, _, tx, _) = service_worker::channels();
+            tx
         });
 
         Self {
             config,
-            notification_service,
             service_commands,
             workspaces: fallback_ws,
             battery,
@@ -283,13 +134,79 @@ impl BarView {
             datetime_str: "17:53 · Tue, 21/07".into(),
             last_error: None,
             last_service_update: std::time::Instant::now(),
-            _observer_task: observer_task,
-            _service_task: service_task,
         }
+    }
+
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_config(window, cx, ShellConfig::default())
     }
 
     pub fn view(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
+    }
+
+    pub fn view_with_config(
+        window: &mut Window,
+        cx: &mut App,
+        config: ShellConfig,
+    ) -> Entity<Self> {
+        cx.new(|cx| Self::new_with_config(window, cx, config))
+    }
+
+    pub fn apply_worker_update(&mut self, update: &WorkerUpdate, cx: &mut Context<Self>) {
+        self.last_service_update = std::time::Instant::now();
+        let mut changed = false;
+        match update {
+            WorkerUpdate::Workspaces(value) if &self.workspaces != value => {
+                self.workspaces = value.clone();
+                changed = true;
+            }
+            WorkerUpdate::ActiveTitle(value) if &self.active_title != value => {
+                self.active_title = value.clone();
+                changed = true;
+            }
+            WorkerUpdate::AppId(value) if &self.app_id != value => {
+                self.app_id = value.clone();
+                changed = true;
+            }
+            WorkerUpdate::Battery(value) if &self.battery != value => {
+                self.battery = value.clone();
+                changed = true;
+            }
+            WorkerUpdate::Audio(value) if &self.audio != value => {
+                self.audio = value.clone();
+                changed = true;
+            }
+            WorkerUpdate::Network(value) if &self.network != value => {
+                self.network = value.clone();
+                changed = true;
+            }
+            WorkerUpdate::Config(ConfigUpdate::Loaded(config)) => {
+                self.config = config.clone();
+                self.last_error = None;
+                apply_config_theme(&self.config, None, cx);
+                changed = true;
+            }
+            WorkerUpdate::Config(ConfigUpdate::Failed(error)) => {
+                tracing::error!(error = %error, "config reload failed");
+                self.last_error = Some(error.clone());
+                open_notification_toast(cx, Notification::new("Configuration Warning", error));
+                changed = true;
+            }
+            _ => {}
+        }
+
+        let now = chrono::Local::now();
+        let updated_dt = now.format("%H:%M · %a, %d/%m").to_string();
+
+        if self.datetime_str != updated_dt {
+            self.datetime_str = updated_dt;
+            changed = true;
+        }
+
+        if changed {
+            cx.notify();
+        }
     }
 }
 

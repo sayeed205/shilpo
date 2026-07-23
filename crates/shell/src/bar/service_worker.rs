@@ -21,13 +21,13 @@ pub enum WorkerCommand {
     ReloadConfig,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ConfigUpdate {
     Loaded(ShellConfig),
     Failed(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum WorkerUpdate {
     Workspaces(Vec<NiriWorkspaceInfo>),
     ActiveTitle(String),
@@ -107,8 +107,10 @@ async fn run(
         while let Ok(command) = commands.try_recv() {
             match command {
                 WorkerCommand::FocusWorkspace(id) => {
-                    if let Some(service) = &niri {
-                        let _ = service.focus_workspace(id);
+                    if let Some(service) = &niri
+                        && let Err(error) = service.focus_workspace(id)
+                    {
+                        tracing::warn!(error = %error, workspace_id = id, "failed to focus Niri workspace");
                     }
                 }
                 WorkerCommand::ReloadConfig => {

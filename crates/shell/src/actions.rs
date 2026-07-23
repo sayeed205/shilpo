@@ -43,6 +43,49 @@ pub enum ActionCategory {
     System,
 }
 
+/// Typed action invocation payload carrying optional parameters (e.g. workspace target).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionInvocation {
+    ToggleLauncher,
+    ToggleControlCenter,
+    ToggleBar,
+    FocusWorkspace(u64),
+    ReloadConfig,
+    Quit,
+}
+
+impl ActionInvocation {
+    pub fn id(&self) -> ActionId {
+        match self {
+            Self::ToggleLauncher => ActionId::ToggleLauncher,
+            Self::ToggleControlCenter => ActionId::ToggleControlCenter,
+            Self::ToggleBar => ActionId::ToggleBar,
+            Self::FocusWorkspace(_) => ActionId::FocusWorkspace,
+            Self::ReloadConfig => ActionId::ReloadConfig,
+            Self::Quit => ActionId::Quit,
+        }
+    }
+
+    /// Verifies that this invocation matches the provided action descriptor.
+    pub fn matches_descriptor(&self, descriptor: &ActionDescriptor) -> bool {
+        self.id() == descriptor.id
+    }
+}
+
+impl From<ActionId> for ActionInvocation {
+    fn from(id: ActionId) -> Self {
+        match id {
+            ActionId::ToggleLauncher => Self::ToggleLauncher,
+            ActionId::ToggleControlCenter => Self::ToggleControlCenter,
+            ActionId::ToggleBar => Self::ToggleBar,
+            ActionId::FocusWorkspace => Self::FocusWorkspace(1),
+            ActionId::ReloadConfig => Self::ReloadConfig,
+            ActionId::Quit => Self::Quit,
+        }
+    }
+}
+
 /// Metadata descriptor for a registered shell action.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionDescriptor {
@@ -249,5 +292,22 @@ mod tests {
         // Conflict registration should fail with diagnostic
         let err = mgr.register(sc, ActionId::Quit).unwrap_err();
         assert!(err.contains("conflict"));
+    }
+
+    #[test]
+    fn action_invocation_payload_and_descriptor_matching() {
+        let inv = ActionInvocation::FocusWorkspace(7);
+        assert_eq!(inv.id(), ActionId::FocusWorkspace);
+
+        let descriptors = ActionRegistry::all();
+        let fw_desc = descriptors
+            .iter()
+            .find(|d| d.id == ActionId::FocusWorkspace)
+            .unwrap();
+        assert!(inv.matches_descriptor(fw_desc));
+
+        let json = serde_json::to_string(&inv).unwrap();
+        let deserialized: ActionInvocation = serde_json::from_str(&json).unwrap();
+        assert_eq!(inv, deserialized);
     }
 }

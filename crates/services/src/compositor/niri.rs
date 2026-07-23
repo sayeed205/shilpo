@@ -141,22 +141,39 @@ impl NiriCompositorService {
 
     /// Switches focus to the workspace with the specified ID.
     pub fn focus_workspace(&self, id: u64) -> Result<()> {
-        if let Ok(mut socket) = Socket::connect() {
-            let req = Request::Action(niri_ipc::Action::FocusWorkspace {
-                reference: niri_ipc::WorkspaceReferenceArg::Id(id),
-            });
-            let _ = socket.send(req);
+        let mut socket = Socket::connect().context("Failed to connect to Niri IPC socket")?;
+        let req = Request::Action(niri_ipc::Action::FocusWorkspace {
+            reference: niri_ipc::WorkspaceReferenceArg::Id(id),
+        });
+        match socket.send(req) {
+            Ok(Ok(Response::Handled)) => Ok(()),
+            Ok(Ok(resp)) => {
+                anyhow::bail!("Niri action FocusWorkspace returned unexpected response: {resp:?}");
+            }
+            Ok(Err(err)) => {
+                anyhow::bail!("Niri action FocusWorkspace for workspace {id} failed: {err}");
+            }
+            Err(err) => Err(err).with_context(|| {
+                format!("Failed to send FocusWorkspace action for workspace {id}")
+            }),
         }
-        Ok(())
     }
 
     /// Switches focus to the window with the specified ID.
     pub fn focus_window(&self, id: u64) -> Result<()> {
-        if let Ok(mut socket) = Socket::connect() {
-            let req = Request::Action(niri_ipc::Action::FocusWindow { id });
-            let _ = socket.send(req);
+        let mut socket = Socket::connect().context("Failed to connect to Niri IPC socket")?;
+        let req = Request::Action(niri_ipc::Action::FocusWindow { id });
+        match socket.send(req) {
+            Ok(Ok(Response::Handled)) => Ok(()),
+            Ok(Ok(resp)) => {
+                anyhow::bail!("Niri action FocusWindow returned unexpected response: {resp:?}");
+            }
+            Ok(Err(err)) => {
+                anyhow::bail!("Niri action FocusWindow for window {id} failed: {err}");
+            }
+            Err(err) => Err(err)
+                .with_context(|| format!("Failed to send FocusWindow action for window {id}")),
         }
-        Ok(())
     }
 }
 
@@ -249,4 +266,71 @@ fn run_niri_listener(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_focus_workspace_fails_without_niri() {
+        let orig = env::var_os("NIRI_SOCKET");
+        unsafe {
+            env::set_var("NIRI_SOCKET", "/tmp/non_existent_niri_socket.sock");
+        }
+
+        let service = NiriCompositorService {
+            workspaces: Arc::new(Mutex::new(Vec::new())),
+            active_window_id: Arc::new(Mutex::new(None)),
+            app_id: Arc::new(Mutex::new(None)),
+            active_window_title: Arc::new(Mutex::new(None)),
+            keyboard_layout: Arc::new(Mutex::new("us".into())),
+        };
+
+        let err = service.focus_workspace(1).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Niri IPC socket") || msg.contains("Failed to connect"),
+            "expected socket connection error context, got: {msg}"
+        );
+
+        unsafe {
+            if let Some(val) = orig {
+                env::set_var("NIRI_SOCKET", val);
+            } else {
+                env::remove_var("NIRI_SOCKET");
+            }
+        }
+    }
+
+    #[test]
+    fn test_focus_window_fails_without_niri() {
+        let orig = env::var_os("NIRI_SOCKET");
+        unsafe {
+            env::set_var("NIRI_SOCKET", "/tmp/non_existent_niri_socket.sock");
+        }
+
+        let service = NiriCompositorService {
+            workspaces: Arc::new(Mutex::new(Vec::new())),
+            active_window_id: Arc::new(Mutex::new(None)),
+            app_id: Arc::new(Mutex::new(None)),
+            active_window_title: Arc::new(Mutex::new(None)),
+            keyboard_layout: Arc::new(Mutex::new("us".into())),
+        };
+
+        let err = service.focus_window(10).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Niri IPC socket") || msg.contains("Failed to connect"),
+            "expected socket connection error context, got: {msg}"
+        );
+
+        unsafe {
+            if let Some(val) = orig {
+                env::set_var("NIRI_SOCKET", val);
+            } else {
+                env::remove_var("NIRI_SOCKET");
+            }
+        }
+    }
 }

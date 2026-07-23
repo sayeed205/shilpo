@@ -29,16 +29,24 @@ pub struct BatteryInfo {
 /// UPower battery service for tracking battery percentage and charging state.
 pub struct BatteryService {
     info: Arc<Mutex<BatteryInfo>>,
+    _task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for BatteryService {
+    fn drop(&mut self) {
+        if let Some(task) = self._task.take() {
+            task.abort();
+        }
+    }
 }
 
 impl BatteryService {
     pub fn new() -> Result<Self> {
         let info = Arc::new(Mutex::new(BatteryInfo::default()));
-        let service = Self { info };
 
         // Attempt async connection and polling of UPower D-Bus
-        let info_clone = service.info.clone();
-        tokio::spawn(async move {
+        let info_clone = info.clone();
+        let task = tokio::spawn(async move {
             if let Ok(connection) = Connection::system().await
                 && let Ok(proxy) = UPowerDisplayDeviceProxy::new(&connection).await
             {
@@ -61,7 +69,10 @@ impl BatteryService {
             }
         });
 
-        Ok(service)
+        Ok(Self {
+            info,
+            _task: Some(task),
+        })
     }
 
     pub fn battery_info(&self) -> BatteryInfo {

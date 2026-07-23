@@ -136,17 +136,9 @@ async fn main() {
         })
         .detach();
 
-        let primary_id = cx.primary_display().map(|d| d.id());
         let displays = cx.displays();
         if !displays.is_empty() {
-            for display in displays {
-                let is_primary = primary_id == Some(display.id());
-                if let Some(bar_config) = config.bar_for_output(None, is_primary) {
-                    let geometry =
-                        BarGeometry::calculate(display.id(), display.bounds(), &bar_config);
-                    ShellRuntime::open_bar(cx, &geometry, true);
-                }
-            }
+            ShellRuntime::sync_displays(cx);
             ShellRuntime::mark_ready(cx);
         } else {
             schedule_bar_retry(cx, config);
@@ -162,19 +154,11 @@ fn schedule_bar_retry(cx: &App, config: ShellConfig) {
                 .await;
 
             let opened = cx.update(|cx| {
-                let primary_id = cx.primary_display().map(|d| d.id());
                 let displays = cx.displays();
                 if displays.is_empty() {
                     return false;
                 }
-                for display in &displays {
-                    let is_primary = primary_id == Some(display.id());
-                    if let Some(bar_config) = config.bar_for_output(None, is_primary) {
-                        let geometry =
-                            BarGeometry::calculate(display.id(), display.bounds(), &bar_config);
-                        ShellRuntime::open_bar(cx, &geometry, true);
-                    }
-                }
+                ShellRuntime::sync_displays(cx);
                 ShellRuntime::mark_ready(cx);
                 true
             });

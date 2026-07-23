@@ -15,15 +15,23 @@ pub struct AudioInfo {
 /// System audio service for volume and mute status.
 pub struct AudioService {
     info: Arc<Mutex<AudioInfo>>,
+    _task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for AudioService {
+    fn drop(&mut self) {
+        if let Some(task) = self._task.take() {
+            task.abort();
+        }
+    }
 }
 
 impl AudioService {
     pub fn new() -> Result<Self> {
         let info = Arc::new(Mutex::new(AudioInfo::default()));
-        let service = Self { info };
 
-        let info_clone = service.info.clone();
-        tokio::spawn(async move {
+        let info_clone = info.clone();
+        let task = tokio::spawn(async move {
             loop {
                 let info = match (query_volume(), query_mute()) {
                     (Some(volume), Some(is_muted)) => AudioInfo {
@@ -38,7 +46,10 @@ impl AudioService {
             }
         });
 
-        Ok(service)
+        Ok(Self {
+            info,
+            _task: Some(task),
+        })
     }
 
     pub fn audio_info(&self) -> AudioInfo {

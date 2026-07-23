@@ -25,23 +25,191 @@ impl Application {
     /// Launches the application in a detached background thread.
     pub fn launch(&self) {
         let exec = self.exec.clone();
-        thread::spawn(move || {
-            let exec_cleaned = exec
-                .replace("%f", "")
-                .replace("%F", "")
-                .replace("%u", "")
-                .replace("%U", "")
-                .replace("%d", "")
-                .replace("%D", "")
-                .replace("%n", "")
-                .replace("%N", "")
-                .replace("%i", "")
-                .replace("%c", "")
-                .replace("%k", "");
+        let icon = self.icon.clone();
+        let desktop_file = self.desktop_file.clone();
+        let name = self.name.clone();
 
-            let _ = Command::new("sh").args(["-c", exec_cleaned.trim()]).spawn();
+        thread::spawn(move || match parse_exec(&exec, icon.as_deref()) {
+            Ok(argv) => {
+                let program = &argv[0];
+                let args = &argv[1..];
+                if let Err(err) = Command::new(program).args(args).spawn() {
+                    eprintln!(
+                        "Failed to launch application '{}' ({}) via {:?}: {}",
+                        name,
+                        desktop_file.display(),
+                        argv,
+                        err
+                    );
+                }
+            }
+            Err(err) => {
+                eprintln!(
+                    "Failed to parse Exec key for application '{}' ({}): {}",
+                    name,
+                    desktop_file.display(),
+                    err
+                );
+            }
         });
     }
+}
+
+/// Parses a Freedesktop Desktop Entry `Exec` line into a program and argument vector.
+///
+/// Handles double quotes (`"..."`), single quotes (`'...'`), backslash escaping (`\`),
+/// and Freedesktop field codes (`%f`, `%F`, `%u`, `%U`, `%i`, `%%`, etc.).
+pub fn parse_exec(exec: &str, icon: Option<&str>) -> Result<Vec<String>> {
+    let mut args = Vec::new();
+    let mut current_arg = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    let mut has_token = false;
+
+    let chars: Vec<char> = exec.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let ch = chars[i];
+
+        if escaped {
+            if in_double {
+                // Inside double quotes, backslash only escapes ", \, $, `
+                match ch {
+                    '"' | '\\' | '$' | '`' => current_arg.push(ch),
+                    _ => {
+                        current_arg.push('\\');
+                        current_arg.push(ch);
+                    }
+                }
+            } else {
+                // Outside double quotes, backslash escapes any character
+                current_arg.push(ch);
+            }
+            escaped = false;
+            has_token = true;
+            i += 1;
+            continue;
+        }
+
+        if ch == '\\' && !in_single {
+            escaped = true;
+            has_token = true;
+            i += 1;
+            continue;
+        }
+
+        if in_single {
+            if ch == '\'' {
+                in_single = false;
+            } else {
+                current_arg.push(ch);
+            }
+            has_token = true;
+            i += 1;
+            continue;
+        }
+
+        if in_double {
+            if ch == '"' {
+                in_double = false;
+            } else if ch == '%' {
+                // Check for field code inside double quotes
+                if i + 1 < chars.len() {
+                    let next = chars[i + 1];
+                    if next == '%' {
+                        current_arg.push('%');
+                        i += 1;
+                    } else if next.is_ascii_alphabetic() {
+                        // Field code inside quotes without target is stripped
+                        i += 1;
+                    } else {
+                        current_arg.push('%');
+                    }
+                } else {
+                    current_arg.push('%');
+                }
+            } else {
+                current_arg.push(ch);
+            }
+            has_token = true;
+            i += 1;
+            continue;
+        }
+
+        // Unquoted context
+        match ch {
+            '\'' => {
+                in_single = true;
+                has_token = true;
+            }
+            '"' => {
+                in_double = true;
+                has_token = true;
+            }
+            ' ' | '\t' | '\n' | '\r' => {
+                if has_token {
+                    args.push(std::mem::take(&mut current_arg));
+                    has_token = false;
+                }
+            }
+            '%' => {
+                if i + 1 < chars.len() {
+                    let next = chars[i + 1];
+                    match next {
+                        '%' => {
+                            current_arg.push('%');
+                            has_token = true;
+                            i += 1;
+                        }
+                        'i' => {
+                            i += 1;
+                            if let Some(ic) = icon.filter(|s| !s.is_empty()) {
+                                if has_token {
+                                    args.push(std::mem::take(&mut current_arg));
+                                    has_token = false;
+                                }
+                                args.push("--icon".to_string());
+                                args.push(ic.to_string());
+                            }
+                        }
+                        c if c.is_ascii_alphabetic() => {
+                            // Strip other field codes (%f, %F, %u, %U, %d, %D, %n, %N, %c, %k)
+                            i += 1;
+                        }
+                        _ => {
+                            current_arg.push('%');
+                            has_token = true;
+                        }
+                    }
+                } else {
+                    current_arg.push('%');
+                    has_token = true;
+                }
+            }
+            _ => {
+                current_arg.push(ch);
+                has_token = true;
+            }
+        }
+
+        i += 1;
+    }
+
+    if escaped || in_single || in_double {
+        anyhow::bail!("Unclosed quote or trailing escape in Exec command line");
+    }
+
+    if has_token {
+        args.push(current_arg);
+    }
+
+    if args.is_empty() {
+        anyhow::bail!("Empty Exec command line");
+    }
+
+    Ok(args)
 }
 
 /// Service for scanning and searching installed desktop applications.
@@ -195,19 +363,102 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_app_scanner_creation() {
-        let scanner = AppScanner::new().unwrap();
-        let apps = scanner.applications();
-        assert!(
-            !apps.is_empty(),
-            "Expected to find system desktop applications"
+    fn test_parse_exec_basic() {
+        let argv = parse_exec("firefox", None).unwrap();
+        assert_eq!(argv, vec!["firefox"]);
+    }
+
+    #[test]
+    fn test_parse_exec_with_arguments() {
+        let argv = parse_exec("vlc --fullscreen --random", None).unwrap();
+        assert_eq!(argv, vec!["vlc", "--fullscreen", "--random"]);
+    }
+
+    #[test]
+    fn test_parse_exec_quoted_paths_and_args() {
+        let exec = r#""/opt/My App/bin" --title="Hello World" 'foo bar'"#;
+        let argv = parse_exec(exec, None).unwrap();
+        assert_eq!(
+            argv,
+            vec!["/opt/My App/bin", "--title=Hello World", "foo bar"]
         );
     }
 
     #[test]
-    fn test_app_search() {
-        let scanner = AppScanner::new().unwrap();
-        let results = scanner.search("a");
-        assert!(!results.is_empty());
+    fn test_parse_exec_escaped_quotes_and_spaces() {
+        let exec = r#"app \"quoted\" arg\ with\ space"#;
+        let argv = parse_exec(exec, None).unwrap();
+        assert_eq!(argv, vec!["app", "\"quoted\"", "arg with space"]);
+    }
+
+    #[test]
+    fn test_parse_exec_field_codes_stripped() {
+        let exec = "gedit %f %F %u %U %d %D %n %N %c %k";
+        let argv = parse_exec(exec, None).unwrap();
+        assert_eq!(argv, vec!["gedit"]);
+    }
+
+    #[test]
+    fn test_parse_exec_percent_literal() {
+        let exec = "app %%";
+        let argv = parse_exec(exec, None).unwrap();
+        assert_eq!(argv, vec!["app", "%"]);
+    }
+
+    #[test]
+    fn test_parse_exec_icon_code() {
+        let exec = "app %i";
+        let argv_with_icon = parse_exec(exec, Some("app-icon")).unwrap();
+        assert_eq!(argv_with_icon, vec!["app", "--icon", "app-icon"]);
+
+        let argv_no_icon = parse_exec(exec, None).unwrap();
+        assert_eq!(argv_no_icon, vec!["app"]);
+    }
+
+    #[test]
+    fn test_parse_exec_shell_metacharacters_literal() {
+        let exec = "echo $HOME && cat /etc/passwd | grep foo";
+        let argv = parse_exec(exec, None).unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "echo",
+                "$HOME",
+                "&&",
+                "cat",
+                "/etc/passwd",
+                "|",
+                "grep",
+                "foo"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_exec_unclosed_quotes() {
+        assert!(parse_exec("app \"unclosed", None).is_err());
+        assert!(parse_exec("app 'unclosed", None).is_err());
+    }
+
+    #[test]
+    fn test_parse_exec_empty_command() {
+        assert!(parse_exec("", None).is_err());
+        assert!(parse_exec("   ", None).is_err());
+        assert!(parse_exec("%f", None).is_err());
+    }
+
+    #[test]
+    fn test_app_scanner_from_applications() {
+        let app = Application {
+            name: "Test App".to_string(),
+            exec: "test-binary --flag".to_string(),
+            icon: Some("test-icon".to_string()),
+            icon_path: None,
+            description: Some("A test application".to_string()),
+            desktop_file: PathBuf::from("/tmp/test.desktop"),
+        };
+        let scanner = AppScanner::from_applications(vec![app.clone()]);
+        assert_eq!(scanner.applications(), vec![app.clone()]);
+        assert_eq!(scanner.search("test"), vec![app]);
     }
 }

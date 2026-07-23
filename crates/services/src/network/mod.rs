@@ -13,15 +13,23 @@ pub struct NetworkInfo {
 /// NetworkManager service for network status tracking.
 pub struct NetworkService {
     info: Arc<Mutex<NetworkInfo>>,
+    _task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for NetworkService {
+    fn drop(&mut self) {
+        if let Some(task) = self._task.take() {
+            task.abort();
+        }
+    }
 }
 
 impl NetworkService {
     pub fn new() -> Result<Self> {
         let info = Arc::new(Mutex::new(NetworkInfo::default()));
-        let service = Self { info };
 
-        let info_clone = service.info.clone();
-        tokio::spawn(async move {
+        let info_clone = info.clone();
+        let task = tokio::spawn(async move {
             if let Ok(connection) = Connection::system().await {
                 loop {
                     let info = if let Ok(reply) = connection
@@ -49,7 +57,10 @@ impl NetworkService {
             }
         });
 
-        Ok(service)
+        Ok(Self {
+            info,
+            _task: Some(task),
+        })
     }
 
     pub fn network_info(&self) -> NetworkInfo {
