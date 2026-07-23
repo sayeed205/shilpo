@@ -11,7 +11,10 @@ pub mod upower;
 pub use applications::{AppScanner, Application};
 pub use audio::{AudioInfo, AudioService};
 pub use brightness::{BrightnessInfo, BrightnessService};
-pub use compositor::{NiriCompositorService, NiriWorkspaceInfo};
+pub use compositor::{
+    CompositorAdapter, CompositorCapabilities, NiriCompositorService, NiriWorkspaceInfo,
+    WindowInfo, WorkspaceInfo,
+};
 pub use error::ServiceError;
 pub use ipc::{BarState, IpcError, IpcRequest, IpcResponse, IpcResult, IpcStatus, ShellIpcServer};
 pub use network::{NetworkInfo, NetworkService};

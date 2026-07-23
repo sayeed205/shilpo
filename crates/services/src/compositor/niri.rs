@@ -1,3 +1,4 @@
+use super::{CompositorAdapter, CompositorCapabilities, WindowInfo, WorkspaceInfo};
 use anyhow::{Context, Result, anyhow};
 use niri_ipc::{
     Event, Reply, Request, Response,
@@ -25,6 +26,7 @@ pub struct NiriWorkspaceInfo {
 /// Niri Compositor IPC service for tracking workspaces and window focus in real time.
 pub struct NiriCompositorService {
     workspaces: Arc<Mutex<Vec<NiriWorkspaceInfo>>>,
+    windows: Arc<Mutex<Vec<WindowInfo>>>,
     active_window_id: Arc<Mutex<Option<u64>>>,
     app_id: Arc<Mutex<Option<String>>>,
     active_window_title: Arc<Mutex<Option<String>>>,
@@ -35,6 +37,7 @@ impl NiriCompositorService {
     /// Connects to Niri IPC socket, queries initial state, and spawns a background event listener thread.
     pub fn new() -> Result<Self> {
         let workspaces = Arc::new(Mutex::new(Vec::new()));
+        let windows = Arc::new(Mutex::new(Vec::new()));
         let active_window_id = Arc::new(Mutex::new(None));
         let app_id = Arc::new(Mutex::new(None));
         let active_window_title = Arc::new(Mutex::new(None));
@@ -42,6 +45,7 @@ impl NiriCompositorService {
 
         let service = Self {
             workspaces,
+            windows,
             active_window_id,
             app_id,
             active_window_title,
@@ -67,6 +71,7 @@ impl NiriCompositorService {
 
         // Spawn background thread to stream Niri events
         let ws_clone = service.workspaces.clone();
+        let win_list_clone = service.windows.clone();
         let win_id_clone = service.active_window_id.clone();
         let app_id_clone = service.app_id.clone();
         let title_clone = service.active_window_title.clone();
@@ -81,6 +86,7 @@ impl NiriCompositorService {
             loop {
                 match run_niri_listener(
                     ws_clone.clone(),
+                    win_list_clone.clone(),
                     win_id_clone.clone(),
                     app_id_clone.clone(),
                     title_clone.clone(),
@@ -100,7 +106,7 @@ impl NiriCompositorService {
                         );
                         if attempts >= max_attempts {
                             tracing::error!(
-                                "Niri listener failed after max retry attempts; giving up"
+                                "Niri listener failed permanently after {max_attempts} attempts"
                             );
                             break;
                         }
@@ -175,6 +181,108 @@ impl NiriCompositorService {
                 .with_context(|| format!("Failed to send FocusWindow action for window {id}")),
         }
     }
+
+    /// Moves a window to the target workspace.
+    pub fn move_window_to_workspace(&self, window_id: u64, workspace_id: u64) -> Result<()> {
+        let mut socket = Socket::connect().context("Failed to connect to Niri IPC socket")?;
+        let req = Request::Action(niri_ipc::Action::MoveWindowToWorkspace {
+            window_id: Some(window_id),
+            reference: niri_ipc::WorkspaceReferenceArg::Id(workspace_id),
+            focus: true,
+        });
+        match socket.send(req) {
+            Ok(Ok(Response::Handled)) => Ok(()),
+            Ok(Ok(resp)) => {
+                anyhow::bail!("Niri action MoveWindowToWorkspace returned unexpected response: {resp:?}");
+            }
+            Ok(Err(err)) => {
+                anyhow::bail!("Niri action MoveWindowToWorkspace failed: {err}");
+            }
+            Err(err) => Err(err).with_context(|| {
+                format!("Failed to send MoveWindowToWorkspace action for window {window_id} -> workspace {workspace_id}")
+            }),
+        }
+    }
+
+    /// Creates a new workspace.
+    pub fn create_workspace(&self, _name: Option<String>) -> Result<()> {
+        let mut socket = Socket::connect().context("Failed to connect to Niri IPC socket")?;
+        let req = Request::Action(niri_ipc::Action::FocusWorkspaceDown {});
+        match socket.send(req) {
+            Ok(Ok(Response::Handled)) => Ok(()),
+            Ok(Ok(resp)) => {
+                anyhow::bail!(
+                    "Niri action FocusWorkspaceDown returned unexpected response: {resp:?}"
+                );
+            }
+            Ok(Err(err)) => {
+                anyhow::bail!("Niri action FocusWorkspaceDown failed: {err}");
+            }
+            Err(err) => Err(err).with_context(|| "Failed to send FocusWorkspaceDown action"),
+        }
+    }
+}
+
+impl CompositorAdapter for NiriCompositorService {
+    fn capabilities(&self) -> CompositorCapabilities {
+        CompositorCapabilities {
+            can_create_workspace: true,
+            can_move_window: true,
+            can_focus_window: true,
+            can_focus_workspace: true,
+        }
+    }
+
+    fn workspaces(&self) -> Vec<WorkspaceInfo> {
+        self.workspaces
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|w| WorkspaceInfo {
+                id: w.id,
+                name: w.name.clone(),
+                idx: w.idx,
+                is_active: w.is_active,
+                is_focused: w.is_focused,
+            })
+            .collect()
+    }
+
+    fn windows(&self) -> Vec<WindowInfo> {
+        self.windows.lock().unwrap().clone()
+    }
+
+    fn active_window_id(&self) -> Option<u64> {
+        self.active_window_id()
+    }
+
+    fn active_window_title(&self) -> Option<String> {
+        self.active_window_title()
+    }
+
+    fn app_id(&self) -> Option<String> {
+        self.app_id()
+    }
+
+    fn keyboard_layout(&self) -> String {
+        self.keyboard_layout()
+    }
+
+    fn focus_workspace(&self, id: u64) -> Result<()> {
+        self.focus_workspace(id)
+    }
+
+    fn focus_window(&self, id: u64) -> Result<()> {
+        self.focus_window(id)
+    }
+
+    fn create_workspace(&self, name: Option<String>) -> Result<()> {
+        self.create_workspace(name)
+    }
+
+    fn move_window_to_workspace(&self, window_id: u64, workspace_id: u64) -> Result<()> {
+        self.move_window_to_workspace(window_id, workspace_id)
+    }
 }
 
 fn connect_socket() -> Result<UnixStream> {
@@ -186,6 +294,7 @@ fn connect_socket() -> Result<UnixStream> {
 
 fn run_niri_listener(
     workspaces: Arc<Mutex<Vec<NiriWorkspaceInfo>>>,
+    win_list: Arc<Mutex<Vec<WindowInfo>>>,
     active_window_id: Arc<Mutex<Option<u64>>>,
     app_id: Arc<Mutex<Option<String>>>,
     title: Arc<Mutex<Option<String>>>,
@@ -240,6 +349,23 @@ fn run_niri_listener(
         let mut ws_guard = workspaces.lock().unwrap();
         *ws_guard = list;
 
+        // Update window list
+        let windows: Vec<WindowInfo> = state
+            .windows
+            .windows
+            .values()
+            .map(|w| WindowInfo {
+                id: w.id,
+                title: w.title.clone(),
+                app_id: w.app_id.clone(),
+                workspace_id: w.workspace_id,
+                is_focused: w.is_focused,
+            })
+            .collect();
+
+        let mut win_list_guard = win_list.lock().unwrap();
+        *win_list_guard = windows;
+
         // Update active window title, app ID & window ID
         let focused_win = state.windows.windows.values().find(|w| w.is_focused);
         let mut win_id_guard = active_window_id.lock().unwrap();
@@ -281,6 +407,7 @@ mod tests {
 
         let service = NiriCompositorService {
             workspaces: Arc::new(Mutex::new(Vec::new())),
+            windows: Arc::new(Mutex::new(Vec::new())),
             active_window_id: Arc::new(Mutex::new(None)),
             app_id: Arc::new(Mutex::new(None)),
             active_window_title: Arc::new(Mutex::new(None)),
@@ -312,6 +439,7 @@ mod tests {
 
         let service = NiriCompositorService {
             workspaces: Arc::new(Mutex::new(Vec::new())),
+            windows: Arc::new(Mutex::new(Vec::new())),
             active_window_id: Arc::new(Mutex::new(None)),
             app_id: Arc::new(Mutex::new(None)),
             active_window_title: Arc::new(Mutex::new(None)),

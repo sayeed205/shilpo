@@ -714,6 +714,19 @@ impl ShellRuntime {
             ActionInvocation::FocusWorkspace(id) => {
                 Self::enqueue_worker(cx, IpcRequest::FocusWorkspace(id));
             }
+            ActionInvocation::CreateWorkspace(name) => {
+                if let Ok(service) = shilpo_services::NiriCompositorService::new() {
+                    let _ = service.create_workspace(name);
+                }
+            }
+            ActionInvocation::MoveWindowToWorkspace {
+                window_id,
+                workspace_id,
+            } => {
+                if let Ok(service) = shilpo_services::NiriCompositorService::new() {
+                    let _ = service.move_window_to_workspace(window_id, workspace_id);
+                }
+            }
         }
         Ok(())
     }

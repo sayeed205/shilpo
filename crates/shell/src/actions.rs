@@ -8,6 +8,8 @@ pub enum ActionId {
     ToggleControlCenter,
     ToggleBar,
     FocusWorkspace,
+    CreateWorkspace,
+    MoveWindowToWorkspace,
     ReloadConfig,
     Quit,
 }
@@ -18,6 +20,8 @@ impl ActionId {
         Self::ToggleControlCenter,
         Self::ToggleBar,
         Self::FocusWorkspace,
+        Self::CreateWorkspace,
+        Self::MoveWindowToWorkspace,
         Self::ReloadConfig,
         Self::Quit,
     ];
@@ -28,6 +32,8 @@ impl ActionId {
             Self::ToggleControlCenter => "toggle_control_center",
             Self::ToggleBar => "toggle_bar",
             Self::FocusWorkspace => "focus_workspace",
+            Self::CreateWorkspace => "create_workspace",
+            Self::MoveWindowToWorkspace => "move_window_to_workspace",
             Self::ReloadConfig => "reload_config",
             Self::Quit => "quit",
         }
@@ -51,6 +57,8 @@ pub enum ActionInvocation {
     ToggleControlCenter,
     ToggleBar,
     FocusWorkspace(u64),
+    CreateWorkspace(Option<String>),
+    MoveWindowToWorkspace { window_id: u64, workspace_id: u64 },
     ReloadConfig,
     Quit,
 }
@@ -62,6 +70,8 @@ impl ActionInvocation {
             Self::ToggleControlCenter => ActionId::ToggleControlCenter,
             Self::ToggleBar => ActionId::ToggleBar,
             Self::FocusWorkspace(_) => ActionId::FocusWorkspace,
+            Self::CreateWorkspace(_) => ActionId::CreateWorkspace,
+            Self::MoveWindowToWorkspace { .. } => ActionId::MoveWindowToWorkspace,
             Self::ReloadConfig => ActionId::ReloadConfig,
             Self::Quit => ActionId::Quit,
         }
@@ -80,6 +90,11 @@ impl From<ActionId> for ActionInvocation {
             ActionId::ToggleControlCenter => Self::ToggleControlCenter,
             ActionId::ToggleBar => Self::ToggleBar,
             ActionId::FocusWorkspace => Self::FocusWorkspace(1),
+            ActionId::CreateWorkspace => Self::CreateWorkspace(None),
+            ActionId::MoveWindowToWorkspace => Self::MoveWindowToWorkspace {
+                window_id: 0,
+                workspace_id: 1,
+            },
             ActionId::ReloadConfig => Self::ReloadConfig,
             ActionId::Quit => Self::Quit,
         }
@@ -130,6 +145,20 @@ impl ActionRegistry {
                     id,
                     name: id.name(),
                     label: "Focus Compositor Workspace",
+                    category: ActionCategory::Navigation,
+                    enabled: true,
+                },
+                ActionId::CreateWorkspace => ActionDescriptor {
+                    id,
+                    name: id.name(),
+                    label: "Create Workspace",
+                    category: ActionCategory::Navigation,
+                    enabled: true,
+                },
+                ActionId::MoveWindowToWorkspace => ActionDescriptor {
+                    id,
+                    name: id.name(),
+                    label: "Move Focused Window to Workspace",
                     category: ActionCategory::Navigation,
                     enabled: true,
                 },
