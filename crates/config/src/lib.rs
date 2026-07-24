@@ -523,6 +523,12 @@ pub struct ClipboardItem {
     pub timestamp: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AudioPreference {
+    pub default_device: Option<String>,
+    pub default_port: Option<String>,
+}
+
 pub struct HeedSessionStore {
     env: heed::Env,
     output_bars_db: heed::Database<heed::types::Str, heed::types::SerdeJson<OutputBarState>>,
@@ -530,6 +536,7 @@ pub struct HeedSessionStore {
         heed::types::U64<heed::byteorder::NativeEndian>,
         heed::types::SerdeJson<ClipboardItem>,
     >,
+    audio_pref_db: heed::Database<heed::types::Str, heed::types::SerdeJson<AudioPreference>>,
 }
 
 impl HeedSessionStore {
@@ -591,6 +598,16 @@ impl HeedSessionStore {
                 },
             })?;
 
+        let audio_pref_db = env
+            .create_database(&mut wtxn, Some("audio_preference"))
+            .map_err(|e| ConfigError::Parse {
+                diagnostic: ConfigDiagnostic {
+                    path: dir.display().to_string(),
+                    message: e.to_string(),
+                    span: None,
+                },
+            })?;
+
         wtxn.commit().map_err(|e| ConfigError::Parse {
             diagnostic: ConfigDiagnostic {
                 path: dir.display().to_string(),
@@ -603,6 +620,7 @@ impl HeedSessionStore {
             env,
             output_bars_db,
             clipboard_history_db,
+            audio_pref_db,
         })
     }
 
@@ -746,6 +764,49 @@ impl HeedSessionStore {
         })?;
 
         Ok(())
+    }
+
+    pub fn save_audio_preference(&self, pref: &AudioPreference) -> Result<(), ConfigError> {
+        let mut wtxn = self.env.write_txn().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: "audio_preference".to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })?;
+        self.audio_pref_db
+            .put(&mut wtxn, "default", pref)
+            .map_err(|e| ConfigError::Parse {
+                diagnostic: ConfigDiagnostic {
+                    path: "audio_preference".to_string(),
+                    message: e.to_string(),
+                    span: None,
+                },
+            })?;
+        wtxn.commit().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: "audio_preference".to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })
+    }
+
+    pub fn get_audio_preference(&self) -> Result<AudioPreference, ConfigError> {
+        let rtxn = self.env.read_txn().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: "audio_preference".to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })?;
+        let pref = self
+            .audio_pref_db
+            .get(&rtxn, "default")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        Ok(pref)
     }
 }
 

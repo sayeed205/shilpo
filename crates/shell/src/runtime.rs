@@ -790,6 +790,21 @@ impl ShellRuntime {
         }
     }
 
+    pub fn save_audio_preference(cx: &App, device: Option<String>, port: Option<String>) {
+        if cx.has_global::<Self>()
+            && let Some(ref store) = cx.global::<Self>().heed_store
+        {
+            let mut pref = store.get_audio_preference().unwrap_or_default();
+            if device.is_some() {
+                pref.default_device = device;
+            }
+            if port.is_some() {
+                pref.default_port = port;
+            }
+            let _ = store.save_audio_preference(&pref);
+        }
+    }
+
     pub fn register_notification(
         cx: &mut App,
         handle: WindowHandle<crate::notification::NotificationToastView>,

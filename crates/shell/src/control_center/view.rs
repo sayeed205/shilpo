@@ -240,6 +240,7 @@ impl ControlCenterView {
     fn select_audio_device(&mut self, device_id: &str, is_input: bool, cx: &mut Context<Self>) {
         if let Some(service) = &self.audio_service {
             let _ = service.set_default_device(device_id, is_input);
+            ShellRuntime::save_audio_preference(cx, Some(device_id.to_string()), None);
         }
         cx.notify();
     }
@@ -247,6 +248,7 @@ impl ControlCenterView {
     fn select_audio_port(&mut self, sink_name: &str, port_name: &str, cx: &mut Context<Self>) {
         if let Some(service) = &self.audio_service {
             let _ = service.set_sink_port(sink_name, port_name);
+            ShellRuntime::save_audio_preference(cx, None, Some(port_name.to_string()));
         }
         cx.notify();
     }
