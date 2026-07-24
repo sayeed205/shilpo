@@ -5,6 +5,15 @@ use std::{
 };
 use zbus::{Connection, interface};
 
+/// Notification urgency levels per Freedesktop Desktop Notifications Specification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum NotificationUrgency {
+    Low = 0,
+    #[default]
+    Normal = 1,
+    Critical = 2,
+}
+
 /// Represents a single desktop notification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notification {
@@ -13,6 +22,9 @@ pub struct Notification {
     pub summary: String,
     pub body: String,
     pub app_icon: Option<String>,
+    pub urgency: NotificationUrgency,
+    pub actions: Vec<(String, String)>,
+    pub expire_timeout_ms: i32,
     pub timestamp: chrono::DateTime<chrono::Local>,
 }
 
@@ -24,6 +36,9 @@ impl Notification {
             summary: summary.into(),
             body: body.into(),
             app_icon: None,
+            urgency: NotificationUrgency::Normal,
+            actions: Vec::new(),
+            expire_timeout_ms: 5000,
             timestamp: chrono::Local::now(),
         }
     }
@@ -140,9 +155,9 @@ impl NotificationServer {
         app_icon: String,
         summary: String,
         body: String,
-        _actions: Vec<String>,
-        _hints: HashMap<String, zbus::zvariant::Value<'_>>,
-        _expire_timeout: i32,
+        raw_actions: Vec<String>,
+        hints: HashMap<String, zbus::zvariant::Value<'_>>,
+        expire_timeout: i32,
     ) -> u32 {
         let mut id_lock = self.next_id.lock().unwrap();
         let id = if replaces_id == 0 {
@@ -150,6 +165,45 @@ impl NotificationServer {
             *id_lock
         } else {
             replaces_id
+        };
+
+        // Parse urgency hint
+        let urgency = hints
+            .get("urgency")
+            .and_then(|v| match v {
+                zbus::zvariant::Value::U8(u) => match u {
+                    0 => Some(NotificationUrgency::Low),
+                    1 => Some(NotificationUrgency::Normal),
+                    2 => Some(NotificationUrgency::Critical),
+                    _ => None,
+                },
+                zbus::zvariant::Value::I32(i) => match i {
+                    0 => Some(NotificationUrgency::Low),
+                    1 => Some(NotificationUrgency::Normal),
+                    2 => Some(NotificationUrgency::Critical),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap_or(NotificationUrgency::Normal);
+
+        // Parse action button pairs
+        let mut actions = Vec::new();
+        for chunk in raw_actions.chunks(2) {
+            if chunk.len() == 2 {
+                actions.push((chunk[0].clone(), chunk[1].clone()));
+            }
+        }
+
+        // Calculate expire timeout
+        let expire_timeout_ms = if expire_timeout > 0 {
+            expire_timeout
+        } else {
+            match urgency {
+                NotificationUrgency::Low => 3000,
+                NotificationUrgency::Normal => 5000,
+                NotificationUrgency::Critical => 0,
+            }
         };
 
         let notification = Notification {
@@ -162,6 +216,9 @@ impl NotificationServer {
             } else {
                 Some(app_icon)
             },
+            urgency,
+            actions,
+            expire_timeout_ms,
             timestamp: chrono::Local::now(),
         };
 
@@ -237,12 +294,43 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].app_name, "test-app");
 
-        // Verify receiver
         let received = rx.recv().unwrap();
         assert_eq!(received.id, 1);
 
         service.dismiss(1);
         assert!(service.notifications().is_empty());
+    }
+
+    #[test]
+    fn test_notification_urgency_and_action_parsing() {
+        let server = NotificationServer {
+            notifications: Arc::new(Mutex::new(Vec::new())),
+            next_id: Arc::new(Mutex::new(0)),
+            new_notif_sender: Arc::new(Mutex::new(None)),
+        };
+
+        let mut hints = HashMap::new();
+        hints.insert("urgency".to_string(), zbus::zvariant::Value::U8(2));
+
+        let id = server.notify(
+            "alert-app".to_string(),
+            0,
+            "error".to_string(),
+            "Critical Alert".to_string(),
+            "System error occurred".to_string(),
+            vec!["default".to_string(), "Open".to_string()],
+            hints,
+            -1,
+        );
+
+        assert_eq!(id, 1);
+        let list = server.notifications.lock().unwrap();
+        assert_eq!(list[0].urgency, NotificationUrgency::Critical);
+        assert_eq!(list[0].expire_timeout_ms, 0);
+        assert_eq!(
+            list[0].actions,
+            vec![("default".to_string(), "Open".to_string())]
+        );
     }
 
     #[test]

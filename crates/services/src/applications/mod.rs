@@ -20,6 +20,9 @@ pub struct Application {
     pub description: Option<String>,
     pub categories: Vec<String>,
     pub desktop_file: PathBuf,
+    pub working_dir: Option<PathBuf>,
+    pub terminal: bool,
+    pub try_exec: Option<String>,
 }
 
 impl Application {
@@ -29,12 +32,28 @@ impl Application {
         let icon = self.icon.clone();
         let desktop_file = self.desktop_file.clone();
         let name = self.name.clone();
+        let working_dir = self.working_dir.clone();
+        let is_terminal = self.terminal;
 
         thread::spawn(move || match parse_exec(&exec, icon.as_deref()) {
-            Ok(argv) => {
+            Ok(mut argv) => {
+                if is_terminal {
+                    let term = find_terminal_emulator().unwrap_or_else(|| "xterm".to_string());
+                    let mut term_argv = vec![term, "-e".to_string()];
+                    term_argv.extend(argv);
+                    argv = term_argv;
+                }
+
                 let program = &argv[0];
                 let args = &argv[1..];
-                if let Err(err) = Command::new(program).args(args).spawn() {
+                let mut cmd = Command::new(program);
+                cmd.args(args);
+
+                if let Some(dir) = working_dir {
+                    cmd.current_dir(dir);
+                }
+
+                if let Err(err) = cmd.spawn() {
                     eprintln!(
                         "Failed to launch application '{}' ({}) via {:?}: {}",
                         name,
@@ -54,6 +73,33 @@ impl Application {
             }
         });
     }
+}
+
+pub fn binary_exists(bin: &str) -> bool {
+    let clean = bin.trim();
+    if clean.is_empty() {
+        return false;
+    }
+    if clean.contains('/') {
+        return std::path::Path::new(clean).exists();
+    }
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            if dir.join(clean).is_file() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn find_terminal_emulator() -> Option<String> {
+    for term in ["foot", "alacritty", "kitty", "xterm", "x-terminal-emulator"] {
+        if binary_exists(term) {
+            return Some(term.to_string());
+        }
+    }
+    None
 }
 
 /// Parses a Freedesktop Desktop Entry `Exec` line into a program and argument vector.
@@ -314,6 +360,11 @@ fn parse_desktop_file(path: &PathBuf) -> Result<Application> {
     let mut description = None;
     let mut categories = Vec::new();
     let mut no_display = false;
+    let mut working_dir = None;
+    let mut terminal = false;
+    let mut try_exec = None;
+    let mut only_show_in = Vec::new();
+    let mut not_show_in = Vec::new();
     let mut in_desktop_entry = false;
 
     for line in reader.lines().map_while(Result::ok) {
@@ -336,8 +387,25 @@ fn parse_desktop_file(path: &PathBuf) -> Result<Application> {
                 "Exec" if exec.is_none() => exec = Some(val.to_string()),
                 "Icon" if icon.is_none() => icon = Some(val.to_string()),
                 "Comment" if description.is_none() => description = Some(val.to_string()),
+                "TryExec" if try_exec.is_none() => try_exec = Some(val.to_string()),
+                "Path" if working_dir.is_none() => working_dir = Some(PathBuf::from(val)),
+                "Terminal" => terminal = val.eq_ignore_ascii_case("true"),
                 "Categories" if categories.is_empty() => {
                     categories = val
+                        .split(';')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
+                "OnlyShowIn" if only_show_in.is_empty() => {
+                    only_show_in = val
+                        .split(';')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
+                "NotShowIn" if not_show_in.is_empty() => {
+                    not_show_in = val
                         .split(';')
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
@@ -353,6 +421,23 @@ fn parse_desktop_file(path: &PathBuf) -> Result<Application> {
         anyhow::bail!("NoDisplay is true");
     }
 
+    if let Some(ref bin) = try_exec
+        && !binary_exists(bin)
+    {
+        anyhow::bail!("TryExec binary '{}' does not exist", bin);
+    }
+
+    if let Ok(current_desktop) = std::env::var("XDG_CURRENT_DESKTOP") {
+        let current = current_desktop.trim();
+        if !only_show_in.is_empty() && !only_show_in.iter().any(|d| d.eq_ignore_ascii_case(current))
+        {
+            anyhow::bail!("OnlyShowIn does not match current desktop '{}'", current);
+        }
+        if not_show_in.iter().any(|d| d.eq_ignore_ascii_case(current)) {
+            anyhow::bail!("NotShowIn matches current desktop '{}'", current);
+        }
+    }
+
     let name = name.ok_or_else(|| anyhow::anyhow!("Missing Name"))?;
     let exec = exec.ok_or_else(|| anyhow::anyhow!("Missing Exec"))?;
     let icon_path = icon.as_ref().and_then(|i| icons::lookup_icon(i));
@@ -365,6 +450,9 @@ fn parse_desktop_file(path: &PathBuf) -> Result<Application> {
         description,
         categories,
         desktop_file: path.clone(),
+        working_dir,
+        terminal,
+        try_exec,
     })
 }
 
@@ -467,9 +555,18 @@ mod tests {
             description: Some("A test application".to_string()),
             categories: vec!["Utility".to_string()],
             desktop_file: PathBuf::from("/tmp/test.desktop"),
+            working_dir: Some(PathBuf::from("/tmp")),
+            terminal: false,
+            try_exec: Some("test-binary".to_string()),
         };
         let scanner = AppScanner::from_applications(vec![app.clone()]);
         assert_eq!(scanner.applications(), vec![app.clone()]);
         assert_eq!(scanner.search("test"), vec![app]);
+    }
+
+    #[test]
+    fn test_binary_exists_validation() {
+        assert!(binary_exists("ls") || binary_exists("sh") || binary_exists("bash"));
+        assert!(!binary_exists("nonexistent_binary_shilpo_12345"));
     }
 }

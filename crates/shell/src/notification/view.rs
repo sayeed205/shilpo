@@ -1,6 +1,6 @@
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Role,
-    StatefulInteractiveElement, Styled, Window, div, img, px,
+    StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px,
 };
 use shilpo_services::Notification;
 use shilpo_ui::{ActiveTheme, Colorize, Icon, IconName, StyledExt, h_flex, v_flex};
@@ -63,13 +63,26 @@ impl Render for NotificationToastView {
                 .child(Icon::new(IconName::Bell).size(px(18.)))
         };
 
+        let (bg, fg) = match self.notification.urgency {
+            shilpo_services::NotificationUrgency::Critical => {
+                (cx.theme().error_container, cx.theme().on_error_container)
+            }
+            shilpo_services::NotificationUrgency::Normal => {
+                (cx.theme().surface_container_highest, cx.theme().on_surface)
+            }
+            shilpo_services::NotificationUrgency::Low => {
+                (cx.theme().surface_container, cx.theme().on_surface_variant)
+            }
+        };
+
         h_flex()
             .w_full()
             .h_full()
             .p_4()
             .gap_4()
             .rounded_2xl()
-            .bg(cx.theme().surface_container_highest)
+            .bg(bg)
+            .text_color(fg)
             .border_1()
             .border_color(cx.theme().outline_variant.opacity(0.4))
             .shadow_lg()
@@ -83,15 +96,32 @@ impl Render for NotificationToastView {
                         div()
                             .text_sm()
                             .font_bold()
-                            .text_color(cx.theme().on_surface)
                             .child(self.notification.summary.clone()),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().on_surface_variant)
-                            .child(self.notification.body.clone()),
-                    ),
+                    .child(div().text_xs().child(self.notification.body.clone()))
+                    .when(!self.notification.actions.is_empty(), |this| {
+                        let actions = self.notification.actions.clone();
+                        this.child(h_flex().gap_1p5().pt_1().children(
+                            actions.into_iter().enumerate().map(|(i, (_key, label))| {
+                                div()
+                                    .id(("toast-action-btn", i))
+                                    .role(Role::Button)
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_md()
+                                    .bg(cx.theme().primary_container)
+                                    .text_color(cx.theme().on_primary_container)
+                                    .text_xs()
+                                    .font_semibold()
+                                    .cursor_pointer()
+                                    .on_click(|_, window, cx| {
+                                        ShellRuntime::close_active_notification(cx);
+                                        window.remove_window();
+                                    })
+                                    .child(label)
+                            }),
+                        ))
+                    }),
             )
             .child(
                 h_flex().gap_2().items_center().child(

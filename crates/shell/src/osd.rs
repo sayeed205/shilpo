@@ -7,10 +7,11 @@ use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
 use crate::runtime::ShellRuntime;
 
 /// Kind of On-Screen Display popup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OsdKind {
     Volume { level: u32, muted: bool },
     Brightness { level: u32 },
+    Notification(shilpo_services::Notification),
 }
 
 /// On-Screen Display (OSD) Overlay View.
@@ -44,9 +45,49 @@ impl OsdView {
 
 impl Render for OsdView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let OsdKind::Notification(ref notif) = self.kind {
+            let (bg, fg) = match notif.urgency {
+                shilpo_services::NotificationUrgency::Critical => (
+                    cx.theme().error_container.opacity(0.95),
+                    cx.theme().on_error_container,
+                ),
+                shilpo_services::NotificationUrgency::Normal => (
+                    cx.theme().surface_container_high.opacity(0.92),
+                    cx.theme().on_surface,
+                ),
+                shilpo_services::NotificationUrgency::Low => (
+                    cx.theme().surface_container.opacity(0.85),
+                    cx.theme().on_surface_variant,
+                ),
+            };
+
+            return h_flex()
+                .w_full()
+                .h_full()
+                .px_4()
+                .py_3()
+                .gap_3()
+                .rounded_2xl()
+                .bg(bg)
+                .text_color(fg)
+                .border_1()
+                .border_color(cx.theme().outline_variant.opacity(0.35))
+                .shadow_2xl()
+                .items_center()
+                .child(Icon::new(IconName::Bell).size(px(20.)))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .gap_0p5()
+                        .child(div().text_xs().font_bold().child(notif.summary.clone()))
+                        .child(div().text_xs().child(notif.body.clone())),
+                );
+        }
+
         let (icon, level, muted) = match self.kind {
             OsdKind::Volume { level, muted } => (IconName::Bell, level, muted),
             OsdKind::Brightness { level } => (IconName::Sun, level, false),
+            OsdKind::Notification(_) => unreachable!(),
         };
 
         let fill_pct = (level as f32 / 100.0).clamp(0.0, 1.0);
