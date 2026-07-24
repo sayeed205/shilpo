@@ -6,7 +6,8 @@ use gpui::{
 };
 use shilpo_services::{
     AudioService, BatteryService, BluetoothService, BrightnessService, NetworkService,
-    NightLightService, PowerProfile, PowerProfileService,
+    NightLightService, PowerProfile, PowerProfileService, RecordMode, ScreenCaptureService,
+    ScreenshotMode,
 };
 use shilpo_ui::{
     ActiveTheme, Colorize, FocusTrapElement, Icon, IconName, Sizable, StyledExt, h_flex,
@@ -24,11 +25,13 @@ pub struct ControlCenterView {
     pub night_light_service: Option<NightLightService>,
     pub bluetooth_service: Option<BluetoothService>,
     pub power_profile_service: Option<PowerProfileService>,
+    pub screen_capture_service: Option<ScreenCaptureService>,
     volume_state: Entity<SliderState>,
     brightness_state: Entity<SliderState>,
     dnd_active: bool,
     night_light_active: bool,
     bluetooth_active: bool,
+    is_recording: bool,
     active_power_profile: PowerProfile,
     focus_handle: FocusHandle,
 }
@@ -41,6 +44,7 @@ impl ControlCenterView {
         let night_light_service = service_or_warn(NightLightService::new, "night_light");
         let bluetooth_service = service_or_warn(BluetoothService::new, "bluetooth");
         let power_profile_service = service_or_warn(PowerProfileService::new, "power_profile");
+        let screen_capture_service = service_or_warn(ScreenCaptureService::new, "screen_capture");
         let brightness_service = match BrightnessService::new() {
             Ok(service) => Some(Arc::new(service)),
             Err(error) => {
@@ -48,6 +52,11 @@ impl ControlCenterView {
                 None
             }
         };
+
+        let initial_is_recording = screen_capture_service
+            .as_ref()
+            .map(|s| s.info().is_recording)
+            .unwrap_or(false);
 
         let initial_bluetooth = bluetooth_service
             .as_ref()
@@ -142,11 +151,13 @@ impl ControlCenterView {
             night_light_service,
             bluetooth_service,
             power_profile_service,
+            screen_capture_service,
             volume_state,
             brightness_state,
             dnd_active: false,
             night_light_active: initial_night_light,
             bluetooth_active: initial_bluetooth,
+            is_recording: initial_is_recording,
             active_power_profile: initial_power_profile,
             focus_handle,
         }
@@ -202,6 +213,27 @@ impl ControlCenterView {
             PowerProfile::Performance => PowerProfile::PowerSaver,
         };
         self.set_power_profile(next, cx);
+    }
+
+    fn take_screenshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(service) = &self.screen_capture_service {
+            service.take_screenshot(ScreenshotMode::Region, None);
+        } else {
+            let _ = std::process::Command::new("sh")
+                .args(["-c", "grim -g \"$(slurp)\" ~/Pictures/screenshot.png"])
+                .spawn();
+        }
+        ShellRuntime::forget_control_center(cx);
+        window.remove_window();
+    }
+
+    fn toggle_recording(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(service) = &self.screen_capture_service {
+            self.is_recording = service.toggle_recording(true, RecordMode::Region);
+        } else {
+            self.is_recording = !self.is_recording;
+        }
+        cx.notify();
     }
 
     fn handle_key_down(
@@ -304,6 +336,17 @@ impl Render for ControlCenterView {
         };
         let bt_fg = if self.bluetooth_active {
             cx.theme().on_primary_container
+        } else {
+            cx.theme().on_surface_variant
+        };
+
+        let record_bg = if self.is_recording {
+            cx.theme().error_container
+        } else {
+            cx.theme().surface_container_highest
+        };
+        let record_fg = if self.is_recording {
+            cx.theme().on_error_container
         } else {
             cx.theme().on_surface_variant
         };
@@ -461,6 +504,58 @@ impl Render for ControlCenterView {
                                             .child(
                                                 div().text_xs().font_bold().child("Night Light"),
                                             ),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_2_5()
+                                    // Screenshot Button
+                                    .child(
+                                        h_flex()
+                                            .id("cc-capture-screen")
+                                            .role(Role::Button)
+                                            .aria_label("Take Screenshot")
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.take_screenshot(window, cx);
+                                            }))
+                                            .w(relative(0.5))
+                                            .px_3()
+                                            .py_2()
+                                            .rounded_xl()
+                                            .bg(cx.theme().surface_container_highest)
+                                            .text_color(cx.theme().on_surface_variant)
+                                            .gap_2_5()
+                                            .items_center()
+                                            .child(Icon::new(IconName::Copy).size(px(16.)))
+                                            .child(div().text_xs().font_bold().child("Screenshot")),
+                                    )
+                                    // Screen Record Button
+                                    .child(
+                                        h_flex()
+                                            .id("cc-toggle-record")
+                                            .role(Role::Button)
+                                            .aria_label("Record Screen Video")
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.toggle_recording(window, cx);
+                                            }))
+                                            .w(relative(0.5))
+                                            .px_3()
+                                            .py_2()
+                                            .rounded_xl()
+                                            .bg(record_bg)
+                                            .text_color(record_fg)
+                                            .gap_2_5()
+                                            .items_center()
+                                            .child(Icon::new(IconName::Play).size(px(16.)))
+                                            .child(div().text_xs().font_bold().child(
+                                                if self.is_recording {
+                                                    "Recording"
+                                                } else {
+                                                    "Record"
+                                                },
+                                            )),
                                     ),
                             ),
                     )

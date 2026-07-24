@@ -9,6 +9,7 @@ pub mod network;
 pub mod night_light;
 pub mod notifications;
 pub mod power_profile;
+pub mod screen_capture;
 pub mod tray;
 pub mod upower;
 
@@ -26,5 +27,6 @@ pub use network::{NetworkInfo, NetworkService};
 pub use night_light::{NightLightInfo, NightLightService};
 pub use notifications::{Notification, NotificationService};
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
+pub use screen_capture::{RecordMode, ScreenCaptureInfo, ScreenCaptureService, ScreenshotMode};
 pub use tray::{TrayItem, TrayService};
 pub use upower::{BatteryInfo, BatteryService};

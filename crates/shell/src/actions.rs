@@ -17,6 +17,8 @@ pub enum ActionId {
     VolumeMute,
     BrightnessUp,
     BrightnessDown,
+    TakeScreenshot,
+    RecordScreen,
 }
 
 impl ActionId {
@@ -34,6 +36,8 @@ impl ActionId {
         Self::VolumeMute,
         Self::BrightnessUp,
         Self::BrightnessDown,
+        Self::TakeScreenshot,
+        Self::RecordScreen,
     ];
 
     pub fn name(self) -> &'static str {
@@ -51,6 +55,8 @@ impl ActionId {
             Self::VolumeMute => "volume_mute",
             Self::BrightnessUp => "brightness_up",
             Self::BrightnessDown => "brightness_down",
+            Self::TakeScreenshot => "take_screenshot",
+            Self::RecordScreen => "record_screen",
         }
     }
 }
@@ -81,6 +87,8 @@ pub enum ActionInvocation {
     VolumeMute,
     BrightnessUp,
     BrightnessDown,
+    TakeScreenshot,
+    RecordScreen,
 }
 
 impl ActionInvocation {
@@ -99,6 +107,8 @@ impl ActionInvocation {
             Self::VolumeMute => ActionId::VolumeMute,
             Self::BrightnessUp => ActionId::BrightnessUp,
             Self::BrightnessDown => ActionId::BrightnessDown,
+            Self::TakeScreenshot => ActionId::TakeScreenshot,
+            Self::RecordScreen => ActionId::RecordScreen,
         }
     }
 
@@ -127,6 +137,8 @@ impl From<ActionId> for ActionInvocation {
             ActionId::VolumeMute => Self::VolumeMute,
             ActionId::BrightnessUp => Self::BrightnessUp,
             ActionId::BrightnessDown => Self::BrightnessDown,
+            ActionId::TakeScreenshot => Self::TakeScreenshot,
+            ActionId::RecordScreen => Self::RecordScreen,
         }
     }
 }
@@ -238,6 +250,20 @@ impl ActionRegistry {
                     id,
                     name: id.name(),
                     label: "Decrease Brightness",
+                    category: ActionCategory::System,
+                    enabled: true,
+                },
+                ActionId::TakeScreenshot => ActionDescriptor {
+                    id,
+                    name: id.name(),
+                    label: "Take Screenshot",
+                    category: ActionCategory::System,
+                    enabled: true,
+                },
+                ActionId::RecordScreen => ActionDescriptor {
+                    id,
+                    name: id.name(),
+                    label: "Record Screen Video",
                     category: ActionCategory::System,
                     enabled: true,
                 },

@@ -995,6 +995,16 @@ impl ShellRuntime {
                     );
                 }
             }
+            ActionInvocation::TakeScreenshot => {
+                if let Ok(capture) = shilpo_services::ScreenCaptureService::new() {
+                    capture.take_screenshot(shilpo_services::ScreenshotMode::Region, None);
+                }
+            }
+            ActionInvocation::RecordScreen => {
+                if let Ok(capture) = shilpo_services::ScreenCaptureService::new() {
+                    capture.toggle_recording(true, shilpo_services::RecordMode::Region);
+                }
+            }
         }
         Ok(())
     }
