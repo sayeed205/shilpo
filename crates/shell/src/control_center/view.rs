@@ -195,15 +195,31 @@ impl ControlCenterView {
         cx.notify();
     }
 
+    fn cycle_power_profile(&mut self, cx: &mut Context<Self>) {
+        let next = match self.active_power_profile {
+            PowerProfile::PowerSaver => PowerProfile::Balanced,
+            PowerProfile::Balanced => PowerProfile::Performance,
+            PowerProfile::Performance => PowerProfile::PowerSaver,
+        };
+        self.set_power_profile(next, cx);
+    }
+
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.keystroke.key.as_str() == "escape" {
-            ShellRuntime::forget_control_center(cx);
-            window.remove_window();
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                ShellRuntime::forget_control_center(cx);
+                window.remove_window();
+            }
+            "d" => self.toggle_dnd(cx),
+            "n" => self.toggle_night_light(cx),
+            "b" => self.toggle_bluetooth(cx),
+            "p" => self.cycle_power_profile(cx),
+            _ => {}
         }
     }
 }

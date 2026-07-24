@@ -81,6 +81,42 @@ impl LauncherCategory {
 pub enum LauncherSearchResult {
     App(Application),
     Action(ActionDescriptor),
+    FilePath(std::path::PathBuf),
+    Uri(String),
+}
+
+fn expand_path(query: &str) -> Option<std::path::PathBuf> {
+    let q = query.trim();
+    if q.is_empty() {
+        return None;
+    }
+    let expanded = if let Some(stripped) = q.strip_prefix("~/") {
+        std::env::var("HOME")
+            .ok()
+            .map(|h| std::path::PathBuf::from(h).join(stripped))
+    } else if q.starts_with('/') {
+        Some(std::path::PathBuf::from(q))
+    } else {
+        None
+    };
+
+    if let Some(path) = expanded
+        && path.exists()
+    {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn is_uri_spec(query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    q.starts_with("http://")
+        || q.starts_with("https://")
+        || q.starts_with("file://")
+        || q.starts_with("mailto:")
+        || q.starts_with("ssh://")
+        || q.starts_with("ftp://")
 }
 
 /// M3 Expressive Application Launcher Overlay View powered by shilpo-ui's Input element.
@@ -190,8 +226,17 @@ impl LauncherView {
             freq_a.cmp(&freq_b)
         });
 
-        let mut combined: Vec<LauncherSearchResult> =
-            apps.into_iter().map(LauncherSearchResult::App).collect();
+        let mut combined: Vec<LauncherSearchResult> = Vec::new();
+
+        if let Some(path) = expand_path(&text) {
+            combined.push(LauncherSearchResult::FilePath(path));
+        } else if is_uri_spec(&text) {
+            combined.push(LauncherSearchResult::Uri(text.trim().to_string()));
+        }
+
+        for app in apps {
+            combined.push(LauncherSearchResult::App(app));
+        }
 
         for action in ActionRegistry::all() {
             if q.is_empty() || action.label.to_lowercase().contains(&q) || action.name.contains(&q)
@@ -235,6 +280,16 @@ impl LauncherView {
                     ShellRuntime::forget_launcher(cx);
                     window.remove_window();
                 }
+                LauncherSearchResult::FilePath(path) => {
+                    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+                    ShellRuntime::forget_launcher(cx);
+                    window.remove_window();
+                }
+                LauncherSearchResult::Uri(uri) => {
+                    let _ = std::process::Command::new("xdg-open").arg(uri).spawn();
+                    ShellRuntime::forget_launcher(cx);
+                    window.remove_window();
+                }
             }
         } else {
             // Launch terminal command or web search
@@ -252,6 +307,20 @@ impl LauncherView {
                 window.remove_window();
             }
         }
+    }
+
+    fn cycle_category(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let all = LauncherCategory::ALL;
+        let current_idx = all
+            .iter()
+            .position(|&c| c == self.active_category)
+            .unwrap_or(0);
+        let next_idx = if forward {
+            (current_idx + 1) % all.len()
+        } else {
+            (current_idx + all.len() - 1) % all.len()
+        };
+        self.set_category(all[next_idx], cx);
     }
 
     fn handle_key_down(
@@ -273,6 +342,10 @@ impl LauncherView {
             }
             "up" => {
                 self.move_selection(-1, cx);
+            }
+            "tab" => {
+                let shift = event.keystroke.modifiers.shift;
+                self.cycle_category(!shift, cx);
             }
             _ => {}
         }
@@ -408,6 +481,105 @@ impl Render for LauncherView {
                             ),
                     )
                 }
+                LauncherSearchResult::FilePath(path) => {
+                    let file_icon = div()
+                        .w(px(42.))
+                        .h(px(42.))
+                        .rounded_xl()
+                        .bg(cx.theme().primary_container)
+                        .text_color(cx.theme().on_primary_container)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Icon::new(IconName::Folder).size(px(20.)));
+
+                    Some(
+                        h_flex()
+                            .id("top-match-card")
+                            .px_4()
+                            .py_3()
+                            .rounded_2xl()
+                            .bg(bg)
+                            .border_1()
+                            .border_color(if is_selected {
+                                cx.theme().primary
+                            } else {
+                                cx.theme().outline_variant.opacity(0.3)
+                            })
+                            .gap_4()
+                            .items_center()
+                            .child(file_icon)
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_base()
+                                            .font_bold()
+                                            .text_color(cx.theme().on_surface)
+                                            .child(
+                                                path.file_name()
+                                                    .and_then(|n| n.to_str())
+                                                    .unwrap_or("File")
+                                                    .to_string(),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().on_surface_variant)
+                                            .child(path.display().to_string()),
+                                    ),
+                            ),
+                    )
+                }
+                LauncherSearchResult::Uri(uri) => {
+                    let uri_icon = div()
+                        .w(px(42.))
+                        .h(px(42.))
+                        .rounded_xl()
+                        .bg(cx.theme().secondary_container)
+                        .text_color(cx.theme().on_secondary_container)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Icon::new(IconName::Star).size(px(20.)));
+
+                    Some(
+                        h_flex()
+                            .id("top-match-card")
+                            .px_4()
+                            .py_3()
+                            .rounded_2xl()
+                            .bg(bg)
+                            .border_1()
+                            .border_color(if is_selected {
+                                cx.theme().secondary
+                            } else {
+                                cx.theme().outline_variant.opacity(0.3)
+                            })
+                            .gap_4()
+                            .items_center()
+                            .child(uri_icon)
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_base()
+                                            .font_bold()
+                                            .text_color(cx.theme().on_surface)
+                                            .child("Open URI Link"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().on_surface_variant)
+                                            .child(uri.clone()),
+                                    ),
+                            ),
+                    )
+                }
             }
         } else {
             None
@@ -539,6 +711,83 @@ impl Render for LauncherView {
                                             .text_xs()
                                             .text_color(cx.theme().on_surface_variant)
                                             .child(format!("Action: {}", action.name)),
+                                    ),
+                            )
+                            .into_any_element()
+                    }
+                    LauncherSearchResult::FilePath(path) => {
+                        let file_icon = div()
+                            .w(px(32.))
+                            .h(px(32.))
+                            .rounded_lg()
+                            .bg(cx.theme().primary_container)
+                            .text_color(cx.theme().on_primary_container)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Icon::new(IconName::Folder).size(px(16.)));
+
+                        h_flex()
+                            .id(("file-item", i))
+                            .px_4()
+                            .py_2()
+                            .rounded_xl()
+                            .bg(bg)
+                            .text_color(fg)
+                            .gap_3()
+                            .items_center()
+                            .child(file_icon)
+                            .child(
+                                v_flex()
+                                    .gap_0p5()
+                                    .child(
+                                        div().text_sm().font_semibold().child(
+                                            path.file_name()
+                                                .and_then(|n| n.to_str())
+                                                .unwrap_or("File")
+                                                .to_string(),
+                                        ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().on_surface_variant)
+                                            .child(path.display().to_string()),
+                                    ),
+                            )
+                            .into_any_element()
+                    }
+                    LauncherSearchResult::Uri(uri) => {
+                        let uri_icon = div()
+                            .w(px(32.))
+                            .h(px(32.))
+                            .rounded_lg()
+                            .bg(cx.theme().secondary_container)
+                            .text_color(cx.theme().on_secondary_container)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Icon::new(IconName::Star).size(px(16.)));
+
+                        h_flex()
+                            .id(("uri-item", i))
+                            .px_4()
+                            .py_2()
+                            .rounded_xl()
+                            .bg(bg)
+                            .text_color(fg)
+                            .gap_3()
+                            .items_center()
+                            .child(uri_icon)
+                            .child(
+                                v_flex()
+                                    .gap_0p5()
+                                    .child(div().text_sm().font_semibold().child("Open URI Link"))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().on_surface_variant)
+                                            .child(uri.clone()),
                                     ),
                             )
                             .into_any_element()
