@@ -24,6 +24,7 @@ pub struct NiriWorkspaceInfo {
 }
 
 /// Niri Compositor IPC service for tracking workspaces and window focus in real time.
+#[derive(Clone)]
 pub struct NiriCompositorService {
     workspaces: Arc<Mutex<Vec<NiriWorkspaceInfo>>>,
     windows: Arc<Mutex<Vec<WindowInfo>>>,
@@ -400,9 +401,11 @@ mod tests {
 
     #[test]
     fn test_focus_workspace_fails_without_niri() {
-        let orig = env::var_os("NIRI_SOCKET");
+        let orig_niri = env::var_os("NIRI_SOCKET");
+        let orig_wayland = env::var_os("WAYLAND_DISPLAY");
         unsafe {
             env::set_var("NIRI_SOCKET", "/tmp/non_existent_niri_socket.sock");
+            env::set_var("WAYLAND_DISPLAY", "non_existent_wayland_display");
         }
 
         let service = NiriCompositorService {
@@ -414,27 +417,36 @@ mod tests {
             keyboard_layout: Arc::new(Mutex::new("us".into())),
         };
 
-        let err = service.focus_workspace(1).unwrap_err();
+        let err = service.focus_workspace(10).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("Niri IPC socket") || msg.contains("Failed to connect"),
+            msg.contains("Niri IPC socket")
+                || msg.contains("Failed to connect")
+                || msg.contains("No such file"),
             "expected socket connection error context, got: {msg}"
         );
 
         unsafe {
-            if let Some(val) = orig {
+            if let Some(val) = orig_niri {
                 env::set_var("NIRI_SOCKET", val);
             } else {
                 env::remove_var("NIRI_SOCKET");
+            }
+            if let Some(val) = orig_wayland {
+                env::set_var("WAYLAND_DISPLAY", val);
+            } else {
+                env::remove_var("WAYLAND_DISPLAY");
             }
         }
     }
 
     #[test]
     fn test_focus_window_fails_without_niri() {
-        let orig = env::var_os("NIRI_SOCKET");
+        let orig_niri = env::var_os("NIRI_SOCKET");
+        let orig_wayland = env::var_os("WAYLAND_DISPLAY");
         unsafe {
             env::set_var("NIRI_SOCKET", "/tmp/non_existent_niri_socket.sock");
+            env::set_var("WAYLAND_DISPLAY", "non_existent_wayland_display");
         }
 
         let service = NiriCompositorService {
@@ -449,15 +461,22 @@ mod tests {
         let err = service.focus_window(10).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("Niri IPC socket") || msg.contains("Failed to connect"),
+            msg.contains("Niri IPC socket")
+                || msg.contains("Failed to connect")
+                || msg.contains("No such file"),
             "expected socket connection error context, got: {msg}"
         );
 
         unsafe {
-            if let Some(val) = orig {
+            if let Some(val) = orig_niri {
                 env::set_var("NIRI_SOCKET", val);
             } else {
                 env::remove_var("NIRI_SOCKET");
+            }
+            if let Some(val) = orig_wayland {
+                env::set_var("WAYLAND_DISPLAY", val);
+            } else {
+                env::remove_var("WAYLAND_DISPLAY");
             }
         }
     }

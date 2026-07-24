@@ -1090,6 +1090,61 @@ impl Render for ControlCenterView {
                                     )
                                 }
                             }),
+                    )
+                    // Workspace Overview Grid
+                    .child(
+                        v_flex()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .justify_between()
+                                    .items_center()
+                                    .child(div().text_xs().font_bold().child("Workspace Overview")),
+                            )
+                            .child({
+                                let workspaces = ShellRuntime::workspace_overview(cx);
+                                if workspaces.is_empty() {
+                                    div()
+                                        .py_2()
+                                        .text_xs()
+                                        .text_color(cx.theme().on_surface_variant)
+                                        .child("Workspace overview unavailable")
+                                } else {
+                                    h_flex().gap_2().children(
+                                        workspaces.into_iter().enumerate().map(|(i, ws)| {
+                                            let ws_id = ws.id;
+                                            let is_active = ws.is_active;
+                                            let (bg, fg) = if is_active {
+                                                (cx.theme().primary, cx.theme().on_primary)
+                                            } else {
+                                                (
+                                                    cx.theme().surface_container,
+                                                    cx.theme().on_surface,
+                                                )
+                                            };
+                                            h_flex()
+                                                .id(("cc-ws-pill", i))
+                                                .role(Role::Button)
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(move |_, _, _, cx| {
+                                                    ShellRuntime::focus_workspace(cx, ws_id);
+                                                }))
+                                                .px_3()
+                                                .py_1p5()
+                                                .rounded_xl()
+                                                .bg(bg)
+                                                .text_color(fg)
+                                                .text_xs()
+                                                .font_bold()
+                                                .child(
+                                                    ws.name.unwrap_or_else(|| {
+                                                        format!("WS {}", ws.idx)
+                                                    }),
+                                                )
+                                        }),
+                                    )
+                                }
+                            }),
                     ),
             )
     }

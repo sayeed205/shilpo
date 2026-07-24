@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 
 pub struct ServiceHub {
+    pub niri: Option<NiriCompositorService>,
     pub notification: Option<NotificationService>,
     pub clipboard: shilpo_services::ClipboardService,
     pub service_commands: CommandSender,
@@ -62,7 +63,7 @@ impl ServiceHub {
             updates_tx,
             commands_rx,
             config_path.clone(),
-            niri,
+            niri.clone(),
             battery,
             audio,
             network,
@@ -103,6 +104,7 @@ impl ServiceHub {
         };
 
         Self {
+            niri,
             notification,
             clipboard,
             service_commands,
@@ -761,6 +763,28 @@ impl ShellRuntime {
             && let Some(ref hub) = cx.global::<Self>().service_hub
         {
             let _ = hub.clipboard.copy_text(text);
+        }
+    }
+
+    pub fn workspace_overview(cx: &App) -> Vec<shilpo_services::WorkspaceInfo> {
+        if cx.has_global::<Self>()
+            && let Some(ref hub) = cx.global::<Self>().service_hub
+            && let Some(ref niri) = hub.niri
+        {
+            use shilpo_services::CompositorAdapter;
+            CompositorAdapter::workspaces(niri)
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn focus_workspace(cx: &mut App, ws_id: u64) {
+        if cx.has_global::<Self>()
+            && let Some(ref hub) = cx.global::<Self>().service_hub
+            && let Some(ref niri) = hub.niri
+        {
+            use shilpo_services::CompositorAdapter;
+            let _ = CompositorAdapter::focus_workspace(niri, ws_id);
         }
     }
 
