@@ -432,6 +432,8 @@ impl Render for ControlCenterView {
                             .child(
                                 div()
                                     .id("cc-power-suspend")
+                                    .role(Role::Button)
+                                    .aria_label("Suspend System")
                                     .px_3()
                                     .py_2()
                                     .rounded_xl()
@@ -440,12 +442,21 @@ impl Render for ControlCenterView {
                                     .cursor_pointer()
                                     .hover(|s| {
                                         s.bg(cx.theme().surface_container_highest.darken(0.1))
+                                    })
+                                    .on_click(|_, window, cx| {
+                                        let _ = std::process::Command::new("systemctl")
+                                            .arg("suspend")
+                                            .spawn();
+                                        ShellRuntime::forget_control_center(cx);
+                                        window.remove_window();
                                     })
                                     .child(Icon::new(IconName::Copy).size(px(16.))),
                             )
                             .child(
                                 div()
                                     .id("cc-power-reboot")
+                                    .role(Role::Button)
+                                    .aria_label("Reboot System")
                                     .px_3()
                                     .py_2()
                                     .rounded_xl()
@@ -455,11 +466,20 @@ impl Render for ControlCenterView {
                                     .hover(|s| {
                                         s.bg(cx.theme().surface_container_highest.darken(0.1))
                                     })
+                                    .on_click(|_, window, cx| {
+                                        let _ = std::process::Command::new("systemctl")
+                                            .arg("reboot")
+                                            .spawn();
+                                        ShellRuntime::forget_control_center(cx);
+                                        window.remove_window();
+                                    })
                                     .child(Icon::new(IconName::Network).size(px(16.))),
                             )
                             .child(
                                 div()
                                     .id("cc-power-off")
+                                    .role(Role::Button)
+                                    .aria_label("Power Off System")
                                     .px_3()
                                     .py_2()
                                     .rounded_xl()
@@ -467,6 +487,13 @@ impl Render for ControlCenterView {
                                     .text_color(cx.theme().on_primary_container)
                                     .cursor_pointer()
                                     .hover(|s| s.bg(cx.theme().primary_container.darken(0.1)))
+                                    .on_click(|_, window, cx| {
+                                        let _ = std::process::Command::new("systemctl")
+                                            .arg("poweroff")
+                                            .spawn();
+                                        ShellRuntime::forget_control_center(cx);
+                                        window.remove_window();
+                                    })
                                     .child(Icon::new(IconName::Star).size(px(16.))),
                             ),
                     ),
