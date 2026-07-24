@@ -6,7 +6,7 @@ use gpui::{
 };
 use shilpo_services::{AudioService, BatteryService, BrightnessService, NetworkService};
 use shilpo_ui::{
-    ActiveTheme, Colorize, Icon, IconName, Sizable, StyledExt, h_flex,
+    ActiveTheme, Colorize, FocusTrapElement, Icon, IconName, Sizable, StyledExt, h_flex,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
     v_flex,
 };
@@ -243,6 +243,7 @@ impl Render for ControlCenterView {
                 v_flex()
                     .id("control-center-card")
                     .track_focus(&self.focus_handle(cx))
+                    .focus_trap("control-center-card-trap", &self.focus_handle)
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                         this.handle_key_down(event, window, cx);
                     }))

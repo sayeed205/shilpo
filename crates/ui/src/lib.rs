@@ -90,7 +90,7 @@ pub mod tree;
 pub use crate::Disableable;
 pub use element_ext::*;
 pub use event::InteractiveElementExt;
-pub use focus_trap::FocusTrapElement;
+pub use focus_trap::{FocusTrapContainer, FocusTrapElement};
 pub use geometry::*;
 pub use global_state::GlobalState;
 pub use icon::*;
@@ -98,6 +98,7 @@ pub use index_path::IndexPath;
 pub use input::{Rope, RopeExt, RopeLines};
 #[cfg(any(feature = "inspector", debug_assertions))]
 pub use inspector::*;
+pub use menu::{ContextMenu, ContextMenuExt, ContextMenuState, PopupMenu, PopupMenuItem};
 pub use root::Root;
 pub use shilpo_macros::icon_named;
 pub use styled::*;

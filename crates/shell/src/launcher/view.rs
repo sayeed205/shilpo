@@ -6,7 +6,8 @@ use gpui::{
 };
 use shilpo_services::{AppScanner, Application};
 use shilpo_ui::{
-    ActiveTheme, Icon, IconName, Sizable, StyledExt, h_flex,
+    ActiveTheme, ContextMenuExt, FocusTrapElement, Icon, IconName, PopupMenuItem, Sizable,
+    StyledExt, h_flex,
     input::{Input, InputEvent, InputState},
     v_flex,
 };
@@ -360,6 +361,7 @@ impl Render for LauncherView {
                                 .child(Icon::new(IconName::SquareTerminal).size(px(16.)))
                         };
 
+                        let app_exec = app.exec.clone();
                         h_flex()
                             .id(("app-item", i))
                             .px_4()
@@ -381,6 +383,32 @@ impl Render for LauncherView {
                                             .child(app.exec.clone()),
                                     ),
                             )
+                            .context_menu(move |menu, _window, _cx| {
+                                let exec_str = app_exec.clone();
+                                let exec_launch = app_exec.clone();
+                                menu.item(
+                                    PopupMenuItem::new("Launch Application")
+                                        .icon(IconName::Play)
+                                        .on_click(move |_, window, cx| {
+                                            let _ = std::process::Command::new("sh")
+                                                .arg("-c")
+                                                .arg(&exec_launch)
+                                                .spawn();
+                                            ShellRuntime::forget_launcher(cx);
+                                            window.remove_window();
+                                        }),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Copy Exec Command")
+                                        .icon(IconName::Copy)
+                                        .on_click(move |_, _window, cx| {
+                                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                                exec_str.clone(),
+                                            ));
+                                        }),
+                                )
+                            })
+                            .into_any_element()
                     }
                     LauncherSearchResult::Action(action) => {
                         let action_icon = div()
@@ -415,6 +443,7 @@ impl Render for LauncherView {
                                             .child(format!("Action: {}", action.name)),
                                     ),
                             )
+                            .into_any_element()
                     }
                 }
             });
@@ -543,6 +572,7 @@ impl Render for LauncherView {
                 v_flex()
                     .id("launcher-card")
                     .track_focus(&self.focus_handle(cx))
+                    .focus_trap("launcher-card-trap", &self.focus_handle(cx))
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                         this.handle_key_down(event, window, cx);
                     }))

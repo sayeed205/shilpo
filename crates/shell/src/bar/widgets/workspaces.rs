@@ -1,9 +1,11 @@
+use crate::actions::ActionInvocation;
+use crate::runtime::ShellRuntime;
 use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
-    Styled, Window, div, px,
+    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
 };
 use shilpo_services::NiriWorkspaceInfo;
-use shilpo_ui::{ActiveTheme, StyledExt, h_flex};
+use shilpo_ui::{ActiveTheme, ContextMenuExt, IconName, PopupMenuItem, StyledExt, h_flex};
 
 /// Workspaces widget for Niri compositor status bar.
 #[derive(IntoElement)]
@@ -65,9 +67,29 @@ impl RenderOnce for WorkspacesWidget {
                     };
 
                     let label = ws.name.unwrap_or_else(|| ws.idx.to_string());
+                    let ws_id = ws.id;
 
                     div()
                         .id(("ws", ws.id))
+                        .cursor_pointer()
+                        .on_click(move |_, _, cx| {
+                            let _ = ShellRuntime::dispatch_action(
+                                cx,
+                                ActionInvocation::FocusWorkspace(ws_id),
+                            );
+                        })
+                        .context_menu(move |menu, _window, _cx| {
+                            menu.item(
+                                PopupMenuItem::new("Focus Workspace")
+                                    .icon(IconName::Check)
+                                    .on_click(move |_, _, cx| {
+                                        let _ = ShellRuntime::dispatch_action(
+                                            cx,
+                                            ActionInvocation::FocusWorkspace(ws_id),
+                                        );
+                                    }),
+                            )
+                        })
                         .h(px(20.))
                         .min_w(w)
                         .px_1_5()
