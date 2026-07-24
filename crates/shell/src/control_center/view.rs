@@ -257,6 +257,20 @@ impl ControlCenterView {
         cx.notify();
     }
 
+    fn toggle_wifi(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if let Some(service) = &self.network_service {
+            let _ = service.set_wifi_enabled(enabled);
+        }
+        cx.notify();
+    }
+
+    fn deactivate_vpn(&mut self, active_conn_path: &str, cx: &mut Context<Self>) {
+        if let Some(service) = &self.network_service {
+            let _ = service.deactivate_connection(active_conn_path);
+        }
+        cx.notify();
+    }
+
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -447,6 +461,13 @@ impl Render for ControlCenterView {
                                     .child(
                                         h_flex()
                                             .id("cc-toggle-wifi")
+                                            .cursor_pointer()
+                                            .on_click(cx.listener({
+                                                let wifi_enabled = network.wifi_enabled;
+                                                move |this, _, _, cx| {
+                                                    this.toggle_wifi(!wifi_enabled, cx);
+                                                }
+                                            }))
                                             .w(relative(0.5))
                                             .px_3()
                                             .py_2()
@@ -741,6 +762,44 @@ impl Render for ControlCenterView {
                                 }),
                         )
                     })
+                    // Active VPN Connections Section
+                    .when(
+                        network.available && !network.active_vpns.is_empty(),
+                        |this| {
+                            let vpns = network.active_vpns.clone();
+                            this.child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_semibold()
+                                            .child("Active VPN Connections"),
+                                    )
+                                    .child(h_flex().gap_1p5().flex_wrap().children(
+                                        vpns.into_iter().enumerate().map(|(i, vpn)| {
+                                            let obj_path = vpn.object_path.clone();
+                                            let label = format!("{} ({})", vpn.id, vpn.vpn_type);
+                                            div()
+                                                .id(("vpn-conn-pill", i))
+                                                .role(Role::Button)
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_md()
+                                                .bg(cx.theme().primary_container)
+                                                .text_color(cx.theme().on_primary_container)
+                                                .text_xs()
+                                                .font_semibold()
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.deactivate_vpn(&obj_path, cx);
+                                                }))
+                                                .child(label)
+                                        }),
+                                    )),
+                            )
+                        },
+                    )
                     // Brightness Slider
                     .child(
                         v_flex()

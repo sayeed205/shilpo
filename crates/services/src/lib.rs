@@ -26,7 +26,7 @@ pub use ipc::{
     BarState, IpcError, IpcRequest, IpcResponse, IpcResult, IpcStatus, ServiceHealth,
     ShellIpcServer,
 };
-pub use network::{NetworkInfo, NetworkService};
+pub use network::{NetworkInfo, NetworkService, VpnConnection};
 pub use night_light::{NightLightInfo, NightLightService};
 pub use notifications::{Notification, NotificationService};
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
