@@ -1,8 +1,8 @@
 use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    KeyDownEvent, ParentElement, Render, Role, StatefulInteractiveElement, Styled, Window, div, px,
-    relative,
+    KeyDownEvent, ParentElement, Render, Role, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder, px, relative,
 };
 use shilpo_services::{
     AudioService, BatteryService, BluetoothService, BrightnessService, NetworkService,
@@ -232,6 +232,27 @@ impl ControlCenterView {
             self.is_recording = service.toggle_recording(true, RecordMode::Region);
         } else {
             self.is_recording = !self.is_recording;
+        }
+        cx.notify();
+    }
+
+    fn select_audio_device(&mut self, device_id: &str, is_input: bool, cx: &mut Context<Self>) {
+        if let Some(service) = &self.audio_service {
+            let _ = service.set_default_device(device_id, is_input);
+        }
+        cx.notify();
+    }
+
+    fn select_audio_port(&mut self, sink_name: &str, port_name: &str, cx: &mut Context<Self>) {
+        if let Some(service) = &self.audio_service {
+            let _ = service.set_sink_port(sink_name, port_name);
+        }
+        cx.notify();
+    }
+
+    fn toggle_simultaneous_audio(&mut self, cx: &mut Context<Self>) {
+        if let Some(service) = &self.audio_service {
+            let _ = service.toggle_simultaneous_output();
         }
         cx.notify();
     }
@@ -618,6 +639,108 @@ impl Render for ControlCenterView {
                                     .with_size(shilpo_ui::Size::Small),
                             ),
                     )
+                    // Audio Devices & Ports Selector
+                    .when(audio_available, |this| {
+                        let devices = self
+                            .audio_service
+                            .as_ref()
+                            .map(|s| s.list_devices())
+                            .unwrap_or_default();
+                        let ports = self
+                            .audio_service
+                            .as_ref()
+                            .map(|s| s.list_ports())
+                            .unwrap_or_default();
+
+                        this.child(
+                            v_flex()
+                                .gap_1p5()
+                                .child(
+                                    h_flex()
+                                        .justify_between()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_semibold()
+                                                .child("Audio Devices & Ports"),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("cc-toggle-simultaneous-audio")
+                                                .role(Role::Button)
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded_full()
+                                                .bg(cx.theme().primary_container)
+                                                .text_color(cx.theme().on_primary_container)
+                                                .text_xs()
+                                                .font_bold()
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.toggle_simultaneous_audio(cx);
+                                                }))
+                                                .child("Simultaneous Audio"),
+                                        ),
+                                )
+                                .child(h_flex().gap_1p5().flex_wrap().children(
+                                    devices.into_iter().enumerate().map(|(i, dev)| {
+                                        let is_input = dev.is_input;
+                                        let dev_id = dev.id.clone();
+                                        let label = dev.description;
+                                        div()
+                                            .id(("audio-dev-pill", i))
+                                            .role(Role::Button)
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .bg(cx.theme().surface_container_highest)
+                                            .text_color(cx.theme().on_surface_variant)
+                                            .text_xs()
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.select_audio_device(&dev_id, is_input, cx);
+                                            }))
+                                            .child(label)
+                                    }),
+                                ))
+                                .when(!ports.is_empty(), |this| {
+                                    this.child(h_flex().gap_1p5().flex_wrap().children(
+                                        ports.into_iter().enumerate().map(|(i, port)| {
+                                            let port_name = port.name.clone();
+                                            let label = port.description.clone();
+                                            let is_active = port.is_active;
+                                            let (bg, fg) = if is_active {
+                                                (cx.theme().primary, cx.theme().on_primary)
+                                            } else {
+                                                (
+                                                    cx.theme().surface_container_highest,
+                                                    cx.theme().on_surface_variant,
+                                                )
+                                            };
+                                            div()
+                                                .id(("audio-port-pill", i))
+                                                .role(Role::Button)
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_md()
+                                                .bg(bg)
+                                                .text_color(fg)
+                                                .text_xs()
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.select_audio_port(
+                                                        "@DEFAULT_SINK@",
+                                                        &port_name,
+                                                        cx,
+                                                    );
+                                                }))
+                                                .child(label)
+                                        }),
+                                    ))
+                                }),
+                        )
+                    })
                     // Brightness Slider
                     .child(
                         v_flex()

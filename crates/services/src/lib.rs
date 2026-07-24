@@ -14,7 +14,7 @@ pub mod tray;
 pub mod upower;
 
 pub use applications::{AppScanner, Application};
-pub use audio::{AudioInfo, AudioService};
+pub use audio::{AudioDevice, AudioInfo, AudioPort, AudioService};
 pub use bluetooth::{BluetoothInfo, BluetoothService};
 pub use brightness::{BrightnessInfo, BrightnessService};
 pub use compositor::{
