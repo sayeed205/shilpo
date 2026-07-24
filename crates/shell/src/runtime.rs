@@ -124,6 +124,8 @@ pub struct ShellRuntime {
     notification_generation: u64,
     notification_history: Vec<shilpo_services::Notification>,
     prior_window_id: Option<u64>,
+    session_state: shilpo_config::ShellSessionState,
+    session_path: PathBuf,
     service_hub: Option<ServiceHub>,
     _window_closed: Option<Subscription>,
     _ipc_task: gpui::Task<()>,
@@ -149,6 +151,8 @@ impl ShellRuntime {
             .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));
         let active_config = shilpo_config::ShellConfig::load_or_create(&config_path)
             .unwrap_or_else(|_| shilpo_config::ShellConfig::default());
+        let session_path = shilpo_config::ShellSessionState::default_session_path();
+        let session_state = shilpo_config::ShellSessionState::load_or_default(&session_path);
         let hub = ServiceHub::new(cx.background_executor().clone(), config_path);
 
         cx.set_global(Self {
@@ -164,6 +168,8 @@ impl ShellRuntime {
             notification_generation: 0,
             notification_history: Vec::new(),
             prior_window_id: None,
+            session_state,
+            session_path,
             service_hub: Some(hub),
             _window_closed: None,
             _ipc_task: cx.spawn(async |_| {}),
@@ -675,6 +681,16 @@ impl ShellRuntime {
             Err(error) => {
                 tracing::warn!(error = %error, "IPC worker request dropped: bar handle unavailable")
             }
+        }
+    }
+
+    pub fn record_recent_app(cx: &mut App, app_id: &str) {
+        if cx.has_global::<Self>() {
+            let runtime = cx.global_mut::<Self>();
+            runtime.session_state.record_recent_app(app_id);
+            let path = runtime.session_path.clone();
+            let session = runtime.session_state.clone();
+            let _ = session.save_atomic(&path);
         }
     }
 

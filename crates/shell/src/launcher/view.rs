@@ -130,6 +130,7 @@ impl LauncherView {
         if self.selected_index < self.results.len() {
             match &self.results[self.selected_index] {
                 LauncherSearchResult::App(app) => {
+                    ShellRuntime::record_recent_app(cx, &app.exec);
                     app.launch();
                     ShellRuntime::forget_launcher(cx);
                     window.remove_window();

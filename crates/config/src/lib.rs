@@ -422,11 +422,116 @@ impl ShellConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ShellSessionState {
+    pub version: u32,
+    #[serde(default)]
+    pub recent_apps: Vec<String>,
+    #[serde(default)]
+    pub pinned_apps: Vec<String>,
+    #[serde(default)]
+    pub dnd_active: bool,
+    #[serde(default)]
+    pub night_light_active: bool,
+}
+
+impl Default for ShellSessionState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            recent_apps: Vec::new(),
+            pinned_apps: Vec::new(),
+            dnd_active: false,
+            night_light_active: false,
+        }
+    }
+}
+
+impl ShellSessionState {
+    pub fn default_session_path() -> PathBuf {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+            .unwrap_or_else(|| PathBuf::from("."));
+        base.join("shilpo").join("session.json")
+    }
+
+    pub fn load_or_default(path: &Path) -> Self {
+        if !path.exists() {
+            return Self::default();
+        }
+        let Ok(text) = fs::read_to_string(path) else {
+            return Self::default();
+        };
+        let Ok(session) = serde_json::from_str::<Self>(&text) else {
+            return Self::default();
+        };
+        if session.version != 1 {
+            return Self::default();
+        }
+        session
+    }
+
+    pub fn save_atomic(&self, path: &Path) -> Result<(), ConfigError> {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let text = serde_json::to_string_pretty(self).map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: path.display().to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })?;
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        fs::write(&tmp, text).map_err(|source| ConfigError::Io {
+            path: tmp.clone(),
+            source,
+        })?;
+        fs::rename(&tmp, path).map_err(|source| ConfigError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        Ok(())
+    }
+
+    pub fn record_recent_app(&mut self, app_id: impl Into<String>) {
+        let app_id = app_id.into();
+        self.recent_apps.retain(|id| id != &app_id);
+        self.recent_apps.insert(0, app_id);
+        if self.recent_apps.len() > 30 {
+            self.recent_apps.truncate(30);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     fn valid() -> ShellConfig {
         ShellConfig::default()
+    }
+
+    #[test]
+    fn session_state_roundtrip_and_atomic_save() {
+        let path = std::env::temp_dir().join(format!("shilpo-session-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let mut session = ShellSessionState::default();
+        session.record_recent_app("org.gnome.Terminal");
+        session.record_recent_app("firefox");
+        session.pinned_apps.push("org.gnome.Terminal".into());
+        session.dnd_active = true;
+
+        session.save_atomic(&path).unwrap();
+
+        let loaded = ShellSessionState::load_or_default(&path);
+        assert_eq!(loaded, session);
+        assert_eq!(loaded.recent_apps, vec!["firefox", "org.gnome.Terminal"]);
+        assert!(loaded.dnd_active);
+
+        let _ = std::fs::remove_file(&path);
     }
     #[test]
     fn roundtrip() {
