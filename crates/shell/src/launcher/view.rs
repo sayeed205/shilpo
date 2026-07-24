@@ -7,11 +7,75 @@ use gpui::{
 };
 use shilpo_services::{AppScanner, Application};
 use shilpo_ui::{
-    ActiveTheme, ContextMenuExt, FocusTrapElement, Icon, IconName, PopupMenuItem, Sizable,
-    StyledExt, h_flex,
+    ActiveTheme, Colorize, ContextMenuExt, FocusTrapElement, Icon, IconName, PopupMenuItem,
+    Sizable, StyledExt, h_flex,
     input::{Input, InputEvent, InputState},
     v_flex,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LauncherCategory {
+    All,
+    Development,
+    System,
+    Utility,
+    Media,
+}
+
+impl LauncherCategory {
+    pub const ALL: &[Self] = &[
+        Self::All,
+        Self::Development,
+        Self::System,
+        Self::Utility,
+        Self::Media,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Development => "Dev",
+            Self::System => "System",
+            Self::Utility => "Utility",
+            Self::Media => "Media",
+        }
+    }
+
+    /// Returns true if this application matches the category filter.
+    pub fn matches(self, app: &Application) -> bool {
+        match self {
+            Self::All => true,
+            Self::Development => app.categories.iter().any(|c| {
+                matches!(
+                    c.as_str(),
+                    "Development" | "IDE" | "TextEditor" | "WebBrowser"
+                )
+            }),
+            Self::System => app.categories.iter().any(|c| {
+                matches!(
+                    c.as_str(),
+                    "System" | "Settings" | "Monitor" | "TerminalEmulator" | "PackageManager"
+                )
+            }),
+            Self::Utility => app
+                .categories
+                .iter()
+                .any(|c| matches!(c.as_str(), "Utility" | "Accessibility" | "FileManager")),
+            Self::Media => app.categories.iter().any(|c| {
+                matches!(
+                    c.as_str(),
+                    "Audio"
+                        | "Video"
+                        | "AudioVideo"
+                        | "Music"
+                        | "Player"
+                        | "Graphics"
+                        | "Photography"
+                )
+            }),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum LauncherSearchResult {
@@ -25,6 +89,7 @@ pub struct LauncherView {
     input_state: Entity<InputState>,
     results: Vec<LauncherSearchResult>,
     selected_index: usize,
+    active_category: LauncherCategory,
     pub loading: bool,
 }
 
@@ -82,6 +147,7 @@ impl LauncherView {
             input_state,
             results: Vec::new(),
             selected_index: 0,
+            active_category: LauncherCategory::All,
             loading: true,
         }
     }
@@ -98,11 +164,34 @@ impl LauncherView {
     fn update_search(&mut self, cx: &mut Context<Self>) {
         let text = self.input_state.read(cx).value().to_string();
         let q = text.trim().to_lowercase();
-        let mut combined = Vec::new();
+        let category = self.active_category;
 
-        for app in self.scanner.search(&text) {
-            combined.push(LauncherSearchResult::App(app));
-        }
+        // Collect recent_apps for frequency ranking
+        let recent_apps = ShellRuntime::recent_apps(cx);
+
+        // Filter and rank applications
+        let mut apps: Vec<Application> = self
+            .scanner
+            .search(&text)
+            .into_iter()
+            .filter(|app| category.matches(app))
+            .collect();
+
+        // Sort by frequency: apps appearing earlier in recent_apps rank higher
+        apps.sort_by(|a, b| {
+            let freq_a = recent_apps
+                .iter()
+                .position(|id| id == &a.exec)
+                .unwrap_or(usize::MAX);
+            let freq_b = recent_apps
+                .iter()
+                .position(|id| id == &b.exec)
+                .unwrap_or(usize::MAX);
+            freq_a.cmp(&freq_b)
+        });
+
+        let mut combined: Vec<LauncherSearchResult> =
+            apps.into_iter().map(LauncherSearchResult::App).collect();
 
         for action in ActionRegistry::all() {
             if q.is_empty() || action.label.to_lowercase().contains(&q) || action.name.contains(&q)
@@ -114,6 +203,11 @@ impl LauncherView {
         self.results = combined;
         self.selected_index = 0;
         cx.notify();
+    }
+
+    fn set_category(&mut self, category: LauncherCategory, cx: &mut Context<Self>) {
+        self.active_category = category;
+        self.update_search(cx);
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -611,6 +705,44 @@ impl Render for LauncherView {
                                     .with_size(shilpo_ui::Size::Medium),
                             ),
                     )
+                    // Category Filter Pills
+                    .child(h_flex().gap_1p5().children(
+                        LauncherCategory::ALL.iter().enumerate().map(|(i, &cat)| {
+                            let is_active = self.active_category == cat;
+                            let (bg, fg) = if is_active {
+                                (cx.theme().primary, cx.theme().on_primary)
+                            } else {
+                                (
+                                    cx.theme().surface_container_highest.opacity(0.6),
+                                    cx.theme().on_surface_variant,
+                                )
+                            };
+
+                            div()
+                                .id(("cat-pill", i))
+                                .role(Role::Button)
+                                .aria_label(format!("Filter {}", cat.label()))
+                                .px_3()
+                                .py_1()
+                                .rounded_full()
+                                .bg(bg)
+                                .text_color(fg)
+                                .text_xs()
+                                .font_semibold()
+                                .cursor_pointer()
+                                .hover(|s| {
+                                    if is_active {
+                                        s.bg(cx.theme().primary.darken(0.05))
+                                    } else {
+                                        s.bg(cx.theme().surface_container_highest)
+                                    }
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.set_category(cat, cx);
+                                }))
+                                .child(cat.label())
+                        }),
+                    ))
                     // Prominent Top Result Card
                     .children(top_match)
                     // Secondary list results and fallback providers

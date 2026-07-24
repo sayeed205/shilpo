@@ -18,6 +18,7 @@ pub struct Application {
     pub icon: Option<String>,
     pub icon_path: Option<PathBuf>,
     pub description: Option<String>,
+    pub categories: Vec<String>,
     pub desktop_file: PathBuf,
 }
 
@@ -311,6 +312,7 @@ fn parse_desktop_file(path: &PathBuf) -> Result<Application> {
     let mut exec = None;
     let mut icon = None;
     let mut description = None;
+    let mut categories = Vec::new();
     let mut no_display = false;
     let mut in_desktop_entry = false;
 
@@ -334,6 +336,13 @@ fn parse_desktop_file(path: &PathBuf) -> Result<Application> {
                 "Exec" if exec.is_none() => exec = Some(val.to_string()),
                 "Icon" if icon.is_none() => icon = Some(val.to_string()),
                 "Comment" if description.is_none() => description = Some(val.to_string()),
+                "Categories" if categories.is_empty() => {
+                    categories = val
+                        .split(';')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
                 "NoDisplay" if val.eq_ignore_ascii_case("true") => no_display = true,
                 _ => {}
             }
@@ -354,6 +363,7 @@ fn parse_desktop_file(path: &PathBuf) -> Result<Application> {
         icon,
         icon_path,
         description,
+        categories,
         desktop_file: path.clone(),
     })
 }
@@ -455,6 +465,7 @@ mod tests {
             icon: Some("test-icon".to_string()),
             icon_path: None,
             description: Some("A test application".to_string()),
+            categories: vec!["Utility".to_string()],
             desktop_file: PathBuf::from("/tmp/test.desktop"),
         };
         let scanner = AppScanner::from_applications(vec![app.clone()]);

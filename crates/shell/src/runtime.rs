@@ -867,6 +867,14 @@ impl ShellRuntime {
         }
     }
 
+    pub fn recent_apps(cx: &App) -> Vec<String> {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>().session_state.recent_apps.clone()
+        } else {
+            Vec::new()
+        }
+    }
+
     pub fn dispatch_action(
         cx: &mut App,
         action: impl Into<ActionInvocation>,
