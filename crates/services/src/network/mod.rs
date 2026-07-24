@@ -17,6 +17,7 @@ pub struct NetworkInfo {
     pub is_connected: bool,
     pub ssid: Option<String>,
     pub wifi_enabled: bool,
+    pub airplane_mode: bool,
     pub active_vpns: Vec<VpnConnection>,
     pub available: bool,
 }
@@ -81,6 +82,7 @@ impl NetworkService {
                         is_connected,
                         ssid: None,
                         wifi_enabled,
+                        airplane_mode: false,
                         active_vpns,
                         available: true,
                     };
@@ -140,6 +142,45 @@ impl NetworkService {
         });
         Ok(())
     }
+
+    pub fn set_airplane_mode_enabled(&self, enabled: bool) -> Result<()> {
+        tokio::spawn(async move {
+            if let Ok(connection) = Connection::system().await {
+                let _ = connection
+                    .call_method(
+                        Some("org.freedesktop.NetworkManager"),
+                        "/org/freedesktop/NetworkManager",
+                        Some("org.freedesktop.DBus.Properties"),
+                        "Set",
+                        &(
+                            "org.freedesktop.NetworkManager",
+                            "WirelessEnabled",
+                            zbus::zvariant::Value::Bool(!enabled),
+                        ),
+                    )
+                    .await;
+                let _ = connection
+                    .call_method(
+                        Some("org.freedesktop.NetworkManager"),
+                        "/org/freedesktop/NetworkManager",
+                        Some("org.freedesktop.DBus.Properties"),
+                        "Set",
+                        &(
+                            "org.freedesktop.NetworkManager",
+                            "WwanEnabled",
+                            zbus::zvariant::Value::Bool(!enabled),
+                        ),
+                    )
+                    .await;
+            }
+        });
+        let mut lock = self.info.lock().unwrap();
+        lock.airplane_mode = enabled;
+        if enabled {
+            lock.wifi_enabled = false;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -154,6 +195,7 @@ mod tests {
                 is_connected: false,
                 ssid: None,
                 wifi_enabled: false,
+                airplane_mode: false,
                 active_vpns: Vec::new(),
                 available: false,
             }

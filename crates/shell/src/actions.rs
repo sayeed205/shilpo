@@ -362,6 +362,14 @@ impl KeybindingManager {
         self.bindings.get(shortcut).copied()
     }
 
+    pub fn register_with_override(
+        &mut self,
+        shortcut: Shortcut,
+        action: ActionId,
+    ) -> Option<ActionId> {
+        self.bindings.insert(shortcut, action)
+    }
+
     pub fn find_conflict(&self, shortcut: &Shortcut, action: ActionId) -> Option<ActionId> {
         if let Some(&existing) = self.bindings.get(shortcut)
             && existing != action

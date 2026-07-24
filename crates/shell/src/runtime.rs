@@ -708,6 +708,17 @@ impl ShellRuntime {
         runtime.keybindings.register(shortcut, action)
     }
 
+    pub fn update_shortcut_with_override(
+        cx: &mut App,
+        spec: &str,
+        action: ActionId,
+    ) -> Result<Option<ActionId>, String> {
+        let shortcut = crate::actions::Shortcut::parse(spec)
+            .ok_or_else(|| format!("invalid shortcut specification: '{}'", spec))?;
+        let runtime = cx.global_mut::<Self>();
+        Ok(runtime.keybindings.register_with_override(shortcut, action))
+    }
+
     pub fn reset_shortcuts_to_defaults(cx: &mut App) {
         if cx.has_global::<Self>() {
             cx.global_mut::<Self>().keybindings.reset_to_defaults();

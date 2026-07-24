@@ -271,6 +271,13 @@ impl ControlCenterView {
         cx.notify();
     }
 
+    fn toggle_airplane_mode(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if let Some(service) = &self.network_service {
+            let _ = service.set_airplane_mode_enabled(enabled);
+        }
+        cx.notify();
+    }
+
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -545,6 +552,47 @@ impl Render for ControlCenterView {
                                             .child(Icon::new(IconName::Star).size(px(16.)))
                                             .child(
                                                 div().text_xs().font_bold().child("Night Light"),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_2_5()
+                                    // Airplane Mode Toggle
+                                    .child(
+                                        h_flex()
+                                            .id("cc-toggle-airplane")
+                                            .role(Role::Button)
+                                            .aria_label("Toggle Airplane Mode")
+                                            .cursor_pointer()
+                                            .on_click(cx.listener({
+                                                let airplane_enabled = network.airplane_mode;
+                                                move |this, _, _, cx| {
+                                                    this.toggle_airplane_mode(
+                                                        !airplane_enabled,
+                                                        cx,
+                                                    );
+                                                }
+                                            }))
+                                            .w(relative(0.5))
+                                            .px_3()
+                                            .py_2()
+                                            .rounded_xl()
+                                            .bg(if network.airplane_mode {
+                                                cx.theme().primary
+                                            } else {
+                                                cx.theme().surface_container
+                                            })
+                                            .text_color(if network.airplane_mode {
+                                                cx.theme().on_primary
+                                            } else {
+                                                cx.theme().on_surface
+                                            })
+                                            .gap_2_5()
+                                            .items_center()
+                                            .child(Icon::new(IconName::Sun).size(px(16.)))
+                                            .child(
+                                                div().text_xs().font_bold().child("Airplane Mode"),
                                             ),
                                     ),
                             )
