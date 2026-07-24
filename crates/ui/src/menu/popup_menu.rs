@@ -40,6 +40,7 @@ pub enum PopupMenuItem {
         disabled: bool,
         checked: bool,
         is_link: bool,
+        accelerator: Option<SharedString>,
         action: Option<Box<dyn Action>>,
         // For link item
         handler: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
@@ -49,6 +50,7 @@ pub enum PopupMenuItem {
         icon: Option<Icon>,
         disabled: bool,
         checked: bool,
+        accelerator: Option<SharedString>,
         action: Option<Box<dyn Action>>,
         render: Box<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>,
         handler: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
@@ -74,8 +76,9 @@ impl PopupMenuItem {
             label: label.into(),
             disabled: false,
             checked: false,
-            action: None,
             is_link: false,
+            accelerator: None,
+            action: None,
             handler: None,
         }
     }
@@ -91,6 +94,7 @@ impl PopupMenuItem {
             icon: None,
             disabled: false,
             checked: false,
+            accelerator: None,
             action: None,
             render: Box::new(move |window, cx| builder(window, cx).into_any_element()),
             handler: None,
@@ -209,6 +213,21 @@ impl PopupMenuItem {
         self
     }
 
+    /// Set an explicit accelerator key label (e.g. "Ctrl+C", "Super+Space") for the menu item.
+    pub fn accelerator(mut self, label: impl Into<SharedString>) -> Self {
+        let label = label.into();
+        match &mut self {
+            PopupMenuItem::Item { accelerator: a, .. } => {
+                *a = Some(label);
+            }
+            PopupMenuItem::ElementItem { accelerator: a, .. } => {
+                *a = Some(label);
+            }
+            _ => {}
+        }
+        self
+    }
+
     /// Create a link menu item.
     #[inline]
     pub fn link(label: impl Into<SharedString>, href: impl Into<String>) -> Self {
@@ -218,8 +237,9 @@ impl PopupMenuItem {
             label: label.into(),
             disabled: false,
             checked: false,
-            action: None,
             is_link: true,
+            accelerator: None,
+            action: None,
             handler: Some(Rc::new(move |_, _, cx| cx.open_url(&href))),
         }
     }
@@ -1003,10 +1023,23 @@ impl PopupMenu {
 
     fn render_key_binding(
         &self,
+        accelerator: Option<&SharedString>,
         action: Option<Box<dyn Action>>,
         window: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Kbd> {
+        if let Some(acc) = accelerator
+            && let Ok(stroke) = gpui::Keystroke::parse(acc.as_ref())
+        {
+            return Some(
+                Kbd::new(stroke)
+                    .p_0()
+                    .flex_nowrap()
+                    .border_0()
+                    .bg(gpui::transparent_white()),
+            );
+        }
+
         let action = action?;
 
         match self
@@ -1170,6 +1203,7 @@ impl PopupMenu {
             PopupMenuItem::Item {
                 icon,
                 label,
+                accelerator,
                 action,
                 disabled,
                 is_link,
@@ -1177,7 +1211,7 @@ impl PopupMenu {
             } => {
                 let show_link_icon = *is_link && self.external_link_icon;
                 let action = action.as_ref().map(|action| action.boxed_clone());
-                let key = self.render_key_binding(action, window, cx);
+                let key = self.render_key_binding(accelerator.as_ref(), action, window, cx);
 
                 this.when(!disabled, |this| {
                     this.on_click(

@@ -84,6 +84,7 @@ impl RenderOnce for WorkspacesWidget {
                             menu.item(
                                 PopupMenuItem::new("Focus Workspace")
                                     .icon(IconName::Check)
+                                    .accelerator(format!("Super+{}", ws_id))
                                     .on_click(move |_, _, cx| {
                                         let _ = ShellRuntime::dispatch_action(
                                             cx,

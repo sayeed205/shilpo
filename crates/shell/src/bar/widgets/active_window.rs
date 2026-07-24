@@ -50,6 +50,7 @@ impl RenderOnce for ActiveWindowWidget {
                 menu.item(
                     PopupMenuItem::new("Close Active Overlay")
                         .icon(IconName::SquareTerminal)
+                        .accelerator("Super+Q")
                         .on_click(|_, window, cx| {
                             let _ = ShellRuntime::dispatch_action(cx, ActionInvocation::Quit);
                             window.remove_window();

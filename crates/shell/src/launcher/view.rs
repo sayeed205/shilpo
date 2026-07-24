@@ -659,6 +659,7 @@ impl Render for LauncherView {
                                 menu.item(
                                     PopupMenuItem::new("Launch Application")
                                         .icon(IconName::Play)
+                                        .accelerator("Enter")
                                         .on_click(move |_, window, cx| {
                                             let _ = std::process::Command::new("sh")
                                                 .arg("-c")
@@ -671,6 +672,7 @@ impl Render for LauncherView {
                                 .item(
                                     PopupMenuItem::new("Copy Exec Command")
                                         .icon(IconName::Copy)
+                                        .accelerator("Ctrl+C")
                                         .on_click(move |_, _window, cx| {
                                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                                                 exec_str.clone(),
