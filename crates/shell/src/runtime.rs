@@ -608,6 +608,14 @@ impl ShellRuntime {
         cx.global::<Self>().publish_status();
     }
 
+    pub fn is_dnd_active(cx: &App) -> bool {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>().session_state.dnd_active
+        } else {
+            false
+        }
+    }
+
     pub fn push_notification_history(cx: &mut App, notification: shilpo_services::Notification) {
         let runtime = cx.global_mut::<Self>();
         runtime.notification_history.push(notification);

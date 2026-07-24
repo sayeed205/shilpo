@@ -409,6 +409,10 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
     };
 
     ShellRuntime::push_notification_history(cx, notification.clone());
+    if ShellRuntime::is_dnd_active(cx) {
+        tracing::info!("DND active: suppressing notification toast popup");
+        return;
+    }
 
     let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
         (display.bounds(), Some(display.id()))

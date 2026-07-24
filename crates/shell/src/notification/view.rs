@@ -1,9 +1,9 @@
 use gpui::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
-    Styled, Window, div, img, px,
+    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Role,
+    StatefulInteractiveElement, Styled, Window, div, img, px,
 };
 use shilpo_services::Notification;
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
+use shilpo_ui::{ActiveTheme, Colorize, Icon, IconName, StyledExt, h_flex, v_flex};
 
 use crate::runtime::ShellRuntime;
 
@@ -74,13 +74,10 @@ impl Render for NotificationToastView {
             .border_color(cx.theme().outline_variant.opacity(0.4))
             .shadow_lg()
             .items_center()
-            .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
-                ShellRuntime::close_active_notification(cx);
-                window.remove_window();
-            })
             .child(app_icon)
             .child(
                 v_flex()
+                    .flex_1()
                     .gap_0p5()
                     .child(
                         div()
@@ -95,6 +92,28 @@ impl Render for NotificationToastView {
                             .text_color(cx.theme().on_surface_variant)
                             .child(self.notification.body.clone()),
                     ),
+            )
+            .child(
+                h_flex().gap_2().items_center().child(
+                    div()
+                        .id("toast-dismiss-btn")
+                        .role(Role::Button)
+                        .aria_label("Dismiss notification")
+                        .px_2p5()
+                        .py_1()
+                        .rounded_lg()
+                        .bg(cx.theme().surface_container)
+                        .text_color(cx.theme().on_surface)
+                        .text_xs()
+                        .font_medium()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(cx.theme().surface_container.darken(0.1)))
+                        .on_click(|_, window, cx| {
+                            ShellRuntime::close_active_notification(cx);
+                            window.remove_window();
+                        })
+                        .child("Dismiss"),
+                ),
             )
     }
 }
