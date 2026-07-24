@@ -420,6 +420,51 @@ impl ShellRuntime {
         Self::open_bar_with_spec(cx, spec)
     }
 
+    pub fn reconcile_bars(cx: &mut App) {
+        let displays = cx.displays();
+        let primary_id = cx.primary_display().map(|d| d.id());
+        let outputs: Vec<_> = displays
+            .into_iter()
+            .map(|d| crate::bar::OutputDescriptor {
+                display_id: d.id(),
+                bounds: d.bounds(),
+                is_primary: Some(d.id()) == primary_id,
+                name: None,
+            })
+            .collect();
+
+        let current_bars: HashMap<_, _> = cx
+            .global::<Self>()
+            .bars
+            .iter()
+            .map(|(&id, (_, spec))| (id, spec.clone()))
+            .collect();
+
+        let active_config = cx.global::<Self>().active_config.clone();
+        let ops = crate::bar::reconcile_output_bars(&outputs, &active_config, &current_bars);
+
+        for op in ops {
+            match op {
+                crate::bar::ReconciliationOp::Create(spec)
+                | crate::bar::ReconciliationOp::Recreate(spec) => {
+                    if let Some((handle, _)) = cx.global_mut::<Self>().bars.remove(&spec.display_id)
+                    {
+                        let _ =
+                            cx.update_window(handle.into(), |_, window, _| window.remove_window());
+                    }
+                    Self::open_bar_with_spec(cx, spec);
+                }
+                crate::bar::ReconciliationOp::Remove(display_id) => {
+                    if let Some((handle, _)) = cx.global_mut::<Self>().bars.remove(&display_id) {
+                        let _ =
+                            cx.update_window(handle.into(), |_, window, _| window.remove_window());
+                    }
+                }
+                crate::bar::ReconciliationOp::Retain(_) => {}
+            }
+        }
+    }
+
     pub fn mark_bar_open_failed(cx: &mut App) {
         let runtime = cx.global_mut::<Self>();
         runtime.bar_state = BarState::OpenFailed;
