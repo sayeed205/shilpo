@@ -22,7 +22,10 @@ pub use compositor::{
     WindowInfo, WorkspaceInfo,
 };
 pub use error::ServiceError;
-pub use ipc::{BarState, IpcError, IpcRequest, IpcResponse, IpcResult, IpcStatus, ShellIpcServer};
+pub use ipc::{
+    BarState, IpcError, IpcRequest, IpcResponse, IpcResult, IpcStatus, ServiceHealth,
+    ShellIpcServer,
+};
 pub use network::{NetworkInfo, NetworkService};
 pub use night_light::{NightLightInfo, NightLightService};
 pub use notifications::{Notification, NotificationService};

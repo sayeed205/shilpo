@@ -134,6 +134,7 @@ pub struct ShellRuntime {
     session_state: shilpo_config::ShellSessionState,
     session_path: PathBuf,
     pub heed_store: Option<Arc<shilpo_config::HeedSessionStore>>,
+    start_time: std::time::Instant,
     service_hub: Option<ServiceHub>,
     _window_closed: Option<Subscription>,
     _ipc_task: gpui::Task<()>,
@@ -186,6 +187,7 @@ impl ShellRuntime {
             session_state,
             session_path,
             heed_store,
+            start_time: std::time::Instant::now(),
             service_hub: Some(hub),
             _window_closed: None,
             _ipc_task: cx.spawn(async |_| {}),
@@ -360,12 +362,27 @@ impl ShellRuntime {
     }
 
     fn publish_status(&self) {
+        let health = shilpo_services::ServiceHealth {
+            compositor_connected: shilpo_services::NiriCompositorService::new().is_ok(),
+            battery_service_available: shilpo_services::BatteryService::new().is_ok(),
+            audio_service_available: shilpo_services::AudioService::new().is_ok(),
+            network_service_available: shilpo_services::NetworkService::new().is_ok(),
+            notification_service_available: self
+                .service_hub
+                .as_ref()
+                .and_then(|h| h.notification.as_ref())
+                .is_some(),
+            heed_store_available: self.heed_store.is_some(),
+            uptime_seconds: self.start_time.elapsed().as_secs(),
+        };
+
         self.ipc_server.update_status(IpcStatus {
             running: true,
             readiness: self.readiness,
             bar: self.bar_state.clone(),
             launcher_visible: self.launcher.is_some(),
             control_center_visible: self.control_center.is_some(),
+            health,
         });
     }
 
@@ -1069,6 +1086,7 @@ impl ShellRuntime {
                     let _ = Self::dispatch_action(cx, ActionInvocation::FocusWorkspace(id));
                 }
                 IpcRequest::GetStatus => {}
+                IpcRequest::GetTelemetry => {}
             }
         }
         cx.global::<Self>().publish_status();

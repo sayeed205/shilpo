@@ -38,6 +38,7 @@ pub enum IpcRequest {
     ToggleControlCenter,
     SetTheme { source_argb: u32, is_dark: bool },
     GetStatus,
+    GetTelemetry,
     Quit,
 }
 
@@ -62,12 +63,25 @@ pub enum ReadinessState {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ServiceHealth {
+    pub compositor_connected: bool,
+    pub battery_service_available: bool,
+    pub audio_service_available: bool,
+    pub network_service_available: bool,
+    pub notification_service_available: bool,
+    pub heed_store_available: bool,
+    pub uptime_seconds: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IpcStatus {
     pub running: bool,
     pub readiness: ReadinessState,
     pub bar: BarState,
     pub launcher_visible: bool,
     pub control_center_visible: bool,
+    #[serde(default)]
+    pub health: ServiceHealth,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -75,6 +89,7 @@ pub struct IpcStatus {
 pub enum IpcResult {
     Accepted,
     Status(IpcStatus),
+    Telemetry(ServiceHealth),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -606,6 +621,7 @@ mod tests {
             bar: BarState::Visible,
             launcher_visible: false,
             control_center_visible: false,
+            health: ServiceHealth::default(),
         });
         let status = ShellIpcServer::send_command_at(&path, IpcRequest::GetStatus).unwrap();
         assert_eq!(
@@ -616,6 +632,7 @@ mod tests {
                 bar: BarState::Visible,
                 launcher_visible: false,
                 control_center_visible: false,
+                health: ServiceHealth::default(),
             }))
         );
         assert!(
@@ -649,12 +666,23 @@ mod tests {
             bar: BarState::OpenFailed,
             launcher_visible: false,
             control_center_visible: true,
+            health: ServiceHealth {
+                compositor_connected: true,
+                battery_service_available: false,
+                audio_service_available: true,
+                network_service_available: true,
+                notification_service_available: true,
+                heed_store_available: true,
+                uptime_seconds: 120,
+            },
         };
         let value = serde_json::to_value(&status).unwrap();
         assert_eq!(value["readiness"], "degraded");
         assert_eq!(value["bar"], "open_failed");
         assert_eq!(value["launcher_visible"], false);
         assert_eq!(value["control_center_visible"], true);
+        assert_eq!(value["health"]["compositor_connected"], true);
+        assert_eq!(value["health"]["uptime_seconds"], 120);
         assert!(value.get("message").is_none());
     }
 

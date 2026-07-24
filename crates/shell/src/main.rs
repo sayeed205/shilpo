@@ -48,6 +48,7 @@ async fn main() {
                         is_dark,
                     }
                 }
+                "telemetry" => IpcRequest::GetTelemetry,
                 _ => {
                     eprintln!("Unknown command: {}", cmd);
                     std::process::exit(1);
@@ -67,11 +68,22 @@ async fn main() {
                     match resp.result {
                         Some(IpcResult::Accepted) => println!("Accepted"),
                         Some(IpcResult::Status(status)) => println!(
-                            "running={} bar={:?} launcher_visible={} control_center_visible={}",
+                            "running={} bar={:?} launcher_visible={} control_center_visible={} health={:?}",
                             status.running,
                             status.bar,
                             status.launcher_visible,
-                            status.control_center_visible
+                            status.control_center_visible,
+                            status.health
+                        ),
+                        Some(IpcResult::Telemetry(health)) => println!(
+                            "compositor_connected={} battery={} audio={} network={} notification={} heed={} uptime={}s",
+                            health.compositor_connected,
+                            health.battery_service_available,
+                            health.audio_service_available,
+                            health.network_service_available,
+                            health.notification_service_available,
+                            health.heed_store_available,
+                            health.uptime_seconds
                         ),
                         None => println!("Accepted"),
                     }
