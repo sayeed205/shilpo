@@ -496,6 +496,80 @@ impl Render for ControlCenterView {
                                     })
                                     .child(Icon::new(IconName::Star).size(px(16.))),
                             ),
+                    )
+                    // Notifications Drawer Header & History List
+                    .child(
+                        v_flex()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .justify_between()
+                                    .items_center()
+                                    .child(div().text_xs().font_bold().child("Notifications"))
+                                    .child(
+                                        div()
+                                            .id("cc-clear-notifications")
+                                            .role(Role::Button)
+                                            .aria_label("Clear All Notifications")
+                                            .text_xs()
+                                            .font_semibold()
+                                            .text_color(cx.theme().primary)
+                                            .cursor_pointer()
+                                            .on_click(|_, _, cx| {
+                                                ShellRuntime::clear_notification_history(cx);
+                                            })
+                                            .child("Clear All"),
+                                    ),
+                            )
+                            .child({
+                                let history = ShellRuntime::notification_history(cx);
+                                if history.is_empty() {
+                                    div()
+                                        .py_2()
+                                        .text_xs()
+                                        .text_color(cx.theme().on_surface_variant)
+                                        .child("No recent notifications")
+                                } else {
+                                    v_flex()
+                                        .gap_1_5()
+                                        .children(history.iter().rev().take(4).map(|n| {
+                                            h_flex()
+                                                .px_2p5()
+                                                .py_2()
+                                                .rounded_xl()
+                                                .bg(cx.theme().surface_container)
+                                                .justify_between()
+                                                .items_center()
+                                                .child(
+                                                    v_flex()
+                                                        .gap_0p5()
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .font_bold()
+                                                                .text_color(cx.theme().on_surface)
+                                                                .child(n.summary.clone()),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .text_color(
+                                                                    cx.theme().on_surface_variant,
+                                                                )
+                                                                .child(n.body.clone()),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().outline_variant)
+                                                        .child(
+                                                            n.timestamp.format("%H:%M").to_string(),
+                                                        ),
+                                                )
+                                        }))
+                                }
+                            }),
                     ),
             )
     }

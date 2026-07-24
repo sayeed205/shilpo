@@ -608,7 +608,7 @@ impl ShellRuntime {
                 None,
             )
         };
-        let cc_size = size(px(340.), px(380.));
+        let cc_size = size(px(340.), px(540.));
         let origin = point(
             display_bounds.origin.x + (display_bounds.size.width - px(360.)),
             display_bounds.origin.y + px(54.),
@@ -671,6 +671,12 @@ impl ShellRuntime {
 
     pub fn notification_history(cx: &App) -> &[shilpo_services::Notification] {
         &cx.global::<Self>().notification_history
+    }
+
+    pub fn clear_notification_history(cx: &mut App) {
+        if cx.has_global::<Self>() {
+            cx.global_mut::<Self>().notification_history.clear();
+        }
     }
 
     pub fn register_notification(
