@@ -336,6 +336,20 @@ impl KeybindingManager {
         self.bindings.get(shortcut).copied()
     }
 
+    pub fn find_conflict(&self, shortcut: &Shortcut, action: ActionId) -> Option<ActionId> {
+        if let Some(&existing) = self.bindings.get(shortcut)
+            && existing != action
+        {
+            Some(existing)
+        } else {
+            None
+        }
+    }
+
+    pub fn reset_to_defaults(&mut self) {
+        *self = Self::with_defaults();
+    }
+
     pub fn bindings(&self) -> &std::collections::HashMap<Shortcut, ActionId> {
         &self.bindings
     }
@@ -386,6 +400,21 @@ mod tests {
         // Conflict registration should fail with diagnostic
         let err = mgr.register(sc, ActionId::Quit).unwrap_err();
         assert!(err.contains("conflict"));
+    }
+
+    #[test]
+    fn shortcut_conflict_query_and_reset_to_defaults() {
+        let mut mgr = KeybindingManager::with_defaults();
+        let sc = Shortcut::parse("super+space").unwrap();
+
+        let conflict = mgr.find_conflict(&sc, ActionId::Quit);
+        assert_eq!(conflict, Some(ActionId::ToggleLauncher));
+
+        let _ = mgr.unregister(&sc);
+        assert_eq!(mgr.action_for(&sc), None);
+
+        mgr.reset_to_defaults();
+        assert_eq!(mgr.action_for(&sc), Some(ActionId::ToggleLauncher));
     }
 
     #[test]

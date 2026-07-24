@@ -130,6 +130,7 @@ pub struct ShellRuntime {
         Entity<crate::osd::OsdView>,
     )>,
     _osd_generation: u64,
+    keybindings: crate::actions::KeybindingManager,
     session_state: shilpo_config::ShellSessionState,
     session_path: PathBuf,
     service_hub: Option<ServiceHub>,
@@ -176,6 +177,7 @@ impl ShellRuntime {
             prior_window_id: None,
             osd: None,
             _osd_generation: 0,
+            keybindings: crate::actions::KeybindingManager::with_defaults(),
             session_state,
             session_path,
             service_hub: Some(hub),
@@ -666,6 +668,19 @@ impl ShellRuntime {
         runtime.notification_history.push(notification);
         if runtime.notification_history.len() > 50 {
             runtime.notification_history.remove(0);
+        }
+    }
+
+    pub fn update_shortcut(cx: &mut App, spec: &str, action: ActionId) -> Result<(), String> {
+        let shortcut = crate::actions::Shortcut::parse(spec)
+            .ok_or_else(|| format!("invalid shortcut specification: '{}'", spec))?;
+        let runtime = cx.global_mut::<Self>();
+        runtime.keybindings.register(shortcut, action)
+    }
+
+    pub fn reset_shortcuts_to_defaults(cx: &mut App) {
+        if cx.has_global::<Self>() {
+            cx.global_mut::<Self>().keybindings.reset_to_defaults();
         }
     }
 
