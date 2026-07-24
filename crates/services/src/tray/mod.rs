@@ -2,6 +2,15 @@ use anyhow::Result;
 use std::sync::{Arc, Mutex};
 use zbus::{Connection, interface};
 
+/// Represents a menu item in a System Tray DBusMenu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrayMenuItem {
+    pub id: i32,
+    pub label: String,
+    pub enabled: bool,
+    pub children: Vec<TrayMenuItem>,
+}
+
 /// Represents an active System Tray StatusNotifierItem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrayItem {
@@ -9,6 +18,9 @@ pub struct TrayItem {
     pub title: String,
     pub icon_name: Option<String>,
     pub status: String,
+    pub badge_count: Option<u32>,
+    pub menu_path: Option<String>,
+    pub menu_items: Vec<TrayMenuItem>,
 }
 
 impl TrayItem {
@@ -18,6 +30,9 @@ impl TrayItem {
             title: title.into(),
             icon_name: None,
             status: "Active".into(),
+            badge_count: None,
+            menu_path: None,
+            menu_items: Vec::new(),
         }
     }
 }
@@ -79,14 +94,7 @@ impl TrayService {
 
     pub fn items(&self) -> Vec<TrayItem> {
         let lock = self.items.lock().unwrap();
-        lock.iter()
-            .map(|s| TrayItem {
-                service: s.clone(),
-                title: s.clone(),
-                icon_name: None,
-                status: "Active".into(),
-            })
-            .collect()
+        lock.iter().map(|s| TrayItem::new(s, s)).collect()
     }
 }
 

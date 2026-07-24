@@ -33,5 +33,5 @@ pub use night_light::{NightLightInfo, NightLightService};
 pub use notifications::{Notification, NotificationService, NotificationUrgency};
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
 pub use screen_capture::{RecordMode, ScreenCaptureInfo, ScreenCaptureService, ScreenshotMode};
-pub use tray::{TrayItem, TrayService};
+pub use tray::{TrayItem, TrayMenuItem, TrayService};
 pub use upower::{BatteryInfo, BatteryService};

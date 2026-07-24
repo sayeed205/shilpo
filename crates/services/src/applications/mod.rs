@@ -73,6 +73,66 @@ impl Application {
             }
         });
     }
+
+    /// Launches the application in a detached background thread and invokes `on_failure` callback if execution fails.
+    pub fn launch_with_feedback(&self, on_failure: impl Fn(String) + Send + 'static) {
+        let exec = self.exec.clone();
+        let icon = self.icon.clone();
+        let desktop_file = self.desktop_file.clone();
+        let name = self.name.clone();
+        let working_dir = self.working_dir.clone();
+        let is_terminal = self.terminal;
+
+        thread::spawn(move || match parse_exec(&exec, icon.as_deref()) {
+            Ok(mut argv) => {
+                if is_terminal {
+                    let term = find_terminal_emulator().unwrap_or_else(|| "xterm".to_string());
+                    let mut term_argv = vec![term, "-e".to_string()];
+                    term_argv.extend(argv);
+                    argv = term_argv;
+                }
+
+                let program = &argv[0];
+                let args = &argv[1..];
+                let mut cmd = Command::new(program);
+                cmd.args(args);
+
+                if let Some(dir) = working_dir {
+                    cmd.current_dir(dir);
+                }
+
+                match cmd.spawn() {
+                    Ok(mut child) => {
+                        thread::sleep(std::time::Duration::from_millis(400));
+                        if let Ok(Some(status)) = child.try_wait()
+                            && !status.success()
+                        {
+                            let code_str = status
+                                .code()
+                                .map(|c| c.to_string())
+                                .unwrap_or_else(|| "signal".to_string());
+                            on_failure(format!(
+                                "Application '{}' exited with status {}",
+                                name, code_str
+                            ));
+                        }
+                    }
+                    Err(err) => {
+                        on_failure(format!(
+                            "Failed to launch application '{}' ({}) via {:?}: {}",
+                            name,
+                            desktop_file.display(),
+                            argv,
+                            err
+                        ));
+                    }
+                }
+            }
+            Err(err) => {
+                on_failure(format!("Failed to parse exec line for '{}': {}", name, err));
+            }
+        });
+    }
 }
 
 pub fn binary_exists(bin: &str) -> bool {

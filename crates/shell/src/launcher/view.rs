@@ -271,7 +271,9 @@ impl LauncherView {
             match &self.results[self.selected_index] {
                 LauncherSearchResult::App(app) => {
                     ShellRuntime::record_recent_app(cx, &app.exec);
-                    app.launch();
+                    app.launch_with_feedback(|err_msg| {
+                        tracing::warn!(error = %err_msg, "application launch failed");
+                    });
                     ShellRuntime::forget_launcher(cx);
                     window.remove_window();
                 }
