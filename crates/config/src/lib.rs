@@ -515,9 +515,20 @@ pub struct OutputBarState {
     pub active_workspace_id: Option<u64>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClipboardItem {
+    pub id: u64,
+    pub text: String,
+    pub timestamp: String,
+}
+
 pub struct HeedSessionStore {
     env: heed::Env,
     output_bars_db: heed::Database<heed::types::Str, heed::types::SerdeJson<OutputBarState>>,
+    clipboard_history_db: heed::Database<
+        heed::types::U64<heed::byteorder::NativeEndian>,
+        heed::types::SerdeJson<ClipboardItem>,
+    >,
 }
 
 impl HeedSessionStore {
@@ -569,6 +580,16 @@ impl HeedSessionStore {
                 },
             })?;
 
+        let clipboard_history_db = env
+            .create_database(&mut wtxn, Some("clipboard_history"))
+            .map_err(|e| ConfigError::Parse {
+                diagnostic: ConfigDiagnostic {
+                    path: dir.display().to_string(),
+                    message: e.to_string(),
+                    span: None,
+                },
+            })?;
+
         wtxn.commit().map_err(|e| ConfigError::Parse {
             diagnostic: ConfigDiagnostic {
                 path: dir.display().to_string(),
@@ -580,6 +601,86 @@ impl HeedSessionStore {
         Ok(Self {
             env,
             output_bars_db,
+            clipboard_history_db,
+        })
+    }
+
+    pub fn save_clipboard_item(&self, item: &ClipboardItem) -> Result<(), ConfigError> {
+        let mut wtxn = self.env.write_txn().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: item.id.to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })?;
+        self.clipboard_history_db
+            .put(&mut wtxn, &item.id, item)
+            .map_err(|e| ConfigError::Parse {
+                diagnostic: ConfigDiagnostic {
+                    path: item.id.to_string(),
+                    message: e.to_string(),
+                    span: None,
+                },
+            })?;
+        wtxn.commit().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: item.id.to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })
+    }
+
+    pub fn get_clipboard_history(&self) -> Result<Vec<ClipboardItem>, ConfigError> {
+        let rtxn = self.env.read_txn().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: "clipboard_history".to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })?;
+        let mut items = Vec::new();
+        let iter = self
+            .clipboard_history_db
+            .iter(&rtxn)
+            .map_err(|e| ConfigError::Parse {
+                diagnostic: ConfigDiagnostic {
+                    path: "clipboard_history".to_string(),
+                    message: e.to_string(),
+                    span: None,
+                },
+            })?;
+        for (_, item) in iter.flatten() {
+            items.push(item);
+        }
+        items.sort_by_key(|i| i.id);
+        items.reverse();
+        Ok(items)
+    }
+
+    pub fn clear_clipboard_history(&self) -> Result<(), ConfigError> {
+        let mut wtxn = self.env.write_txn().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: "clipboard_history".to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })?;
+        self.clipboard_history_db
+            .clear(&mut wtxn)
+            .map_err(|e| ConfigError::Parse {
+                diagnostic: ConfigDiagnostic {
+                    path: "clipboard_history".to_string(),
+                    message: e.to_string(),
+                    span: None,
+                },
+            })?;
+        wtxn.commit().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: "clipboard_history".to_string(),
+                message: e.to_string(),
+                span: None,
+            },
         })
     }
 
@@ -855,5 +956,30 @@ margin = { horizontal = 600, vertical = 6 }
             }
             _ => panic!("expected validation error"),
         }
+    }
+
+    #[test]
+    fn test_heed_clipboard_history_persistence() {
+        let db_dir = std::env::temp_dir().join(format!("shilpo-clip-{}.lmdb", std::process::id()));
+        let _ = std::fs::remove_dir_all(&db_dir);
+
+        let store = HeedSessionStore::open_or_create(&db_dir).unwrap();
+        assert!(store.get_clipboard_history().unwrap().is_empty());
+
+        let item = ClipboardItem {
+            id: 100,
+            text: "Hello Shilpo".to_string(),
+            timestamp: "12:00:00".to_string(),
+        };
+        store.save_clipboard_item(&item).unwrap();
+
+        let history = store.get_clipboard_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0], item);
+
+        store.clear_clipboard_history().unwrap();
+        assert!(store.get_clipboard_history().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(db_dir);
     }
 }

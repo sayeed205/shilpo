@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex, mpsc};
 
 pub struct ServiceHub {
     pub notification: Option<NotificationService>,
+    pub clipboard: shilpo_services::ClipboardService,
     pub service_commands: CommandSender,
     pub notif_rx: Arc<Mutex<mpsc::Receiver<shilpo_services::Notification>>>,
     pub updates_rx: Arc<Mutex<UpdateReceiver>>,
@@ -38,6 +39,7 @@ impl ServiceHub {
         let battery = BatteryService::new().ok();
         let audio = AudioService::new().ok();
         let network = NetworkService::new().ok();
+        let clipboard = shilpo_services::ClipboardService::new();
         let notification = match NotificationService::new() {
             Ok(s) => Some(s),
             Err(e) => {
@@ -99,6 +101,7 @@ impl ServiceHub {
 
         Self {
             notification,
+            clipboard,
             service_commands,
             notif_rx: Arc::new(Mutex::new(notif_rx)),
             updates_rx: Arc::new(Mutex::new(updates_rx)),
@@ -714,6 +717,24 @@ impl ShellRuntime {
     pub fn clear_notification_history(cx: &mut App) {
         if cx.has_global::<Self>() {
             cx.global_mut::<Self>().notification_history.clear();
+        }
+    }
+
+    pub fn clipboard_history(cx: &App) -> Vec<shilpo_config::ClipboardItem> {
+        if cx.has_global::<Self>()
+            && let Some(ref hub) = cx.global::<Self>().service_hub
+        {
+            hub.clipboard.history()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn copy_clipboard_text(cx: &App, text: &str) {
+        if cx.has_global::<Self>()
+            && let Some(ref hub) = cx.global::<Self>().service_hub
+        {
+            let _ = hub.clipboard.copy_text(text);
         }
     }
 

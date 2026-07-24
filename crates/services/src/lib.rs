@@ -2,6 +2,7 @@ pub mod applications;
 pub mod audio;
 pub mod bluetooth;
 pub mod brightness;
+pub mod clipboard;
 pub mod compositor;
 pub mod error;
 pub mod ipc;
@@ -17,6 +18,7 @@ pub use applications::{AppScanner, Application};
 pub use audio::{AudioDevice, AudioInfo, AudioPort, AudioService};
 pub use bluetooth::{BluetoothInfo, BluetoothService};
 pub use brightness::{BrightnessInfo, BrightnessService};
+pub use clipboard::ClipboardService;
 pub use compositor::{
     CompositorAdapter, CompositorCapabilities, NiriCompositorService, NiriWorkspaceInfo,
     WindowInfo, WorkspaceInfo,

@@ -978,6 +978,69 @@ impl Render for ControlCenterView {
                                         }))
                                 }
                             }),
+                    )
+                    // Clipboard History Drawer
+                    .child(
+                        v_flex()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .justify_between()
+                                    .items_center()
+                                    .child(div().text_xs().font_bold().child("Clipboard History")),
+                            )
+                            .child({
+                                let clips = ShellRuntime::clipboard_history(cx);
+                                if clips.is_empty() {
+                                    div()
+                                        .py_2()
+                                        .text_xs()
+                                        .text_color(cx.theme().on_surface_variant)
+                                        .child("No clipboard items copied yet")
+                                } else {
+                                    v_flex().gap_1_5().children(
+                                        clips.into_iter().take(3).enumerate().map(|(i, clip)| {
+                                            let text_val = clip.text.clone();
+                                            h_flex()
+                                                .id(("cc-clip-item", i))
+                                                .role(Role::Button)
+                                                .aria_label("Copy item")
+                                                .cursor_pointer()
+                                                .on_click(cx.listener({
+                                                    let text_val = text_val.clone();
+                                                    move |_, _, _, cx| {
+                                                        ShellRuntime::copy_clipboard_text(
+                                                            cx, &text_val,
+                                                        );
+                                                    }
+                                                }))
+                                                .px_2p5()
+                                                .py_1p5()
+                                                .rounded_xl()
+                                                .bg(cx.theme().surface_container)
+                                                .justify_between()
+                                                .items_center()
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .font_medium()
+                                                        .text_color(cx.theme().on_surface)
+                                                        .child(if text_val.len() > 35 {
+                                                            format!("{}...", &text_val[..35])
+                                                        } else {
+                                                            text_val
+                                                        }),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().outline_variant)
+                                                        .child(clip.timestamp),
+                                                )
+                                        }),
+                                    )
+                                }
+                            }),
                     ),
             )
     }
