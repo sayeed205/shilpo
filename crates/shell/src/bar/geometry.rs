@@ -18,18 +18,28 @@ impl BarGeometry {
         display_bounds: Bounds<Pixels>,
         config: &BarConfig,
     ) -> Self {
-        let thickness = px(config.height as f32);
+        Self::calculate_with_scale(display_id, display_bounds, config, None)
+    }
+
+    pub fn calculate_with_scale(
+        display_id: DisplayId,
+        display_bounds: Bounds<Pixels>,
+        config: &BarConfig,
+        scale: Option<f32>,
+    ) -> Self {
+        let scale_factor = scale.unwrap_or(1.0).max(0.5);
+        let thickness = px(config.height as f32 * scale_factor);
         let (horizontal_margin, vertical_margin) = if config.style == BarStyle::FloatingCapsule {
             (
-                px(config.margin.horizontal as f32),
-                px(config.margin.vertical as f32),
+                px(config.margin.horizontal as f32 * scale_factor),
+                px(config.margin.vertical as f32 * scale_factor),
             )
         } else {
             (Pixels::ZERO, Pixels::ZERO)
         };
 
         let calculated_exclusive_zone = if let Some(zone) = config.exclusive_zone {
-            px(zone as f32)
+            px(zone as f32 * scale_factor)
         } else if config.style == BarStyle::FloatingCapsule {
             if matches!(config.position, BarPosition::Left | BarPosition::Right) {
                 thickness + horizontal_margin

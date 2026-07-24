@@ -1,6 +1,6 @@
 use gpui::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Role,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
 
@@ -60,12 +60,14 @@ impl SettingsCategory {
 /// Standalone Settings Application View.
 pub struct SettingsView {
     pub active_category: SettingsCategory,
+    pub active_scale: f32,
 }
 
 impl SettingsView {
     pub fn new() -> Self {
         Self {
             active_category: SettingsCategory::default(),
+            active_scale: 1.0,
         }
     }
 
@@ -90,43 +92,30 @@ impl Render for SettingsView {
         let active = self.active_category;
 
         h_flex()
-            .w_full()
-            .h_full()
+            .size_full()
             .bg(cx.theme().surface)
             .text_color(cx.theme().on_surface)
             // Left Navigation Sidebar
             .child(
                 v_flex()
-                    .w(px(220.))
+                    .w_64()
                     .h_full()
                     .p_4()
                     .gap_2()
-                    .bg(cx.theme().surface_container_low)
                     .border_r_1()
-                    .border_color(cx.theme().outline_variant.opacity(0.3))
-                    .child(
-                        div()
-                            .pb_3()
-                            .text_sm()
-                            .font_bold()
-                            .text_color(cx.theme().primary)
-                            .child("Shilpo Settings"),
-                    )
+                    .border_color(cx.theme().outline_variant)
+                    .bg(cx.theme().surface_container)
                     .children(SettingsCategory::ALL.iter().map(|&cat| {
-                        let is_active = cat == active;
-                        let bg = if is_active {
-                            cx.theme().primary_container
+                        let is_active = active == cat;
+                        let (bg, fg) = if is_active {
+                            (cx.theme().primary_container, cx.theme().on_primary_container)
                         } else {
-                            cx.theme().transparent
-                        };
-                        let fg = if is_active {
-                            cx.theme().on_primary_container
-                        } else {
-                            cx.theme().on_surface
+                            (cx.theme().surface_container, cx.theme().on_surface_variant)
                         };
 
                         h_flex()
                             .id(("settings-cat", cat as usize))
+                            .role(Role::Button)
                             .px_3()
                             .py_2()
                             .rounded_xl()
@@ -165,7 +154,41 @@ impl Render for SettingsView {
                                 "Dedicated OS Control Panel for {}. Configure system parameters, appearance, and preferences.",
                                 active.label()
                             )),
-                    ),
+                    )
+                    .when(active == SettingsCategory::Display, |this| {
+                        let active_scale = self.active_scale;
+                        this.child(
+                            v_flex()
+                                .gap_2()
+                                .child(div().text_xs().font_bold().child("Display Scaling"))
+                                .child(h_flex().gap_2().children(
+                                    [1.0f32, 1.25, 1.5, 2.0].into_iter().enumerate().map(|(i, scale)| {
+                                        let is_active = (active_scale - scale).abs() < 0.01;
+                                        let (bg, fg) = if is_active {
+                                            (cx.theme().primary, cx.theme().on_primary)
+                                        } else {
+                                            (cx.theme().surface_container, cx.theme().on_surface)
+                                        };
+                                        div()
+                                            .id(("display-scale-pill", i))
+                                            .role(Role::Button)
+                                            .cursor_pointer()
+                                            .px_3()
+                                            .py_1p5()
+                                            .rounded_xl()
+                                            .bg(bg)
+                                            .text_color(fg)
+                                            .text_xs()
+                                            .font_bold()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.active_scale = scale;
+                                                cx.notify();
+                                            }))
+                                            .child(format!("{}%", (scale * 100.0) as u32))
+                                    }),
+                                )),
+                        )
+                    }),
             )
     }
 }

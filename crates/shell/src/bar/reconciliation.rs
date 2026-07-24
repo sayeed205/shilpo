@@ -4,12 +4,13 @@ use shilpo_config::{BarConfig, ShellConfig};
 use std::collections::HashMap;
 
 /// Metadata describing a physical monitor output.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OutputDescriptor {
     pub display_id: DisplayId,
     pub bounds: Bounds<Pixels>,
     pub is_primary: bool,
     pub name: Option<String>,
+    pub scale: Option<f32>,
 }
 
 /// Target operational specification for a single bar instance.
@@ -50,8 +51,12 @@ pub fn reconcile_output_bars(
             }
             (None, None) => {}
             (Some(bar_config), existing_spec) => {
-                let geometry =
-                    BarGeometry::calculate(output.display_id, output.bounds, &bar_config);
+                let geometry = BarGeometry::calculate_with_scale(
+                    output.display_id,
+                    output.bounds,
+                    &bar_config,
+                    output.scale,
+                );
                 let desired_spec = BarSpec {
                     display_id: output.display_id,
                     geometry,
@@ -96,6 +101,7 @@ mod tests {
             bounds: sample_bounds(1920., 1080.),
             is_primary: true,
             name: Some("eDP-1".into()),
+            scale: None,
         }];
         let config = ShellConfig::default();
         let current_bars = HashMap::new();
@@ -114,6 +120,7 @@ mod tests {
             bounds: sample_bounds(1920., 1080.),
             is_primary: true,
             name: Some("eDP-1".into()),
+            scale: None,
         }];
         let config = ShellConfig::default();
         let bar_config = config.bar_for_output(Some("eDP-1"), true).unwrap();
@@ -139,6 +146,7 @@ mod tests {
             bounds: sample_bounds(2560., 1440.),
             is_primary: true,
             name: Some("eDP-1".into()),
+            scale: None,
         }];
         let config = ShellConfig::default();
         let old_bar_config = config.bar_for_output(Some("eDP-1"), true).unwrap();
@@ -190,12 +198,14 @@ mod tests {
             bounds: sample_bounds(1920., 1080.),
             is_primary: false,
             name: Some("HDMI-A-1".into()),
+            scale: None,
         }];
         let mut config = ShellConfig::default();
         config.outputs.insert(
             "HDMI-A-1".to_string(),
             OutputConfig {
                 enabled: false,
+                scale: None,
                 position: None,
                 style: None,
                 height: None,
@@ -221,5 +231,26 @@ mod tests {
 
         let ops = reconcile_output_bars(&outputs, &config, &current_bars);
         assert_eq!(ops, vec![ReconciliationOp::Remove(DisplayId::new(2))]);
+    }
+
+    #[test]
+    fn reconciliation_scale_factor_adjustment() {
+        let outputs = vec![OutputDescriptor {
+            display_id: DisplayId::new(1),
+            bounds: sample_bounds(3840., 2160.),
+            is_primary: true,
+            name: Some("DP-1".into()),
+            scale: Some(2.0),
+        }];
+        let config = ShellConfig::default();
+        let current_bars = HashMap::new();
+
+        let ops = reconcile_output_bars(&outputs, &config, &current_bars);
+        assert_eq!(ops.len(), 1);
+        if let ReconciliationOp::Create(spec) = &ops[0] {
+            assert_eq!(spec.geometry.bounds.size.height, px(120.0));
+        } else {
+            panic!("expected ReconciliationOp::Create");
+        }
     }
 }

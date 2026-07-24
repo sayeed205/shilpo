@@ -331,6 +331,7 @@ impl ShellRuntime {
                 bounds: d.bounds(),
                 is_primary: primary_id == Some(d.id()),
                 name: None,
+                scale: None,
             })
             .collect();
 
@@ -464,6 +465,7 @@ impl ShellRuntime {
                 bounds: d.bounds(),
                 is_primary: Some(d.id()) == primary_id,
                 name: None,
+                scale: None,
             })
             .collect();
 

@@ -211,6 +211,13 @@
             }
           ]
         },
+        "scale": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
         "style": {
           "anyOf": [
             {

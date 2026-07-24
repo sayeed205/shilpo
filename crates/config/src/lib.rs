@@ -22,6 +22,7 @@ pub struct ShellConfig {
 pub struct OutputConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    pub scale: Option<f32>,
     pub position: Option<BarPosition>,
     pub style: Option<BarStyle>,
     pub height: Option<u32>,
