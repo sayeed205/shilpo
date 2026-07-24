@@ -1,5 +1,5 @@
 use gpui::{
-    App, AppContext, Bounds, DisplayId, Global, Pixels, Point, Subscription,
+    App, AppContext, Bounds, DisplayId, Entity, Global, Pixels, Point, Subscription,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
     layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
     point, px, size,
@@ -124,6 +124,12 @@ pub struct ShellRuntime {
     notification_generation: u64,
     notification_history: Vec<shilpo_services::Notification>,
     prior_window_id: Option<u64>,
+    osd: Option<(
+        u64,
+        WindowHandle<shilpo_ui::Root>,
+        Entity<crate::osd::OsdView>,
+    )>,
+    _osd_generation: u64,
     session_state: shilpo_config::ShellSessionState,
     session_path: PathBuf,
     service_hub: Option<ServiceHub>,
@@ -168,6 +174,8 @@ impl ShellRuntime {
             notification_generation: 0,
             notification_history: Vec::new(),
             prior_window_id: None,
+            osd: None,
+            _osd_generation: 0,
             session_state,
             session_path,
             service_hub: Some(hub),
@@ -655,6 +663,97 @@ impl ShellRuntime {
         cx.global_mut::<Self>().notification = None;
     }
 
+    pub fn forget_osd(cx: &mut App) {
+        if cx.has_global::<Self>() {
+            cx.global_mut::<Self>().osd = None;
+        }
+    }
+
+    fn schedule_osd_dismiss(cx: &mut App, generation: u64) {
+        cx.spawn(async move |cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+            cx.update(|cx| {
+                if cx.has_global::<Self>() {
+                    let runtime = cx.global_mut::<Self>();
+                    if let Some((current_gen, handle, _)) = &runtime.osd
+                        && *current_gen == generation
+                    {
+                        let window_handle = *handle;
+                        runtime.osd = None;
+                        let _ = cx.update_window(window_handle.into(), |_, window, _| {
+                            window.remove_window()
+                        });
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub fn show_osd(cx: &mut App, kind: crate::osd::OsdKind) {
+        let existing = cx.global_mut::<Self>().osd.take();
+        if let Some((generation, window_handle, view_handle)) = existing {
+            view_handle.update(cx, |view, cx| {
+                view.kind = kind;
+                cx.notify();
+            });
+            let next_gen = generation + 1;
+            cx.global_mut::<Self>().osd = Some((next_gen, window_handle, view_handle));
+            Self::schedule_osd_dismiss(cx, next_gen);
+            return;
+        }
+
+        let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
+            (display.bounds(), Some(display.id()))
+        } else {
+            (
+                Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
+                None,
+            )
+        };
+        let osd_size = size(px(260.), px(48.));
+        let origin = point(
+            display_bounds.origin.x + (display_bounds.size.width - osd_size.width) / 2.0,
+            display_bounds.origin.y + display_bounds.size.height - px(140.),
+        );
+        let options = WindowOptions {
+            titlebar: None,
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(origin, osd_size))),
+            display_id,
+            app_id: Some("shilpo-osd".into()),
+            window_background: WindowBackgroundAppearance::Transparent,
+            kind: WindowKind::LayerShell(LayerShellOptions {
+                namespace: "osd".into(),
+                layer: Layer::Overlay,
+                anchor: Anchor::BOTTOM,
+                margin: Some((px(0.), px(0.), px(84.), px(0.))),
+                keyboard_interactivity: KeyboardInteractivity::None,
+                ..Default::default()
+            }),
+            focus: false,
+            show: true,
+            ..Default::default()
+        };
+
+        let spawned_view: std::sync::Arc<std::sync::Mutex<Option<Entity<crate::osd::OsdView>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let view_cell = spawned_view.clone();
+        let window_result = cx.open_window(options, move |window, cx| {
+            let (root, view) = crate::osd::OsdView::view(kind, window, cx);
+            *view_cell.lock().unwrap() = Some(view);
+            root
+        });
+
+        if let Ok(window_handle) = window_result
+            && let Some(view_handle) = spawned_view.lock().unwrap().take()
+        {
+            cx.global_mut::<Self>().osd = Some((1, window_handle, view_handle));
+            Self::schedule_osd_dismiss(cx, 1);
+        }
+    }
+
     pub fn forget_bar(cx: &mut App) {
         let runtime = cx.global_mut::<Self>();
         runtime.bars.clear();
@@ -664,23 +763,23 @@ impl ShellRuntime {
 
     fn enqueue_worker(cx: &mut App, request: IpcRequest) {
         let handle = cx
-            .global_mut::<Self>()
-            .bars
-            .values()
-            .next()
-            .map(|(h, _)| *h);
-        let Some(handle) = handle else {
-            tracing::warn!(?request, "IPC worker request dropped: bar unavailable");
-            return;
-        };
-        match handle.update(cx, |bar, _, _| bar.enqueue_request(request)) {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(error = %error, "IPC worker request rejected");
+            .global::<Self>()
+            .service_hub
+            .as_ref()
+            .map(|h| h.service_commands.clone());
+        if let Some(handle) = handle {
+            if let Err(error) = service_worker::try_send_command(
+                &handle,
+                match request {
+                    IpcRequest::FocusWorkspace(id) => WorkerCommand::FocusWorkspace(id),
+                    IpcRequest::ReloadConfig => WorkerCommand::ReloadConfig,
+                    _ => return,
+                },
+            ) {
+                tracing::warn!(error = %error, "IPC worker request dropped: send failed");
             }
-            Err(error) => {
-                tracing::warn!(error = %error, "IPC worker request dropped: bar handle unavailable")
-            }
+        } else {
+            tracing::warn!("IPC worker request dropped: bar handle unavailable");
         }
     }
 
@@ -741,6 +840,77 @@ impl ShellRuntime {
             } => {
                 if let Ok(service) = shilpo_services::NiriCompositorService::new() {
                     let _ = service.move_window_to_workspace(window_id, workspace_id);
+                }
+            }
+            ActionInvocation::VolumeUp => {
+                let _ = std::process::Command::new("wpctl")
+                    .args(["set-volume", "@DEFAULT_AUDIO_SINK@", "5%+"])
+                    .status();
+                if let Ok(audio) = shilpo_services::AudioService::new() {
+                    let info = audio.audio_info();
+                    Self::show_osd(
+                        cx,
+                        crate::osd::OsdKind::Volume {
+                            level: info.volume as u32,
+                            muted: info.is_muted,
+                        },
+                    );
+                }
+            }
+            ActionInvocation::VolumeDown => {
+                let _ = std::process::Command::new("wpctl")
+                    .args(["set-volume", "@DEFAULT_AUDIO_SINK@", "5%-"])
+                    .status();
+                if let Ok(audio) = shilpo_services::AudioService::new() {
+                    let info = audio.audio_info();
+                    Self::show_osd(
+                        cx,
+                        crate::osd::OsdKind::Volume {
+                            level: info.volume as u32,
+                            muted: info.is_muted,
+                        },
+                    );
+                }
+            }
+            ActionInvocation::VolumeMute => {
+                let _ = std::process::Command::new("wpctl")
+                    .args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
+                    .status();
+                if let Ok(audio) = shilpo_services::AudioService::new() {
+                    let info = audio.audio_info();
+                    Self::show_osd(
+                        cx,
+                        crate::osd::OsdKind::Volume {
+                            level: info.volume as u32,
+                            muted: info.is_muted,
+                        },
+                    );
+                }
+            }
+            ActionInvocation::BrightnessUp => {
+                if let Ok(brightness) = shilpo_services::BrightnessService::new() {
+                    let info = brightness.brightness_info();
+                    let new_pct = (info.percentage + 5).min(100);
+                    brightness.set_brightness(new_pct);
+                    Self::show_osd(
+                        cx,
+                        crate::osd::OsdKind::Brightness {
+                            level: new_pct as u32,
+                        },
+                    );
+                }
+            }
+            ActionInvocation::BrightnessDown => {
+                if let Ok(brightness) = shilpo_services::BrightnessService::new() {
+                    let info = brightness.brightness_info();
+                    let new_pct = info.percentage.saturating_sub(5);
+                    brightness.set_brightness(new_pct);
+                    Self::show_osd(
+                        cx,
+                        crate::osd::OsdKind::Brightness {
+                            level: new_pct as u32,
+                        },
+                    );
                 }
             }
         }

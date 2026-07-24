@@ -4,6 +4,7 @@ pub mod control_center;
 pub mod error;
 pub mod launcher;
 pub mod notification;
+pub mod osd;
 pub mod runtime;
 
 pub use actions::{
@@ -14,4 +15,5 @@ pub use control_center::ControlCenterView;
 pub use error::ShellError;
 pub use launcher::LauncherView;
 pub use notification::NotificationToastView;
+pub use osd::{OsdKind, OsdView};
 pub use runtime::ShellRuntime;

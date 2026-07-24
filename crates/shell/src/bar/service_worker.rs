@@ -171,20 +171,21 @@ async fn run(
                 return;
             }
         }
+        if !sample_device(
+            &updates,
+            &mut audio_last,
+            audio.as_ref().map(AudioService::audio_info),
+            WorkerUpdate::Audio,
+        ) {
+            return;
+        }
+
         if device_ticks == 0 {
             if !sample_device(
                 &updates,
                 &mut battery_last,
                 battery.as_ref().map(BatteryService::battery_info),
                 WorkerUpdate::Battery,
-            ) {
-                return;
-            }
-            if !sample_device(
-                &updates,
-                &mut audio_last,
-                audio.as_ref().map(AudioService::audio_info),
-                WorkerUpdate::Audio,
             ) {
                 return;
             }

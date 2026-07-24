@@ -12,6 +12,11 @@ pub enum ActionId {
     MoveWindowToWorkspace,
     ReloadConfig,
     Quit,
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
+    BrightnessUp,
+    BrightnessDown,
 }
 
 impl ActionId {
@@ -24,6 +29,11 @@ impl ActionId {
         Self::MoveWindowToWorkspace,
         Self::ReloadConfig,
         Self::Quit,
+        Self::VolumeUp,
+        Self::VolumeDown,
+        Self::VolumeMute,
+        Self::BrightnessUp,
+        Self::BrightnessDown,
     ];
 
     pub fn name(self) -> &'static str {
@@ -36,6 +46,11 @@ impl ActionId {
             Self::MoveWindowToWorkspace => "move_window_to_workspace",
             Self::ReloadConfig => "reload_config",
             Self::Quit => "quit",
+            Self::VolumeUp => "volume_up",
+            Self::VolumeDown => "volume_down",
+            Self::VolumeMute => "volume_mute",
+            Self::BrightnessUp => "brightness_up",
+            Self::BrightnessDown => "brightness_down",
         }
     }
 }
@@ -61,6 +76,11 @@ pub enum ActionInvocation {
     MoveWindowToWorkspace { window_id: u64, workspace_id: u64 },
     ReloadConfig,
     Quit,
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
+    BrightnessUp,
+    BrightnessDown,
 }
 
 impl ActionInvocation {
@@ -74,6 +94,11 @@ impl ActionInvocation {
             Self::MoveWindowToWorkspace { .. } => ActionId::MoveWindowToWorkspace,
             Self::ReloadConfig => ActionId::ReloadConfig,
             Self::Quit => ActionId::Quit,
+            Self::VolumeUp => ActionId::VolumeUp,
+            Self::VolumeDown => ActionId::VolumeDown,
+            Self::VolumeMute => ActionId::VolumeMute,
+            Self::BrightnessUp => ActionId::BrightnessUp,
+            Self::BrightnessDown => ActionId::BrightnessDown,
         }
     }
 
@@ -97,6 +122,11 @@ impl From<ActionId> for ActionInvocation {
             },
             ActionId::ReloadConfig => Self::ReloadConfig,
             ActionId::Quit => Self::Quit,
+            ActionId::VolumeUp => Self::VolumeUp,
+            ActionId::VolumeDown => Self::VolumeDown,
+            ActionId::VolumeMute => Self::VolumeMute,
+            ActionId::BrightnessUp => Self::BrightnessUp,
+            ActionId::BrightnessDown => Self::BrightnessDown,
         }
     }
 }
@@ -173,6 +203,41 @@ impl ActionRegistry {
                     id,
                     name: id.name(),
                     label: "Quit Shell Runtime",
+                    category: ActionCategory::System,
+                    enabled: true,
+                },
+                ActionId::VolumeUp => ActionDescriptor {
+                    id,
+                    name: id.name(),
+                    label: "Increase Volume",
+                    category: ActionCategory::System,
+                    enabled: true,
+                },
+                ActionId::VolumeDown => ActionDescriptor {
+                    id,
+                    name: id.name(),
+                    label: "Decrease Volume",
+                    category: ActionCategory::System,
+                    enabled: true,
+                },
+                ActionId::VolumeMute => ActionDescriptor {
+                    id,
+                    name: id.name(),
+                    label: "Mute Volume",
+                    category: ActionCategory::System,
+                    enabled: true,
+                },
+                ActionId::BrightnessUp => ActionDescriptor {
+                    id,
+                    name: id.name(),
+                    label: "Increase Brightness",
+                    category: ActionCategory::System,
+                    enabled: true,
+                },
+                ActionId::BrightnessDown => ActionDescriptor {
+                    id,
+                    name: id.name(),
+                    label: "Decrease Brightness",
                     category: ActionCategory::System,
                     enabled: true,
                 },

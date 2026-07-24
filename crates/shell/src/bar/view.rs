@@ -174,7 +174,19 @@ impl BarView {
                 changed = true;
             }
             WorkerUpdate::Audio(value) if &self.audio != value => {
+                let show_osd = self.audio.available
+                    && value.available
+                    && (self.audio.volume != value.volume || self.audio.is_muted != value.is_muted);
                 self.audio = value.clone();
+                if show_osd {
+                    ShellRuntime::show_osd(
+                        cx,
+                        crate::osd::OsdKind::Volume {
+                            level: value.volume as u32,
+                            muted: value.is_muted,
+                        },
+                    );
+                }
                 changed = true;
             }
             WorkerUpdate::Network(value) if &self.network != value => {
