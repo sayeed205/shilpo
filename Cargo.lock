@@ -7288,6 +7288,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "shilpo-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui_platform",
+ "serde",
+ "shilpo-assets",
+ "shilpo-config",
+ "shilpo-services",
+ "shilpo-ui",
+ "tracing",
+]
+
+[[package]]
 name = "shilpo-shell"
 version = "0.1.0"
 dependencies = [
