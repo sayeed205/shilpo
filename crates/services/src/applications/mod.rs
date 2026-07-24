@@ -627,9 +627,61 @@ pub fn resolve_handler_for_uri(uri: &str) -> Option<String> {
     None
 }
 
+/// Helper to percent-decode URL string (e.g. "%20" -> " ").
+pub fn percent_decode(s: &str) -> String {
+    let mut decoded = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            decoded.push(b);
+            i += 3;
+            continue;
+        }
+        decoded.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&decoded).to_string()
+}
+
+/// Parses a Freedesktop/RFC 2483 `text/uri-list` payload into validated local file `PathBuf`s.
+pub fn parse_uri_list(raw_data: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for line in raw_data.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let path_str = if let Some(stripped) = trimmed.strip_prefix("file://") {
+            stripped
+        } else {
+            trimmed
+        };
+
+        let decoded = percent_decode(path_str);
+        let path = PathBuf::from(decoded);
+        if path.exists() {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_uri_list_decoding_and_validation() {
+        let raw = "# Comment line\nfile:///tmp\nfile:///nonexistent_path_shilpo_999\n";
+        let parsed = parse_uri_list(raw);
+        assert_eq!(parsed, vec![PathBuf::from("/tmp")]);
+        assert_eq!(percent_decode("Hello%20World"), "Hello World");
+    }
 
     #[test]
     fn test_parse_exec_basic() {
