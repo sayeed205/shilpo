@@ -14,7 +14,7 @@ pub mod screen_capture;
 pub mod tray;
 pub mod upower;
 
-pub use applications::{AppScanner, Application};
+pub use applications::{AppScanner, Application, resolve_handler_for_uri};
 pub use audio::{AudioDevice, AudioInfo, AudioPort, AudioService};
 pub use bluetooth::{BluetoothInfo, BluetoothService};
 pub use brightness::{BrightnessInfo, BrightnessService};

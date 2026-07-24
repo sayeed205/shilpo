@@ -174,6 +174,7 @@ impl ControlCenterView {
 
     fn toggle_dnd(&mut self, cx: &mut Context<Self>) {
         self.dnd_active = !self.dnd_active;
+        ShellRuntime::set_dnd_enabled(cx, self.dnd_active);
         cx.notify();
     }
 

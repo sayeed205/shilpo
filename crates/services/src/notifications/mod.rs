@@ -48,6 +48,7 @@ impl Notification {
 pub struct NotificationService {
     notifications: Arc<Mutex<Vec<Notification>>>,
     new_notif_sender: Arc<Mutex<Option<std::sync::mpsc::Sender<Notification>>>>,
+    dnd_enabled: Arc<Mutex<bool>>,
     _connection: Option<Connection>,
 }
 
@@ -76,6 +77,7 @@ impl NotificationService {
         Self {
             notifications: Arc::new(Mutex::new(Vec::new())),
             new_notif_sender: Arc::new(Mutex::new(None)),
+            dnd_enabled: Arc::new(Mutex::new(false)),
             _connection: None,
         }
     }
@@ -85,10 +87,12 @@ impl NotificationService {
         let notifications = Arc::new(Mutex::new(Vec::new()));
         let next_id = Arc::new(Mutex::new(0));
         let new_notif_sender = Arc::new(Mutex::new(None));
+        let dnd_enabled = Arc::new(Mutex::new(false));
 
         let service = Self {
             notifications: notifications.clone(),
             new_notif_sender: new_notif_sender.clone(),
+            dnd_enabled: dnd_enabled.clone(),
             _connection: Some(connection.clone()),
         };
 
@@ -96,6 +100,7 @@ impl NotificationService {
             notifications,
             next_id,
             new_notif_sender,
+            dnd_enabled,
         };
 
         connection
@@ -137,12 +142,24 @@ impl NotificationService {
         let mut lock = self.notifications.lock().unwrap();
         lock.clear();
     }
+
+    /// Sets whether Do Not Disturb mode is enabled.
+    pub fn set_dnd_enabled(&self, enabled: bool) {
+        let mut lock = self.dnd_enabled.lock().unwrap();
+        *lock = enabled;
+    }
+
+    /// Returns whether Do Not Disturb mode is enabled.
+    pub fn is_dnd_enabled(&self) -> bool {
+        *self.dnd_enabled.lock().unwrap()
+    }
 }
 
 struct NotificationServer {
     notifications: Arc<Mutex<Vec<Notification>>>,
     next_id: Arc<Mutex<u32>>,
     new_notif_sender: Arc<Mutex<Option<std::sync::mpsc::Sender<Notification>>>>,
+    dnd_enabled: Arc<Mutex<bool>>,
 }
 
 #[interface(name = "org.freedesktop.Notifications")]
@@ -233,8 +250,11 @@ impl NotificationServer {
             }
         }
 
-        // Notify subscribers/OSD listeners
-        if let Some(tx) = &*self.new_notif_sender.lock().unwrap() {
+        // Notify subscribers/OSD listeners if not suppressed by DND (Critical bypasses DND)
+        let is_dnd = *self.dnd_enabled.lock().unwrap();
+        if (!is_dnd || urgency == NotificationUrgency::Critical)
+            && let Some(tx) = &*self.new_notif_sender.lock().unwrap()
+        {
             let _ = tx.send(notification);
         }
 
@@ -276,6 +296,7 @@ mod tests {
             notifications: service.notifications.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
+            dnd_enabled: service.dnd_enabled.clone(),
         };
 
         let id = server.notify(
@@ -307,6 +328,7 @@ mod tests {
             notifications: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: Arc::new(Mutex::new(None)),
+            dnd_enabled: Arc::new(Mutex::new(false)),
         };
 
         let mut hints = HashMap::new();
@@ -340,6 +362,7 @@ mod tests {
             notifications: service.notifications.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
+            dnd_enabled: service.dnd_enabled.clone(),
         };
 
         server.notify(
@@ -375,6 +398,7 @@ mod tests {
             notifications: service.notifications.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
+            dnd_enabled: service.dnd_enabled.clone(),
         };
 
         let id1 = server.notify(
@@ -416,6 +440,7 @@ mod tests {
             notifications: service.notifications.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
+            dnd_enabled: service.dnd_enabled.clone(),
         };
 
         server.notify(
@@ -454,6 +479,7 @@ mod tests {
             notifications: service.notifications.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
+            dnd_enabled: service.dnd_enabled.clone(),
         };
 
         let id = server.notify(
@@ -482,6 +508,7 @@ mod tests {
             notifications: service.notifications.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
+            dnd_enabled: service.dnd_enabled.clone(),
         };
 
         server.notify(
@@ -510,5 +537,50 @@ mod tests {
         let second_msg = rx.recv().unwrap();
         assert_eq!(second_msg.summary, "Second");
         assert_eq!(second_msg.id, 1);
+    }
+
+    #[test]
+    fn test_notification_dnd_suppression() {
+        let service = NotificationService::new_offline();
+        let (tx, rx) = std::sync::mpsc::channel();
+        service.set_new_notification_sender(tx);
+        service.set_dnd_enabled(true);
+        assert!(service.is_dnd_enabled());
+
+        let server = NotificationServer {
+            notifications: service.notifications.clone(),
+            next_id: Arc::new(Mutex::new(0)),
+            new_notif_sender: service.new_notif_sender.clone(),
+            dnd_enabled: service.dnd_enabled.clone(),
+        };
+
+        // Low urgency - suppressed from rx toast channel
+        server.notify(
+            "app".to_string(),
+            0,
+            "".to_string(),
+            "Quiet Notif".to_string(),
+            "Body".to_string(),
+            vec![],
+            HashMap::from([("urgency".to_string(), zbus::zvariant::Value::U8(0))]),
+            0,
+        );
+        assert!(rx.try_recv().is_err());
+        assert_eq!(service.notifications().len(), 1);
+
+        // Critical urgency - bypasses DND
+        server.notify(
+            "app".to_string(),
+            0,
+            "".to_string(),
+            "Critical Alert".to_string(),
+            "Body".to_string(),
+            vec![],
+            HashMap::from([("urgency".to_string(), zbus::zvariant::Value::U8(2))]),
+            0,
+        );
+        let critical_msg = rx.recv().unwrap();
+        assert_eq!(critical_msg.summary, "Critical Alert");
+        assert_eq!(service.notifications().len(), 2);
     }
 }

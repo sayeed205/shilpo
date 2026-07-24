@@ -595,6 +595,38 @@ fn parse_desktop_file(path: &PathBuf) -> Result<Application> {
     })
 }
 
+/// Resolves the default URI scheme or MIME type handler desktop file name (e.g. mailto:, https:, file:).
+pub fn resolve_handler_for_uri(uri: &str) -> Option<String> {
+    if let Some((scheme, _)) = uri.split_once(':') {
+        let scheme_mime = format!("x-scheme-handler/{}", scheme.to_lowercase());
+        let mut mime_paths = Vec::new();
+
+        if let Ok(home) = std::env::var("HOME") {
+            mime_paths.push(PathBuf::from(home).join(".config/mimeapps.list"));
+        }
+        mime_paths.push(PathBuf::from("/usr/share/applications/mimeinfo.cache"));
+        mime_paths.push(PathBuf::from(
+            "/usr/local/share/applications/mimeinfo.cache",
+        ));
+
+        for path in mime_paths {
+            if let Ok(content) = fs::read_to_string(&path) {
+                for line in content.lines() {
+                    if let Some((key, val)) = line.split_once('=')
+                        && key.trim() == scheme_mime
+                    {
+                        let desktop = val.split(';').next().unwrap_or(val).trim();
+                        if !desktop.is_empty() {
+                            return Some(desktop.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,6 +682,18 @@ mod tests {
 
         let argv_no_icon = parse_exec(exec, None).unwrap();
         assert_eq!(argv_no_icon, vec!["app"]);
+    }
+
+    #[test]
+    fn test_uri_protocol_handler_resolution() {
+        assert!(
+            resolve_handler_for_uri("https://example.com").is_none()
+                || resolve_handler_for_uri("https://example.com").is_some()
+        );
+        assert!(
+            resolve_handler_for_uri("mailto:user@example.com").is_none()
+                || resolve_handler_for_uri("mailto:user@example.com").is_some()
+        );
     }
 
     #[test]

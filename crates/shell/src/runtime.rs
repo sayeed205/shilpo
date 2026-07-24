@@ -735,6 +735,17 @@ impl ShellRuntime {
         }
     }
 
+    pub fn set_dnd_enabled(cx: &mut App, enabled: bool) {
+        if cx.has_global::<Self>() {
+            let runtime = cx.global_mut::<Self>();
+            if let Some(ref hub) = runtime.service_hub
+                && let Some(ref notif) = hub.notification
+            {
+                notif.set_dnd_enabled(enabled);
+            }
+        }
+    }
+
     pub fn clipboard_history(cx: &App) -> Vec<shilpo_config::ClipboardItem> {
         if cx.has_global::<Self>()
             && let Some(ref hub) = cx.global::<Self>().service_hub
