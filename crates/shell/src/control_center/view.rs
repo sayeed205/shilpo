@@ -5,7 +5,8 @@ use gpui::{
     relative,
 };
 use shilpo_services::{
-    AudioService, BatteryService, BrightnessService, NetworkService, NightLightService,
+    AudioService, BatteryService, BluetoothService, BrightnessService, NetworkService,
+    NightLightService, PowerProfile, PowerProfileService,
 };
 use shilpo_ui::{
     ActiveTheme, Colorize, FocusTrapElement, Icon, IconName, Sizable, StyledExt, h_flex,
@@ -21,10 +22,14 @@ pub struct ControlCenterView {
     pub audio_service: Option<AudioService>,
     pub brightness_service: Option<Arc<BrightnessService>>,
     pub night_light_service: Option<NightLightService>,
+    pub bluetooth_service: Option<BluetoothService>,
+    pub power_profile_service: Option<PowerProfileService>,
     volume_state: Entity<SliderState>,
     brightness_state: Entity<SliderState>,
     dnd_active: bool,
     night_light_active: bool,
+    bluetooth_active: bool,
+    active_power_profile: PowerProfile,
     focus_handle: FocusHandle,
 }
 
@@ -34,6 +39,8 @@ impl ControlCenterView {
         let network_service = service_or_warn(NetworkService::new, "network");
         let audio_service = service_or_warn(AudioService::new, "audio");
         let night_light_service = service_or_warn(NightLightService::new, "night_light");
+        let bluetooth_service = service_or_warn(BluetoothService::new, "bluetooth");
+        let power_profile_service = service_or_warn(PowerProfileService::new, "power_profile");
         let brightness_service = match BrightnessService::new() {
             Ok(service) => Some(Arc::new(service)),
             Err(error) => {
@@ -41,6 +48,15 @@ impl ControlCenterView {
                 None
             }
         };
+
+        let initial_bluetooth = bluetooth_service
+            .as_ref()
+            .map(|s| s.info().powered)
+            .unwrap_or(false);
+        let initial_power_profile = power_profile_service
+            .as_ref()
+            .map(|s| s.info().active_profile)
+            .unwrap_or(PowerProfile::Balanced);
 
         let initial_night_light = night_light_service
             .as_ref()
@@ -124,10 +140,14 @@ impl ControlCenterView {
             audio_service,
             brightness_service,
             night_light_service,
+            bluetooth_service,
+            power_profile_service,
             volume_state,
             brightness_state,
             dnd_active: false,
             night_light_active: initial_night_light,
+            bluetooth_active: initial_bluetooth,
+            active_power_profile: initial_power_profile,
             focus_handle,
         }
     }
@@ -151,6 +171,26 @@ impl ControlCenterView {
             self.night_light_active = service.toggle();
         } else {
             self.night_light_active = !self.night_light_active;
+        }
+        cx.notify();
+    }
+
+    fn toggle_bluetooth(&mut self, cx: &mut Context<Self>) {
+        if let Some(service) = &self.bluetooth_service {
+            self.bluetooth_active = service.toggle();
+        } else {
+            self.bluetooth_active = !self.bluetooth_active;
+        }
+        cx.notify();
+    }
+
+    fn set_power_profile(&mut self, profile: PowerProfile, cx: &mut Context<Self>) {
+        if let Some(service) = &self.power_profile_service {
+            if service.set_profile(profile.clone()) {
+                self.active_power_profile = profile;
+            }
+        } else {
+            self.active_power_profile = profile;
         }
         cx.notify();
     }
@@ -236,6 +276,17 @@ impl Render for ControlCenterView {
             cx.theme().surface_container_highest
         };
         let night_fg = if self.night_light_active {
+            cx.theme().on_primary_container
+        } else {
+            cx.theme().on_surface_variant
+        };
+
+        let bt_bg = if self.bluetooth_active {
+            cx.theme().primary_container
+        } else {
+            cx.theme().surface_container_highest
+        };
+        let bt_fg = if self.bluetooth_active {
             cx.theme().on_primary_container
         } else {
             cx.theme().on_surface_variant
@@ -353,12 +404,18 @@ impl Render for ControlCenterView {
                                     .child(
                                         h_flex()
                                             .id("cc-toggle-bluetooth")
+                                            .role(Role::Button)
+                                            .aria_label("Toggle Bluetooth")
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.toggle_bluetooth(cx);
+                                            }))
                                             .w(relative(0.5))
                                             .px_3()
                                             .py_2()
                                             .rounded_xl()
-                                            .bg(cx.theme().surface_container_highest)
-                                            .text_color(cx.theme().on_surface_variant)
+                                            .bg(bt_bg)
+                                            .text_color(bt_fg)
                                             .gap_2_5()
                                             .items_center()
                                             .child(
@@ -370,6 +427,9 @@ impl Render for ControlCenterView {
                                     .child(
                                         h_flex()
                                             .id("cc-toggle-night")
+                                            .role(Role::Button)
+                                            .aria_label("Toggle Night Light")
+                                            .cursor_pointer()
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.toggle_night_light(cx);
                                             }))
@@ -387,6 +447,47 @@ impl Render for ControlCenterView {
                                             ),
                                     ),
                             ),
+                    )
+                    // Power Profile Selector Pills
+                    .child(
+                        h_flex().gap_1p5().justify_between().children(
+                            [
+                                (PowerProfile::PowerSaver, "Saver"),
+                                (PowerProfile::Balanced, "Balanced"),
+                                (PowerProfile::Performance, "Perf"),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, (prof, label))| {
+                                let is_active = self.active_power_profile == prof;
+                                let (bg, fg) = if is_active {
+                                    (cx.theme().primary, cx.theme().on_primary)
+                                } else {
+                                    (
+                                        cx.theme().surface_container_highest,
+                                        cx.theme().on_surface_variant,
+                                    )
+                                };
+                                let prof_clone = prof.clone();
+
+                                div()
+                                    .id(("power-profile-pill", i))
+                                    .role(Role::Button)
+                                    .aria_label(format!("Select {} Power Profile", label))
+                                    .px_3()
+                                    .py_1()
+                                    .rounded_full()
+                                    .bg(bg)
+                                    .text_color(fg)
+                                    .text_xs()
+                                    .font_semibold()
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.set_power_profile(prof_clone.clone(), cx);
+                                    }))
+                                    .child(label)
+                            }),
+                        ),
                     )
                     // Volume Slider
                     .child(
