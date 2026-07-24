@@ -4,7 +4,9 @@ use gpui::{
     KeyDownEvent, ParentElement, Render, Role, StatefulInteractiveElement, Styled, Window, div, px,
     relative,
 };
-use shilpo_services::{AudioService, BatteryService, BrightnessService, NetworkService};
+use shilpo_services::{
+    AudioService, BatteryService, BrightnessService, NetworkService, NightLightService,
+};
 use shilpo_ui::{
     ActiveTheme, Colorize, FocusTrapElement, Icon, IconName, Sizable, StyledExt, h_flex,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
@@ -18,6 +20,7 @@ pub struct ControlCenterView {
     pub network_service: Option<NetworkService>,
     pub audio_service: Option<AudioService>,
     pub brightness_service: Option<Arc<BrightnessService>>,
+    pub night_light_service: Option<NightLightService>,
     volume_state: Entity<SliderState>,
     brightness_state: Entity<SliderState>,
     dnd_active: bool,
@@ -30,6 +33,7 @@ impl ControlCenterView {
         let battery_service = service_or_warn(BatteryService::new, "battery");
         let network_service = service_or_warn(NetworkService::new, "network");
         let audio_service = service_or_warn(AudioService::new, "audio");
+        let night_light_service = service_or_warn(NightLightService::new, "night_light");
         let brightness_service = match BrightnessService::new() {
             Ok(service) => Some(Arc::new(service)),
             Err(error) => {
@@ -37,6 +41,11 @@ impl ControlCenterView {
                 None
             }
         };
+
+        let initial_night_light = night_light_service
+            .as_ref()
+            .map(|service| service.info().is_active)
+            .unwrap_or(false);
 
         let audio_available = audio_service
             .as_ref()
@@ -114,10 +123,11 @@ impl ControlCenterView {
             network_service,
             audio_service,
             brightness_service,
+            night_light_service,
             volume_state,
             brightness_state,
             dnd_active: false,
-            night_light_active: false,
+            night_light_active: initial_night_light,
             focus_handle,
         }
     }
@@ -137,7 +147,11 @@ impl ControlCenterView {
     }
 
     fn toggle_night_light(&mut self, cx: &mut Context<Self>) {
-        self.night_light_active = !self.night_light_active;
+        if let Some(service) = &self.night_light_service {
+            self.night_light_active = service.toggle();
+        } else {
+            self.night_light_active = !self.night_light_active;
+        }
         cx.notify();
     }
 
