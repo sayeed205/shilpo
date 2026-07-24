@@ -1,8 +1,12 @@
+use crate::actions::ActionInvocation;
+use crate::runtime::ShellRuntime;
 use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
 };
-use shilpo_ui::{ActiveTheme, Colorize, Icon, IconName, StyledExt, h_flex};
+use shilpo_ui::{
+    ActiveTheme, Colorize, ContextMenuExt, Icon, IconName, PopupMenuItem, StyledExt, h_flex,
+};
 
 pub type ClickHandler = Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static>;
 
@@ -68,8 +72,12 @@ impl RenderOnce for WindowInfoCapsule {
             star_btn
         };
 
+        let aria = format!("Active Window: {} - {}", self.app_id, self.title);
+
         h_flex()
             .id(self.id)
+            .role(Role::Button)
+            .aria_label(aria)
             .h(px(32.))
             .px_3()
             .items_center()
@@ -80,6 +88,16 @@ impl RenderOnce for WindowInfoCapsule {
             .border_color(cx.theme().outline_variant.opacity(0.3))
             .text_color(cx.theme().on_surface)
             .shadow_sm()
+            .context_menu(|menu, _, _| {
+                menu.item(
+                    PopupMenuItem::new("Close Active Overlay")
+                        .icon(IconName::SquareTerminal)
+                        .on_click(|_, window, cx| {
+                            let _ = ShellRuntime::dispatch_action(cx, ActionInvocation::Quit);
+                            window.remove_window();
+                        }),
+                )
+            })
             .child(star_btn)
             .child(
                 h_flex()

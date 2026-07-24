@@ -1,8 +1,10 @@
+use crate::actions::ActionInvocation;
+use crate::runtime::ShellRuntime;
 use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
-    Styled, Window, div, px,
+    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
 };
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex};
+use shilpo_ui::{ActiveTheme, ContextMenuExt, Icon, IconName, PopupMenuItem, StyledExt, h_flex};
 
 /// Active Window Title widget for Shilpo status bar.
 #[derive(IntoElement)]
@@ -30,8 +32,11 @@ impl Styled for ActiveWindowWidget {
 
 impl RenderOnce for ActiveWindowWidget {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let aria = format!("Active Window: {}", self.title);
         div()
             .id(self.id)
+            .role(Role::Button)
+            .aria_label(aria)
             .px_3()
             .py_1()
             .rounded_full()
@@ -41,6 +46,16 @@ impl RenderOnce for ActiveWindowWidget {
             .font_medium()
             .max_w(px(220.))
             .overflow_hidden()
+            .context_menu(|menu, _, _| {
+                menu.item(
+                    PopupMenuItem::new("Close Active Overlay")
+                        .icon(IconName::SquareTerminal)
+                        .on_click(|_, window, cx| {
+                            let _ = ShellRuntime::dispatch_action(cx, ActionInvocation::Quit);
+                            window.remove_window();
+                        }),
+                )
+            })
             .child(
                 h_flex()
                     .gap_2()
