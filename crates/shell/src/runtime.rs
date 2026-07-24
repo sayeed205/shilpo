@@ -172,7 +172,7 @@ impl ShellRuntime {
         let session_path = shilpo_config::ShellSessionState::default_session_path();
         let session_state = shilpo_config::ShellSessionState::load_or_default(&session_path);
         let heed_dir = shilpo_config::HeedSessionStore::default_db_dir();
-        let heed_store = shilpo_config::HeedSessionStore::open_or_create(&heed_dir)
+        let heed_store = shilpo_config::HeedSessionStore::open_or_repair(&heed_dir)
             .ok()
             .map(Arc::new);
         let hub = ServiceHub::new(cx.background_executor().clone(), config_path);

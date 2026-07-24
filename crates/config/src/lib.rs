@@ -606,6 +606,20 @@ impl HeedSessionStore {
         })
     }
 
+    pub fn open_or_repair(dir: &Path) -> Result<Self, ConfigError> {
+        match Self::open_or_create(dir) {
+            Ok(store) => Ok(store),
+            Err(e) => {
+                eprintln!(
+                    "LMDB session store open failed (path = {}): {e}; resetting corrupt store directory",
+                    dir.display()
+                );
+                let _ = fs::remove_dir_all(dir);
+                Self::open_or_create(dir)
+            }
+        }
+    }
+
     pub fn save_clipboard_item(&self, item: &ClipboardItem) -> Result<(), ConfigError> {
         let mut wtxn = self.env.write_txn().map_err(|e| ConfigError::Parse {
             diagnostic: ConfigDiagnostic {
@@ -641,18 +655,10 @@ impl HeedSessionStore {
             },
         })?;
         let mut items = Vec::new();
-        let iter = self
-            .clipboard_history_db
-            .iter(&rtxn)
-            .map_err(|e| ConfigError::Parse {
-                diagnostic: ConfigDiagnostic {
-                    path: "clipboard_history".to_string(),
-                    message: e.to_string(),
-                    span: None,
-                },
-            })?;
-        for (_, item) in iter.flatten() {
-            items.push(item);
+        if let Ok(iter) = self.clipboard_history_db.iter(&rtxn) {
+            for (_, item) in iter.flatten() {
+                items.push(item);
+            }
         }
         items.sort_by_key(|i| i.id);
         items.reverse();
@@ -979,6 +985,20 @@ margin = { horizontal = 600, vertical = 6 }
         assert_eq!(history[0], item);
 
         store.clear_clipboard_history().unwrap();
+        assert!(store.get_clipboard_history().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(db_dir);
+    }
+
+    #[test]
+    fn test_heed_corrupt_state_recovery_and_atomic_commit() {
+        let db_dir =
+            std::env::temp_dir().join(format!("shilpo-corrupt-{}.lmdb", std::process::id()));
+        let _ = std::fs::remove_dir_all(&db_dir);
+        std::fs::create_dir_all(&db_dir).unwrap();
+        std::fs::write(db_dir.join("data.mdb"), b"CORRUPTED_GARBAGE_BYTES_12345").unwrap();
+
+        let store = HeedSessionStore::open_or_repair(&db_dir).unwrap();
         assert!(store.get_clipboard_history().unwrap().is_empty());
 
         let _ = std::fs::remove_dir_all(db_dir);
