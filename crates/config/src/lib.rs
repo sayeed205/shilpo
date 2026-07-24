@@ -506,6 +506,141 @@ impl ShellSessionState {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct OutputBarState {
+    pub visible: bool,
+    pub position_edge: String,
+    pub thickness: u32,
+    pub exclusive_zone: Option<u32>,
+    pub active_workspace_id: Option<u64>,
+}
+
+pub struct HeedSessionStore {
+    env: heed::Env,
+    output_bars_db: heed::Database<heed::types::Str, heed::types::SerdeJson<OutputBarState>>,
+}
+
+impl HeedSessionStore {
+    pub fn default_db_dir() -> PathBuf {
+        let base = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+            .unwrap_or_else(|| PathBuf::from("."));
+        base.join("shilpo").join("session.lmdb")
+    }
+
+    pub fn open_or_create(dir: &Path) -> Result<Self, ConfigError> {
+        if let Err(e) = fs::create_dir_all(dir) {
+            return Err(ConfigError::Io {
+                path: dir.to_path_buf(),
+                source: e,
+            });
+        }
+
+        let env = unsafe {
+            heed::EnvOpenOptions::new()
+                .max_dbs(10)
+                .map_size(10 * 1024 * 1024)
+                .open(dir)
+                .map_err(|e| ConfigError::Parse {
+                    diagnostic: ConfigDiagnostic {
+                        path: dir.display().to_string(),
+                        message: e.to_string(),
+                        span: None,
+                    },
+                })?
+        };
+
+        let mut wtxn = env.write_txn().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: dir.display().to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })?;
+
+        let output_bars_db = env
+            .create_database(&mut wtxn, Some("output_bars"))
+            .map_err(|e| ConfigError::Parse {
+                diagnostic: ConfigDiagnostic {
+                    path: dir.display().to_string(),
+                    message: e.to_string(),
+                    span: None,
+                },
+            })?;
+
+        wtxn.commit().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: dir.display().to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })?;
+
+        Ok(Self {
+            env,
+            output_bars_db,
+        })
+    }
+
+    pub fn get_output_bar(&self, output_name: &str) -> Result<Option<OutputBarState>, ConfigError> {
+        let rtxn = self.env.read_txn().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: output_name.to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })?;
+
+        let state =
+            self.output_bars_db
+                .get(&rtxn, output_name)
+                .map_err(|e| ConfigError::Parse {
+                    diagnostic: ConfigDiagnostic {
+                        path: output_name.to_string(),
+                        message: e.to_string(),
+                        span: None,
+                    },
+                })?;
+
+        Ok(state)
+    }
+
+    pub fn put_output_bar(
+        &self,
+        output_name: &str,
+        state: &OutputBarState,
+    ) -> Result<(), ConfigError> {
+        let mut wtxn = self.env.write_txn().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: output_name.to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })?;
+
+        self.output_bars_db
+            .put(&mut wtxn, output_name, state)
+            .map_err(|e| ConfigError::Parse {
+                diagnostic: ConfigDiagnostic {
+                    path: output_name.to_string(),
+                    message: e.to_string(),
+                    span: None,
+                },
+            })?;
+
+        wtxn.commit().map_err(|e| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: output_name.to_string(),
+                message: e.to_string(),
+                span: None,
+            },
+        })?;
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,6 +667,31 @@ mod tests {
         assert!(loaded.dnd_active);
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_heed_session_store_roundtrip() {
+        let db_dir = std::env::temp_dir().join(format!("shilpo-heed-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&db_dir);
+
+        let store = HeedSessionStore::open_or_create(&db_dir).unwrap();
+        let state = OutputBarState {
+            visible: true,
+            position_edge: "top".to_string(),
+            thickness: 42,
+            exclusive_zone: Some(42),
+            active_workspace_id: Some(1),
+        };
+
+        store.put_output_bar("eDP-1", &state).unwrap();
+        let loaded = store.get_output_bar("eDP-1").unwrap().unwrap();
+        assert_eq!(loaded, state);
+        assert_eq!(loaded.thickness, 42);
+
+        let missing = store.get_output_bar("NON-EXISTENT").unwrap();
+        assert!(missing.is_none());
+
+        let _ = std::fs::remove_dir_all(&db_dir);
     }
     #[test]
     fn roundtrip() {

@@ -133,6 +133,7 @@ pub struct ShellRuntime {
     keybindings: crate::actions::KeybindingManager,
     session_state: shilpo_config::ShellSessionState,
     session_path: PathBuf,
+    pub heed_store: Option<Arc<shilpo_config::HeedSessionStore>>,
     service_hub: Option<ServiceHub>,
     _window_closed: Option<Subscription>,
     _ipc_task: gpui::Task<()>,
@@ -160,6 +161,10 @@ impl ShellRuntime {
             .unwrap_or_else(|_| shilpo_config::ShellConfig::default());
         let session_path = shilpo_config::ShellSessionState::default_session_path();
         let session_state = shilpo_config::ShellSessionState::load_or_default(&session_path);
+        let heed_dir = shilpo_config::HeedSessionStore::default_db_dir();
+        let heed_store = shilpo_config::HeedSessionStore::open_or_create(&heed_dir)
+            .ok()
+            .map(Arc::new);
         let hub = ServiceHub::new(cx.background_executor().clone(), config_path);
 
         cx.set_global(Self {
@@ -180,6 +185,7 @@ impl ShellRuntime {
             keybindings: crate::actions::KeybindingManager::with_defaults(),
             session_state,
             session_path,
+            heed_store,
             service_hub: Some(hub),
             _window_closed: None,
             _ipc_task: cx.spawn(async |_| {}),
@@ -872,6 +878,24 @@ impl ShellRuntime {
             cx.global::<Self>().session_state.recent_apps.clone()
         } else {
             Vec::new()
+        }
+    }
+
+    pub fn save_output_bar(cx: &mut App, output_name: &str, state: &shilpo_config::OutputBarState) {
+        if cx.has_global::<Self>()
+            && let Some(store) = &cx.global::<Self>().heed_store
+        {
+            let _ = store.put_output_bar(output_name, state);
+        }
+    }
+
+    pub fn load_output_bar(cx: &App, output_name: &str) -> Option<shilpo_config::OutputBarState> {
+        if cx.has_global::<Self>()
+            && let Some(store) = &cx.global::<Self>().heed_store
+        {
+            store.get_output_bar(output_name).ok().flatten()
+        } else {
+            None
         }
     }
 
