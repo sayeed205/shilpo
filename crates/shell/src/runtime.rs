@@ -31,6 +31,7 @@ pub struct ServiceHub {
     pub updates_rx: Arc<Mutex<UpdateReceiver>>,
     pub _service_task: Option<gpui::Task<()>>,
     pub _watcher: Option<notify::RecommendedWatcher>,
+    pub _app_watcher: Option<notify::RecommendedWatcher>,
 }
 
 impl ServiceHub {
@@ -40,6 +41,8 @@ impl ServiceHub {
         let audio = AudioService::new().ok();
         let network = NetworkService::new().ok();
         let clipboard = shilpo_services::ClipboardService::new();
+        let app_scanner = shilpo_services::AppScanner::new_empty();
+        let app_watcher = app_scanner.start_watcher();
         let notification = match NotificationService::new() {
             Ok(s) => Some(s),
             Err(e) => {
@@ -107,6 +110,7 @@ impl ServiceHub {
             updates_rx: Arc::new(Mutex::new(updates_rx)),
             _service_task: Some(service_task),
             _watcher: watcher,
+            _app_watcher: app_watcher,
         }
     }
 }

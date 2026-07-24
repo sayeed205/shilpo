@@ -7278,6 +7278,7 @@ dependencies = [
  "libc",
  "log",
  "niri-ipc",
+ "notify",
  "serde",
  "serde_json",
  "shilpo-config",

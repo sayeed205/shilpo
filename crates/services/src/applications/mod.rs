@@ -323,6 +323,85 @@ impl AppScanner {
         *lock = scanned;
     }
 
+    /// Starts watching XDG and Flatpak application directories for .desktop file changes.
+    pub fn start_watcher(&self) -> Option<notify::RecommendedWatcher> {
+        use notify::Watcher;
+
+        let apps_arc = self.apps.clone();
+        let mut dirs = vec![
+            PathBuf::from("/usr/share/applications"),
+            PathBuf::from("/usr/local/share/applications"),
+            PathBuf::from("/var/lib/flatpak/exports/share/applications"),
+        ];
+
+        if let Ok(home) = std::env::var("HOME") {
+            let home_path = PathBuf::from(home);
+            dirs.push(home_path.join(".local/share/applications"));
+            dirs.push(home_path.join(".local/share/flatpak/exports/share/applications"));
+        }
+
+        match notify::RecommendedWatcher::new(
+            move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res
+                    && event
+                        .paths
+                        .iter()
+                        .any(|p| p.extension().and_then(|e| e.to_str()) == Some("desktop"))
+                {
+                    icons::clear_icon_cache();
+                    let mut scanned = Vec::new();
+                    let mut scan_dirs = vec![
+                        PathBuf::from("/usr/share/applications"),
+                        PathBuf::from("/usr/local/share/applications"),
+                        PathBuf::from("/var/lib/flatpak/exports/share/applications"),
+                    ];
+                    if let Ok(home) = std::env::var("HOME") {
+                        let home_path = PathBuf::from(home);
+                        scan_dirs.push(home_path.join(".local/share/applications"));
+                        scan_dirs.push(
+                            home_path.join(".local/share/flatpak/exports/share/applications"),
+                        );
+                    }
+                    for dir in scan_dirs {
+                        if let Ok(entries) = fs::read_dir(dir) {
+                            for entry in entries.filter_map(Result::ok) {
+                                let path = entry.path();
+                                if path.extension().and_then(|s| s.to_str()) == Some("desktop")
+                                    && let Ok(app) = parse_desktop_file(&path)
+                                {
+                                    scanned.push(app);
+                                }
+                            }
+                        }
+                    }
+                    scanned.sort_by_key(|a| a.name.to_lowercase());
+                    if let Ok(mut lock) = apps_arc.lock() {
+                        *lock = scanned;
+                    }
+                }
+            },
+            notify::Config::default(),
+        ) {
+            Ok(mut watcher) => {
+                let mut watched_any = false;
+                for dir in dirs {
+                    if dir.exists()
+                        && watcher
+                            .watch(&dir, notify::RecursiveMode::NonRecursive)
+                            .is_ok()
+                    {
+                        watched_any = true;
+                    }
+                }
+                if watched_any { Some(watcher) } else { None }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to initialize application directory watcher");
+                None
+            }
+        }
+    }
+
     /// Returns all scanned applications.
     pub fn applications(&self) -> Vec<Application> {
         self.apps.lock().unwrap().clone()
