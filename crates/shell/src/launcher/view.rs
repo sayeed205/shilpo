@@ -2,7 +2,8 @@ use crate::actions::{ActionDescriptor, ActionRegistry};
 use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    KeyDownEvent, ParentElement, Render, Styled, Window, div, img, px,
+    KeyDownEvent, ParentElement, Render, Role, StatefulInteractiveElement, Styled, Window, div,
+    img, px,
 };
 use shilpo_services::{AppScanner, Application};
 use shilpo_ui::{
@@ -365,6 +366,8 @@ impl Render for LauncherView {
                         let app_exec = app.exec.clone();
                         h_flex()
                             .id(("app-item", i))
+                            .role(Role::Button)
+                            .aria_label(app.name.clone())
                             .px_4()
                             .py_2()
                             .rounded_xl()
@@ -572,6 +575,8 @@ impl Render for LauncherView {
             .child(
                 v_flex()
                     .id("launcher-card")
+                    .role(Role::Dialog)
+                    .aria_label("Application Launcher")
                     .track_focus(&self.focus_handle(cx))
                     .focus_trap("launcher-card-trap", &self.focus_handle(cx))
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {

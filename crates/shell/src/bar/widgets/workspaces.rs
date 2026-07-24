@@ -1,7 +1,7 @@
 use crate::actions::ActionInvocation;
 use crate::runtime::ShellRuntime;
 use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
 };
 use shilpo_services::NiriWorkspaceInfo;
@@ -71,6 +71,8 @@ impl RenderOnce for WorkspacesWidget {
 
                     div()
                         .id(("ws", ws.id))
+                        .role(Role::Button)
+                        .aria_label(format!("Workspace {}", label))
                         .cursor_pointer()
                         .on_click(move |_, _, cx| {
                             let _ = ShellRuntime::dispatch_action(

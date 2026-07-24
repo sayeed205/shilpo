@@ -1,7 +1,7 @@
 use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    KeyDownEvent, ParentElement, Render, StatefulInteractiveElement, Styled, Window, div, px,
+    KeyDownEvent, ParentElement, Render, Role, StatefulInteractiveElement, Styled, Window, div, px,
     relative,
 };
 use shilpo_services::{AudioService, BatteryService, BrightnessService, NetworkService};
@@ -242,6 +242,8 @@ impl Render for ControlCenterView {
             .child(
                 v_flex()
                     .id("control-center-card")
+                    .role(Role::Dialog)
+                    .aria_label("Control Center Panel")
                     .track_focus(&self.focus_handle(cx))
                     .focus_trap("control-center-card-trap", &self.focus_handle)
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
