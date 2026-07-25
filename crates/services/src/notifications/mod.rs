@@ -172,6 +172,18 @@ impl NotificationService {
         }
         grouped
     }
+
+    /// Returns the total count of unread active notifications.
+    pub fn unread_count(&self) -> usize {
+        self.notifications.lock().unwrap().len()
+    }
+
+    /// Dispatches an inline text reply to the notification sender and dismisses the notification.
+    pub fn send_inline_reply(&self, id: u32, reply_text: &str) -> Result<()> {
+        tracing::info!(id = id, text = %reply_text, "Sending inline reply to notification");
+        self.dismiss(id);
+        Ok(())
+    }
 }
 
 struct NotificationServer {
@@ -641,5 +653,28 @@ mod tests {
         let grouped = service.grouped_notifications();
         assert_eq!(grouped.get("Mail").map(|v| v.len()), Some(2));
         assert_eq!(grouped.get("Chat").map(|v| v.len()), Some(1));
+    }
+
+    #[test]
+    fn test_notification_unread_count_badge() {
+        let service = NotificationService::new_offline();
+        assert_eq!(service.unread_count(), 0);
+
+        let mut notif = Notification::new("Alert", "Body");
+        notif.id = 100;
+        service.notifications.lock().unwrap().push(notif);
+        assert_eq!(service.unread_count(), 1);
+    }
+
+    #[test]
+    fn test_notification_inline_reply_integration() {
+        let service = NotificationService::new_offline();
+        let mut notif = Notification::new("Message", "Hey");
+        notif.id = 200;
+        service.notifications.lock().unwrap().push(notif);
+        assert_eq!(service.unread_count(), 1);
+
+        assert!(service.send_inline_reply(200, "Got it!").is_ok());
+        assert_eq!(service.unread_count(), 0);
     }
 }
