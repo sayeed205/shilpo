@@ -206,6 +206,15 @@ impl Kbd {
         parts.push(&keys);
         parts.join(SEPARATOR)
     }
+
+    /// Formats a menu item accelerator shortcut string (e.g. "Ctrl+Shift", "c" -> "Ctrl+Shift+C").
+    pub fn format_accelerator_label(modifiers: &str, key: &str) -> String {
+        if modifiers.is_empty() {
+            key.to_uppercase()
+        } else {
+            format!("{modifiers}+{}", key.to_uppercase())
+        }
+    }
 }
 
 impl Styled for Kbd {
@@ -320,5 +329,14 @@ mod tests {
                 "Alt+Tab"
             );
         }
+    }
+
+    #[test]
+    fn test_shell_menu_model_and_accelerator_labels() {
+        assert_eq!(
+            super::Kbd::format_accelerator_label("Ctrl+Shift", "c"),
+            "Ctrl+Shift+C"
+        );
+        assert_eq!(super::Kbd::format_accelerator_label("", "f1"), "F1");
     }
 }

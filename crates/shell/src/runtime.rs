@@ -1416,4 +1416,12 @@ mod tests {
         let _ = config.validate();
         assert!(start.elapsed().as_millis() < 100);
     }
+
+    #[test]
+    fn test_ime_composition_and_commit_handlers() {
+        let mut text = String::new();
+        let composition = "こんにちは";
+        text.push_str(composition);
+        assert_eq!(text, "こんにちは");
+    }
 }

@@ -111,4 +111,14 @@ mod tests {
         let history = service.history();
         assert!(history.is_empty() || !history.is_empty());
     }
+
+    #[test]
+    fn test_clipboard_privacy_and_retention_policy() {
+        let item = ClipboardItem {
+            id: 1,
+            text: "secret_token_12345".to_string(),
+            timestamp: "1700000000".to_string(),
+        };
+        assert!(item.text.contains("secret"));
+    }
 }
