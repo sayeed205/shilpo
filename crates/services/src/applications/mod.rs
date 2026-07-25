@@ -467,25 +467,68 @@ impl AppScanner {
         self.apps.lock().unwrap().clone()
     }
 
-    /// Performs case-insensitive search over application names and descriptions.
-    pub fn search(&self, query: &str) -> Vec<Application> {
+    /// Performs case-insensitive search with category filtering and relevance ranking score.
+    pub fn search_with_category(&self, query: &str, category: Option<&str>) -> Vec<Application> {
         let query_lower = query.trim().to_lowercase();
+        let cat_lower = category.map(|c| c.trim().to_lowercase());
         let lock = self.apps.lock().unwrap();
 
-        if query_lower.is_empty() {
-            return lock.clone();
+        let mut matches: Vec<(u32, Application)> = lock
+            .iter()
+            .filter_map(|app| {
+                if let Some(ref target_cat) = cat_lower
+                    && !target_cat.is_empty()
+                {
+                    let has_cat = app
+                        .categories
+                        .iter()
+                        .any(|c| c.to_lowercase() == *target_cat);
+                    if !has_cat {
+                        return None;
+                    }
+                }
+
+                if query_lower.is_empty() {
+                    return Some((0, app.clone()));
+                }
+
+                let name_lower = app.name.to_lowercase();
+                let score = if name_lower == query_lower {
+                    100
+                } else if name_lower.starts_with(&query_lower) {
+                    80
+                } else if name_lower.contains(&query_lower) {
+                    50
+                } else if app
+                    .description
+                    .as_ref()
+                    .is_some_and(|d| d.to_lowercase().contains(&query_lower))
+                {
+                    30
+                } else if app
+                    .categories
+                    .iter()
+                    .any(|c| c.to_lowercase().contains(&query_lower))
+                {
+                    20
+                } else {
+                    return None;
+                };
+
+                Some((score, app.clone()))
+            })
+            .collect();
+
+        if !query_lower.is_empty() {
+            matches.sort_by_key(|a| std::cmp::Reverse(a.0));
         }
 
-        lock.iter()
-            .filter(|app| {
-                app.name.to_lowercase().contains(&query_lower)
-                    || app
-                        .description
-                        .as_ref()
-                        .is_some_and(|d| d.to_lowercase().contains(&query_lower))
-            })
-            .cloned()
-            .collect()
+        matches.into_iter().map(|(_, app)| app).collect()
+    }
+
+    /// Performs case-insensitive search over application names and descriptions.
+    pub fn search(&self, query: &str) -> Vec<Application> {
+        self.search_with_category(query, None)
     }
 }
 
@@ -836,5 +879,71 @@ mod tests {
     fn test_binary_exists_validation() {
         assert!(binary_exists("ls") || binary_exists("sh") || binary_exists("bash"));
         assert!(!binary_exists("nonexistent_binary_shilpo_12345"));
+    }
+
+    #[test]
+    fn test_app_search_category_filtering() {
+        let app1 = Application {
+            name: "VS Code".to_string(),
+            exec: "code".to_string(),
+            icon: None,
+            icon_path: None,
+            description: Some("Code Editor".to_string()),
+            categories: vec!["Development".to_string()],
+            desktop_file: PathBuf::from("/tmp/code.desktop"),
+            working_dir: None,
+            terminal: false,
+            try_exec: None,
+        };
+        let app2 = Application {
+            name: "GIMP".to_string(),
+            exec: "gimp".to_string(),
+            icon: None,
+            icon_path: None,
+            description: Some("Image Editor".to_string()),
+            categories: vec!["Graphics".to_string()],
+            desktop_file: PathBuf::from("/tmp/gimp.desktop"),
+            working_dir: None,
+            terminal: false,
+            try_exec: None,
+        };
+
+        let scanner = AppScanner::from_applications(vec![app1.clone(), app2]);
+        let dev_apps = scanner.search_with_category("", Some("Development"));
+        assert_eq!(dev_apps.len(), 1);
+        assert_eq!(dev_apps[0].name, "VS Code");
+    }
+
+    #[test]
+    fn test_app_search_relevance_ranking() {
+        let app1 = Application {
+            name: "Terminal".to_string(),
+            exec: "terminal".to_string(),
+            icon: None,
+            icon_path: None,
+            description: Some("System Command Line".to_string()),
+            categories: vec!["System".to_string()],
+            desktop_file: PathBuf::from("/tmp/term.desktop"),
+            working_dir: None,
+            terminal: true,
+            try_exec: None,
+        };
+        let app2 = Application {
+            name: "GNOME Terminal".to_string(),
+            exec: "gnome-terminal".to_string(),
+            icon: None,
+            icon_path: None,
+            description: Some("Terminal emulator".to_string()),
+            categories: vec!["System".to_string()],
+            desktop_file: PathBuf::from("/tmp/gnome-term.desktop"),
+            working_dir: None,
+            terminal: true,
+            try_exec: None,
+        };
+
+        let scanner = AppScanner::from_applications(vec![app2, app1]);
+        let results = scanner.search("Terminal");
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].name, "Terminal");
     }
 }
