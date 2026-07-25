@@ -348,4 +348,10 @@ mod tests {
         let min_contrast = calculate_contrast_ratio((0, 0, 0), (0, 0, 0));
         assert!((min_contrast - 1.0).abs() < 0.01);
     }
+
+    #[test]
+    fn test_visible_focus_indicators_and_disabled_keyboard_policy() {
+        let focus_contrast = calculate_contrast_ratio((0, 108, 76), (255, 255, 255));
+        assert!(focus_contrast > 3.0);
+    }
 }

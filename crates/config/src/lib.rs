@@ -481,6 +481,10 @@ pub struct ShellSessionState {
     pub dnd_active: bool,
     #[serde(default)]
     pub night_light_active: bool,
+    #[serde(default)]
+    pub last_workspace_id: Option<u64>,
+    #[serde(default)]
+    pub visible_output_bars: Vec<u64>,
 }
 
 impl Default for ShellSessionState {
@@ -492,6 +496,8 @@ impl Default for ShellSessionState {
             launch_counts: HashMap::new(),
             dnd_active: false,
             night_light_active: false,
+            last_workspace_id: None,
+            visible_output_bars: Vec::new(),
         }
     }
 }
@@ -1252,6 +1258,7 @@ margin = { horizontal = 600, vertical = 6 }
             launch_counts: HashMap::new(),
             dnd_active: false,
             night_light_active: false,
+            ..Default::default()
         };
         valid_session.save_atomic(&temp_file).unwrap();
 
@@ -1297,5 +1304,25 @@ margin = { horizontal = 600, vertical = 6 }
         let migrated = ShellSessionState::migrate_to_latest(legacy_json);
         assert_eq!(migrated.version, 1);
         assert_eq!(migrated.recent_apps, vec!["terminal".to_string()]);
+    }
+
+    #[test]
+    fn test_durable_per_output_bar_state_and_workspace_persistence() {
+        let session = ShellSessionState {
+            last_workspace_id: Some(3),
+            visible_output_bars: vec![1, 2],
+            ..Default::default()
+        };
+
+        let temp_file =
+            std::env::temp_dir().join(format!("session-test-{}.json", std::process::id()));
+        session.save_atomic(&temp_file).unwrap();
+
+        let (restored, ok) = ShellSessionState::restore_with_fallback(&temp_file);
+        assert!(ok);
+        assert_eq!(restored.last_workspace_id, Some(3));
+        assert_eq!(restored.visible_output_bars, vec![1, 2]);
+
+        let _ = std::fs::remove_file(&temp_file);
     }
 }
