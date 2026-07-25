@@ -26,6 +26,16 @@ pub struct BatteryInfo {
     pub is_present: bool,
 }
 
+impl BatteryInfo {
+    pub fn is_low_battery(&self) -> bool {
+        self.is_present && !self.is_charging && self.percentage < 15
+    }
+
+    pub fn low_power_mode(&self) -> bool {
+        self.is_present && !self.is_charging && self.percentage < 20
+    }
+}
+
 /// UPower battery service for tracking battery percentage and charging state.
 pub struct BatteryService {
     info: Arc<Mutex<BatteryInfo>>,
@@ -89,5 +99,20 @@ mod tests {
         assert_eq!(BatteryInfo::default().percentage, 0);
         assert!(!BatteryInfo::default().is_charging);
         assert!(!BatteryInfo::default().is_present);
+    }
+
+    #[test]
+    fn test_battery_low_power_threshold_policy() {
+        let mut info = BatteryInfo {
+            percentage: 10,
+            is_charging: false,
+            is_present: true,
+        };
+        assert!(info.is_low_battery());
+        assert!(info.low_power_mode());
+
+        info.is_charging = true;
+        assert!(!info.is_low_battery());
+        assert!(!info.low_power_mode());
     }
 }

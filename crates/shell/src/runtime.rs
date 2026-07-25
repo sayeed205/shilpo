@@ -1305,4 +1305,34 @@ mod tests {
         );
         drop(updates_tx);
     }
+
+    #[test]
+    fn test_performance_frame_budget_compliance() {
+        use std::time::Instant;
+        let config = shilpo_config::ShellConfig::default();
+        let display_bounds = gpui::Bounds {
+            origin: gpui::Point::default(),
+            size: gpui::Size {
+                width: gpui::px(1920.0),
+                height: gpui::px(1080.0),
+            },
+        };
+        let display_id = gpui::DisplayId::from(1u64);
+
+        let start = Instant::now();
+        for _ in 0..1000 {
+            let _geom = crate::bar::geometry::BarGeometry::calculate_with_scale(
+                display_id,
+                display_bounds,
+                &config.bar,
+                Some(1.0),
+            );
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_millis() < 16,
+            "1000 geometry calculations took {:?}, exceeding 16.6ms frame budget",
+            elapsed
+        );
+    }
 }
