@@ -76,6 +76,9 @@ pub trait CompositorAdapter: Send + Sync {
     fn move_window_to_workspace(&self, window_id: u64, workspace_id: u64) -> anyhow::Result<()>;
     fn reorder_workspace(&self, id: u64, new_index: u8) -> anyhow::Result<()>;
     fn move_workspace_to_output(&self, id: u64, output_name: &str) -> anyhow::Result<()>;
+    fn restore_compositor_session(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -149,5 +152,6 @@ mod tests {
                 .disabled_reason(CompositorCapability::MoveWindow)
                 .is_none()
         );
+        assert!(compositor.restore_compositor_session().is_ok());
     }
 }
