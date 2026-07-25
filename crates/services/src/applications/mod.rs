@@ -671,6 +671,26 @@ pub fn parse_uri_list(raw_data: &str) -> Vec<PathBuf> {
     paths
 }
 
+/// Validates drag & drop payload MIME types and sanitizes local file paths against path traversal attacks (`..`).
+pub fn validate_drag_drop_payload(mime_type: &str, data: &[u8]) -> Vec<PathBuf> {
+    let mime = mime_type.to_lowercase();
+    if mime != "text/uri-list" && mime != "text/plain" && mime != "application/x-uri" {
+        return Vec::new();
+    }
+
+    let text = String::from_utf8_lossy(data);
+    let paths = parse_uri_list(&text);
+    paths
+        .into_iter()
+        .filter(|path| {
+            path.is_absolute()
+                && !path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -797,6 +817,19 @@ mod tests {
         let scanner = AppScanner::from_applications(vec![app.clone()]);
         assert_eq!(scanner.applications(), vec![app.clone()]);
         assert_eq!(scanner.search("test"), vec![app]);
+    }
+
+    #[test]
+    fn test_drag_drop_payload_validation_and_mime_filter() {
+        let valid = validate_drag_drop_payload(
+            "text/uri-list",
+            b"file:///tmp\nfile:///tmp/../etc/passwd\n",
+        );
+        assert_eq!(valid.len(), 1);
+        assert_eq!(valid[0], PathBuf::from("/tmp"));
+
+        let invalid_mime = validate_drag_drop_payload("application/octet-stream", b"file:///tmp");
+        assert!(invalid_mime.is_empty());
     }
 
     #[test]

@@ -48,6 +48,7 @@ pub mod group_box;
 pub mod highlighter;
 pub mod history;
 pub mod hover_card;
+pub mod i18n;
 pub mod input;
 pub mod kbd;
 pub mod label;
@@ -99,6 +100,7 @@ pub use input::{Rope, RopeExt, RopeLines};
 pub mod font;
 
 pub use font::FontFamilyCache;
+pub use i18n::LocaleCatalogue;
 #[cfg(any(feature = "inspector", debug_assertions))]
 pub use inspector::*;
 pub use menu::{ContextMenu, ContextMenuExt, ContextMenuState, PopupMenu, PopupMenuItem};
