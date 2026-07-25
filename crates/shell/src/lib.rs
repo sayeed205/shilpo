@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod bar;
 pub mod control_center;
+pub mod doctor;
 pub mod error;
 pub mod launcher;
 pub mod notification;
@@ -13,6 +14,7 @@ pub use actions::{
 };
 pub use bar::BarView;
 pub use control_center::ControlCenterView;
+pub use doctor::DoctorChecker;
 pub use error::ShellError;
 pub use launcher::LauncherView;
 pub use notification::NotificationToastView;

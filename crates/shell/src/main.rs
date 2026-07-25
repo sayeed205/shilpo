@@ -8,6 +8,15 @@ use shilpo_shell::{ShellRuntime, bar::geometry::BarGeometry};
 async fn main() {
     init_tracing();
     let args: Vec<String> = std::env::args().collect();
+
+    if args.len() > 1 && (args[1] == "doctor" || args[1] == "--doctor") {
+        let auto_fix = args.iter().any(|a| a == "--fix");
+        let doctor = shilpo_shell::DoctorChecker::new();
+        let report = doctor.run_diagnostics(auto_fix);
+        doctor.print_report(&report);
+        return;
+    }
+
     if args.len() > 1 && args[1] == "msg" {
         if args.len() > 2 {
             let cmd = &args[2];
