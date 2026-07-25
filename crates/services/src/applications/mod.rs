@@ -959,4 +959,25 @@ mod tests {
 
         let _ = std::fs::remove_file(&temp_file);
     }
+
+    #[test]
+    fn test_desktop_entry_categories_and_keywords_search() {
+        let app = Application {
+            name: "Firefox".to_string(),
+            exec: "firefox".to_string(),
+            icon: None,
+            icon_path: None,
+            description: Some("Web Browser".to_string()),
+            categories: vec!["Network".to_string(), "WebBrowser".to_string()],
+            desktop_file: PathBuf::from("/tmp/firefox.desktop"),
+            working_dir: None,
+            terminal: false,
+            try_exec: None,
+        };
+
+        let scanner = AppScanner::from_applications(vec![app]);
+        let results = scanner.search_with_category("Browser", Some("Network"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Firefox");
+    }
 }

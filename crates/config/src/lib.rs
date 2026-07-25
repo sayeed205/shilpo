@@ -1280,4 +1280,14 @@ margin = { horizontal = 600, vertical = 6 }
         config.locale = Some("bn-IN".to_string());
         assert!(config.validate().is_ok());
     }
+
+    #[test]
+    fn test_action_registry_and_configuration_validation() {
+        let mut config = ShellConfig::default();
+        config.bar.height = 0;
+        assert!(config.validate().is_err());
+
+        config.bar.height = 36;
+        assert!(config.validate().is_ok());
+    }
 }
