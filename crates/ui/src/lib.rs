@@ -73,6 +73,7 @@ pub mod separator;
 pub mod setting;
 pub mod shape;
 pub mod sheet;
+pub mod side_panel;
 pub mod sidebar;
 pub mod skeleton;
 pub mod slider;
@@ -87,6 +88,8 @@ pub mod theme;
 pub mod toggle_button;
 pub mod tooltip;
 pub mod tree;
+
+pub use side_panel::{SidePanel, SidePanelPosition};
 
 pub use crate::Disableable;
 pub use element_ext::*;
