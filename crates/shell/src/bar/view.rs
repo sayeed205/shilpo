@@ -194,7 +194,7 @@ impl BarView {
                 changed = true;
             }
             WorkerUpdate::Config(ConfigUpdate::Loaded(config)) => {
-                self.config = config.clone();
+                self.config = (**config).clone();
                 self.last_error = None;
                 apply_config_theme(&self.config, None, cx);
                 changed = true;

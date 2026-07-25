@@ -268,8 +268,20 @@
         "font_family": {
           "type": "string"
         },
+        "heading_font_family": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "mode": {
           "$ref": "#/$defs/ThemeMode"
+        },
+        "mono_font_family": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false

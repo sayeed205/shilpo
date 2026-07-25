@@ -290,7 +290,7 @@ impl ShellRuntime {
                     crate::bar::service_worker::ConfigUpdate::Loaded(config),
                 ) = upd
                 {
-                    cx.global_mut::<Self>().active_config = config.clone();
+                    cx.global_mut::<Self>().active_config = (**config).clone();
                     Self::sync_displays(cx);
                 }
             }

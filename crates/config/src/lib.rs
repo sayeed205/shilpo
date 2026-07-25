@@ -43,6 +43,8 @@ pub struct ThemeConfig {
     pub mode: ThemeMode,
     pub accent: String,
     pub font_family: String,
+    pub heading_font_family: Option<String>,
+    pub mono_font_family: Option<String>,
     pub corner_radius_scale: f32,
 }
 
@@ -133,6 +135,8 @@ impl Default for ThemeConfig {
             mode: ThemeMode::Dark,
             accent: "#6750A4".into(),
             font_family: "sans-serif".into(),
+            heading_font_family: None,
+            mono_font_family: None,
             corner_radius_scale: 1.0,
         }
     }

@@ -61,6 +61,7 @@ impl SettingsCategory {
 pub struct SettingsView {
     pub active_category: SettingsCategory,
     pub active_scale: f32,
+    pub selected_font: String,
 }
 
 impl SettingsView {
@@ -68,6 +69,7 @@ impl SettingsView {
         Self {
             active_category: SettingsCategory::default(),
             active_scale: 1.0,
+            selected_font: "sans-serif".to_string(),
         }
     }
 
@@ -185,6 +187,49 @@ impl Render for SettingsView {
                                                 cx.notify();
                                             }))
                                             .child(format!("{}%", (scale * 100.0) as u32))
+                                    }),
+                                )),
+                        )
+                    })
+                    .when(active == SettingsCategory::Appearance, |this| {
+                        let fonts = shilpo_ui::FontFamilyCache::global(cx).list_font_families(cx);
+                        let sample_fonts = if fonts.is_empty() {
+                            vec!["sans-serif".into(), "Inter".into(), "Roboto".into(), "Fira Code".into()]
+                        } else {
+                            fonts.into_iter().take(5).collect()
+                        };
+                        let selected_font = self.selected_font.clone();
+
+                        this.child(
+                            v_flex()
+                                .gap_2()
+                                .child(div().text_xs().font_bold().child("UI & Typography Fonts (Heading, Body, Monospace)"))
+                                .child(h_flex().gap_2().flex_wrap().children(
+                                    sample_fonts.into_iter().enumerate().map(|(i, font)| {
+                                        let font_str = font.to_string();
+                                        let is_active = selected_font == font_str;
+                                        let (bg, fg) = if is_active {
+                                            (cx.theme().primary, cx.theme().on_primary)
+                                        } else {
+                                            (cx.theme().surface_container, cx.theme().on_surface)
+                                        };
+                                        let font_clone = font_str.clone();
+                                        div()
+                                            .id(("appearance-font-pill", i))
+                                            .role(Role::Button)
+                                            .cursor_pointer()
+                                            .px_3()
+                                            .py_1p5()
+                                            .rounded_xl()
+                                            .bg(bg)
+                                            .text_color(fg)
+                                            .text_xs()
+                                            .font_semibold()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.selected_font = font_clone.clone();
+                                                cx.notify();
+                                            }))
+                                            .child(font_str)
                                     }),
                                 )),
                         )

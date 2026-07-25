@@ -96,6 +96,9 @@ pub use global_state::GlobalState;
 pub use icon::*;
 pub use index_path::IndexPath;
 pub use input::{Rope, RopeExt, RopeLines};
+pub mod font;
+
+pub use font::FontFamilyCache;
 #[cfg(any(feature = "inspector", debug_assertions))]
 pub use inspector::*;
 pub use menu::{ContextMenu, ContextMenuExt, ContextMenuState, PopupMenu, PopupMenuItem};
@@ -116,6 +119,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 /// You must initialize the components at your application's entry point.
 pub fn init(cx: &mut App) {
     theme::init(cx);
+    font::FontFamilyCache::init_global(cx);
     global_state::init(cx);
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector::init(cx);

@@ -23,7 +23,7 @@ pub enum WorkerCommand {
 
 #[derive(Debug, Clone)]
 pub enum ConfigUpdate {
-    Loaded(ShellConfig),
+    Loaded(Box<ShellConfig>),
     Failed(String),
 }
 
@@ -205,7 +205,7 @@ async fn run(
 
 fn load_config(updates: &UpdateSender, path: &PathBuf) -> bool {
     let update = match ShellConfig::load_or_create(path) {
-        Ok(config) => WorkerUpdate::Config(ConfigUpdate::Loaded(config)),
+        Ok(config) => WorkerUpdate::Config(ConfigUpdate::Loaded(Box::new(config))),
         Err(error) => WorkerUpdate::Config(ConfigUpdate::Failed(error.to_string())),
     };
     match updates.try_send(update) {
