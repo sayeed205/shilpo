@@ -157,4 +157,24 @@ mod tests {
         );
         assert!(compositor.restore_compositor_session().is_ok());
     }
+
+    #[test]
+    fn test_compositor_state_mapping_and_unavailable_capability_behavior() {
+        let compositor = TestCompositor;
+        assert!(
+            compositor
+                .disabled_reason(CompositorCapability::FocusWindow)
+                .is_none()
+        );
+        assert!(
+            compositor
+                .disabled_reason(CompositorCapability::FocusWorkspace)
+                .is_none()
+        );
+        assert!(
+            compositor
+                .disabled_reason(CompositorCapability::CreateWorkspace)
+                .is_some()
+        );
+    }
 }
