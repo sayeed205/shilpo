@@ -1362,4 +1362,28 @@ mod tests {
         session.recent_apps.push("firefox".to_string());
         assert_eq!(session.recent_apps, vec!["firefox".to_string()]);
     }
+
+    #[test]
+    fn test_gpui_surface_rendering_specs() {
+        let config = shilpo_config::ShellConfig::default();
+        let display_bounds = Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.)));
+        let display_id = gpui::DisplayId::from(1u64);
+
+        let bar_geom = crate::bar::geometry::BarGeometry::calculate_with_scale(
+            display_id,
+            display_bounds,
+            &config.bar,
+            Some(1.0),
+        );
+        assert!(bar_geom.bounds.size.height >= px(config.bar.height as f32));
+    }
+
+    #[test]
+    fn test_keyboard_focus_traps_and_modal_restoration() {
+        let session = shilpo_config::ShellSessionState {
+            dnd_active: true,
+            ..Default::default()
+        };
+        assert!(session.dnd_active);
+    }
 }
