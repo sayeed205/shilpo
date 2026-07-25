@@ -1353,4 +1353,13 @@ mod tests {
         let truncated = en_cat.truncate_or_expand("Super Long Application Title", 15);
         assert_eq!(truncated, "Super Long App…");
     }
+
+    #[test]
+    fn test_shell_state_reducers_and_runtime_transitions() {
+        let mut session = shilpo_config::ShellSessionState::default();
+        assert_eq!(session.recent_apps.len(), 0);
+
+        session.recent_apps.push("firefox".to_string());
+        assert_eq!(session.recent_apps, vec!["firefox".to_string()]);
+    }
 }

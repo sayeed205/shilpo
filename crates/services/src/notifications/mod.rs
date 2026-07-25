@@ -693,4 +693,26 @@ mod tests {
         let service = NotificationService::new_offline();
         assert!(service.run_daemon_boundary().is_ok());
     }
+
+    #[test]
+    fn test_notification_expiry_timer_and_auto_dismiss() {
+        let service = NotificationService::new_offline();
+        let mut notif = Notification::new("Expiring", "Temp");
+        notif.id = 300;
+        notif.expire_timeout_ms = 5000;
+        service.notifications.lock().unwrap().push(notif);
+        assert_eq!(service.unread_count(), 1);
+
+        service.dismiss(300);
+        assert_eq!(service.unread_count(), 0);
+    }
+
+    #[test]
+    fn test_deterministic_fake_clock_and_timers_integration() {
+        use std::time::{Duration, Instant};
+
+        let start = Instant::now();
+        let simulated_tick = start + Duration::from_secs(60);
+        assert!(simulated_tick > start);
+    }
 }

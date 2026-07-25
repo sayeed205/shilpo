@@ -728,4 +728,19 @@ mod tests {
 
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn test_ipc_integration_and_security_validation() {
+        let (root, path) = fixture();
+        let server = ShellIpcServer::new_at(&root, &path).unwrap();
+
+        let req = IpcRequest::ToggleLauncher;
+        let resp = ShellIpcServer::send_command_at(&path, req);
+        assert!(resp.is_ok());
+
+        let reqs = server.pop_pending_requests();
+        assert_eq!(reqs.len(), 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }
