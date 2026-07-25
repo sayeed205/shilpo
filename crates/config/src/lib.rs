@@ -1290,4 +1290,12 @@ margin = { horizontal = 600, vertical = 6 }
         config.bar.height = 36;
         assert!(config.validate().is_ok());
     }
+
+    #[test]
+    fn test_config_migration_fixtures_integration() {
+        let legacy_json = r#"{"version": 0, "recent_apps": ["terminal"], "pinned_apps": [], "launch_counts": {}, "dnd_active": false, "night_light_active": false}"#;
+        let migrated = ShellSessionState::migrate_to_latest(legacy_json);
+        assert_eq!(migrated.version, 1);
+        assert_eq!(migrated.recent_apps, vec!["terminal".to_string()]);
+    }
 }

@@ -178,4 +178,12 @@ mod tests {
                 .is_some()
         );
     }
+
+    #[test]
+    fn test_mockable_compositor_and_service_interfaces() {
+        let compositor = TestCompositor;
+        assert_eq!(compositor.workspaces().len(), 0);
+        assert_eq!(compositor.windows().len(), 0);
+        assert!(compositor.focus_previous_window().is_ok());
+    }
 }
