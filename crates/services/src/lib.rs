@@ -31,7 +31,7 @@ pub use ipc::{
     ShellIpcServer,
 };
 pub use network::{NetworkInfo, NetworkService, VpnConnection};
-pub use night_light::{NightLightInfo, NightLightService};
+pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_use_dark_mode};
 pub use notifications::{Notification, NotificationService, NotificationUrgency};
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
 pub use screen_capture::{RecordMode, ScreenCaptureInfo, ScreenCaptureService, ScreenshotMode};

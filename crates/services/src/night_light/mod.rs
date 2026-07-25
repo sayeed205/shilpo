@@ -11,6 +11,34 @@ pub struct NightLightInfo {
     pub backend_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ThemeSchedule {
+    Manual,
+    #[default]
+    SunsetToSunrise,
+    Scheduled {
+        start_hour: u8,
+        end_hour: u8,
+    },
+}
+
+pub fn should_use_dark_mode(schedule: &ThemeSchedule, current_hour: u8) -> bool {
+    match schedule {
+        ThemeSchedule::Manual => true,
+        ThemeSchedule::SunsetToSunrise => !(6..18).contains(&current_hour),
+        ThemeSchedule::Scheduled {
+            start_hour,
+            end_hour,
+        } => {
+            if start_hour < end_hour {
+                current_hour >= *start_hour && current_hour < *end_hour
+            } else {
+                current_hour >= *start_hour || current_hour < *end_hour
+            }
+        }
+    }
+}
+
 impl Default for NightLightInfo {
     fn default() -> Self {
         Self {
@@ -139,5 +167,21 @@ mod tests {
 
         let toggled = service.toggle();
         assert!(!toggled);
+    }
+
+    #[test]
+    fn test_theme_schedule_policy() {
+        assert!(should_use_dark_mode(&ThemeSchedule::Manual, 12));
+        assert!(should_use_dark_mode(&ThemeSchedule::SunsetToSunrise, 20));
+        assert!(should_use_dark_mode(&ThemeSchedule::SunsetToSunrise, 2));
+        assert!(!should_use_dark_mode(&ThemeSchedule::SunsetToSunrise, 12));
+
+        let sched = ThemeSchedule::Scheduled {
+            start_hour: 22,
+            end_hour: 7,
+        };
+        assert!(should_use_dark_mode(&sched, 23));
+        assert!(should_use_dark_mode(&sched, 5));
+        assert!(!should_use_dark_mode(&sched, 14));
     }
 }

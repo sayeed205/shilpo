@@ -62,6 +62,8 @@ pub struct SettingsView {
     pub active_category: SettingsCategory,
     pub active_scale: f32,
     pub selected_font: String,
+    pub active_theme_mode: String,
+    pub active_corner_radius_scale: f32,
 }
 
 impl SettingsView {
@@ -70,6 +72,8 @@ impl SettingsView {
             active_category: SettingsCategory::default(),
             active_scale: 1.0,
             selected_font: "sans-serif".to_string(),
+            active_theme_mode: "Dark".to_string(),
+            active_corner_radius_scale: 1.0,
         }
     }
 
@@ -199,39 +203,111 @@ impl Render for SettingsView {
                             fonts.into_iter().take(5).collect()
                         };
                         let selected_font = self.selected_font.clone();
+                        let active_theme_mode = self.active_theme_mode.clone();
+                        let active_radius = self.active_corner_radius_scale;
 
                         this.child(
                             v_flex()
-                                .gap_2()
-                                .child(div().text_xs().font_bold().child("UI & Typography Fonts (Heading, Body, Monospace)"))
-                                .child(h_flex().gap_2().flex_wrap().children(
-                                    sample_fonts.into_iter().enumerate().map(|(i, font)| {
-                                        let font_str = font.to_string();
-                                        let is_active = selected_font == font_str;
-                                        let (bg, fg) = if is_active {
-                                            (cx.theme().primary, cx.theme().on_primary)
-                                        } else {
-                                            (cx.theme().surface_container, cx.theme().on_surface)
-                                        };
-                                        let font_clone = font_str.clone();
-                                        div()
-                                            .id(("appearance-font-pill", i))
-                                            .role(Role::Button)
-                                            .cursor_pointer()
-                                            .px_3()
-                                            .py_1p5()
-                                            .rounded_xl()
-                                            .bg(bg)
-                                            .text_color(fg)
-                                            .text_xs()
-                                            .font_semibold()
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.selected_font = font_clone.clone();
-                                                cx.notify();
-                                            }))
-                                            .child(font_str)
-                                    }),
-                                )),
+                                .gap_4()
+                                // Theme Mode / Auto Schedule
+                                .child(
+                                    v_flex()
+                                        .gap_2()
+                                        .child(div().text_xs().font_bold().child("System Theme & Auto-Schedule Policy"))
+                                        .child(h_flex().gap_2().children(
+                                            ["Dark", "Light", "Auto (Sunset-to-Sunrise)"].into_iter().enumerate().map(|(i, mode)| {
+                                                let is_active = active_theme_mode == mode;
+                                                let (bg, fg) = if is_active {
+                                                    (cx.theme().primary, cx.theme().on_primary)
+                                                } else {
+                                                    (cx.theme().surface_container, cx.theme().on_surface)
+                                                };
+                                                let mode_str = mode.to_string();
+                                                div()
+                                                    .id(("theme-mode-pill", i))
+                                                    .role(Role::Button)
+                                                    .cursor_pointer()
+                                                    .px_3()
+                                                    .py_1p5()
+                                                    .rounded_xl()
+                                                    .bg(bg)
+                                                    .text_color(fg)
+                                                    .text_xs()
+                                                    .font_semibold()
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.active_theme_mode = mode_str.clone();
+                                                        cx.notify();
+                                                    }))
+                                                    .child(mode)
+                                            }),
+                                        )),
+                                )
+                                // Corner Radius Scaling
+                                .child(
+                                    v_flex()
+                                        .gap_2()
+                                        .child(div().text_xs().font_bold().child("Corner Radius Scale Factor"))
+                                        .child(h_flex().gap_2().children(
+                                            [(0.5f32, "Compact (0.5x)"), (1.0, "Standard (1.0x)"), (1.5, "Extra Rounded (1.5x)")].into_iter().enumerate().map(|(i, (scale, label))| {
+                                                let is_active = (active_radius - scale).abs() < 0.01;
+                                                let (bg, fg) = if is_active {
+                                                    (cx.theme().primary, cx.theme().on_primary)
+                                                } else {
+                                                    (cx.theme().surface_container, cx.theme().on_surface)
+                                                };
+                                                div()
+                                                    .id(("corner-radius-pill", i))
+                                                    .role(Role::Button)
+                                                    .cursor_pointer()
+                                                    .px_3()
+                                                    .py_1p5()
+                                                    .rounded_xl()
+                                                    .bg(bg)
+                                                    .text_color(fg)
+                                                    .text_xs()
+                                                    .font_semibold()
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.active_corner_radius_scale = scale;
+                                                        cx.notify();
+                                                    }))
+                                                    .child(label)
+                                            }),
+                                        )),
+                                )
+                                // Fonts
+                                .child(
+                                    v_flex()
+                                        .gap_2()
+                                        .child(div().text_xs().font_bold().child("UI & Typography Fonts (Heading, Body, Monospace)"))
+                                        .child(h_flex().gap_2().flex_wrap().children(
+                                            sample_fonts.into_iter().enumerate().map(|(i, font)| {
+                                                let font_str = font.to_string();
+                                                let is_active = selected_font == font_str;
+                                                let (bg, fg) = if is_active {
+                                                    (cx.theme().primary, cx.theme().on_primary)
+                                                } else {
+                                                    (cx.theme().surface_container, cx.theme().on_surface)
+                                                };
+                                                let font_clone = font_str.clone();
+                                                div()
+                                                    .id(("appearance-font-pill", i))
+                                                    .role(Role::Button)
+                                                    .cursor_pointer()
+                                                    .px_3()
+                                                    .py_1p5()
+                                                    .rounded_xl()
+                                                    .bg(bg)
+                                                    .text_color(fg)
+                                                    .text_xs()
+                                                    .font_semibold()
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.selected_font = font_clone.clone();
+                                                        cx.notify();
+                                                    }))
+                                                    .child(font_str)
+                                            }),
+                                        )),
+                                ),
                         )
                     }),
             )
