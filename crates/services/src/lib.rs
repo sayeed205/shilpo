@@ -9,6 +9,7 @@ pub mod ipc;
 pub mod network;
 pub mod night_light;
 pub mod notifications;
+pub mod palette;
 pub mod power_profile;
 pub mod screen_capture;
 pub mod tray;
@@ -35,6 +36,7 @@ pub use ipc::{
 pub use network::{NetworkInfo, NetworkService, VpnConnection};
 pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_use_dark_mode};
 pub use notifications::{Notification, NotificationService, NotificationUrgency};
+pub use palette::PaletteExtractor;
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
 pub use screen_capture::{RecordMode, ScreenCaptureInfo, ScreenCaptureService, ScreenshotMode};
 pub use tray::{TrayItem, TrayMenuItem, TrayService};

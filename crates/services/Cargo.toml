@@ -19,3 +19,5 @@ libc = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 shilpo-config = { path = "../config" }
 notify.workspace = true
+mcu-material-color.workspace = true
+image.workspace = true
