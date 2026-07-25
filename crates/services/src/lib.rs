@@ -38,3 +38,37 @@ pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
 pub use screen_capture::{RecordMode, ScreenCaptureInfo, ScreenCaptureService, ScreenshotMode};
 pub use tray::{TrayItem, TrayMenuItem, TrayService};
 pub use upower::{BatteryInfo, BatteryService};
+
+/// Returns whether Niri Wayland compositor IPC is supported on this target platform.
+pub fn is_niri_supported() -> bool {
+    cfg!(target_os = "linux")
+}
+
+/// Returns the supported system service capability matrix on this platform.
+pub fn platform_capabilities() -> Vec<&'static str> {
+    if cfg!(target_os = "linux") {
+        vec![
+            "compositor",
+            "brightness",
+            "audio",
+            "notifications",
+            "tray",
+            "network",
+            "upower",
+        ]
+    } else {
+        vec!["offline_fallback"]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_platform_capability_matrix() {
+        assert!(is_niri_supported());
+        let caps = platform_capabilities();
+        assert!(caps.contains(&"compositor"));
+    }
+}

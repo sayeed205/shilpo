@@ -167,6 +167,12 @@ impl LocaleCatalogue {
             format!("Workspace {id}")
         }
     }
+
+    /// Logs assistive technology accessibility status announcements for screen readers & overlays.
+    pub fn announce_status(&self, message: &str) -> String {
+        tracing::info!(locale = %self.current_locale, message = %message, "Accessibility Status Announcement");
+        format!("[Announce ({})] {message}", self.current_locale)
+    }
 }
 
 #[cfg(test)]
@@ -231,5 +237,12 @@ mod tests {
             catalogue.tr("launcher.search_placeholder"),
             "অ্যাপ্লিকেশন খুঁজুন..."
         );
+    }
+
+    #[test]
+    fn test_assistive_tech_overlay_announcements() {
+        let catalogue = LocaleCatalogue::new("en-US");
+        let announcement = catalogue.announce_status("Launcher overlay opened");
+        assert_eq!(announcement, "[Announce (en-US)] Launcher overlay opened");
     }
 }
