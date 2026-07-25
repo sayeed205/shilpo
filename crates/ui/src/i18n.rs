@@ -56,6 +56,34 @@ impl LocaleCatalogue {
 
         key.to_string()
     }
+
+    pub fn pluralize(&self, count: usize, singular: &str, plural: &str) -> String {
+        let pattern = if count == 1 { singular } else { plural };
+        pattern.replace("{count}", &self.format_number(count))
+    }
+
+    pub fn format_number(&self, val: usize) -> String {
+        let s = val.to_string();
+        if self.current_locale.starts_with("bn") {
+            s.chars()
+                .map(|c| match c {
+                    '0' => '০',
+                    '1' => '১',
+                    '2' => '২',
+                    '3' => '৩',
+                    '4' => '৪',
+                    '5' => '৫',
+                    '6' => '৬',
+                    '7' => '৭',
+                    '8' => '৮',
+                    '9' => '৯',
+                    other => other,
+                })
+                .collect()
+        } else {
+            s
+        }
+    }
 }
 
 #[cfg(test)]
@@ -70,5 +98,21 @@ mod tests {
         assert_eq!(catalogue.tr("settings.title"), "সেটিংস");
         assert_eq!(catalogue.tr("settings.general"), "General");
         assert_eq!(catalogue.tr("unknown.key"), "unknown.key");
+    }
+
+    #[test]
+    fn test_pluralization_and_locale_number_formatting() {
+        let en_cat = LocaleCatalogue::new("en-US");
+        assert_eq!(
+            en_cat.pluralize(1, "{count} window", "{count} windows"),
+            "1 window"
+        );
+        assert_eq!(
+            en_cat.pluralize(5, "{count} window", "{count} windows"),
+            "5 windows"
+        );
+
+        let bn_cat = LocaleCatalogue::new("bn-IN");
+        assert_eq!(bn_cat.format_number(12345), "১২৩৪৫");
     }
 }

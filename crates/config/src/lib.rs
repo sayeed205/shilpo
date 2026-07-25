@@ -477,6 +477,16 @@ impl ShellSessionState {
         base.join("shilpo").join("session.json")
     }
 
+    pub fn migrate_to_latest(raw_json: &str) -> Self {
+        if let Ok(mut session) = serde_json::from_str::<Self>(raw_json)
+            && (session.version == 0 || session.version == 1)
+        {
+            session.version = 1;
+            return session;
+        }
+        Self::default()
+    }
+
     pub fn load_or_default(path: &Path) -> Self {
         if !path.exists() {
             return Self::default();
@@ -484,13 +494,7 @@ impl ShellSessionState {
         let Ok(text) = fs::read_to_string(path) else {
             return Self::default();
         };
-        let Ok(session) = serde_json::from_str::<Self>(&text) else {
-            return Self::default();
-        };
-        if session.version != 1 {
-            return Self::default();
-        }
-        session
+        Self::migrate_to_latest(&text)
     }
 
     pub fn save_atomic(&self, path: &Path) -> Result<(), ConfigError> {
@@ -1153,5 +1157,17 @@ margin = { horizontal = 600, vertical = 6 }
         drop(store);
 
         let _ = std::fs::remove_dir_all(db_dir);
+    }
+
+    #[test]
+    fn test_schema_migration_pipeline_and_fixture_recovery() {
+        let legacy_json = r#"{"version": 0, "recent_apps": ["code"]}"#;
+        let migrated = ShellSessionState::migrate_to_latest(legacy_json);
+        assert_eq!(migrated.version, 1);
+        assert_eq!(migrated.recent_apps, vec!["code"]);
+
+        let invalid_json = r#"{"version": 9999, "invalid": true}"#;
+        let fallback = ShellSessionState::migrate_to_latest(invalid_json);
+        assert_eq!(fallback.version, 1);
     }
 }
