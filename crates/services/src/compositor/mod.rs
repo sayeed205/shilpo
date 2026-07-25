@@ -44,5 +44,7 @@ pub trait CompositorAdapter: Send + Sync {
     fn focus_workspace(&self, id: u64) -> anyhow::Result<()>;
     fn focus_window(&self, id: u64) -> anyhow::Result<()>;
     fn create_workspace(&self, name: Option<String>) -> anyhow::Result<()>;
+    fn rename_workspace(&self, old_name: &str, new_name: &str) -> anyhow::Result<()>;
+    fn delete_workspace(&self, name: &str) -> anyhow::Result<()>;
     fn move_window_to_workspace(&self, window_id: u64, workspace_id: u64) -> anyhow::Result<()>;
 }

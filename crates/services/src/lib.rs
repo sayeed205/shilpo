@@ -17,7 +17,7 @@ pub mod upower;
 pub use applications::{
     AppScanner, Application, parse_uri_list, percent_decode, resolve_handler_for_uri,
 };
-pub use audio::{AudioDevice, AudioInfo, AudioPort, AudioService};
+pub use audio::{AudioDevice, AudioInfo, AudioPort, AudioService, AudioStream};
 pub use bluetooth::{BluetoothInfo, BluetoothService};
 pub use brightness::{BrightnessInfo, BrightnessService};
 pub use clipboard::ClipboardService;

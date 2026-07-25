@@ -260,6 +260,7 @@ mod tests {
             volume: 50,
             is_muted: false,
             available: true,
+            app_streams: Vec::new(),
         });
         assert!(send_changed(
             &tx,

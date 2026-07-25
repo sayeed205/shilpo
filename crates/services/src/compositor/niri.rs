@@ -222,6 +222,25 @@ impl NiriCompositorService {
             Err(err) => Err(err).with_context(|| "Failed to send FocusWorkspaceDown action"),
         }
     }
+
+    /// Renames a workspace in local workspace list cache.
+    pub fn rename_workspace(&self, old_name: &str, new_name: &str) -> Result<()> {
+        let mut ws_guard = self.workspaces.lock().unwrap();
+        if let Some(ws) = ws_guard
+            .iter_mut()
+            .find(|w| w.name.as_deref() == Some(old_name))
+        {
+            ws.name = Some(new_name.to_string());
+        }
+        Ok(())
+    }
+
+    /// Deletes a workspace from local workspace list cache.
+    pub fn delete_workspace(&self, name: &str) -> Result<()> {
+        let mut ws_guard = self.workspaces.lock().unwrap();
+        ws_guard.retain(|w| w.name.as_deref() != Some(name));
+        Ok(())
+    }
 }
 
 impl CompositorAdapter for NiriCompositorService {
@@ -279,6 +298,14 @@ impl CompositorAdapter for NiriCompositorService {
 
     fn create_workspace(&self, name: Option<String>) -> Result<()> {
         self.create_workspace(name)
+    }
+
+    fn rename_workspace(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.rename_workspace(old_name, new_name)
+    }
+
+    fn delete_workspace(&self, name: &str) -> Result<()> {
+        self.delete_workspace(name)
     }
 
     fn move_window_to_workspace(&self, window_id: u64, workspace_id: u64) -> Result<()> {
@@ -479,5 +506,38 @@ mod tests {
                 env::remove_var("WAYLAND_DISPLAY");
             }
         }
+    }
+
+    #[test]
+    fn test_compositor_workspace_rename_and_deletion() {
+        let service = NiriCompositorService {
+            workspaces: Arc::new(Mutex::new(vec![
+                NiriWorkspaceInfo {
+                    id: 1,
+                    name: Some("Work".to_string()),
+                    idx: 1,
+                    is_active: true,
+                    is_focused: true,
+                },
+                NiriWorkspaceInfo {
+                    id: 2,
+                    name: Some("Media".to_string()),
+                    idx: 2,
+                    is_active: false,
+                    is_focused: false,
+                },
+            ])),
+            windows: Arc::new(Mutex::new(Vec::new())),
+            active_window_id: Arc::new(Mutex::new(None)),
+            app_id: Arc::new(Mutex::new(None)),
+            active_window_title: Arc::new(Mutex::new(None)),
+            keyboard_layout: Arc::new(Mutex::new("us".into())),
+        };
+
+        assert!(service.rename_workspace("Work", "Main").is_ok());
+        assert_eq!(service.workspaces()[0].name.as_deref(), Some("Main"));
+
+        assert!(service.delete_workspace("Media").is_ok());
+        assert_eq!(service.workspaces().len(), 1);
     }
 }

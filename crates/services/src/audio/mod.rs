@@ -4,12 +4,22 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// Metadata describing an individual application audio playback stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioStream {
+    pub id: u32,
+    pub name: String,
+    pub volume_percent: u8,
+    pub is_muted: bool,
+}
+
 /// Audio sink volume & mute status.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AudioInfo {
     pub volume: u8,
     pub is_muted: bool,
     pub available: bool,
+    pub app_streams: Vec<AudioStream>,
 }
 
 /// Metadata describing a physical audio device (sink or source).
@@ -56,6 +66,7 @@ impl AudioService {
                         volume,
                         is_muted,
                         available: true,
+                        app_streams: Vec::new(),
                     },
                     _ => AudioInfo::default(),
                 };
@@ -164,6 +175,18 @@ impl AudioService {
             Ok(())
         } else {
             Err(anyhow::anyhow!("failed to set sink input volume"))
+        }
+    }
+
+    pub fn toggle_sink_input_mute(&self, index: u32) -> Result<()> {
+        let status = Command::new("pactl")
+            .args(["set-sink-input-mute", &index.to_string(), "toggle"])
+            .status()?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("failed to toggle sink input mute"))
         }
     }
 
@@ -305,5 +328,21 @@ mod tests {
         };
         assert_eq!(dev.id, "alsa_output.pci-0000_00_1f.3.analog-stereo");
         assert!(!dev.is_input);
+    }
+
+    #[test]
+    fn test_audio_stream_volume_and_mute_controls() {
+        let stream = AudioStream {
+            id: 1,
+            name: "Firefox".to_string(),
+            volume_percent: 80,
+            is_muted: false,
+        };
+        let mut info = AudioInfo::default();
+        info.app_streams.push(stream);
+
+        assert_eq!(info.app_streams.len(), 1);
+        assert_eq!(info.app_streams[0].name, "Firefox");
+        assert_eq!(info.app_streams[0].volume_percent, 80);
     }
 }
