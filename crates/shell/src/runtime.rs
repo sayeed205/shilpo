@@ -1335,4 +1335,22 @@ mod tests {
             elapsed
         );
     }
+
+    #[test]
+    fn test_appearance_fields_locale_formatting_and_long_string_layouts() {
+        use shilpo_ui::LocaleCatalogue;
+
+        let mut config = shilpo_config::ShellConfig::default();
+        config.theme.high_contrast = true;
+        config.theme.reduced_motion = true;
+        config.theme.corner_radius_scale = 1.5;
+        assert!(config.validate().is_ok());
+
+        let bn_cat = LocaleCatalogue::new("bn-IN");
+        assert_eq!(bn_cat.format_number(1234567890), "১২৩৪৫৬৭৮৯০");
+
+        let en_cat = LocaleCatalogue::new("en-US");
+        let truncated = en_cat.truncate_or_expand("Super Long Application Title", 15);
+        assert_eq!(truncated, "Super Long App…");
+    }
 }

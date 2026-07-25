@@ -541,11 +541,18 @@ impl ShellSessionState {
         Self::migrate_to_latest(&text)
     }
 
+    pub fn sanitize_sensitive_state(&mut self) {
+        self.recent_apps
+            .retain(|app| !app.contains("secret") && !app.contains("token"));
+    }
+
     pub fn save_atomic(&self, path: &Path) -> Result<(), ConfigError> {
+        let mut clone = self.clone();
+        clone.sanitize_sensitive_state();
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let text = serde_json::to_string_pretty(self).map_err(|e| ConfigError::Parse {
+        let text = serde_json::to_string_pretty(&clone).map_err(|e| ConfigError::Parse {
             diagnostic: ConfigDiagnostic {
                 path: path.display().to_string(),
                 message: e.to_string(),
@@ -1250,5 +1257,16 @@ margin = { horizontal = 600, vertical = 6 }
         assert_eq!(restored_state.recent_apps, vec!["gimp"]);
 
         let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_transient_and_sensitive_state_exclusion_audit() {
+        let mut session = ShellSessionState::default();
+        session.recent_apps.push("code".to_string());
+        session.recent_apps.push("app-with-secret-key".to_string());
+        session.recent_apps.push("app-with-token-auth".to_string());
+
+        session.sanitize_sensitive_state();
+        assert_eq!(session.recent_apps, vec!["code".to_string()]);
     }
 }
