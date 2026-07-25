@@ -79,6 +79,9 @@ pub trait CompositorAdapter: Send + Sync {
     fn restore_compositor_session(&self) -> anyhow::Result<()> {
         Ok(())
     }
+    fn focus_previous_window(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

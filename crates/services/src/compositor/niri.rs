@@ -259,6 +259,15 @@ impl NiriCompositorService {
         let _ = self.focus_workspace(id);
         Ok(())
     }
+
+    /// Focuses the previously active window in recent window navigation stack.
+    pub fn focus_previous_window(&self) -> Result<()> {
+        let windows = self.windows.lock().unwrap();
+        if let Some(win) = windows.first() {
+            let _ = self.focus_window(win.id);
+        }
+        Ok(())
+    }
 }
 
 impl CompositorAdapter for NiriCompositorService {
@@ -336,6 +345,10 @@ impl CompositorAdapter for NiriCompositorService {
 
     fn move_workspace_to_output(&self, id: u64, output_name: &str) -> Result<()> {
         self.move_workspace_to_output(id, output_name)
+    }
+
+    fn focus_previous_window(&self) -> Result<()> {
+        self.focus_previous_window()
     }
 }
 
@@ -598,5 +611,25 @@ mod tests {
 
         assert!(service.reorder_workspace(1, 2).is_ok());
         assert!(service.move_workspace_to_output(1, "HDMI-A-1").is_ok());
+    }
+
+    #[test]
+    fn test_compositor_recent_window_navigation() {
+        let service = NiriCompositorService {
+            workspaces: Arc::new(Mutex::new(Vec::new())),
+            windows: Arc::new(Mutex::new(vec![WindowInfo {
+                id: 101,
+                title: Some("Browser".to_string()),
+                app_id: Some("firefox".to_string()),
+                workspace_id: Some(1),
+                is_focused: false,
+            }])),
+            active_window_id: Arc::new(Mutex::new(Some(101))),
+            app_id: Arc::new(Mutex::new(Some("firefox".to_string()))),
+            active_window_title: Arc::new(Mutex::new(Some("Browser".to_string()))),
+            keyboard_layout: Arc::new(Mutex::new("us".into())),
+        };
+
+        assert!(service.focus_previous_window().is_ok());
     }
 }

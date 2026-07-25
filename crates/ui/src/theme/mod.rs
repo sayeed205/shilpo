@@ -299,3 +299,53 @@ impl From<WindowAppearance> for ThemeMode {
         }
     }
 }
+
+/// Available theme variants including high-contrast accessibility themes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThemeVariant {
+    #[default]
+    Dark,
+    Light,
+    HighContrastDark,
+    HighContrastLight,
+}
+
+fn relative_luminance_component(c: f32) -> f32 {
+    if c <= 0.03928 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Calculates WCAG 2.1 relative luminance for an (R, G, B) tuple in 0..=255.
+pub fn relative_luminance(r: u8, g: u8, b: u8) -> f32 {
+    let r_lin = relative_luminance_component(r as f32 / 255.0);
+    let g_lin = relative_luminance_component(g as f32 / 255.0);
+    let b_lin = relative_luminance_component(b as f32 / 255.0);
+    0.2126 * r_lin + 0.7152 * g_lin + 0.0722 * b_lin
+}
+
+/// Calculates contrast ratio (1.0..=21.0) between foreground and background colors.
+pub fn calculate_contrast_ratio(fg: (u8, u8, u8), bg: (u8, u8, u8)) -> f32 {
+    let l1 = relative_luminance(fg.0, fg.1, fg.2);
+    let l2 = relative_luminance(bg.0, bg.1, bg.2);
+    let (brighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+    (brighter + 0.05) / (darker + 0.05)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_theme_variant_and_contrast_validation() {
+        assert_eq!(ThemeVariant::default(), ThemeVariant::Dark);
+
+        let max_contrast = calculate_contrast_ratio((0, 0, 0), (255, 255, 255));
+        assert!((max_contrast - 21.0).abs() < 0.1);
+
+        let min_contrast = calculate_contrast_ratio((0, 0, 0), (0, 0, 0));
+        assert!((min_contrast - 1.0).abs() < 0.01);
+    }
+}
