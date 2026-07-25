@@ -64,6 +64,10 @@ pub struct SettingsView {
     pub selected_font: String,
     pub active_theme_mode: String,
     pub active_corner_radius_scale: f32,
+    pub high_contrast: bool,
+    pub reduced_motion: bool,
+    pub clock_format: String,
+    pub temperature_unit: String,
 }
 
 impl SettingsView {
@@ -74,6 +78,10 @@ impl SettingsView {
             selected_font: "sans-serif".to_string(),
             active_theme_mode: "Dark".to_string(),
             active_corner_radius_scale: 1.0,
+            high_contrast: false,
+            reduced_motion: false,
+            clock_format: "%H:%M".to_string(),
+            temperature_unit: "Celsius".to_string(),
         }
     }
 
@@ -307,6 +315,118 @@ impl Render for SettingsView {
                                                     .child(font_str)
                                             }),
                                         )),
+                                )
+                                // Accessibility & Motion Overrides
+                                .child(
+                                    v_flex()
+                                        .gap_2()
+                                        .child(div().text_xs().font_bold().child("Accessibility & Motion Preferences"))
+                                        .child(h_flex().gap_2().children([
+                                            {
+                                                let is_active = self.high_contrast;
+                                                let (bg, fg) = if is_active {
+                                                    (cx.theme().primary, cx.theme().on_primary)
+                                                } else {
+                                                    (cx.theme().surface_container, cx.theme().on_surface)
+                                                };
+                                                div()
+                                                    .id("high-contrast-pill")
+                                                    .role(Role::Button)
+                                                    .cursor_pointer()
+                                                    .px_3()
+                                                    .py_1p5()
+                                                    .rounded_xl()
+                                                    .bg(bg)
+                                                    .text_color(fg)
+                                                    .text_xs()
+                                                    .font_semibold()
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.high_contrast = !this.high_contrast;
+                                                        cx.notify();
+                                                    }))
+                                                    .child("High Contrast")
+                                            },
+                                            {
+                                                let is_active = self.reduced_motion;
+                                                let (bg, fg) = if is_active {
+                                                    (cx.theme().primary, cx.theme().on_primary)
+                                                } else {
+                                                    (cx.theme().surface_container, cx.theme().on_surface)
+                                                };
+                                                div()
+                                                    .id("reduced-motion-pill")
+                                                    .role(Role::Button)
+                                                    .cursor_pointer()
+                                                    .px_3()
+                                                    .py_1p5()
+                                                    .rounded_xl()
+                                                    .bg(bg)
+                                                    .text_color(fg)
+                                                    .text_xs()
+                                                    .font_semibold()
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.reduced_motion = !this.reduced_motion;
+                                                        cx.notify();
+                                                    }))
+                                                    .child("Reduced Motion")
+                                            },
+                                        ])),
+                                )
+                                // Clock & Units Preferences
+                                .child(
+                                    v_flex()
+                                        .gap_2()
+                                        .child(div().text_xs().font_bold().child("Clock Format & Temperature Units"))
+                                        .child(h_flex().gap_2().children([
+                                            {
+                                                let fmt_24 = self.clock_format == "%H:%M";
+                                                let (bg, fg) = if fmt_24 {
+                                                    (cx.theme().primary, cx.theme().on_primary)
+                                                } else {
+                                                    (cx.theme().surface_container, cx.theme().on_surface)
+                                                };
+                                                div()
+                                                    .id("clock-24h-pill")
+                                                    .role(Role::Button)
+                                                    .cursor_pointer()
+                                                    .px_3()
+                                                    .py_1p5()
+                                                    .rounded_xl()
+                                                    .bg(bg)
+                                                    .text_color(fg)
+                                                    .text_xs()
+                                                    .font_semibold()
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.clock_format = "%H:%M".to_string();
+                                                        cx.notify();
+                                                    }))
+                                                    .child("24-Hour (14:30)")
+                                            },
+                                            {
+                                                let fmt_12 = self.clock_format == "%I:%M %p";
+                                                let (bg, fg) = if fmt_12 {
+                                                    (cx.theme().primary, cx.theme().on_primary)
+                                                } else {
+                                                    (cx.theme().surface_container, cx.theme().on_surface)
+                                                };
+                                                div()
+                                                    .id("clock-12h-pill")
+                                                    .role(Role::Button)
+                                                    .cursor_pointer()
+                                                    .px_3()
+                                                    .py_1p5()
+                                                    .rounded_xl()
+                                                    .bg(bg)
+                                                    .text_color(fg)
+                                                    .text_xs()
+                                                    .font_semibold()
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.clock_format = "%I:%M %p".to_string();
+                                                        cx.notify();
+                                                    }))
+                                                    .child("12-Hour (02:30 PM)")
+                                            },
+                                        ])),
                                 ),
                         )
                     }),

@@ -15,6 +15,10 @@ pub struct ShellConfig {
     pub bar: BarConfig,
     #[serde(default)]
     pub outputs: HashMap<String, OutputConfig>,
+    #[serde(default)]
+    pub clock_format: Option<String>,
+    #[serde(default)]
+    pub temperature_unit: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -46,6 +50,10 @@ pub struct ThemeConfig {
     pub heading_font_family: Option<String>,
     pub mono_font_family: Option<String>,
     pub corner_radius_scale: f32,
+    #[serde(default)]
+    pub high_contrast: bool,
+    #[serde(default)]
+    pub reduced_motion: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
@@ -126,6 +134,8 @@ impl Default for ShellConfig {
             theme: ThemeConfig::default(),
             bar: BarConfig::default(),
             outputs: HashMap::new(),
+            clock_format: None,
+            temperature_unit: None,
         }
     }
 }
@@ -138,6 +148,8 @@ impl Default for ThemeConfig {
             heading_font_family: None,
             mono_font_family: None,
             corner_radius_scale: 1.0,
+            high_contrast: false,
+            reduced_motion: false,
         }
     }
 }
@@ -1096,5 +1108,27 @@ margin = { horizontal = 600, vertical = 6 }
         session.purge_usage_history();
         assert_eq!(session.app_launch_count("firefox"), 0);
         assert!(session.recent_apps.is_empty());
+    }
+
+    #[test]
+    fn test_accessibility_theme_config() {
+        let mut config = ShellConfig::default();
+        assert!(!config.theme.high_contrast);
+        assert!(!config.theme.reduced_motion);
+
+        config.theme.high_contrast = true;
+        config.theme.reduced_motion = true;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_clock_format_and_units_config() {
+        let mut config = ShellConfig::default();
+        assert!(config.clock_format.is_none());
+        assert!(config.temperature_unit.is_none());
+
+        config.clock_format = Some("%I:%M %p".to_string());
+        config.temperature_unit = Some("Celsius".to_string());
+        assert!(config.validate().is_ok());
     }
 }

@@ -11,12 +11,26 @@
     "bar": {
       "$ref": "#/$defs/BarConfig"
     },
+    "clock_format": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "outputs": {
       "default": {},
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/OutputConfig"
       }
+    },
+    "temperature_unit": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "theme": {
       "$ref": "#/$defs/ThemeConfig"
@@ -282,6 +296,14 @@
             "string",
             "null"
           ]
+        },
+        "high_contrast": {
+          "default": false,
+          "type": "boolean"
+        },
+        "reduced_motion": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "additionalProperties": false
