@@ -39,6 +39,13 @@
         "null"
       ]
     },
+    "locale": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "theme": {
       "$ref": "#/$defs/ThemeConfig"
     },

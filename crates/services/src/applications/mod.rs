@@ -946,4 +946,17 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].name, "Terminal");
     }
+
+    #[test]
+    fn test_malformed_desktop_entries_and_launch_failure_safety() {
+        let corrupt_content = "[Desktop Entry]\nNoNameKey=Corrupt\nExec=\n";
+        let temp_file =
+            std::env::temp_dir().join(format!("corrupt-{}.desktop", std::process::id()));
+        std::fs::write(&temp_file, corrupt_content).unwrap();
+
+        let parsed = parse_desktop_file(&temp_file);
+        assert!(parsed.is_err());
+
+        let _ = std::fs::remove_file(&temp_file);
+    }
 }

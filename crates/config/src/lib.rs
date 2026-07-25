@@ -20,6 +20,8 @@ pub struct ShellConfig {
     #[serde(default)]
     pub temperature_unit: Option<String>,
     #[serde(default)]
+    pub locale: Option<String>,
+    #[serde(default)]
     pub startup: StartupConfig,
 }
 
@@ -160,6 +162,7 @@ impl Default for ShellConfig {
             outputs: HashMap::new(),
             clock_format: None,
             temperature_unit: None,
+            locale: None,
             startup: StartupConfig::default(),
         }
     }
@@ -1268,5 +1271,13 @@ margin = { horizontal = 600, vertical = 6 }
 
         session.sanitize_sensitive_state();
         assert_eq!(session.recent_apps, vec!["code".to_string()]);
+    }
+
+    #[test]
+    fn test_locale_selection_config() {
+        let mut config = ShellConfig::default();
+        assert_eq!(config.locale, None);
+        config.locale = Some("bn-IN".to_string());
+        assert!(config.validate().is_ok());
     }
 }

@@ -68,6 +68,7 @@ pub struct SettingsView {
     pub reduced_motion: bool,
     pub clock_format: String,
     pub temperature_unit: String,
+    pub active_locale: String,
 }
 
 impl SettingsView {
@@ -82,6 +83,7 @@ impl SettingsView {
             reduced_motion: false,
             clock_format: "%H:%M".to_string(),
             temperature_unit: "Celsius".to_string(),
+            active_locale: "en-US".to_string(),
         }
     }
 
@@ -427,6 +429,39 @@ impl Render for SettingsView {
                                                     .child("12-Hour (02:30 PM)")
                                             },
                                         ])),
+                                )
+                                // System Locale Selection
+                                .child(
+                                    v_flex()
+                                        .gap_2()
+                                        .child(div().text_xs().font_bold().child("System Locale & Translation Dictionary"))
+                                        .child(h_flex().gap_2().children(
+                                            [("en-US", "English (US)"), ("bn-IN", "Bangla (bn-IN)"), ("ar-SA", "Arabic (RTL)")].into_iter().enumerate().map(|(i, (loc_code, loc_label))| {
+                                                let is_active = self.active_locale == loc_code;
+                                                let (bg, fg) = if is_active {
+                                                    (cx.theme().primary, cx.theme().on_primary)
+                                                } else {
+                                                    (cx.theme().surface_container, cx.theme().on_surface)
+                                                };
+                                                let loc_str = loc_code.to_string();
+                                                div()
+                                                    .id(("locale-pill", i))
+                                                    .role(Role::Button)
+                                                    .cursor_pointer()
+                                                    .px_3()
+                                                    .py_1p5()
+                                                    .rounded_xl()
+                                                    .bg(bg)
+                                                    .text_color(fg)
+                                                    .text_xs()
+                                                    .font_semibold()
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.active_locale = loc_str.clone();
+                                                        cx.notify();
+                                                    }))
+                                                    .child(loc_label)
+                                            }),
+                                        )),
                                 ),
                         )
                     }),
