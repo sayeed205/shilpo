@@ -436,6 +436,8 @@ pub struct ShellSessionState {
     #[serde(default)]
     pub pinned_apps: Vec<String>,
     #[serde(default)]
+    pub launch_counts: HashMap<String, u32>,
+    #[serde(default)]
     pub dnd_active: bool,
     #[serde(default)]
     pub night_light_active: bool,
@@ -447,6 +449,7 @@ impl Default for ShellSessionState {
             version: 1,
             recent_apps: Vec::new(),
             pinned_apps: Vec::new(),
+            launch_counts: HashMap::new(),
             dnd_active: false,
             night_light_active: false,
         }
@@ -503,11 +506,21 @@ impl ShellSessionState {
 
     pub fn record_recent_app(&mut self, app_id: impl Into<String>) {
         let app_id = app_id.into();
+        *self.launch_counts.entry(app_id.clone()).or_insert(0) += 1;
         self.recent_apps.retain(|id| id != &app_id);
         self.recent_apps.insert(0, app_id);
         if self.recent_apps.len() > 30 {
             self.recent_apps.truncate(30);
         }
+    }
+
+    pub fn app_launch_count(&self, app_id: &str) -> u32 {
+        self.launch_counts.get(app_id).copied().unwrap_or(0)
+    }
+
+    pub fn purge_usage_history(&mut self) {
+        self.recent_apps.clear();
+        self.launch_counts.clear();
     }
 }
 
@@ -1067,5 +1080,21 @@ margin = { horizontal = 600, vertical = 6 }
         assert!(store.get_clipboard_history().unwrap().is_empty());
 
         let _ = std::fs::remove_dir_all(db_dir);
+    }
+
+    #[test]
+    fn test_app_launch_frequency_ranking_and_privacy_purge() {
+        let mut session = ShellSessionState::default();
+        session.record_recent_app("firefox");
+        session.record_recent_app("firefox");
+        session.record_recent_app("org.gnome.Terminal");
+
+        assert_eq!(session.app_launch_count("firefox"), 2);
+        assert_eq!(session.app_launch_count("org.gnome.Terminal"), 1);
+        assert_eq!(session.app_launch_count("unknown"), 0);
+
+        session.purge_usage_history();
+        assert_eq!(session.app_launch_count("firefox"), 0);
+        assert!(session.recent_apps.is_empty());
     }
 }

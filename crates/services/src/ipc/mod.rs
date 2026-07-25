@@ -701,4 +701,31 @@ mod tests {
         assert!(other.is_file());
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn test_ipc_server_high_concurrency_bench() {
+        let (root, path) = fixture();
+        let server = ShellIpcServer::new_at(&root, &path).unwrap();
+
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let socket_path = path.clone();
+            handles.push(std::thread::spawn(move || {
+                let req = IpcRequest::ToggleLauncher;
+                let _ = ShellIpcServer::send_command_at(&socket_path, req);
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let reqs = server.pop_pending_requests();
+        assert_eq!(reqs.len(), 10);
+        for req in reqs {
+            assert!(matches!(req, IpcRequest::ToggleLauncher));
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }
