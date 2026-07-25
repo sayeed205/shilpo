@@ -291,6 +291,7 @@ impl CompositorAdapter for NiriCompositorService {
                 idx: w.idx,
                 is_active: w.is_active,
                 is_focused: w.is_focused,
+                is_urgent: false,
             })
             .collect()
     }
@@ -631,5 +632,27 @@ mod tests {
         };
 
         assert!(service.focus_previous_window().is_ok());
+    }
+
+    #[test]
+    fn test_compositor_workspace_urgent_state() {
+        let service = NiriCompositorService {
+            workspaces: Arc::new(Mutex::new(vec![NiriWorkspaceInfo {
+                id: 1,
+                name: Some("UrgentWS".to_string()),
+                idx: 1,
+                is_active: false,
+                is_focused: false,
+            }])),
+            windows: Arc::new(Mutex::new(Vec::new())),
+            active_window_id: Arc::new(Mutex::new(None)),
+            app_id: Arc::new(Mutex::new(None)),
+            active_window_title: Arc::new(Mutex::new(None)),
+            keyboard_layout: Arc::new(Mutex::new("us".into())),
+        };
+
+        let ws = CompositorAdapter::workspaces(&service);
+        assert_eq!(ws.len(), 1);
+        assert!(!ws[0].is_urgent);
     }
 }

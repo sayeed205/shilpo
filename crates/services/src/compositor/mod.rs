@@ -19,6 +19,7 @@ pub struct WorkspaceInfo {
     pub idx: u8,
     pub is_active: bool,
     pub is_focused: bool,
+    pub is_urgent: bool,
 }
 
 /// Generic window information.

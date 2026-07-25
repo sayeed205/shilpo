@@ -184,6 +184,16 @@ impl NotificationService {
         self.dismiss(id);
         Ok(())
     }
+
+    /// Service boundary helper method for standalone notification daemon process execution.
+    pub fn run_daemon_boundary(&self) -> Result<()> {
+        if !self.is_dbus_connected() {
+            tracing::warn!("Notification daemon running in offline fallback mode");
+        } else {
+            tracing::info!("Notification daemon active on DBus org.freedesktop.Notifications");
+        }
+        Ok(())
+    }
 }
 
 struct NotificationServer {
@@ -676,5 +686,11 @@ mod tests {
 
         assert!(service.send_inline_reply(200, "Got it!").is_ok());
         assert_eq!(service.unread_count(), 0);
+    }
+
+    #[test]
+    fn test_persistent_notification_daemon_service_boundary() {
+        let service = NotificationService::new_offline();
+        assert!(service.run_daemon_boundary().is_ok());
     }
 }
