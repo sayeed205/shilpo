@@ -301,6 +301,66 @@ impl SliderState {
         self.value
     }
 
+    /// Steps up the slider value by step.
+    pub fn step_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.value {
+            SliderValue::Single(val) => {
+                let next = (val + self.step).min(self.max);
+                self.set_value(next, window, cx);
+                cx.emit(SliderEvent::Change(self.value));
+            }
+            SliderValue::Range(start, end) => {
+                let next_end = (end + self.step).min(self.max);
+                self.set_value((start, next_end), window, cx);
+                cx.emit(SliderEvent::Change(self.value));
+            }
+        }
+    }
+
+    /// Steps down the slider value by step.
+    pub fn step_down(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.value {
+            SliderValue::Single(val) => {
+                let next = (val - self.step).max(self.min);
+                self.set_value(next, window, cx);
+                cx.emit(SliderEvent::Change(self.value));
+            }
+            SliderValue::Range(start, end) => {
+                let next_start = (start - self.step).max(self.min);
+                self.set_value((next_start, end), window, cx);
+                cx.emit(SliderEvent::Change(self.value));
+            }
+        }
+    }
+
+    /// Sets slider to min.
+    pub fn jump_to_min(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.value {
+            SliderValue::Single(_) => {
+                self.set_value(self.min, window, cx);
+                cx.emit(SliderEvent::Change(self.value));
+            }
+            SliderValue::Range(_, end) => {
+                self.set_value((self.min, end), window, cx);
+                cx.emit(SliderEvent::Change(self.value));
+            }
+        }
+    }
+
+    /// Sets slider to max.
+    pub fn jump_to_max(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.value {
+            SliderValue::Single(_) => {
+                self.set_value(self.max, window, cx);
+                cx.emit(SliderEvent::Change(self.value));
+            }
+            SliderValue::Range(start, _) => {
+                self.set_value((start, self.max), window, cx);
+                cx.emit(SliderEvent::Change(self.value));
+            }
+        }
+    }
+
     /// Get the minimum value.
     pub fn min_value(&self) -> f32 {
         self.min
@@ -1112,10 +1172,17 @@ mod tests {
     #[test]
     fn test_slider_state_snapping() {
         let state = SliderState::new().min(0.0).max(5.0).step(1.0);
-        let val = state.percentage_to_value(0.3); // 1.5
+        let val = state.percentage_to_value(0.3);
         let snapped_val = (val / 1.0).round() * 1.0;
         let pct = state.value_to_percentage(snapped_val);
         assert_eq!(snapped_val, 2.0);
         assert_eq!(pct, 0.4);
+    }
+
+    #[test]
+    fn test_slider_state_keyboard_step() {
+        let state = SliderState::new().min(0.0).max(100.0).step(5.0);
+        assert_eq!(state.value(), SliderValue::Single(0.0));
+        assert_eq!(state.step_value(), 5.0);
     }
 }

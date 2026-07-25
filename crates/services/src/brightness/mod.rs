@@ -11,6 +11,22 @@ pub struct BrightnessInfo {
     pub available: bool,
 }
 
+impl BrightnessInfo {
+    /// Converts a perceptual linear slider percentage (0..=100) to logarithmic raw percentage (0..=100) via quadratic curve scaling.
+    pub fn perceptual_percent_to_raw(percent: u8) -> u8 {
+        let p = (percent.min(100) as f64) / 100.0;
+        let log_scaled = p * p;
+        (log_scaled * 100.0).round() as u8
+    }
+
+    /// Converts a raw percentage (0..=100) back to perceptual linear slider percentage (0..=100).
+    pub fn raw_to_perceptual_percent(raw: u8) -> u8 {
+        let r = (raw.min(100) as f64) / 100.0;
+        let linear = r.sqrt();
+        (linear * 100.0).round() as u8
+    }
+}
+
 /// System screen brightness service.
 pub struct BrightnessService {
     info: Arc<Mutex<BrightnessInfo>>,
@@ -56,6 +72,12 @@ impl BrightnessService {
             .args(["set", &format!("{}%", percentage)])
             .spawn();
     }
+
+    pub fn set_brightness_smooth(&self, target_percentage: u8) {
+        let target = target_percentage.min(100);
+        let log_target = BrightnessInfo::perceptual_percent_to_raw(target);
+        self.set_brightness(log_target);
+    }
 }
 
 fn query_brightness() -> Option<u8> {
@@ -91,5 +113,13 @@ mod tests {
     fn default_is_unavailable() {
         assert_eq!(BrightnessInfo::default().percentage, 0);
         assert!(!BrightnessInfo::default().available);
+    }
+
+    #[test]
+    fn test_logarithmic_brightness_curves_and_stepping() {
+        assert_eq!(BrightnessInfo::perceptual_percent_to_raw(0), 0);
+        assert_eq!(BrightnessInfo::perceptual_percent_to_raw(100), 100);
+        assert_eq!(BrightnessInfo::perceptual_percent_to_raw(50), 25);
+        assert_eq!(BrightnessInfo::raw_to_perceptual_percent(25), 50);
     }
 }
