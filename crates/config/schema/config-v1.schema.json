@@ -25,6 +25,13 @@
         "$ref": "#/$defs/OutputConfig"
       }
     },
+    "startup": {
+      "$ref": "#/$defs/StartupConfig",
+      "default": {
+        "autostart_apps": [],
+        "compositor_wait_timeout_ms": 3000
+      }
+    },
     "temperature_unit": {
       "default": null,
       "type": [
@@ -304,6 +311,25 @@
         "reduced_motion": {
           "default": false,
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StartupConfig": {
+      "type": "object",
+      "properties": {
+        "autostart_apps": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "compositor_wait_timeout_ms": {
+          "default": 3000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "additionalProperties": false

@@ -19,6 +19,30 @@ pub struct ShellConfig {
     pub clock_format: Option<String>,
     #[serde(default)]
     pub temperature_unit: Option<String>,
+    #[serde(default)]
+    pub startup: StartupConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StartupConfig {
+    #[serde(default)]
+    pub autostart_apps: Vec<String>,
+    #[serde(default = "default_compositor_wait_timeout")]
+    pub compositor_wait_timeout_ms: u64,
+}
+
+fn default_compositor_wait_timeout() -> u64 {
+    3000
+}
+
+impl Default for StartupConfig {
+    fn default() -> Self {
+        Self {
+            autostart_apps: Vec::new(),
+            compositor_wait_timeout_ms: 3000,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -136,6 +160,7 @@ impl Default for ShellConfig {
             outputs: HashMap::new(),
             clock_format: None,
             temperature_unit: None,
+            startup: StartupConfig::default(),
         }
     }
 }
@@ -1169,5 +1194,15 @@ margin = { horizontal = 600, vertical = 6 }
         let invalid_json = r#"{"version": 9999, "invalid": true}"#;
         let fallback = ShellSessionState::migrate_to_latest(invalid_json);
         assert_eq!(fallback.version, 1);
+    }
+
+    #[test]
+    fn test_startup_config_and_compositor_wait_policy() {
+        let mut config = ShellConfig::default();
+        assert_eq!(config.startup.compositor_wait_timeout_ms, 3000);
+        assert!(config.startup.autostart_apps.is_empty());
+
+        config.startup.autostart_apps.push("waybar".to_string());
+        assert!(config.validate().is_ok());
     }
 }

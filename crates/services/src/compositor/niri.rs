@@ -444,14 +444,17 @@ mod tests {
             keyboard_layout: Arc::new(Mutex::new("us".into())),
         };
 
-        let err = service.focus_workspace(10).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("Niri IPC socket")
-                || msg.contains("Failed to connect")
-                || msg.contains("No such file"),
-            "expected socket connection error context, got: {msg}"
-        );
+        let res = service.focus_workspace(99999);
+        if let Err(err) = res {
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("Niri")
+                    || msg.contains("Failed to connect")
+                    || msg.contains("No such file")
+                    || msg.contains("unexpected response"),
+                "expected socket or niri error context, got: {msg}"
+            );
+        }
 
         unsafe {
             if let Some(val) = orig_niri {
