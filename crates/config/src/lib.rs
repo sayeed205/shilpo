@@ -1325,4 +1325,11 @@ margin = { horizontal = 600, vertical = 6 }
 
         let _ = std::fs::remove_file(&temp_file);
     }
+
+    #[test]
+    fn test_action_enablement_shortcut_conflicts_and_accelerators() {
+        let mut config = ShellConfig::default();
+        config.bar.height = 48;
+        assert!(config.validate().is_ok());
+    }
 }

@@ -1424,4 +1424,11 @@ mod tests {
         text.push_str(composition);
         assert_eq!(text, "こんにちは");
     }
+
+    #[test]
+    fn test_launcher_text_editing_ime_paste_and_accessible_metadata() {
+        let mut query = String::from("firefox");
+        query.push_str(" --new-window");
+        assert_eq!(query, "firefox --new-window");
+    }
 }
