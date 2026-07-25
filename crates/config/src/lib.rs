@@ -512,6 +512,25 @@ impl ShellSessionState {
         Self::default()
     }
 
+    pub fn restore_with_fallback(path: &Path) -> (Self, bool) {
+        if !path.exists() {
+            return (Self::default(), false);
+        }
+        let backup_path = path.with_extension("json.bak");
+        if let Ok(text) = fs::read_to_string(path)
+            && let Ok(session) = serde_json::from_str::<Self>(&text)
+        {
+            return (session, true);
+        }
+        if backup_path.exists()
+            && let Ok(text) = fs::read_to_string(&backup_path)
+            && let Ok(session) = serde_json::from_str::<Self>(&text)
+        {
+            return (session, true);
+        }
+        (Self::default(), false)
+    }
+
     pub fn load_or_default(path: &Path) -> Self {
         if !path.exists() {
             return Self::default();
@@ -1204,5 +1223,32 @@ margin = { horizontal = 600, vertical = 6 }
 
         config.startup.autostart_apps.push("waybar".to_string());
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_session_restore_fallback_policy() {
+        let temp_file =
+            std::env::temp_dir().join(format!("shilpo-session-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&temp_file);
+
+        let (state, restored) = ShellSessionState::restore_with_fallback(&temp_file);
+        assert!(!restored);
+        assert_eq!(state.version, 1);
+
+        let valid_session = ShellSessionState {
+            version: 1,
+            recent_apps: vec!["gimp".to_string()],
+            pinned_apps: Vec::new(),
+            launch_counts: HashMap::new(),
+            dnd_active: false,
+            night_light_active: false,
+        };
+        valid_session.save_atomic(&temp_file).unwrap();
+
+        let (restored_state, ok) = ShellSessionState::restore_with_fallback(&temp_file);
+        assert!(ok);
+        assert_eq!(restored_state.recent_apps, vec!["gimp"]);
+
+        let _ = std::fs::remove_file(temp_file);
     }
 }

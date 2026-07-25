@@ -84,6 +84,25 @@ impl LocaleCatalogue {
             s
         }
     }
+
+    pub fn is_rtl(&self) -> bool {
+        let lang = self
+            .current_locale
+            .split(&['-', '_'][..])
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+        matches!(lang.as_str(), "ar" | "he" | "fa" | "ur")
+    }
+
+    pub fn truncate_or_expand(&self, text: &str, max_len: usize) -> String {
+        if text.chars().count() <= max_len {
+            text.to_string()
+        } else {
+            let truncated: String = text.chars().take(max_len.saturating_sub(1)).collect();
+            format!("{truncated}…")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -114,5 +133,18 @@ mod tests {
 
         let bn_cat = LocaleCatalogue::new("bn-IN");
         assert_eq!(bn_cat.format_number(12345), "১২৩৪৫");
+    }
+
+    #[test]
+    fn test_bidirectional_layout_and_string_expansion() {
+        let ar_cat = LocaleCatalogue::new("ar-SA");
+        assert!(ar_cat.is_rtl());
+
+        let en_cat = LocaleCatalogue::new("en-US");
+        assert!(!en_cat.is_rtl());
+
+        let long_str = "Long string expansion test";
+        assert_eq!(en_cat.truncate_or_expand(long_str, 10), "Long stri…");
+        assert_eq!(en_cat.truncate_or_expand("Short", 10), "Short");
     }
 }
