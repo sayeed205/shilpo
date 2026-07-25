@@ -37,6 +37,13 @@ impl Drop for NetworkService {
 }
 
 impl NetworkService {
+    pub fn new_offline() -> Self {
+        Self {
+            info: Arc::new(Mutex::new(NetworkInfo::default())),
+            _task: None,
+        }
+    }
+
     pub fn new() -> Result<Self> {
         let info = Arc::new(Mutex::new(NetworkInfo::default()));
 
@@ -143,6 +150,26 @@ impl NetworkService {
         Ok(())
     }
 
+    pub fn connect_vpn(&self, name: &str) -> Result<()> {
+        let vpn_name = name.to_string();
+        tokio::spawn(async move {
+            let _ = std::process::Command::new("nmcli")
+                .args(["connection", "up", &vpn_name])
+                .status();
+        });
+        Ok(())
+    }
+
+    pub fn disconnect_vpn(&self, name: &str) -> Result<()> {
+        let vpn_name = name.to_string();
+        tokio::spawn(async move {
+            let _ = std::process::Command::new("nmcli")
+                .args(["connection", "down", &vpn_name])
+                .status();
+        });
+        Ok(())
+    }
+
     pub fn set_airplane_mode_enabled(&self, enabled: bool) -> Result<()> {
         tokio::spawn(async move {
             if let Ok(connection) = Connection::system().await {
@@ -212,5 +239,24 @@ mod tests {
         };
         assert_eq!(vpn.id, "Corporate-VPN");
         assert!(vpn.is_active);
+    }
+
+    #[tokio::test]
+    async fn test_vpn_connection_selection_and_status() {
+        let service = NetworkService::new_offline();
+        let vpn = VpnConnection {
+            id: "Corporate VPN".to_string(),
+            vpn_type: "wireguard".to_string(),
+            is_active: true,
+            object_path: "/org/freedesktop/NetworkManager/ActiveConnection/1".to_string(),
+        };
+
+        let mut info = NetworkInfo::default();
+        info.active_vpns.push(vpn.clone());
+        assert_eq!(info.active_vpns.len(), 1);
+        assert_eq!(info.active_vpns[0].id, "Corporate VPN");
+
+        assert!(service.connect_vpn("Corporate VPN").is_ok());
+        assert!(service.disconnect_vpn("Corporate VPN").is_ok());
     }
 }

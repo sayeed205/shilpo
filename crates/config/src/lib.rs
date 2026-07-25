@@ -566,6 +566,7 @@ pub struct HeedSessionStore {
         heed::types::SerdeJson<ClipboardItem>,
     >,
     audio_pref_db: heed::Database<heed::types::Str, heed::types::SerdeJson<AudioPreference>>,
+    _lock_file: Option<fs::File>,
 }
 
 impl HeedSessionStore {
@@ -584,6 +585,15 @@ impl HeedSessionStore {
                 source: e,
             });
         }
+
+        let lock_path = dir.join("session.lock");
+        let lock_file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .ok();
 
         let env = unsafe {
             heed::EnvOpenOptions::new()
@@ -650,6 +660,7 @@ impl HeedSessionStore {
             output_bars_db,
             clipboard_history_db,
             audio_pref_db,
+            _lock_file: lock_file,
         })
     }
 
@@ -1130,5 +1141,17 @@ margin = { horizontal = 600, vertical = 6 }
         config.clock_format = Some("%I:%M %p".to_string());
         config.temperature_unit = Some("Celsius".to_string());
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_session_store_single_writer_file_locking() {
+        let db_dir = std::env::temp_dir().join(format!("shilpo-lock-{}.lmdb", std::process::id()));
+        let _ = std::fs::remove_dir_all(&db_dir);
+
+        let store = HeedSessionStore::open_or_create(&db_dir).unwrap();
+        assert!(db_dir.join("session.lock").exists());
+        drop(store);
+
+        let _ = std::fs::remove_dir_all(db_dir);
     }
 }
