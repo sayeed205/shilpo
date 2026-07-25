@@ -856,4 +856,16 @@ mod tests {
             ]
         );
     }
+
+    #[gpui::test]
+    fn test_tree_keyboard_navigation_and_collapsing(cx: &mut gpui::TestAppContext) {
+        let root =
+            super::TreeItem::new("root", "root").child(super::TreeItem::new("child1", "child1"));
+        let state = cx.new(|cx| TreeState::new(cx).items(vec![root]));
+
+        state.update(cx, |state, cx| {
+            state.toggle_expand(0, cx);
+            assert!(state.selected_item().is_none());
+        });
+    }
 }

@@ -247,4 +247,28 @@ mod tests {
         let geometry = BarGeometry::calculate(DisplayId::new(1), display, &cfg);
         assert_eq!(geometry.exclusive_zone, px(48.));
     }
+
+    #[test]
+    fn test_multi_monitor_bar_geometry_calculations() {
+        let mon_1 = Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.)));
+        let mon_2 = Bounds::new(point(px(1920.), px(0.)), size(px(3840.), px(2160.)));
+
+        let geom1 = BarGeometry::calculate(
+            DisplayId::new(1),
+            mon_1,
+            &config(BarPosition::Top, BarStyle::FullEdge),
+        );
+        let geom2 = BarGeometry::calculate_with_scale(
+            DisplayId::new(2),
+            mon_2,
+            &config(BarPosition::Top, BarStyle::FullEdge),
+            Some(2.0),
+        );
+
+        assert_eq!(geom1.bounds.origin, point(px(0.), px(0.)));
+        assert_eq!(geom1.bounds.size.width, px(1920.));
+
+        assert_eq!(geom2.bounds.origin, point(px(1920.), px(0.)));
+        assert_eq!(geom2.bounds.size.width, px(3840.));
+    }
 }
