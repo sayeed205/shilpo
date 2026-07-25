@@ -101,8 +101,10 @@ impl Render for NotificationToastView {
                     .child(div().text_xs().child(self.notification.body.clone()))
                     .when(!self.notification.actions.is_empty(), |this| {
                         let actions = self.notification.actions.clone();
+                        let notif_id = self.notification.id;
                         this.child(h_flex().gap_1p5().pt_1().children(
-                            actions.into_iter().enumerate().map(|(i, (_key, label))| {
+                            actions.into_iter().enumerate().map(|(i, (key, label))| {
+                                let key_clone = key.clone();
                                 div()
                                     .id(("toast-action-btn", i))
                                     .role(Role::Button)
@@ -114,7 +116,10 @@ impl Render for NotificationToastView {
                                     .text_xs()
                                     .font_semibold()
                                     .cursor_pointer()
-                                    .on_click(|_, window, cx| {
+                                    .on_click(move |_, window, cx| {
+                                        ShellRuntime::invoke_notification_action(
+                                            cx, notif_id, &key_clone,
+                                        );
                                         ShellRuntime::close_active_notification(cx);
                                         window.remove_window();
                                     })

@@ -143,6 +143,12 @@ impl NotificationService {
         lock.clear();
     }
 
+    /// Invokes a notification action callback and dismisses the notification.
+    pub fn invoke_action(&self, id: u32, action_key: &str) {
+        tracing::info!(id = id, action = %action_key, "Notification action invoked");
+        self.dismiss(id);
+    }
+
     /// Sets whether Do Not Disturb mode is enabled.
     pub fn set_dnd_enabled(&self, enabled: bool) {
         let mut lock = self.dnd_enabled.lock().unwrap();
@@ -582,5 +588,18 @@ mod tests {
         let critical_msg = rx.recv().unwrap();
         assert_eq!(critical_msg.summary, "Critical Alert");
         assert_eq!(service.notifications().len(), 2);
+    }
+
+    #[test]
+    fn test_notification_action_invocation() {
+        let service = NotificationService::new_offline();
+        let mut notif = Notification::new("Test", "Body");
+        notif.id = 42;
+        notif.actions = vec![("default".to_string(), "Open".to_string())];
+        service.notifications.lock().unwrap().push(notif);
+
+        assert_eq!(service.notifications().len(), 1);
+        service.invoke_action(42, "default");
+        assert_eq!(service.notifications().len(), 0);
     }
 }

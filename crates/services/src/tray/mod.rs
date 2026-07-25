@@ -152,4 +152,34 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].service, "org.kde.StatusNotifierItem-1234-1");
     }
+
+    #[test]
+    fn test_tray_menu_item_badges_and_submenus() {
+        let mut item = TrayItem::new("org.test.Tray", "Test Tray");
+        item.badge_count = Some(5);
+        item.menu_path = Some("/MenuBar".to_string());
+        item.menu_items = vec![TrayMenuItem {
+            id: 1,
+            label: "File".to_string(),
+            enabled: true,
+            children: vec![
+                TrayMenuItem {
+                    id: 2,
+                    label: "Open".to_string(),
+                    enabled: true,
+                    children: Vec::new(),
+                },
+                TrayMenuItem {
+                    id: 3,
+                    label: "Save".to_string(),
+                    enabled: false,
+                    children: Vec::new(),
+                },
+            ],
+        }];
+
+        assert_eq!(item.badge_count, Some(5));
+        assert_eq!(item.menu_items[0].children.len(), 2);
+        assert!(!item.menu_items[0].children[1].enabled);
+    }
 }

@@ -823,6 +823,15 @@ impl ShellRuntime {
         generation
     }
 
+    pub fn invoke_notification_action(cx: &App, id: u32, action_key: &str) {
+        if cx.has_global::<Self>()
+            && let Some(ref hub) = cx.global::<Self>().service_hub
+            && let Some(ref notif_service) = hub.notification
+        {
+            notif_service.invoke_action(id, action_key);
+        }
+    }
+
     pub fn close_active_notification(cx: &mut App) {
         let entry = cx.global_mut::<Self>().notification.take();
         if let Some((_, handle)) = entry {
