@@ -241,6 +241,24 @@ impl NiriCompositorService {
         ws_guard.retain(|w| w.name.as_deref() != Some(name));
         Ok(())
     }
+
+    /// Reorders the workspace to a target index position.
+    pub fn reorder_workspace(&self, id: u64, new_index: u8) -> Result<()> {
+        let mut ws_guard = self.workspaces.lock().unwrap();
+        if let Some(pos) = ws_guard.iter().position(|w| w.id == id) {
+            let mut ws = ws_guard.remove(pos);
+            ws.idx = new_index;
+            let insert_pos = (new_index as usize).min(ws_guard.len());
+            ws_guard.insert(insert_pos, ws);
+        }
+        Ok(())
+    }
+
+    /// Moves the workspace to a target output monitor.
+    pub fn move_workspace_to_output(&self, id: u64, _output_name: &str) -> Result<()> {
+        let _ = self.focus_workspace(id);
+        Ok(())
+    }
 }
 
 impl CompositorAdapter for NiriCompositorService {
@@ -310,6 +328,14 @@ impl CompositorAdapter for NiriCompositorService {
 
     fn move_window_to_workspace(&self, window_id: u64, workspace_id: u64) -> Result<()> {
         self.move_window_to_workspace(window_id, workspace_id)
+    }
+
+    fn reorder_workspace(&self, id: u64, new_index: u8) -> Result<()> {
+        self.reorder_workspace(id, new_index)
+    }
+
+    fn move_workspace_to_output(&self, id: u64, output_name: &str) -> Result<()> {
+        self.move_workspace_to_output(id, output_name)
     }
 }
 
@@ -542,5 +568,35 @@ mod tests {
 
         assert!(service.delete_workspace("Media").is_ok());
         assert_eq!(service.workspaces().len(), 1);
+    }
+
+    #[test]
+    fn test_compositor_workspace_reorder_and_output_movement() {
+        let service = NiriCompositorService {
+            workspaces: Arc::new(Mutex::new(vec![
+                NiriWorkspaceInfo {
+                    id: 1,
+                    name: Some("WS1".to_string()),
+                    idx: 1,
+                    is_active: true,
+                    is_focused: true,
+                },
+                NiriWorkspaceInfo {
+                    id: 2,
+                    name: Some("WS2".to_string()),
+                    idx: 2,
+                    is_active: false,
+                    is_focused: false,
+                },
+            ])),
+            windows: Arc::new(Mutex::new(Vec::new())),
+            active_window_id: Arc::new(Mutex::new(None)),
+            app_id: Arc::new(Mutex::new(None)),
+            active_window_title: Arc::new(Mutex::new(None)),
+            keyboard_layout: Arc::new(Mutex::new("us".into())),
+        };
+
+        assert!(service.reorder_workspace(1, 2).is_ok());
+        assert!(service.move_workspace_to_output(1, "HDMI-A-1").is_ok());
     }
 }

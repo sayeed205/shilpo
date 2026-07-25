@@ -103,6 +103,19 @@ impl LocaleCatalogue {
             format!("{truncated}…")
         }
     }
+
+    pub fn workspace_label(&self, id: u64, custom_name: Option<&str>) -> String {
+        if let Some(name) = custom_name
+            && !name.trim().is_empty()
+        {
+            return name.to_string();
+        }
+        if self.current_locale.starts_with("bn") {
+            format!("ওয়ার্কস্পেস {}", self.format_number(id as usize))
+        } else {
+            format!("Workspace {id}")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -146,5 +159,15 @@ mod tests {
         let long_str = "Long string expansion test";
         assert_eq!(en_cat.truncate_or_expand(long_str, 10), "Long stri…");
         assert_eq!(en_cat.truncate_or_expand("Short", 10), "Short");
+    }
+
+    #[test]
+    fn test_localized_workspace_fallback_labels() {
+        let en_cat = LocaleCatalogue::new("en-US");
+        assert_eq!(en_cat.workspace_label(1, None), "Workspace 1");
+        assert_eq!(en_cat.workspace_label(1, Some("Media")), "Media");
+
+        let bn_cat = LocaleCatalogue::new("bn-IN");
+        assert_eq!(bn_cat.workspace_label(2, None), "ওয়ার্কস্পেস ২");
     }
 }

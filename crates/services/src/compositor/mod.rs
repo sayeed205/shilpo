@@ -74,6 +74,8 @@ pub trait CompositorAdapter: Send + Sync {
     fn rename_workspace(&self, old_name: &str, new_name: &str) -> anyhow::Result<()>;
     fn delete_workspace(&self, name: &str) -> anyhow::Result<()>;
     fn move_window_to_workspace(&self, window_id: u64, workspace_id: u64) -> anyhow::Result<()>;
+    fn reorder_workspace(&self, id: u64, new_index: u8) -> anyhow::Result<()>;
+    fn move_workspace_to_output(&self, id: u64, output_name: &str) -> anyhow::Result<()>;
 }
 
 #[cfg(test)]
@@ -124,6 +126,12 @@ mod tests {
             Ok(())
         }
         fn move_window_to_workspace(&self, _w: u64, _ws: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn reorder_workspace(&self, _id: u64, _new_index: u8) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn move_workspace_to_output(&self, _id: u64, _output_name: &str) -> anyhow::Result<()> {
             Ok(())
         }
     }
