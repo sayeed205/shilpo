@@ -159,6 +159,19 @@ impl NotificationService {
     pub fn is_dnd_enabled(&self) -> bool {
         *self.dnd_enabled.lock().unwrap()
     }
+
+    /// Returns active notifications grouped by application name.
+    pub fn grouped_notifications(&self) -> HashMap<String, Vec<Notification>> {
+        let notifs = self.notifications();
+        let mut grouped: HashMap<String, Vec<Notification>> = HashMap::new();
+        for notif in notifs {
+            grouped
+                .entry(notif.app_name.clone())
+                .or_default()
+                .push(notif);
+        }
+        grouped
+    }
 }
 
 struct NotificationServer {
@@ -601,5 +614,32 @@ mod tests {
         assert_eq!(service.notifications().len(), 1);
         service.invoke_action(42, "default");
         assert_eq!(service.notifications().len(), 0);
+    }
+
+    #[test]
+    fn test_persistent_dnd_state_integration() {
+        let service = NotificationService::new_offline();
+        assert!(!service.is_dnd_enabled());
+        service.set_dnd_enabled(true);
+        assert!(service.is_dnd_enabled());
+    }
+
+    #[test]
+    fn test_notification_grouping_and_threading_policy() {
+        let service = NotificationService::new_offline();
+        let mut notif1 = Notification::new("Email 1", "Body");
+        notif1.app_name = "Mail".to_string();
+        let mut notif2 = Notification::new("Email 2", "Body");
+        notif2.app_name = "Mail".to_string();
+        let mut notif3 = Notification::new("Message", "Body");
+        notif3.app_name = "Chat".to_string();
+
+        service.notifications.lock().unwrap().push(notif1);
+        service.notifications.lock().unwrap().push(notif2);
+        service.notifications.lock().unwrap().push(notif3);
+
+        let grouped = service.grouped_notifications();
+        assert_eq!(grouped.get("Mail").map(|v| v.len()), Some(2));
+        assert_eq!(grouped.get("Chat").map(|v| v.len()), Some(1));
     }
 }
