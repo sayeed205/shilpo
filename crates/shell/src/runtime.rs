@@ -126,6 +126,7 @@ pub struct ShellRuntime {
     readiness: shilpo_services::ipc::ReadinessState,
     launcher: Option<WindowHandle<shilpo_ui::Root>>,
     control_center: Option<WindowHandle<shilpo_ui::Root>>,
+    overview: Option<WindowHandle<shilpo_ui::Root>>,
     notification: Option<(
         u64,
         WindowHandle<crate::notification::NotificationToastView>,
@@ -186,6 +187,7 @@ impl ShellRuntime {
             readiness: shilpo_services::ipc::ReadinessState::Starting,
             launcher: None,
             control_center: None,
+            overview: None,
             notification: None,
             notification_generation: 0,
             notification_history: Vec::new(),
@@ -621,6 +623,75 @@ impl ShellRuntime {
         cx.global::<Self>().publish_status();
     }
 
+    pub fn toggle_overview(cx: &mut App) {
+        if cx.global::<Self>().overview.is_some() {
+            Self::close_overview(cx);
+        } else {
+            Self::open_or_focus_overview(cx);
+        }
+    }
+
+    pub fn close_overview(cx: &mut App) {
+        let handle = cx.global_mut::<Self>().overview.take();
+        let Some(handle) = handle else { return };
+        let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        Self::restore_prior_focus(cx);
+        cx.global::<Self>().publish_status();
+    }
+
+    pub fn forget_overview(cx: &mut App) {
+        cx.global_mut::<Self>().overview = None;
+        Self::restore_prior_focus(cx);
+        cx.global::<Self>().publish_status();
+    }
+
+    pub fn open_or_focus_overview(cx: &mut App) {
+        Self::capture_prior_focus(cx);
+        Self::close_launcher(cx);
+        Self::close_control_center(cx);
+        let handle = cx.global_mut::<Self>().overview.take();
+        if let Some(handle) = handle
+            && handle
+                .update(cx, |_, window, _| {
+                    window.activate_window();
+                })
+                .is_ok()
+        {
+            cx.global_mut::<Self>().overview = Some(handle);
+            cx.global::<Self>().publish_status();
+            return;
+        }
+
+        let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
+            (display.bounds(), Some(display.id()))
+        } else {
+            (
+                Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
+                None,
+            )
+        };
+        let overview_size = size(px(900.), px(540.));
+        let origin = point(
+            display_bounds.origin.x + (display_bounds.size.width - overview_size.width) / 2.0,
+            display_bounds.origin.y + (display_bounds.size.height - overview_size.height) / 2.0,
+        );
+        let options = overlay_options(
+            "shilpo-overview",
+            "overview",
+            overview_size,
+            origin,
+            display_id,
+        );
+        match cx.open_window(options, crate::overview::WorkspaceOverview::view) {
+            Ok(handle) => cx.global_mut::<Self>().overview = Some(handle),
+            Err(error) => {
+                tracing::warn!(error = %error, "cannot open workspace overview window");
+                Self::restore_prior_focus(cx);
+            }
+        }
+        cx.global::<Self>().publish_status();
+    }
+
     pub fn open_or_focus_control_center(cx: &mut App) {
         Self::capture_prior_focus(cx);
         Self::close_launcher(cx);
@@ -1044,6 +1115,7 @@ impl ShellRuntime {
             ActionInvocation::ToggleLauncher => Self::toggle_launcher(cx),
             ActionInvocation::ToggleControlCenter => Self::toggle_control_center(cx),
             ActionInvocation::ToggleBar => Self::toggle_bar(cx),
+            ActionInvocation::ToggleOverview => Self::toggle_overview(cx),
             ActionInvocation::ReloadConfig => Self::enqueue_worker(cx, IpcRequest::ReloadConfig),
             ActionInvocation::Quit => Self::shutdown(cx),
             ActionInvocation::FocusWorkspace(id) => {
@@ -1159,6 +1231,9 @@ impl ShellRuntime {
                 }
                 IpcRequest::ToggleControlCenter => {
                     let _ = Self::dispatch_action(cx, ActionId::ToggleControlCenter);
+                }
+                IpcRequest::ToggleOverview => {
+                    let _ = Self::dispatch_action(cx, ActionId::ToggleOverview);
                 }
                 IpcRequest::ReloadConfig => {
                     let _ = Self::dispatch_action(cx, ActionId::ReloadConfig);
@@ -1430,5 +1505,13 @@ mod tests {
         let mut query = String::from("firefox");
         query.push_str(" --new-window");
         assert_eq!(query, "firefox --new-window");
+    }
+
+    #[test]
+    fn test_workspace_overview_surface() {
+        let mut overview = crate::overview::WorkspaceOverview::new_offline();
+        assert_eq!(overview.selected_window_id(), Some(101));
+        overview.select_next_window();
+        assert_eq!(overview.selected_window_id(), Some(101));
     }
 }
