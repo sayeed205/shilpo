@@ -36,6 +36,18 @@ pub struct NiriCompositorService {
 
 impl NiriCompositorService {
     /// Connects to Niri IPC socket, queries initial state, and spawns a background event listener thread.
+    /// Creates an offline NiriCompositorService instance for testing and fallback mode.
+    pub fn new_offline() -> Self {
+        Self {
+            workspaces: Arc::new(Mutex::new(Vec::new())),
+            windows: Arc::new(Mutex::new(Vec::new())),
+            active_window_id: Arc::new(Mutex::new(None)),
+            app_id: Arc::new(Mutex::new(None)),
+            active_window_title: Arc::new(Mutex::new(None)),
+            keyboard_layout: Arc::new(Mutex::new("us".into())),
+        }
+    }
+
     pub fn new() -> Result<Self> {
         let workspaces = Arc::new(Mutex::new(Vec::new()));
         let windows = Arc::new(Mutex::new(Vec::new()));

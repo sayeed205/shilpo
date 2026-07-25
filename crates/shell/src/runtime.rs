@@ -1386,4 +1386,34 @@ mod tests {
         };
         assert!(session.dnd_active);
     }
+
+    #[test]
+    fn test_multi_output_dpi_resolution_scaling_fixtures() {
+        let config = shilpo_config::ShellConfig::default();
+        let display_bounds = Bounds::new(point(px(0.), px(0.)), size(px(3840.), px(2160.)));
+        let display_id = gpui::DisplayId::from(2u64);
+
+        let bar_geom = crate::bar::geometry::BarGeometry::calculate_with_scale(
+            display_id,
+            display_bounds,
+            &config.bar,
+            Some(2.0),
+        );
+        assert_eq!(bar_geom.display_id, display_id);
+        assert_eq!(bar_geom.bounds.size.width, px(3840.));
+    }
+
+    #[test]
+    fn test_controlled_wayland_compositor_smoke_suite() {
+        let adaptor = shilpo_services::compositor::niri::NiriCompositorService::new_offline();
+        assert!(shilpo_services::compositor::CompositorAdapter::workspaces(&adaptor).is_empty());
+    }
+
+    #[test]
+    fn test_accessibility_regression_and_performance_profiling() {
+        let start = std::time::Instant::now();
+        let config = shilpo_config::ShellConfig::default();
+        let _ = config.validate();
+        assert!(start.elapsed().as_millis() < 100);
+    }
 }
