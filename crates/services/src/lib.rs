@@ -13,6 +13,7 @@ pub mod power_profile;
 pub mod screen_capture;
 pub mod tray;
 pub mod upower;
+pub mod wallpaper;
 
 pub use applications::{
     AppScanner, Application, parse_uri_list, percent_decode, resolve_handler_for_uri,
@@ -38,6 +39,7 @@ pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
 pub use screen_capture::{RecordMode, ScreenCaptureInfo, ScreenCaptureService, ScreenshotMode};
 pub use tray::{TrayItem, TrayMenuItem, TrayService};
 pub use upower::{BatteryInfo, BatteryService};
+pub use wallpaper::WallpaperService;
 
 /// Returns whether Niri Wayland compositor IPC is supported on this target platform.
 pub fn is_niri_supported() -> bool {
