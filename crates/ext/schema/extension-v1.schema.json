@@ -5,7 +5,7 @@
   "properties": {
     "api_version": {
       "type": "string",
-      "default": "0.1.0"
+      "default": "0.2.0"
     },
     "authors": {
       "type": "array",
@@ -64,7 +64,7 @@
     },
     "min_shilpo_version": {
       "type": "string",
-      "default": "0.1.0"
+      "default": "0.2.0"
     },
     "name": {
       "type": "string"

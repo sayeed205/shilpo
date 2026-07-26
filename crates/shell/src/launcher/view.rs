@@ -269,6 +269,18 @@ impl LauncherView {
 
     fn update_search(&mut self, cx: &mut Context<Self>) {
         let text = self.input_state.read(cx).value().to_string();
+        for descriptor in ShellRuntime::extension_descriptors(
+            cx,
+            crate::extensions::ContributionSurface::Launcher,
+        ) {
+            ShellRuntime::dispatch_extension_input(
+                cx,
+                &descriptor.id,
+                None,
+                "query",
+                Some(text.clone().into()),
+            );
+        }
         let recent_apps = ShellRuntime::recent_apps(cx);
         self.results = search_results(
             &self.scanner,
@@ -392,9 +404,18 @@ impl Focusable for LauncherView {
 }
 
 impl Render for LauncherView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let selected_idx = self.selected_index;
         let query_text = self.input_state.read(cx).value().to_string();
+        let provider_views = ShellRuntime::extension_surface_views(
+            cx,
+            crate::extensions::ContributionSurface::Launcher,
+        )
+        .into_iter()
+        .map(|(id, tree)| {
+            crate::bar::ext_view_adapter::render_ext_view_tree(&id, None, &tree, window, cx)
+        })
+        .collect::<Vec<_>>();
 
         // Render Top Match (First match) prominent card
         let top_match = if let Some(item) = self.results.first() {
@@ -1036,6 +1057,7 @@ impl Render for LauncherView {
                         v_flex()
                             .gap_1p5()
                             .children(other_items)
+                            .children(provider_views)
                             .child(run_cmd_item)
                             .child(search_web_item),
                     ),

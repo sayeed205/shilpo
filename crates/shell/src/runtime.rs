@@ -11,6 +11,7 @@ use crate::{
     bar::{BarView, geometry::BarGeometry},
     control_center::ControlCenterView,
     error::ShellError,
+    extensions::{ContributionDescriptor, ContributionSurface, ExtensionChanges, ShellExtensions},
     launcher::LauncherView,
 };
 
@@ -22,6 +23,13 @@ use shilpo_services::{
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
+
+#[derive(Clone, Debug, PartialEq)]
+struct ExtensionSurfaceSpec {
+    contribution: shilpo_ext::CanonicalId,
+    display_id: DisplayId,
+    bounds: Bounds<Pixels>,
+}
 
 pub struct ServiceHub {
     pub niri: Option<NiriCompositorService>,
@@ -156,6 +164,10 @@ pub struct ShellRuntime {
         Entity<crate::osd::OsdView>,
     )>,
     _osd_generation: u64,
+    extensions: Option<ShellExtensions>,
+    extension_surfaces: HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
+    extension_panel: Option<(WindowHandle<shilpo_ui::Root>, shilpo_ext::CanonicalId)>,
+    extension_output_ids: std::collections::HashSet<DisplayId>,
     actions: ActionRegistry,
     keybindings: crate::actions::KeybindingManager,
     session_state: shilpo_config::ShellSessionState,
@@ -196,6 +208,13 @@ impl ShellRuntime {
             .map(Arc::new);
         let hub = ServiceHub::new(cx.background_executor().clone(), config_path);
         apply_notification_dnd(hub.notification.as_ref(), session_state.dnd_active);
+        let extensions = match ShellExtensions::load_default() {
+            Ok(extensions) => Some(extensions),
+            Err(error) => {
+                tracing::warn!(error = %error, "extension runtime is unavailable");
+                None
+            }
+        };
 
         cx.set_global(Self {
             ipc_server,
@@ -212,6 +231,10 @@ impl ShellRuntime {
             prior_window_id: None,
             osd: None,
             _osd_generation: 0,
+            extensions,
+            extension_surfaces: HashMap::new(),
+            extension_panel: None,
+            extension_output_ids: std::collections::HashSet::new(),
             actions: ActionRegistry::default(),
             keybindings: crate::actions::KeybindingManager::with_defaults(),
             session_state,
@@ -228,23 +251,41 @@ impl ShellRuntime {
             runtime
                 .bars
                 .retain(|_, (handle, _)| handle.window_id() != window_id);
+            runtime
+                .extension_surfaces
+                .retain(|_, (handle, _)| handle.window_id() != window_id);
             if runtime.bars.is_empty() {
                 runtime.bar_state = BarState::Hidden;
             }
-            if runtime
+            let closed_launcher = if runtime
                 .launcher
                 .as_ref()
                 .is_some_and(|handle| handle.window_id() == window_id)
             {
                 runtime.launcher = None;
-            }
-            if runtime
+                true
+            } else {
+                false
+            };
+            let closed_control_center = if runtime
                 .control_center
                 .as_ref()
                 .is_some_and(|handle| handle.window_id() == window_id)
             {
                 runtime.control_center = None;
-            }
+                true
+            } else {
+                false
+            };
+            let closed_extension_panel = if runtime
+                .extension_panel
+                .as_ref()
+                .is_some_and(|(handle, _)| handle.window_id() == window_id)
+            {
+                runtime.extension_panel.take().map(|(_, id)| id)
+            } else {
+                None
+            };
             if runtime
                 .notification
                 .as_ref()
@@ -253,8 +294,44 @@ impl ShellRuntime {
                 runtime.notification = None;
             }
             runtime.publish_status();
+            if closed_launcher {
+                Self::dispatch_surface_lifecycle(
+                    cx,
+                    ContributionSurface::Launcher,
+                    false,
+                    640.,
+                    480.,
+                );
+            }
+            if closed_control_center {
+                Self::dispatch_surface_lifecycle(
+                    cx,
+                    ContributionSurface::ControlCenter,
+                    false,
+                    340.,
+                    540.,
+                );
+            }
+            if let Some(contribution) = closed_extension_panel {
+                let changes = cx
+                    .global_mut::<Self>()
+                    .extensions
+                    .as_mut()
+                    .map(|extensions| {
+                        extensions.dispatch_to(
+                            &contribution.extension_id,
+                            &shilpo_ext::ExtensionEvent::ContributionUnmounted {
+                                contribution_id: contribution.contribution_id.to_string(),
+                                instance_id: None,
+                            },
+                        )
+                    })
+                    .unwrap_or_default();
+                Self::apply_extension_changes(cx, changes);
+            }
         });
         cx.global_mut::<Self>()._window_closed = Some(subscription);
+        Self::sync_extension_actions(cx);
 
         let task = cx.spawn(async move |cx| {
             loop {
@@ -263,11 +340,388 @@ impl ShellRuntime {
                     .await;
                 cx.update(Self::sync_displays);
                 cx.update(Self::drain_service_hub);
+                cx.update(Self::poll_extensions);
                 cx.update(Self::drain_ipc);
             }
         });
         cx.global_mut::<Self>()._ipc_task = task;
         cx.global::<Self>().publish_status();
+    }
+
+    pub fn extension_descriptors(
+        cx: &App,
+        surface: ContributionSurface,
+    ) -> Vec<ContributionDescriptor> {
+        cx.global::<Self>()
+            .extensions
+            .as_ref()
+            .map_or_else(Vec::new, |extensions| extensions.descriptors_for(surface))
+    }
+
+    pub fn extension_surface_views(
+        cx: &mut App,
+        surface: ContributionSurface,
+    ) -> Vec<(shilpo_ext::CanonicalId, shilpo_ext::ViewTree)> {
+        let descriptors = Self::extension_descriptors(cx, surface);
+        descriptors
+            .into_iter()
+            .filter_map(|descriptor| {
+                let tree = Self::extension_view(cx, &descriptor.id)?;
+                Some((descriptor.id, tree))
+            })
+            .collect()
+    }
+
+    pub fn extension_view(
+        cx: &mut App,
+        id: &shilpo_ext::CanonicalId,
+    ) -> Option<shilpo_ext::ViewTree> {
+        cx.global_mut::<Self>()
+            .extensions
+            .as_mut()
+            .and_then(|extensions| extensions.view(id))
+    }
+
+    pub fn extension_asset_path(
+        cx: &App,
+        id: &shilpo_ext::CanonicalId,
+        relative: &str,
+    ) -> Result<PathBuf, String> {
+        cx.global::<Self>()
+            .extensions
+            .as_ref()
+            .ok_or_else(|| "extension runtime is unavailable".to_owned())?
+            .asset_path(id, relative)
+    }
+
+    pub fn dispatch_extension_input(
+        cx: &mut App,
+        contribution: &shilpo_ext::CanonicalId,
+        instance_id: Option<&str>,
+        event_id: impl Into<String>,
+        value: Option<serde_json::Value>,
+    ) {
+        let changes = cx
+            .global_mut::<Self>()
+            .extensions
+            .as_mut()
+            .map(|extensions| extensions.input(contribution, instance_id, event_id, value))
+            .unwrap_or_default();
+        Self::apply_extension_changes(cx, changes);
+    }
+
+    pub fn open_extension_panel(cx: &mut App, contribution: shilpo_ext::CanonicalId) {
+        if let Some((handle, current)) = cx.global_mut::<Self>().extension_panel.take() {
+            if current == contribution
+                && handle
+                    .update(cx, |_, window, _| window.activate_window())
+                    .is_ok()
+            {
+                cx.global_mut::<Self>().extension_panel = Some((handle, current));
+                return;
+            }
+            let changes = cx
+                .global_mut::<Self>()
+                .extensions
+                .as_mut()
+                .map(|extensions| {
+                    extensions.dispatch_to(
+                        &current.extension_id,
+                        &shilpo_ext::ExtensionEvent::ContributionUnmounted {
+                            contribution_id: current.contribution_id.to_string(),
+                            instance_id: None,
+                        },
+                    )
+                })
+                .unwrap_or_default();
+            Self::apply_extension_changes(cx, changes);
+            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        }
+        let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
+            (display.bounds(), Some(display.id()))
+        } else {
+            (
+                Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
+                None,
+            )
+        };
+        let panel_size = size(px(420.), px(600.));
+        let origin = point(
+            display_bounds.origin.x + display_bounds.size.width - panel_size.width - px(16.),
+            display_bounds.origin.y + px(56.),
+        );
+        let options = overlay_options(
+            "shilpo-extension-panel",
+            "extension-panel",
+            panel_size,
+            origin,
+            display_id,
+        );
+        let view_id = contribution.clone();
+        match cx.open_window(options, move |window, cx| {
+            crate::extension_surface::ExtensionSurfaceView::view(view_id, None, window, cx)
+        }) {
+            Ok(handle) => {
+                let changes = cx
+                    .global_mut::<Self>()
+                    .extensions
+                    .as_mut()
+                    .map(|extensions| {
+                        extensions.dispatch_to(
+                            &contribution.extension_id,
+                            &shilpo_ext::ExtensionEvent::ContributionMounted {
+                                contribution_id: contribution.contribution_id.to_string(),
+                                instance_id: None,
+                                width: 420.,
+                                height: 600.,
+                            },
+                        )
+                    })
+                    .unwrap_or_default();
+                cx.global_mut::<Self>().extension_panel = Some((handle, contribution));
+                Self::apply_extension_changes(cx, changes);
+            }
+            Err(error) => tracing::warn!(error = %error, "failed to open extension side panel"),
+        }
+    }
+
+    fn poll_extensions(cx: &mut App) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let changes = cx
+            .global_mut::<Self>()
+            .extensions
+            .as_mut()
+            .map(ShellExtensions::poll_hot_reload)
+            .unwrap_or_default();
+        let catalog_changed = changes.catalog_changed;
+        if catalog_changed {
+            Self::sync_extension_actions(cx);
+        }
+        Self::apply_extension_changes(cx, changes);
+        if catalog_changed {
+            let (launcher_open, control_center_open, panel) = {
+                let runtime = cx.global::<Self>();
+                (
+                    runtime.launcher.is_some(),
+                    runtime.control_center.is_some(),
+                    runtime.extension_panel.as_ref().map(|(_, id)| id.clone()),
+                )
+            };
+            if launcher_open {
+                Self::dispatch_surface_lifecycle(
+                    cx,
+                    ContributionSurface::Launcher,
+                    true,
+                    640.,
+                    480.,
+                );
+            }
+            if control_center_open {
+                Self::dispatch_surface_lifecycle(
+                    cx,
+                    ContributionSurface::ControlCenter,
+                    true,
+                    340.,
+                    540.,
+                );
+            }
+            if let Some(contribution) = panel {
+                let changes = cx
+                    .global_mut::<Self>()
+                    .extensions
+                    .as_mut()
+                    .map(|extensions| {
+                        extensions.dispatch_to(
+                            &contribution.extension_id,
+                            &shilpo_ext::ExtensionEvent::ContributionMounted {
+                                contribution_id: contribution.contribution_id.to_string(),
+                                instance_id: None,
+                                width: 420.,
+                                height: 600.,
+                            },
+                        )
+                    })
+                    .unwrap_or_default();
+                Self::apply_extension_changes(cx, changes);
+            }
+        }
+    }
+
+    fn dispatch_extension_event(cx: &mut App, event: shilpo_ext::ExtensionEvent) {
+        let changes = cx
+            .global_mut::<Self>()
+            .extensions
+            .as_mut()
+            .map(|extensions| extensions.dispatch_all(&event))
+            .unwrap_or_default();
+        Self::apply_extension_changes(cx, changes);
+    }
+
+    fn dispatch_surface_lifecycle(
+        cx: &mut App,
+        surface: ContributionSurface,
+        mounted: bool,
+        width: f32,
+        height: f32,
+    ) {
+        let descriptors = Self::extension_descriptors(cx, surface);
+        for descriptor in descriptors {
+            let event = if mounted {
+                shilpo_ext::ExtensionEvent::ContributionMounted {
+                    contribution_id: descriptor.id.contribution_id.to_string(),
+                    instance_id: None,
+                    width,
+                    height,
+                }
+            } else {
+                shilpo_ext::ExtensionEvent::ContributionUnmounted {
+                    contribution_id: descriptor.id.contribution_id.to_string(),
+                    instance_id: None,
+                }
+            };
+            let changes = cx
+                .global_mut::<Self>()
+                .extensions
+                .as_mut()
+                .map(|extensions| extensions.dispatch_to(&descriptor.id.extension_id, &event))
+                .unwrap_or_default();
+            Self::apply_extension_changes(cx, changes);
+        }
+    }
+
+    fn sync_extension_actions(cx: &mut App) {
+        let desired = Self::extension_descriptors(cx, ContributionSurface::Action);
+        let existing = cx
+            .global::<Self>()
+            .actions
+            .all()
+            .into_iter()
+            .filter_map(|descriptor| descriptor.id.extension_id())
+            .collect::<Vec<_>>();
+        let actions = &mut cx.global_mut::<Self>().actions;
+        for id in existing {
+            actions.unregister_extension(&id);
+        }
+        for descriptor in desired {
+            if let Err(error) =
+                actions.register_extension(descriptor.id, descriptor.name.clone(), descriptor.name)
+            {
+                tracing::warn!(error = %error, "extension action registration failed");
+            }
+        }
+    }
+
+    fn apply_extension_changes(cx: &mut App, changes: ExtensionChanges) {
+        let refresh_views = changes.catalog_changed || !changes.invalidated_views.is_empty();
+        for (extension_id, effect) in changes.effects {
+            match effect {
+                shilpo_ext::HostEffect::InvokeAction { action_id, payload } => {
+                    match action_id.parse::<ActionId>() {
+                        Ok(id) => {
+                            let invocation = match id.extension_id() {
+                                Some(id) => ActionInvocation::Extension { id, payload },
+                                None => id.into(),
+                            };
+                            if let Err(error) = Self::dispatch_invocation(cx, invocation) {
+                                tracing::warn!(
+                                    extension = %extension_id,
+                                    error = %error,
+                                    "extension action effect failed"
+                                );
+                            }
+                        }
+                        Err(error) => tracing::warn!(
+                            extension = %extension_id,
+                            error = %error,
+                            "extension returned an invalid action ID"
+                        ),
+                    }
+                }
+                shilpo_ext::HostEffect::ShowNotification { title, body, icon } => {
+                    let mut notification = shilpo_services::Notification::new(title, body);
+                    notification.app_name = extension_id.to_string();
+                    notification.app_icon = icon;
+                    crate::bar::view::open_notification_toast(cx, notification);
+                }
+                shilpo_ext::HostEffect::SetThemeSource { color } => {
+                    if let Some(argb) = crate::bar::view::parse_hex_color(&color) {
+                        shilpo_ui::Theme::global_mut(cx).set_source_argb(argb);
+                    } else {
+                        tracing::warn!(
+                            extension = %extension_id,
+                            %color,
+                            "extension returned an invalid theme source"
+                        );
+                    }
+                }
+                shilpo_ext::HostEffect::SetWallpaper { path, .. } => {
+                    if let Err(error) =
+                        shilpo_services::WallpaperService::default().set_wallpaper(&path)
+                    {
+                        tracing::warn!(
+                            extension = %extension_id,
+                            error = %error,
+                            "extension wallpaper effect failed"
+                        );
+                    }
+                }
+                shilpo_ext::HostEffect::ClipboardWrite { text } => {
+                    let result = cx
+                        .global::<Self>()
+                        .service_hub
+                        .as_ref()
+                        .map(|hub| hub.clipboard.copy_text(&text));
+                    if let Some(Err(error)) = result {
+                        tracing::warn!(
+                            extension = %extension_id,
+                            error = %error,
+                            "extension clipboard effect failed"
+                        );
+                    }
+                }
+                effect => tracing::debug!(
+                    extension = %extension_id,
+                    ?effect,
+                    "accepted extension effect has no shell service adapter yet"
+                ),
+            }
+        }
+        if refresh_views {
+            let bar_handles = cx
+                .global::<Self>()
+                .bars
+                .values()
+                .map(|(handle, _)| *handle)
+                .collect::<Vec<_>>();
+            for handle in bar_handles {
+                let _ = handle.update(cx, |_, window, _| window.refresh());
+            }
+            let surface_handles = cx
+                .global::<Self>()
+                .extension_surfaces
+                .values()
+                .map(|(handle, _)| *handle)
+                .collect::<Vec<_>>();
+            for handle in surface_handles {
+                let _ = handle.update(cx, |_, window, _| window.refresh());
+            }
+            let overlay_handles = {
+                let runtime = cx.global::<Self>();
+                [
+                    runtime.extension_panel.as_ref().map(|(handle, _)| *handle),
+                    runtime.launcher,
+                    runtime.control_center,
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+            };
+            for handle in overlay_handles {
+                let _ = handle.update(cx, |_, window, _| window.refresh());
+            }
+        }
     }
 
     fn drain_service_hub(cx: &mut App) {
@@ -307,12 +761,48 @@ impl ShellRuntime {
 
         if !updates.is_empty() {
             for upd in &updates {
-                if let crate::bar::service_worker::WorkerUpdate::Config(
-                    crate::bar::service_worker::ConfigUpdate::Loaded(config),
-                ) = upd
-                {
-                    cx.global_mut::<Self>().active_config = (**config).clone();
-                    Self::sync_displays(cx);
+                match upd {
+                    crate::bar::service_worker::WorkerUpdate::Config(
+                        crate::bar::service_worker::ConfigUpdate::Loaded(config),
+                    ) => {
+                        let previous = cx.global::<Self>().active_config.clone();
+                        cx.global_mut::<Self>().active_config = (**config).clone();
+                        if previous.theme.mode != config.theme.mode {
+                            Self::dispatch_extension_event(
+                                cx,
+                                shilpo_ext::ExtensionEvent::ThemeChanged {
+                                    mode: format!("{:?}", config.theme.mode).to_lowercase(),
+                                },
+                            );
+                        }
+                        if previous.theme.accent != config.theme.accent {
+                            Self::dispatch_extension_event(
+                                cx,
+                                shilpo_ext::ExtensionEvent::PaletteGenerated {
+                                    accent: config.theme.accent.clone(),
+                                },
+                            );
+                        }
+                        Self::sync_displays(cx);
+                    }
+                    crate::bar::service_worker::WorkerUpdate::Battery(info) => {
+                        Self::dispatch_extension_event(
+                            cx,
+                            shilpo_ext::ExtensionEvent::PowerChanged {
+                                percentage: info.is_present.then_some(info.percentage as f32),
+                                charging: info.is_charging,
+                            },
+                        );
+                    }
+                    crate::bar::service_worker::WorkerUpdate::Network(info) => {
+                        Self::dispatch_extension_event(
+                            cx,
+                            shilpo_ext::ExtensionEvent::NetworkChanged {
+                                connected: info.available && info.is_connected,
+                            },
+                        );
+                    }
+                    _ => {}
                 }
             }
 
@@ -351,10 +841,26 @@ impl ShellRuntime {
                 display_id: d.id(),
                 bounds: d.bounds(),
                 is_primary: primary_id == Some(d.id()),
-                name: None,
+                name: d.uuid().ok().map(|id| id.to_string()),
                 scale: None,
             })
             .collect();
+        let output_ids = current_outputs
+            .iter()
+            .map(|output| output.display_id)
+            .collect::<std::collections::HashSet<_>>();
+        let outputs_changed = {
+            let runtime = cx.global_mut::<Self>();
+            if runtime.extension_output_ids == output_ids {
+                false
+            } else {
+                runtime.extension_output_ids = output_ids;
+                true
+            }
+        };
+        if outputs_changed {
+            Self::dispatch_extension_event(cx, shilpo_ext::ExtensionEvent::OutputsChanged);
+        }
 
         let (config, current_specs) = {
             let runtime = cx.global::<Self>();
@@ -389,6 +895,134 @@ impl ShellRuntime {
                     }
                 }
                 ReconciliationOp::Retain(_) => {}
+            }
+        }
+        Self::reconcile_extension_surfaces(cx, &current_outputs);
+    }
+
+    fn reconcile_extension_surfaces(cx: &mut App, outputs: &[crate::bar::OutputDescriptor]) {
+        let config = cx.global::<Self>().active_config.clone();
+        let mut instances = Vec::new();
+
+        for (display_id, (_, spec)) in &cx.global::<Self>().bars {
+            for (section, widgets) in [
+                ("start", &spec.config.widgets.start),
+                ("center", &spec.config.widgets.center),
+                ("end", &spec.config.widgets.end),
+            ] {
+                for (index, widget) in widgets.iter().enumerate() {
+                    if let shilpo_config::BarWidget::Extension(contribution) = widget {
+                        instances.push(crate::extensions::ContributionInstance {
+                            id: format!("bar:{display_id:?}:{section}:{index}"),
+                            contribution: contribution.clone(),
+                            output: Some(format!("{display_id:?}")),
+                            width: spec.geometry.bounds.size.width.as_f32(),
+                            height: spec.config.height as f32,
+                            settings: serde_json::json!({}),
+                        });
+                    }
+                }
+            }
+        }
+
+        let mut desired_windows = HashMap::new();
+        for widget in &config.desktop.widgets {
+            let output = if widget.output == "primary" {
+                outputs.iter().find(|output| output.is_primary)
+            } else {
+                outputs.iter().find(|output| {
+                    output.name.as_deref() == Some(widget.output.as_str())
+                        || format!("{:?}", output.display_id) == widget.output
+                })
+            };
+            let Some(output) = output else {
+                continue;
+            };
+            let bounds = Bounds::new(
+                point(
+                    output.bounds.origin.x + px(widget.x as f32),
+                    output.bounds.origin.y + px(widget.y as f32),
+                ),
+                size(px(widget.width as f32), px(widget.height as f32)),
+            );
+            let spec = ExtensionSurfaceSpec {
+                contribution: widget.contribution.0.clone(),
+                display_id: output.display_id,
+                bounds,
+            };
+            desired_windows.insert(widget.instance.clone(), spec);
+            instances.push(crate::extensions::ContributionInstance {
+                id: widget.instance.clone(),
+                contribution: widget.contribution.0.clone(),
+                output: Some(widget.output.clone()),
+                width: widget.width as f32,
+                height: widget.height as f32,
+                settings: widget.settings.clone(),
+            });
+        }
+
+        let changes = cx
+            .global_mut::<Self>()
+            .extensions
+            .as_mut()
+            .map(|extensions| extensions.reconcile_instances(instances))
+            .unwrap_or_default();
+        Self::apply_extension_changes(cx, changes);
+
+        let stale = cx
+            .global::<Self>()
+            .extension_surfaces
+            .iter()
+            .filter(|(id, (_, current))| desired_windows.get(*id) != Some(current))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in stale {
+            if let Some((handle, _)) = cx.global_mut::<Self>().extension_surfaces.remove(&id) {
+                let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+            }
+        }
+
+        for (instance_id, spec) in desired_windows {
+            if cx
+                .global::<Self>()
+                .extension_surfaces
+                .contains_key(&instance_id)
+            {
+                continue;
+            }
+            let options = WindowOptions {
+                titlebar: None,
+                window_bounds: Some(WindowBounds::Windowed(spec.bounds)),
+                display_id: Some(spec.display_id),
+                app_id: Some(format!("shilpo-extension-{instance_id}")),
+                window_background: WindowBackgroundAppearance::Transparent,
+                kind: WindowKind::LayerShell(LayerShellOptions {
+                    namespace: format!("extension-{instance_id}"),
+                    layer: Layer::Bottom,
+                    keyboard_interactivity: KeyboardInteractivity::None,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let contribution = spec.contribution.clone();
+            let view_instance_id = instance_id.clone();
+            match cx.open_window(options, move |window, cx| {
+                crate::extension_surface::ExtensionSurfaceView::view(
+                    contribution,
+                    Some(view_instance_id),
+                    window,
+                    cx,
+                )
+            }) {
+                Ok(handle) => {
+                    cx.global_mut::<Self>()
+                        .extension_surfaces
+                        .insert(instance_id, (handle, spec));
+                }
+                Err(error) => tracing::warn!(
+                    error = %error,
+                    "failed to open extension desktop surface"
+                ),
             }
         }
     }
@@ -444,7 +1078,7 @@ impl ShellRuntime {
                 bar: bar_config,
                 ..Default::default()
             };
-            BarView::view_with_config(window, cx, shell_config)
+            BarView::view_with_config_on_display(window, cx, shell_config, display_id)
         });
 
         let runtime = cx.global_mut::<Self>();
@@ -490,7 +1124,7 @@ impl ShellRuntime {
                 display_id: d.id(),
                 bounds: d.bounds(),
                 is_primary: Some(d.id()) == primary_id,
-                name: None,
+                name: d.uuid().ok().map(|id| id.to_string()),
                 scale: None,
             })
             .collect();
@@ -615,7 +1249,16 @@ impl ShellRuntime {
             display_id,
         );
         match cx.open_window(options, LauncherView::view) {
-            Ok(handle) => cx.global_mut::<Self>().launcher = Some(handle),
+            Ok(handle) => {
+                cx.global_mut::<Self>().launcher = Some(handle);
+                Self::dispatch_surface_lifecycle(
+                    cx,
+                    ContributionSurface::Launcher,
+                    true,
+                    640.,
+                    480.,
+                );
+            }
             Err(error) => {
                 tracing::error!(error = %error, overlay = "launcher", "failed to open overlay window")
             }
@@ -634,6 +1277,7 @@ impl ShellRuntime {
     pub fn close_launcher(cx: &mut App) {
         let handle = cx.global_mut::<Self>().launcher.take();
         let Some(handle) = handle else { return };
+        Self::dispatch_surface_lifecycle(cx, ContributionSurface::Launcher, false, 640., 480.);
         // Registry entry is invalidated above. A close racing with this call can
         // leave handle stale; update_window failure is expected in that case.
         let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
@@ -642,7 +1286,9 @@ impl ShellRuntime {
     }
 
     pub fn forget_launcher(cx: &mut App) {
-        cx.global_mut::<Self>().launcher = None;
+        if cx.global_mut::<Self>().launcher.take().is_some() {
+            Self::dispatch_surface_lifecycle(cx, ContributionSurface::Launcher, false, 640., 480.);
+        }
         Self::restore_prior_focus(cx);
         cx.global::<Self>().publish_status();
     }
@@ -752,7 +1398,16 @@ impl ShellRuntime {
             display_id,
         );
         match cx.open_window(options, ControlCenterView::view) {
-            Ok(handle) => cx.global_mut::<Self>().control_center = Some(handle),
+            Ok(handle) => {
+                cx.global_mut::<Self>().control_center = Some(handle);
+                Self::dispatch_surface_lifecycle(
+                    cx,
+                    ContributionSurface::ControlCenter,
+                    true,
+                    340.,
+                    540.,
+                );
+            }
             Err(error) => {
                 tracing::error!(error = %error, overlay = "control-center", "failed to open overlay window")
             }
@@ -771,6 +1426,7 @@ impl ShellRuntime {
     pub fn close_control_center(cx: &mut App) {
         let handle = cx.global_mut::<Self>().control_center.take();
         let Some(handle) = handle else { return };
+        Self::dispatch_surface_lifecycle(cx, ContributionSurface::ControlCenter, false, 340., 540.);
         // Registry entry is invalidated above. A close racing with this call can
         // leave handle stale; update_window failure is expected in that case.
         let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
@@ -779,7 +1435,15 @@ impl ShellRuntime {
     }
 
     pub fn forget_control_center(cx: &mut App) {
-        cx.global_mut::<Self>().control_center = None;
+        if cx.global_mut::<Self>().control_center.take().is_some() {
+            Self::dispatch_surface_lifecycle(
+                cx,
+                ContributionSurface::ControlCenter,
+                false,
+                340.,
+                540.,
+            );
+        }
         Self::restore_prior_focus(cx);
         cx.global::<Self>().publish_status();
     }
@@ -1330,10 +1994,13 @@ impl ShellRuntime {
                     capture.toggle_recording(true, shilpo_services::RecordMode::Region);
                 }
             }
-            ActionInvocation::Extension { id, .. } => {
-                return Err(ShellError::ActionFailed(format!(
-                    "extension action 'ext:{id}' has no loaded runtime"
-                )));
+            ActionInvocation::Extension { id, payload } => {
+                if cx.global::<Self>().extensions.is_none() {
+                    return Err(ShellError::ActionFailed(format!(
+                        "extension action 'ext:{id}' has no loaded runtime"
+                    )));
+                }
+                Self::dispatch_extension_input(cx, &id, None, "invoke", payload);
             }
         }
         Ok(())
@@ -1388,10 +2055,27 @@ impl ShellRuntime {
         if !cx.has_global::<Self>() {
             return;
         }
-        let (bars, launcher, control_center, notification, _service_hub) = {
+        let stopping = cx
+            .global_mut::<Self>()
+            .extensions
+            .as_mut()
+            .map(|extensions| extensions.dispatch_all(&shilpo_ext::ExtensionEvent::ShellStopping))
+            .unwrap_or_default();
+        Self::apply_extension_changes(cx, stopping);
+        let (
+            bars,
+            extension_surfaces,
+            extension_panel,
+            launcher,
+            control_center,
+            notification,
+            _service_hub,
+        ) = {
             let runtime = cx.global_mut::<Self>();
             (
                 std::mem::take(&mut runtime.bars),
+                std::mem::take(&mut runtime.extension_surfaces),
+                runtime.extension_panel.take(),
                 runtime.launcher.take(),
                 runtime.control_center.take(),
                 runtime.notification.take(),
@@ -1399,6 +2083,12 @@ impl ShellRuntime {
             )
         };
         for (_, (handle, _)) in bars {
+            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        }
+        for (_, (handle, _)) in extension_surfaces {
+            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        }
+        if let Some((handle, _)) = extension_panel {
             let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         }
         if let Some(handle) = launcher {

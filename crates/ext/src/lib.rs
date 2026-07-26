@@ -12,7 +12,10 @@ pub use adapter::{
     RuntimeBudget, RuntimeError, RuntimeFailureKind,
 };
 pub use circuit_breaker::{CircuitBreaker, DiagnosticCode, DiagnosticLevel, ExtensionDiagnostic};
-pub use cli::{ExtensionCli, ExtensionCliResult};
+pub use cli::{
+    DevelopmentRegistration, ExtensionCli, ExtensionCliResult, default_extension_state_dir,
+    development_registrations,
+};
 pub use effects::{HostEffect, WallpaperSource};
 pub use events::{EventKind, ExtensionEvent};
 pub use manifest::{

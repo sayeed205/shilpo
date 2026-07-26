@@ -48,20 +48,38 @@ pub enum ExtensionEvent {
     },
     ContributionMounted {
         contribution_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance_id: Option<String>,
         width: f32,
         height: f32,
     },
     ContributionUnmounted {
         contribution_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance_id: Option<String>,
     },
     ContributionResized {
         contribution_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance_id: Option<String>,
         width: f32,
         height: f32,
     },
+    ContributionSettingsChanged {
+        contribution_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance_id: Option<String>,
+        settings: serde_json::Value,
+    },
     Input {
         contribution_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance_id: Option<String>,
         event_id: String,
+        value: Option<serde_json::Value>,
+    },
+    StateValue {
+        key: String,
         value: Option<serde_json::Value>,
     },
 }
@@ -74,7 +92,9 @@ impl ExtensionEvent {
             | Self::ContributionMounted { .. }
             | Self::ContributionUnmounted { .. }
             | Self::ContributionResized { .. }
-            | Self::Input { .. } => None,
+            | Self::ContributionSettingsChanged { .. }
+            | Self::Input { .. }
+            | Self::StateValue { .. } => None,
             Self::OutputsChanged => Some(EventKind::OutputsChanged),
             Self::ThemeChanged { .. } => Some(EventKind::ThemeChanged),
             Self::PaletteGenerated { .. } => Some(EventKind::PaletteGenerated),

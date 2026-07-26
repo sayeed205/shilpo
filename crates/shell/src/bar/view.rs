@@ -4,16 +4,12 @@ use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Path, PathBuilder, Pixels, Point,
     Render, Styled, Window, div, prelude::*, px,
 };
-use shilpo_config::{BarPosition, BarWidget, BuiltinBarWidget, ShellConfig};
+use shilpo_config::{BarPosition, BarWidget, ShellConfig};
 use shilpo_services::{AudioInfo, BatteryInfo, NetworkInfo, NiriWorkspaceInfo, Notification};
 use shilpo_ui::{ActiveTheme, h_flex, v_flex};
 use std::time::Duration;
 
 use super::geometry::HUG_CORNER_RADIUS;
-use super::widgets::{
-    ClockBatteryCapsule, PerfMediaCapsule, StatusTogglesCapsule, WindowInfoCapsule,
-    WorkspacesWidget,
-};
 
 fn build_hug_corner(
     start: Point<Pixels>,
@@ -68,6 +64,7 @@ pub struct BarView {
     #[allow(dead_code)]
     media_track: String,
     datetime_str: String,
+    extension_instance_prefix: Option<String>,
     last_error: Option<String>,
     last_service_update: std::time::Instant,
 }
@@ -149,6 +146,7 @@ impl BarView {
             active_title: "Shilpo Shell".into(),
             media_track: "KK - Police ke hathiyar".into(),
             datetime_str: "17:53 · Tue, 21/07".into(),
+            extension_instance_prefix: None,
             last_error: None,
             last_service_update: std::time::Instant::now(),
         }
@@ -168,6 +166,19 @@ impl BarView {
         config: ShellConfig,
     ) -> Entity<Self> {
         cx.new(|cx| Self::new_with_config(window, cx, config))
+    }
+
+    pub fn view_with_config_on_display(
+        window: &mut Window,
+        cx: &mut App,
+        config: ShellConfig,
+        display_id: gpui::DisplayId,
+    ) -> Entity<Self> {
+        cx.new(|cx| {
+            let mut view = Self::new_with_config(window, cx, config);
+            view.extension_instance_prefix = Some(format!("bar:{display_id:?}"));
+            view
+        })
     }
 
     pub fn apply_worker_update(&mut self, update: &WorkerUpdate, cx: &mut Context<Self>) {
@@ -239,92 +250,33 @@ impl BarView {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Default)]
-struct RenderedWidgets {
-    win: bool,
-    ws: bool,
-    clock_bat: bool,
-    perf_media: bool,
-    toggles: bool,
-}
-
 impl BarView {
-    #[allow(dead_code)]
     fn build_section(
         &self,
+        section_name: &str,
         widget_names: &[BarWidget],
         side: bool,
         is_floating: bool,
-        rendered: &mut RenderedWidgets,
-        cx: &App,
-    ) -> impl IntoElement {
+        window: &mut Window,
+        cx: &mut App,
+    ) -> gpui::AnyElement {
         let mut elements: Vec<gpui::AnyElement> = Vec::new();
 
-        for name in widget_names {
-            match name {
-                BarWidget::Builtin(BuiltinBarWidget::Launcher | BuiltinBarWidget::ActiveWindow)
-                    if !rendered.win =>
-                {
-                    elements.push(
-                        WindowInfoCapsule::new(
-                            "mod-win",
-                            self.app_id.clone(),
-                            self.active_title.clone(),
-                        )
-                        .on_click(|_, _, cx| ShellRuntime::open_or_focus_launcher(cx))
-                        .into_any_element(),
-                    );
-                    rendered.win = true;
-                }
-                BarWidget::Builtin(BuiltinBarWidget::Workspaces) if !rendered.ws => {
-                    elements.push(
-                        WorkspacesWidget::new("mod-ws", self.workspaces.clone()).into_any_element(),
-                    );
-                    rendered.ws = true;
-                }
-                BarWidget::Builtin(BuiltinBarWidget::Clock | BuiltinBarWidget::Battery)
-                    if !rendered.clock_bat =>
-                {
-                    elements.push(
-                        ClockBatteryCapsule::new(
-                            "mod-clock",
-                            self.datetime_str.clone(),
-                            self.battery.clone(),
-                        )
-                        .into_any_element(),
-                    );
-                    rendered.clock_bat = true;
-                }
-                BarWidget::Builtin(BuiltinBarWidget::Media | BuiltinBarWidget::Sysinfo)
-                    if !rendered.perf_media =>
-                {
-                    elements.push(
-                        PerfMediaCapsule::new("mod-perf", 40, 66, 3, self.media_track.clone())
-                            .into_any_element(),
-                    );
-                    rendered.perf_media = true;
-                }
-                BarWidget::Builtin(
-                    BuiltinBarWidget::Network
-                    | BuiltinBarWidget::Audio
-                    | BuiltinBarWidget::Settings,
-                ) if !rendered.toggles => {
-                    elements.push(
-                        StatusTogglesCapsule::new(
-                            "mod-toggles",
-                            self.audio.clone(),
-                            self.network.clone(),
-                        )
-                        .on_click(|_, _, cx| ShellRuntime::open_or_focus_control_center(cx))
-                        .into_any_element(),
-                    );
-                    rendered.toggles = true;
-                }
-                BarWidget::Extension(_) => {
-                    // Extension contribution widget rendering seam
-                }
-                _ => {}
+        for (index, name) in widget_names.iter().enumerate() {
+            if let BarWidget::Extension(ext_ref) = name
+                && let Some(tree) = ShellRuntime::extension_view(cx, ext_ref)
+            {
+                let instance_id = self
+                    .extension_instance_prefix
+                    .as_ref()
+                    .map(|prefix| format!("{prefix}:{section_name}:{index}"));
+                elements.push(super::ext_view_adapter::render_ext_view_tree(
+                    ext_ref,
+                    instance_id.as_deref(),
+                    &tree,
+                    window,
+                    cx,
+                ));
             }
         }
 
@@ -493,7 +445,7 @@ impl BarView {
 }
 
 impl Render for BarView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use shilpo_config::BarStyle;
 
         let style = self.config.bar.style;
@@ -503,6 +455,11 @@ impl Render for BarView {
         );
         let opacity = self.config.bar.opacity.clamp(0.0, 1.0);
         let bg_color = cx.theme().surface_container_high.opacity(opacity);
+        let widgets = self.config.bar.widgets.clone();
+        let is_floating = style == BarStyle::Float;
+        let start = self.build_section("start", &widgets.start, side, is_floating, window, cx);
+        let center = self.build_section("center", &widgets.center, side, is_floating, window, cx);
+        let end = self.build_section("end", &widgets.end, side, is_floating, window, cx);
 
         let bar_container = div()
             .when(side, |this| {
@@ -518,9 +475,12 @@ impl Render for BarView {
             .flex()
             .items_center()
             .justify_between()
-            .bg(bg_color);
+            .bg(bg_color)
+            .child(start)
+            .child(center)
+            .child(end);
 
-        let styled_bar = match style {
+        match style {
             BarStyle::Hug => {
                 let hug_corners = self.render_hug_corners(
                     self.config.bar.position,
@@ -549,10 +509,7 @@ impl Render for BarView {
                 .shadow_md()
                 .into_any_element(),
             BarStyle::Rect => bar_container.rounded_none().shadow_sm().into_any_element(),
-        };
-
-        // All widgets removed for now per user instruction ("remove all the components from the bar for now and we will tackle widgets one by one", "dont add any widgets in the bar yet").
-        styled_bar
+        }
     }
 }
 

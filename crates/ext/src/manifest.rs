@@ -9,7 +9,7 @@ use std::path::{Component, Path};
 use std::str::FromStr;
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
-pub const SUPPORTED_API_VERSION: &str = "0.1.0";
+pub const SUPPORTED_API_VERSION: &str = "0.2.0";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ManifestError {

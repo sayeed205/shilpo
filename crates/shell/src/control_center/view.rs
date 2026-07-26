@@ -319,7 +319,38 @@ impl Focusable for ControlCenterView {
 }
 
 impl Render for ControlCenterView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let extension_entries = ShellRuntime::extension_surface_views(
+            cx,
+            crate::extensions::ContributionSurface::ControlCenter,
+        )
+        .into_iter()
+        .map(|(id, tree)| {
+            crate::bar::ext_view_adapter::render_ext_view_tree(&id, None, &tree, window, cx)
+        })
+        .collect::<Vec<_>>();
+        let side_panel_entries = ShellRuntime::extension_descriptors(
+            cx,
+            crate::extensions::ContributionSurface::SidePanel,
+        )
+        .into_iter()
+        .map(|descriptor| {
+            let contribution = descriptor.id;
+            h_flex()
+                .id(format!("extension-panel:{contribution}"))
+                .role(Role::Button)
+                .cursor_pointer()
+                .px_3()
+                .py_2()
+                .rounded_xl()
+                .bg(cx.theme().surface_container)
+                .child(descriptor.name)
+                .on_click(move |_, _, cx| {
+                    ShellRuntime::open_extension_panel(cx, contribution.clone());
+                })
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
         let battery = self
             .battery_service
             .as_ref()
@@ -1148,7 +1179,9 @@ impl Render for ControlCenterView {
                                     )
                                 }
                             }),
-                    ),
+                    )
+                    .children(side_panel_entries)
+                    .children(extension_entries),
             )
     }
 }

@@ -147,9 +147,11 @@ The runtime seam has two justified adapters:
 The runtime adapter executes guest functions. It does not decide shell policy. Capability checks, scheduling, and effect
 validation remain in `ExtensionHost`.
 
-The Phase 2 world is versioned as `shilpo:extension@0.1.0` and exports `on-event(string) -> string` and
+The component ABI remains versioned as `shilpo:extension@0.1.0` and exports `on-event(string) -> string` and
 `view(string) -> string`. The strings encode the contract crate's typed events, effects, and view trees as JSON. The
 small ABI avoids duplicating policy or UI types in generated bindings; a later guest SDK will wrap this wire format.
+Phase 3 advances the JSON contract's `api_version` to `0.2.0` for instance-aware lifecycle/input events and host-owned
+state responses without changing those two component exports.
 
 Rust-generated WASI Preview 2 components receive a default-deny WASI context so the Rust component adapter can
 initialize. It has closed stdin, discarded stdout/stderr, no arguments or environment, no preopened directories, and
@@ -257,7 +259,7 @@ A signed registry release entry contains:
 {
   "id": "io.github.alice.world-clock",
   "version": "1.3.0",
-  "api_version": "0.1.0",
+  "api_version": "0.2.0",
   "min_shilpo_version": "0.2.0",
   "channel": "stable",
   "package_url": "https://extensions.shilpo.org/packages/world-clock-1.3.0.shilpo-ext",
@@ -574,9 +576,18 @@ Full shell-surface integration depends on these seams:
 
 ### Phase 3: shell surfaces
 
-- Integrate bar and desktop instances.
-- Add side-panel, control-center, settings, action, and launcher contribution adapters.
-- Add hot reload and multi-output reconciliation.
+- [x] Integrate bar and desktop instances.
+- [x] Add side-panel, control-center, settings, action, and launcher contribution adapters.
+- [x] Add state-preserving hot reload and multi-output reconciliation.
+
+`ShellRuntime` owns the single production `ShellExtensions` lifecycle module. Surface code consumes catalog descriptors
+and validated view trees through that interface; it does not load modules or decide grants. Development registrations
+are scanned for manifest, component, settings-schema, and asset changes. A replacement generation is built completely
+before activation, and a broken edit leaves the last valid runtime and view tree active.
+
+Configured bar placements and desktop widgets become host-owned instances. Their stable instance IDs are included in
+mount, resize, settings, input, and unmount events, allowing multiple placements to share one loaded guest.
+Reconciliation runs after output, configuration, and catalog changes.
 
 ### Phase 4: end-user distribution
 

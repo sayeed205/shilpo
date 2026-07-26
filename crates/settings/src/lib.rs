@@ -3,6 +3,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
+use std::fs;
 
 /// Settings App Navigation Category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -16,6 +17,79 @@ pub enum SettingsCategory {
     Appearance,
     Shortcuts,
     About,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsPageId {
+    Builtin(SettingsCategory),
+    Extension(shilpo_ext::CanonicalId),
+}
+
+#[derive(Debug, Clone)]
+pub struct SettingsPageDescriptor {
+    pub id: SettingsPageId,
+    pub label: String,
+    pub schema: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SettingsPageRegistry {
+    pages: Vec<SettingsPageDescriptor>,
+}
+
+impl SettingsPageRegistry {
+    pub fn discover() -> Self {
+        let mut pages = SettingsCategory::ALL
+            .iter()
+            .map(|category| SettingsPageDescriptor {
+                id: SettingsPageId::Builtin(*category),
+                label: category.label().to_owned(),
+                schema: None,
+            })
+            .collect::<Vec<_>>();
+        pages.extend(discover_extension_settings());
+        Self { pages }
+    }
+
+    pub fn pages(&self) -> &[SettingsPageDescriptor] {
+        &self.pages
+    }
+}
+
+fn discover_extension_settings() -> Vec<SettingsPageDescriptor> {
+    let state = shilpo_ext::default_extension_state_dir();
+    let (registrations, _) = shilpo_ext::development_registrations(&state);
+    let mut pages = Vec::new();
+    for registration in registrations {
+        let Ok(manifest_source) = fs::read_to_string(registration.path.join("extension.toml"))
+        else {
+            continue;
+        };
+        let Ok(manifest) = shilpo_ext::ExtensionManifest::from_toml(&manifest_source) else {
+            continue;
+        };
+        pages.extend(
+            manifest
+                .contributions
+                .settings_pages
+                .into_iter()
+                .map(|page| {
+                    let schema = fs::read_to_string(registration.path.join(&page.schema))
+                        .ok()
+                        .and_then(|source| serde_json::from_str(&source).ok());
+                    SettingsPageDescriptor {
+                        id: SettingsPageId::Extension(shilpo_ext::CanonicalId::new(
+                            manifest.id.clone(),
+                            page.id,
+                        )),
+                        label: page.name,
+                        schema,
+                    }
+                }),
+        );
+    }
+    pages.sort_by(|left, right| left.label.cmp(&right.label));
+    pages
 }
 
 impl SettingsCategory {
@@ -59,7 +133,8 @@ impl SettingsCategory {
 
 /// Standalone Settings Application View.
 pub struct SettingsView {
-    pub active_category: SettingsCategory,
+    pub active_page: SettingsPageId,
+    pub page_registry: SettingsPageRegistry,
     pub active_scale: f32,
     pub selected_font: String,
     pub active_theme_mode: String,
@@ -73,8 +148,10 @@ pub struct SettingsView {
 
 impl SettingsView {
     pub fn new() -> Self {
+        let page_registry = SettingsPageRegistry::discover();
         Self {
-            active_category: SettingsCategory::default(),
+            active_page: SettingsPageId::Builtin(SettingsCategory::default()),
+            page_registry,
             active_scale: 1.0,
             selected_font: "sans-serif".to_string(),
             active_theme_mode: "Dark".to_string(),
@@ -105,7 +182,20 @@ impl Default for SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.active_category;
+        let active = self.active_page.clone();
+        let active_builtin = match active {
+            SettingsPageId::Builtin(category) => Some(category),
+            SettingsPageId::Extension(_) => None,
+        };
+        let active_descriptor = self
+            .page_registry
+            .pages()
+            .iter()
+            .find(|page| page.id == active)
+            .cloned();
+        let active_label = active_descriptor
+            .as_ref()
+            .map_or_else(|| "Settings".to_owned(), |page| page.label.clone());
 
         h_flex()
             .size_full()
@@ -121,16 +211,22 @@ impl Render for SettingsView {
                     .border_r_1()
                     .border_color(cx.theme().outline_variant)
                     .bg(cx.theme().surface_container)
-                    .children(SettingsCategory::ALL.iter().map(|&cat| {
-                        let is_active = active == cat;
+                    .children(self.page_registry.pages().iter().cloned().enumerate().map(
+                        |(index, page)| {
+                            let is_active = active == page.id;
                         let (bg, fg) = if is_active {
                             (cx.theme().primary_container, cx.theme().on_primary_container)
                         } else {
                             (cx.theme().surface_container, cx.theme().on_surface_variant)
                         };
+                            let icon = match &page.id {
+                                SettingsPageId::Builtin(category) => category.icon(),
+                                SettingsPageId::Extension(_) => IconName::SquareTerminal,
+                            };
+                            let selected_page = page.id.clone();
 
                         h_flex()
-                            .id(("settings-cat", cat as usize))
+                            .id(("settings-page", index))
                             .role(Role::Button)
                             .px_3()
                             .py_2()
@@ -141,11 +237,11 @@ impl Render for SettingsView {
                             .items_center()
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.active_category = cat;
+                                this.active_page = selected_page.clone();
                                 cx.notify();
                             }))
-                            .child(Icon::new(cat.icon()).size(px(16.)))
-                            .child(div().text_xs().font_medium().child(cat.label()))
+                            .child(Icon::new(icon).size(px(16.)))
+                            .child(div().text_xs().font_medium().child(page.label))
                     })),
             )
             // Main Content Area
@@ -160,7 +256,7 @@ impl Render for SettingsView {
                             .text_lg()
                             .font_bold()
                             .text_color(cx.theme().on_surface)
-                            .child(active.label()),
+                            .child(active_label.clone()),
                     )
                     .child(
                         div()
@@ -168,10 +264,10 @@ impl Render for SettingsView {
                             .text_color(cx.theme().on_surface_variant)
                             .child(format!(
                                 "Dedicated OS Control Panel for {}. Configure system parameters, appearance, and preferences.",
-                                active.label()
+                                active_label
                             )),
                     )
-                    .when(active == SettingsCategory::Display, |this| {
+                    .when(active_builtin == Some(SettingsCategory::Display), |this| {
                         let active_scale = self.active_scale;
                         this.child(
                             v_flex()
@@ -205,7 +301,7 @@ impl Render for SettingsView {
                                 )),
                         )
                     })
-                    .when(active == SettingsCategory::Appearance, |this| {
+                    .when(active_builtin == Some(SettingsCategory::Appearance), |this| {
                         let fonts = shilpo_ui::FontFamilyCache::global(cx).list_font_families(cx);
                         let sample_fonts = if fonts.is_empty() {
                             vec!["sans-serif".into(), "Inter".into(), "Roboto".into(), "Fira Code".into()]
@@ -464,7 +560,30 @@ impl Render for SettingsView {
                                         )),
                                 ),
                         )
-                    }),
+                    })
+                    .when_some(
+                        active_descriptor.and_then(|page| page.schema),
+                        |this, schema| {
+                            let fields = schema
+                                .get("properties")
+                                .and_then(serde_json::Value::as_object)
+                                .map(|properties| properties.keys().cloned().collect::<Vec<_>>())
+                                .unwrap_or_default();
+                            this.child(
+                                v_flex()
+                                    .gap_2()
+                                    .child(div().text_xs().font_bold().child("Extension settings"))
+                                    .children(fields.into_iter().map(|field| {
+                                        div()
+                                            .px_3()
+                                            .py_2()
+                                            .rounded_xl()
+                                            .bg(cx.theme().surface_container)
+                                            .child(field)
+                                    })),
+                            )
+                        },
+                    ),
             )
     }
 }

@@ -38,11 +38,11 @@ impl ExtensionCliResult {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-struct DevRegistration {
-    id: ExtensionId,
-    path: PathBuf,
-    generation: u64,
-    updated_at_unix_seconds: u64,
+pub struct DevelopmentRegistration {
+    pub id: ExtensionId,
+    pub path: PathBuf,
+    pub generation: u64,
+    pub updated_at_unix_seconds: u64,
 }
 
 struct CheckedExtension {
@@ -159,7 +159,7 @@ impl ExtensionCli {
                 );
             }
         };
-        let registration = DevRegistration {
+        let registration = DevelopmentRegistration {
             id: id.clone(),
             path,
             generation: 1,
@@ -264,21 +264,11 @@ impl ExtensionCli {
     }
 
     pub fn list_dev(state_dir: &Path) -> Vec<ExtensionCliResult> {
-        let directory = state_dir.join("dev");
-        let Ok(entries) = fs::read_dir(directory) else {
-            return Vec::new();
-        };
-        let mut results = Vec::new();
-        for entry in entries.flatten() {
-            let Ok(source) = fs::read_to_string(entry.path()) else {
-                continue;
-            };
-            let Ok(registration) = toml::from_str::<DevRegistration>(&source) else {
-                continue;
-            };
-            results.push(Self::check(&registration.path));
-        }
-        results
+        development_registrations(state_dir)
+            .0
+            .into_iter()
+            .map(|registration| Self::check(&registration.path))
+            .collect()
     }
 
     pub fn list(dev_paths: &[PathBuf]) -> Vec<ExtensionCliResult> {
@@ -291,7 +281,7 @@ pub fn run_cli(args: &[String]) -> i32 {
         print_usage();
         return 2;
     };
-    let state_dir = default_state_dir();
+    let state_dir = default_extension_state_dir();
     let result = match command {
         "check" => ExtensionCli::check(Path::new(args.get(1).map_or(".", String::as_str))),
         "pack" => {
@@ -678,7 +668,10 @@ fn file_size(path: &Path, diagnostics: &mut Vec<String>) -> u64 {
     }
 }
 
-fn write_registration(state_dir: &Path, registration: &DevRegistration) -> Result<(), String> {
+fn write_registration(
+    state_dir: &Path,
+    registration: &DevelopmentRegistration,
+) -> Result<(), String> {
     let directory = state_dir.join("dev");
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     let path = registration_path(state_dir, &registration.id);
@@ -688,7 +681,10 @@ fn write_registration(state_dir: &Path, registration: &DevRegistration) -> Resul
     fs::rename(&temporary, &path).map_err(|error| error.to_string())
 }
 
-fn read_registration(state_dir: &Path, id: &ExtensionId) -> Result<DevRegistration, String> {
+fn read_registration(
+    state_dir: &Path,
+    id: &ExtensionId,
+) -> Result<DevelopmentRegistration, String> {
     let path = registration_path(state_dir, id);
     let source = fs::read_to_string(&path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
@@ -743,7 +739,7 @@ fn follow_log(id: &ExtensionId, state_dir: &Path) {
     }
 }
 
-fn default_state_dir() -> PathBuf {
+pub fn default_extension_state_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("XDG_STATE_HOME") {
         return PathBuf::from(path).join("shilpo/extensions");
     }
@@ -751,6 +747,33 @@ fn default_state_dir() -> PathBuf {
         || PathBuf::from(".local/state/shilpo/extensions"),
         |home| PathBuf::from(home).join(".local/state/shilpo/extensions"),
     )
+}
+
+pub fn development_registrations(state_dir: &Path) -> (Vec<DevelopmentRegistration>, Vec<String>) {
+    let directory = state_dir.join("dev");
+    let Ok(entries) = fs::read_dir(&directory) else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut registrations = Vec::new();
+    let mut diagnostics = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+            continue;
+        }
+        match fs::read_to_string(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|source| toml::from_str(&source).map_err(|error| error.to_string()))
+        {
+            Ok(registration) => registrations.push(registration),
+            Err(error) => diagnostics.push(format!(
+                "ignored invalid development registration {}: {error}",
+                path.display()
+            )),
+        }
+    }
+    registrations.sort_by(|left: &DevelopmentRegistration, right| left.id.cmp(&right.id));
+    (registrations, diagnostics)
 }
 
 fn parse_id(value: Option<&String>) -> Option<ExtensionId> {

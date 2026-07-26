@@ -252,7 +252,7 @@ fn validate_node(
             validate_style(text.style.as_ref())?;
         }
         ViewNode::Icon(icon) => {
-            validate_text(&icon.name)?;
+            validate_icon_name(&icon.name)?;
             validate_positive("icon size", icon.size)?;
             validate_style(icon.style.as_ref())?;
         }
@@ -268,7 +268,7 @@ fn validate_node(
             validate_style(button.style.as_ref())?;
         }
         ViewNode::IconButton(button) => {
-            validate_text(&button.icon_name)?;
+            validate_icon_name(&button.icon_name)?;
             validate_event_id(&button.event_id)?;
             validate_style(button.style.as_ref())?;
         }
@@ -362,6 +362,18 @@ fn validate_event_id(value: &str) -> Result<(), ViewValidationError> {
             .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')))
     {
         return invalid("event ID has an invalid format");
+    }
+    Ok(())
+}
+
+fn validate_icon_name(value: &str) -> Result<(), ViewValidationError> {
+    if value.is_empty()
+        || value.len() > 64
+        || value.bytes().any(|byte| {
+            !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_'))
+        })
+    {
+        return invalid("icon name has an invalid format");
     }
     Ok(())
 }

@@ -88,7 +88,7 @@ id = "io.github.alice.world-clock"
 name = "World Clock"
 version = "1.0.0"
 schema_version = 1
-api_version = "0.1.0"
+api_version = "0.2.0"
 min_shilpo_version = "0.1.0"
 authors = ["Alice <alice@example.com>"]
 description = "Shows local time for selected cities."
@@ -318,8 +318,10 @@ shilpo ext reload io.github.alice.world-clock
 shilpo ext logs io.github.alice.world-clock --follow
 ```
 
-Rebuild the component, then run `reload` to validate it and advance the persisted generation. Automatic file watching,
-live contribution replacement, stopping overrides, and state-preserving hot reload are Phase 3 shell-integration work.
+Rebuild the component, then run `reload` to validate it and advance the persisted generation. A running shell also
+detects changes to the registered manifest, component, settings schema, and assets. It constructs and validates a
+replacement generation before swapping, preserves host-owned extension state and contribution instances, and keeps the
+last valid runtime and view visible when a development edit is broken.
 
 ## Placing contributions
 

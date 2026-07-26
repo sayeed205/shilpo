@@ -17,6 +17,8 @@ pub struct ShellConfig {
     pub theme: ThemeConfig,
     pub bar: BarConfig,
     #[serde(default)]
+    pub desktop: DesktopConfig,
+    #[serde(default)]
     pub outputs: HashMap<String, OutputConfig>,
     #[serde(default)]
     pub clock_format: Option<String>,
@@ -26,6 +28,104 @@ pub struct ShellConfig {
     pub locale: Option<String>,
     #[serde(default)]
     pub startup: StartupConfig,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopConfig {
+    #[serde(default)]
+    pub widgets: Vec<DesktopWidgetConfig>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopWidgetConfig {
+    pub instance: String,
+    pub contribution: ExtensionContributionRef,
+    #[serde(default = "default_primary_output")]
+    pub output: String,
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default = "default_settings_value")]
+    pub settings: serde_json::Value,
+}
+
+fn default_primary_output() -> String {
+    "primary".into()
+}
+
+fn default_settings_value() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ExtensionContributionRef(pub CanonicalId);
+
+impl fmt::Display for ExtensionContributionRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ext:{}", self.0)
+    }
+}
+
+impl FromStr for ExtensionContributionRef {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value
+            .strip_prefix("ext:")
+            .ok_or_else(|| {
+                format!(
+                    "invalid extension contribution '{value}': expected 'ext:<extension>/<contribution>'"
+                )
+            })?
+            .parse()
+            .map(Self)
+            .map_err(|error: shilpo_ext::ManifestError| error.to_string())
+    }
+}
+
+impl Serialize for ExtensionContributionRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for ExtensionContributionRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(de::Error::custom)
+    }
+}
+
+impl JsonSchema for ExtensionContributionRef {
+    fn schema_name() -> Cow<'static, str> {
+        "ExtensionContributionRef".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = generator.subschema_for::<String>();
+        if let Some(object) = schema.as_object_mut() {
+            object.insert(
+                "pattern".into(),
+                serde_json::Value::String(
+                    r"^ext:[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*$"
+                        .into(),
+                ),
+            );
+        }
+        schema
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -317,6 +417,7 @@ impl Default for ShellConfig {
             version: 1,
             theme: ThemeConfig::default(),
             bar: BarConfig::default(),
+            desktop: DesktopConfig::default(),
             outputs: HashMap::new(),
             clock_format: None,
             temperature_unit: None,
@@ -569,6 +670,33 @@ impl ShellConfig {
         for output_name in self.outputs.keys() {
             if let Some(resolved_bar) = self.bar_for_output(Some(output_name), false) {
                 resolved_bar.validate(&format!("outputs.\"{output_name}\""), &mut d);
+            }
+        }
+        let mut desktop_instances = std::collections::HashSet::new();
+        for (index, widget) in self.desktop.widgets.iter().enumerate() {
+            let prefix = format!("desktop.widgets[{index}]");
+            if widget.instance.trim().is_empty() {
+                d.push(ConfigDiagnostic::new(
+                    format!("{prefix}.instance"),
+                    "must not be empty",
+                ));
+            } else if !desktop_instances.insert(widget.instance.as_str()) {
+                d.push(ConfigDiagnostic::new(
+                    format!("{prefix}.instance"),
+                    "must be unique",
+                ));
+            }
+            if widget.output.trim().is_empty() {
+                d.push(ConfigDiagnostic::new(
+                    format!("{prefix}.output"),
+                    "must not be empty",
+                ));
+            }
+            if widget.width == 0 || widget.height == 0 {
+                d.push(ConfigDiagnostic::new(
+                    prefix,
+                    "width and height must be greater than zero",
+                ));
             }
         }
 
@@ -1193,6 +1321,37 @@ mod tests {
             serde_json::to_string(&BarWidget::Builtin(BuiltinBarWidget::Clock)).unwrap(),
             "\"builtin:clock\""
         );
+    }
+    #[test]
+    fn desktop_extension_instances_are_namespaced_and_unique() {
+        let contribution = "ext:io.github.alice.world-clock/desktop"
+            .parse::<ExtensionContributionRef>()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_string(&contribution).unwrap(),
+            "\"ext:io.github.alice.world-clock/desktop\""
+        );
+        assert!(
+            "io.github.alice.world-clock/desktop"
+                .parse::<ExtensionContributionRef>()
+                .is_err()
+        );
+
+        let mut config = ShellConfig::default();
+        let widget = DesktopWidgetConfig {
+            instance: "home-clock".into(),
+            contribution,
+            output: "primary".into(),
+            x: 32,
+            y: 32,
+            width: 320,
+            height: 180,
+            settings: serde_json::json!({}),
+        };
+        config.desktop.widgets.push(widget.clone());
+        assert!(config.validate().is_ok());
+        config.desktop.widgets.push(widget);
+        assert!(config.validate().is_err());
     }
     #[test]
     fn schema_fixture_matches_generated_schema() {

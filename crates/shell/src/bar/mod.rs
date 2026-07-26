@@ -1,3 +1,4 @@
+pub mod ext_view_adapter;
 pub mod geometry;
 pub mod reconciliation;
 pub mod service_worker;

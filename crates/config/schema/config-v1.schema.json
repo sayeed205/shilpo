@@ -13,6 +13,12 @@
       ],
       "default": null
     },
+    "desktop": {
+      "$ref": "#/$defs/DesktopConfig",
+      "default": {
+        "widgets": []
+      }
+    },
     "locale": {
       "type": [
         "string",
@@ -182,6 +188,68 @@
         "center",
         "end"
       ]
+    },
+    "DesktopConfig": {
+      "type": "object",
+      "properties": {
+        "widgets": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DesktopWidgetConfig"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "DesktopWidgetConfig": {
+      "type": "object",
+      "properties": {
+        "contribution": {
+          "$ref": "#/$defs/ExtensionContributionRef"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "instance": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string",
+          "default": "primary"
+        },
+        "settings": {
+          "default": {}
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "x": {
+          "type": "integer",
+          "format": "int32",
+          "default": 0
+        },
+        "y": {
+          "type": "integer",
+          "format": "int32",
+          "default": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "instance",
+        "contribution",
+        "width",
+        "height"
+      ]
+    },
+    "ExtensionContributionRef": {
+      "type": "string",
+      "pattern": "^ext:[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*$"
     },
     "OutputConfig": {
       "type": "object",
