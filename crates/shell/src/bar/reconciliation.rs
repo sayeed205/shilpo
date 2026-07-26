@@ -242,7 +242,8 @@ mod tests {
             name: Some("DP-1".into()),
             scale: Some(2.0),
         }];
-        let config = ShellConfig::default();
+        let mut config = ShellConfig::default();
+        config.bar.style = shilpo_config::BarStyle::Float;
         let current_bars = HashMap::new();
 
         let ops = reconcile_output_bars(&outputs, &config, &current_bars);

@@ -83,7 +83,7 @@ pub struct ThemeConfig {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "PascalCase")]
 pub enum ThemeMode {
     #[default]
     Dark,
@@ -121,7 +121,7 @@ pub struct BarWidgets {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "PascalCase")]
 pub enum BarPosition {
     #[default]
     Top,
@@ -131,15 +131,16 @@ pub enum BarPosition {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "PascalCase")]
 pub enum BarStyle {
     #[default]
-    FloatingCapsule,
-    FullEdge,
+    Hug,
+    Float,
+    Rect,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "PascalCase")]
 pub enum BarWidget {
     Launcher,
     Workspaces,
@@ -185,7 +186,7 @@ impl Default for BarConfig {
     fn default() -> Self {
         Self {
             position: BarPosition::Top,
-            style: BarStyle::FloatingCapsule,
+            style: BarStyle::Hug,
             height: 48,
             padding: 8,
             margin: BarMargin {
@@ -1045,14 +1046,14 @@ mod tests {
         let toml_text = r##"
 version = 1
 [theme]
-mode = "dark"
+mode = "Dark"
 accent = "#6750A4"
 font_family = "sans-serif"
 corner_radius_scale = 1.0
 
 [bar]
-position = "top"
-style = "floating-capsule"
+position = "Top"
+style = "Float"
 height = 48
 padding = 8
 widget_spacing = 6
@@ -1060,13 +1061,13 @@ widget_spacing = 6
 horizontal = 16
 vertical = 6
 [bar.widgets]
-start = ["launcher"]
-center = ["clock"]
-end = ["settings"]
+start = ["Launcher"]
+center = ["Clock"]
+end = ["Settings"]
 
 [outputs."DP-1"]
-position = "bottom"
-style = "full-edge"
+position = "Bottom"
+style = "Rect"
 
 [outputs."HDMI-A-1"]
 enabled = false
@@ -1077,7 +1078,7 @@ enabled = false
 
         let dp1_bar = config.bar_for_output(Some("DP-1"), false).unwrap();
         assert_eq!(dp1_bar.position, BarPosition::Bottom);
-        assert_eq!(dp1_bar.style, BarStyle::FullEdge);
+        assert_eq!(dp1_bar.style, BarStyle::Rect);
 
         assert!(config.bar_for_output(Some("HDMI-A-1"), false).is_none());
     }
@@ -1094,14 +1095,14 @@ enabled = false
         let toml_text = r##"
 version = 1
 [theme]
-mode = "dark"
+mode = "Dark"
 accent = "#6750A4"
 font_family = "sans-serif"
 corner_radius_scale = 1.0
 
 [bar]
-position = "top"
-style = "floating-capsule"
+position = "Top"
+style = "Float"
 height = 48
 padding = 8
 widget_spacing = 6
@@ -1109,9 +1110,9 @@ widget_spacing = 6
 horizontal = 16
 vertical = 6
 [bar.widgets]
-start = ["launcher"]
-center = ["clock"]
-end = ["settings"]
+start = ["Launcher"]
+center = ["Clock"]
+end = ["Settings"]
 
 [outputs."DP-1"]
 margin = { horizontal = 600, vertical = 6 }

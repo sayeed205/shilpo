@@ -1,18 +1,34 @@
 use crate::bar::service_worker::{self, ConfigUpdate, WorkerCommand, WorkerUpdate};
 use crate::runtime::ShellRuntime;
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div,
-    prelude::*, px,
+    App, AppContext, Context, Entity, IntoElement, ParentElement, Path, PathBuilder, Pixels, Point,
+    Render, Styled, Window, div, prelude::*, px,
 };
 use shilpo_config::{BarPosition, BarWidget, ShellConfig};
 use shilpo_services::{AudioInfo, BatteryInfo, NetworkInfo, NiriWorkspaceInfo, Notification};
 use shilpo_ui::{ActiveTheme, h_flex, v_flex};
 use std::time::Duration;
 
+use super::geometry::HUG_CORNER_RADIUS;
 use super::widgets::{
     ClockBatteryCapsule, PerfMediaCapsule, StatusTogglesCapsule, WindowInfoCapsule,
     WorkspacesWidget,
 };
+
+fn build_hug_corner(
+    start: Point<Pixels>,
+    edge_end: Point<Pixels>,
+    arc_end: Point<Pixels>,
+    control_a: Point<Pixels>,
+    control_b: Point<Pixels>,
+) -> Option<Path<Pixels>> {
+    let mut builder = PathBuilder::fill();
+    builder.move_to(start);
+    builder.line_to(edge_end);
+    builder.cubic_bezier_to(arc_end, control_a, control_b);
+    builder.close();
+    builder.build().ok()
+}
 
 pub fn parse_hex_color(hex: &str) -> Option<u32> {
     let clean = hex.trim_start_matches('#');
@@ -49,6 +65,7 @@ pub struct BarView {
     network: NetworkInfo,
     app_id: String,
     active_title: String,
+    #[allow(dead_code)]
     media_track: String,
     datetime_str: String,
     last_error: Option<String>,
@@ -222,6 +239,7 @@ impl BarView {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Default)]
 struct RenderedWidgets {
     win: bool,
@@ -232,6 +250,7 @@ struct RenderedWidgets {
 }
 
 impl BarView {
+    #[allow(dead_code)]
     fn build_section(
         &self,
         widget_names: &[BarWidget],
@@ -323,19 +342,158 @@ impl BarView {
             section.into_any_element()
         }
     }
+
+    fn render_hug_corners(
+        &self,
+        position: BarPosition,
+        radius: gpui::Pixels,
+        bg_color: gpui::Hsla,
+    ) -> impl IntoElement {
+        use gpui::{canvas, point};
+
+        let bar_height = px(self.config.bar.height as f32);
+
+        canvas(
+            move |_, _, _| {},
+            move |bounds, _, window, _| {
+                let r = radius.as_f32();
+                let k = r * 0.552_284_8;
+
+                match position {
+                    BarPosition::Top => {
+                        let y0 = bounds.origin.y.as_f32() + bar_height.as_f32();
+
+                        // Left inverse corner (below bar at x=0, y=bar_height)
+                        // Filled shape: (0, y0) -> (0, y0 + r) -> arc centered at (r, y0 + r) to (r, y0) -> (0, y0)
+                        let x0 = bounds.origin.x.as_f32();
+                        if let Some(path) = build_hug_corner(
+                            point(px(x0), px(y0)),
+                            point(px(x0), px(y0 + r)),
+                            point(px(x0 + r), px(y0)),
+                            point(px(x0), px(y0 + r - k)),
+                            point(px(x0 + r - k), px(y0)),
+                        ) {
+                            window.paint_path(path, bg_color);
+                        }
+
+                        // Right inverse corner (below bar at x=width, y=bar_height)
+                        // Filled shape: (width, y0) -> (width, y0 + r) -> arc centered at (width - r, y0 + r) to (width - r, y0) -> (width, y0)
+                        let x1 = bounds.origin.x.as_f32() + bounds.size.width.as_f32();
+                        if let Some(path) = build_hug_corner(
+                            point(px(x1), px(y0)),
+                            point(px(x1), px(y0 + r)),
+                            point(px(x1 - r), px(y0)),
+                            point(px(x1), px(y0 + r - k)),
+                            point(px(x1 - r + k), px(y0)),
+                        ) {
+                            window.paint_path(path, bg_color);
+                        }
+                    }
+                    BarPosition::Bottom => {
+                        let y0 = bounds.origin.y.as_f32() + bounds.size.height.as_f32()
+                            - bar_height.as_f32();
+
+                        // Left inverse corner (above bar at x=0, y=y0)
+                        let x0 = bounds.origin.x.as_f32();
+                        if let Some(path) = build_hug_corner(
+                            point(px(x0), px(y0)),
+                            point(px(x0), px(y0 - r)),
+                            point(px(x0 + r), px(y0)),
+                            point(px(x0), px(y0 - r + k)),
+                            point(px(x0 + r - k), px(y0)),
+                        ) {
+                            window.paint_path(path, bg_color);
+                        }
+
+                        // Right inverse corner (above bar at x=width, y=y0)
+                        let x1 = bounds.origin.x.as_f32() + bounds.size.width.as_f32();
+                        if let Some(path) = build_hug_corner(
+                            point(px(x1), px(y0)),
+                            point(px(x1), px(y0 - r)),
+                            point(px(x1 - r), px(y0)),
+                            point(px(x1), px(y0 - r + k)),
+                            point(px(x1 - r + k), px(y0)),
+                        ) {
+                            window.paint_path(path, bg_color);
+                        }
+                    }
+                    BarPosition::Left => {
+                        let x0 = bounds.origin.x.as_f32() + bar_height.as_f32();
+                        let y0 = bounds.origin.y.as_f32();
+                        let y1 = bounds.origin.y.as_f32() + bounds.size.height.as_f32();
+
+                        // Top-right inverse corner (right of bar at x0, y0)
+                        if let Some(path) = build_hug_corner(
+                            point(px(x0), px(y0)),
+                            point(px(x0 + r), px(y0)),
+                            point(px(x0), px(y0 + r)),
+                            point(px(x0 + r - k), px(y0)),
+                            point(px(x0), px(y0 + r - k)),
+                        ) {
+                            window.paint_path(path, bg_color);
+                        }
+
+                        // Bottom-right inverse corner (right of bar at x0, y1)
+                        if let Some(path) = build_hug_corner(
+                            point(px(x0), px(y1)),
+                            point(px(x0 + r), px(y1)),
+                            point(px(x0), px(y1 - r)),
+                            point(px(x0 + r - k), px(y1)),
+                            point(px(x0), px(y1 - r + k)),
+                        ) {
+                            window.paint_path(path, bg_color);
+                        }
+                    }
+                    BarPosition::Right => {
+                        let x0 = bounds.origin.x.as_f32() + bounds.size.width.as_f32()
+                            - bar_height.as_f32();
+                        let y0 = bounds.origin.y.as_f32();
+                        let y1 = bounds.origin.y.as_f32() + bounds.size.height.as_f32();
+
+                        // Top-left inverse corner (left of bar at x0, y0)
+                        if let Some(path) = build_hug_corner(
+                            point(px(x0), px(y0)),
+                            point(px(x0 - r), px(y0)),
+                            point(px(x0), px(y0 + r)),
+                            point(px(x0 - r + k), px(y0)),
+                            point(px(x0), px(y0 + r - k)),
+                        ) {
+                            window.paint_path(path, bg_color);
+                        }
+
+                        // Bottom-left inverse corner (left of bar at x0, y1)
+                        if let Some(path) = build_hug_corner(
+                            point(px(x0), px(y1)),
+                            point(px(x0 - r), px(y1)),
+                            point(px(x0), px(y1 - r)),
+                            point(px(x0 - r + k), px(y1)),
+                            point(px(x0), px(y1 - r + k)),
+                        ) {
+                            window.paint_path(path, bg_color);
+                        }
+                    }
+                }
+            },
+        )
+        .size_full()
+        .absolute()
+        .inset_0()
+    }
 }
 
 impl Render for BarView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_floating = self.config.bar.style == shilpo_config::BarStyle::FloatingCapsule;
+        use shilpo_config::BarStyle;
+
+        let style = self.config.bar.style;
         let side = matches!(
             self.config.bar.position,
             BarPosition::Left | BarPosition::Right
         );
         let bg_color = cx.theme().surface_container_high.opacity(0.92);
-        let mut rendered = RenderedWidgets::default();
+        let border_color = cx.theme().outline_variant.opacity(0.3);
 
-        div()
+        let bar_container = div()
             .when(side, |this| {
                 this.w(px(self.config.bar.height as f32))
                     .h_full()
@@ -349,54 +507,56 @@ impl Render for BarView {
             .flex()
             .items_center()
             .justify_between()
-            .when(side, |this| this.py(px(self.config.bar.padding as f32)))
-            .when(!side, |this| this.px(px(self.config.bar.padding as f32)))
-            .when(is_floating, |this| {
-                this.px(px(self.config.bar.margin.horizontal as f32))
-                    .py(px(self.config.bar.margin.vertical as f32))
-            })
-            .when(!is_floating, |this| {
-                this.bg(bg_color)
-                    .when(
-                        matches!(self.config.bar.position, BarPosition::Top),
-                        |this| this.border_b_1(),
-                    )
-                    .when(
-                        matches!(self.config.bar.position, BarPosition::Bottom),
-                        |this| this.border_t_1(),
-                    )
-                    .when(
-                        matches!(self.config.bar.position, BarPosition::Left),
-                        |this| this.border_r_1(),
-                    )
-                    .when(
-                        matches!(self.config.bar.position, BarPosition::Right),
-                        |this| this.border_l_1(),
-                    )
-                    .border_color(cx.theme().outline_variant.opacity(0.3))
-                    .shadow_sm()
-            })
-            .child(self.build_section(
-                &self.config.bar.widgets.start,
-                side,
-                is_floating,
-                &mut rendered,
-                cx,
-            ))
-            .child(self.build_section(
-                &self.config.bar.widgets.center,
-                side,
-                is_floating,
-                &mut rendered,
-                cx,
-            ))
-            .child(self.build_section(
-                &self.config.bar.widgets.end,
-                side,
-                is_floating,
-                &mut rendered,
-                cx,
-            ))
+            .bg(bg_color)
+            .border_color(border_color);
+
+        let styled_bar = match style {
+            BarStyle::Hug => {
+                let hug_corners = self.render_hug_corners(
+                    self.config.bar.position,
+                    px(HUG_CORNER_RADIUS),
+                    bg_color,
+                );
+                let main_bar = bar_container;
+
+                div()
+                    .relative()
+                    .size_full()
+                    .child(main_bar)
+                    .child(hug_corners)
+                    .into_any_element()
+            }
+            BarStyle::Float => bar_container
+                .px(px(self.config.bar.margin.horizontal as f32))
+                .py(px(self.config.bar.margin.vertical as f32))
+                .rounded_2xl()
+                .border_1()
+                .shadow_md()
+                .into_any_element(),
+            BarStyle::Rect => bar_container
+                .rounded_none()
+                .shadow_sm()
+                .when(
+                    matches!(self.config.bar.position, BarPosition::Top),
+                    |this| this.border_b_1(),
+                )
+                .when(
+                    matches!(self.config.bar.position, BarPosition::Bottom),
+                    |this| this.border_t_1(),
+                )
+                .when(
+                    matches!(self.config.bar.position, BarPosition::Left),
+                    |this| this.border_r_1(),
+                )
+                .when(
+                    matches!(self.config.bar.position, BarPosition::Right),
+                    |this| this.border_l_1(),
+                )
+                .into_any_element(),
+        };
+
+        // All widgets removed for now per user instruction ("remove all the components from the bar for now and we will tackle widgets one by one", "dont add any widgets in the bar yet").
+        styled_bar
     }
 }
 
@@ -473,5 +633,29 @@ mod notification_tests {
         notification.expire_timeout_ms = 0;
 
         assert_eq!(notification_timeout(&notification), None);
+    }
+}
+
+#[cfg(test)]
+mod hug_corner_tests {
+    use super::*;
+    use gpui::point;
+
+    #[test]
+    fn fills_the_complete_quarter_circle_bounds() {
+        let radius = HUG_CORNER_RADIUS;
+        let control_offset = radius * 0.552_284_8;
+        let path = build_hug_corner(
+            point(px(0.0), px(0.0)),
+            point(px(0.0), px(radius)),
+            point(px(radius), px(0.0)),
+            point(px(0.0), px(radius - control_offset)),
+            point(px(radius - control_offset), px(0.0)),
+        )
+        .expect("valid Hug corner path");
+
+        assert_eq!(path.bounds.origin, point(px(0.0), px(0.0)));
+        assert_eq!(path.bounds.size.width, px(radius));
+        assert_eq!(path.bounds.size.height, px(radius));
     }
 }

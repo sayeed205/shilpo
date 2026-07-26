@@ -129,35 +129,36 @@
       "additionalProperties": false
     },
     "BarPosition": {
-      "type": "string",
       "enum": [
-        "top",
-        "bottom",
-        "left",
-        "right"
-      ]
+        "Top",
+        "Bottom",
+        "Left",
+        "Right"
+      ],
+      "type": "string"
     },
     "BarStyle": {
-      "type": "string",
       "enum": [
-        "floating-capsule",
-        "full-edge"
-      ]
+        "Hug",
+        "Float",
+        "Rect"
+      ],
+      "type": "string"
     },
     "BarWidget": {
-      "type": "string",
       "enum": [
-        "launcher",
-        "workspaces",
-        "active-window",
-        "clock",
-        "media",
-        "sysinfo",
-        "network",
-        "audio",
-        "battery",
-        "settings"
-      ]
+        "Launcher",
+        "Workspaces",
+        "ActiveWindow",
+        "Clock",
+        "Media",
+        "Sysinfo",
+        "Network",
+        "Audio",
+        "Battery",
+        "Settings"
+      ],
+      "type": "string"
     },
     "BarWidgets": {
       "type": "object",
@@ -342,12 +343,12 @@
       "additionalProperties": false
     },
     "ThemeMode": {
-      "type": "string",
       "enum": [
-        "dark",
-        "light",
-        "auto"
-      ]
+        "Dark",
+        "Light",
+        "Auto"
+      ],
+      "type": "string"
     }
   }
 }
