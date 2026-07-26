@@ -490,8 +490,8 @@ impl Render for BarView {
             self.config.bar.position,
             BarPosition::Left | BarPosition::Right
         );
-        let bg_color = cx.theme().surface_container_high.opacity(0.92);
-        let border_color = cx.theme().outline_variant.opacity(0.3);
+        let opacity = self.config.bar.opacity.clamp(0.0, 1.0);
+        let bg_color = cx.theme().surface_container_high.opacity(opacity);
 
         let bar_container = div()
             .when(side, |this| {
@@ -507,8 +507,7 @@ impl Render for BarView {
             .flex()
             .items_center()
             .justify_between()
-            .bg(bg_color)
-            .border_color(border_color);
+            .bg(bg_color);
 
         let styled_bar = match style {
             BarStyle::Hug => {
@@ -518,11 +517,17 @@ impl Render for BarView {
                     bg_color,
                 );
                 let main_bar = bar_container;
+                let aligned_bar = match self.config.bar.position {
+                    BarPosition::Top => div().absolute().top_0().w_full().child(main_bar),
+                    BarPosition::Bottom => div().absolute().bottom_0().w_full().child(main_bar),
+                    BarPosition::Left => div().absolute().left_0().h_full().child(main_bar),
+                    BarPosition::Right => div().absolute().right_0().h_full().child(main_bar),
+                };
 
                 div()
                     .relative()
                     .size_full()
-                    .child(main_bar)
+                    .child(aligned_bar)
                     .child(hug_corners)
                     .into_any_element()
             }
@@ -530,29 +535,9 @@ impl Render for BarView {
                 .px(px(self.config.bar.margin.horizontal as f32))
                 .py(px(self.config.bar.margin.vertical as f32))
                 .rounded_2xl()
-                .border_1()
                 .shadow_md()
                 .into_any_element(),
-            BarStyle::Rect => bar_container
-                .rounded_none()
-                .shadow_sm()
-                .when(
-                    matches!(self.config.bar.position, BarPosition::Top),
-                    |this| this.border_b_1(),
-                )
-                .when(
-                    matches!(self.config.bar.position, BarPosition::Bottom),
-                    |this| this.border_t_1(),
-                )
-                .when(
-                    matches!(self.config.bar.position, BarPosition::Left),
-                    |this| this.border_r_1(),
-                )
-                .when(
-                    matches!(self.config.bar.position, BarPosition::Right),
-                    |this| this.border_l_1(),
-                )
-                .into_any_element(),
+            BarStyle::Rect => bar_container.rounded_none().shadow_sm().into_any_element(),
         };
 
         // All widgets removed for now per user instruction ("remove all the components from the bar for now and we will tackle widgets one by one", "dont add any widgets in the bar yet").

@@ -12,6 +12,7 @@ style = "Hug"
 height = 48
 padding = 8
 widget_spacing = 6
+opacity = 0.92
 
 [bar.margin]
 horizontal = 180

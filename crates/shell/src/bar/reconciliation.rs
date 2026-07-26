@@ -212,6 +212,7 @@ mod tests {
                 padding: None,
                 margin: None,
                 widget_spacing: None,
+                opacity: None,
                 exclusive_zone: None,
                 widgets: None,
             },

@@ -59,6 +59,7 @@ pub struct OutputConfig {
     pub padding: Option<u32>,
     pub margin: Option<BarMargin>,
     pub widget_spacing: Option<u32>,
+    pub opacity: Option<f32>,
     pub exclusive_zone: Option<u32>,
     pub widgets: Option<BarWidgets>,
 }
@@ -100,9 +101,15 @@ pub struct BarConfig {
     pub padding: u32,
     pub margin: BarMargin,
     pub widget_spacing: u32,
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
     #[serde(default)]
     pub exclusive_zone: Option<u32>,
     pub widgets: BarWidgets,
+}
+
+fn default_opacity() -> f32 {
+    0.92
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -194,6 +201,7 @@ impl Default for BarConfig {
                 vertical: 6,
             },
             widget_spacing: 6,
+            opacity: 0.92,
             exclusive_zone: None,
             widgets: BarWidgets {
                 start: vec![
@@ -360,6 +368,9 @@ impl ShellConfig {
         }
         if let Some(s) = overrides.widget_spacing {
             bar.widget_spacing = s;
+        }
+        if let Some(op) = overrides.opacity {
+            bar.opacity = op;
         }
         if overrides.exclusive_zone.is_some() {
             bar.exclusive_zone = overrides.exclusive_zone;
@@ -1010,7 +1021,7 @@ mod tests {
             serde_json::from_str(include_str!("../schema/config-v1.schema.json")).unwrap();
         let generated: serde_json::Value =
             serde_json::from_str(&ShellConfig::schema_json()).unwrap();
-        assert_eq!(fixture, generated,);
+        assert_eq!(fixture, generated);
     }
     #[test]
     fn loader_writes_canonical_config() {

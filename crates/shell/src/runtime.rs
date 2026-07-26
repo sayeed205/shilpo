@@ -373,11 +373,12 @@ impl ShellRuntime {
                 }
                 ReconciliationOp::Recreate(spec) => {
                     let display_id = spec.display_id;
-                    if let Some((handle, _)) = cx.global_mut::<Self>().bars.remove(&display_id) {
+                    let old_bar = cx.global_mut::<Self>().bars.remove(&display_id);
+                    Self::open_bar_with_spec(cx, spec);
+                    if let Some((handle, _)) = old_bar {
                         let _ =
                             cx.update_window(handle.into(), |_, window, _| window.remove_window());
                     }
-                    Self::open_bar_with_spec(cx, spec);
                 }
                 ReconciliationOp::Remove(display_id) => {
                     if let Some((handle, _)) = cx.global_mut::<Self>().bars.remove(&display_id) {
