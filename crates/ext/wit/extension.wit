@@ -1,0 +1,10 @@
+package shilpo:extension@0.1.0;
+
+world extension {
+    /// Receives one JSON-encoded `ExtensionEvent` and returns a JSON-encoded
+    /// list of `HostEffect` values.
+    export on-event: func(event-json: string) -> string;
+
+    /// Returns a JSON-encoded `Option<ViewTree>` for a contribution.
+    export view: func(contribution-id: string) -> string;
+}

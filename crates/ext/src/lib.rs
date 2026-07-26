@@ -1,13 +1,18 @@
 pub mod adapter;
+pub mod circuit_breaker;
+pub mod cli;
 pub mod effects;
 pub mod events;
 pub mod manifest;
 pub mod view;
+pub mod wasm;
 
 pub use adapter::{
     DispatchResult, ExtensionHost, ExtensionRuntime, GuestExtension, HostError, InMemoryRuntime,
-    RuntimeError,
+    RuntimeBudget, RuntimeError, RuntimeFailureKind,
 };
+pub use circuit_breaker::{CircuitBreaker, DiagnosticCode, DiagnosticLevel, ExtensionDiagnostic};
+pub use cli::{ExtensionCli, ExtensionCliResult};
 pub use effects::{HostEffect, WallpaperSource};
 pub use events::{EventKind, ExtensionEvent};
 pub use manifest::{
@@ -18,10 +23,17 @@ pub use view::{
     ContainerDirection, ContainerNode, SemanticColorToken, TextNode, ViewLimits, ViewNode,
     ViewStyle, ViewTree, ViewValidationError,
 };
+pub use wasm::{WasmModule, WasmRuntime};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::read::GzDecoder;
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use tar::Archive;
 
     const MANIFEST: &str = r#"
         id = "io.github.alice.world-clock"
@@ -46,6 +58,107 @@ mod tests {
         kind = "network:http"
         hosts = ["api.example.com"]
         paths = ["/clock/*"]
+    "#;
+
+    const VALID_COMPONENT: &str = r#"
+        (component
+          (core module $module
+            (memory (export "memory") 1)
+            (global $heap (mut i32) (i32.const 4096))
+            (func (export "cabi_realloc")
+              (param i32 i32 i32 i32) (result i32)
+              global.get $heap
+              global.get $heap
+              local.get 3
+              i32.add
+              global.set $heap)
+            (data (i32.const 0) "[]")
+            (data (i32.const 16) "null")
+            (func (export "on-event") (param i32 i32) (result i32)
+              i32.const 64
+              i32.const 0
+              i32.store
+              i32.const 64
+              i32.const 2
+              i32.store offset=4
+              i32.const 64)
+            (func (export "view") (param i32 i32) (result i32)
+              i32.const 72
+              i32.const 16
+              i32.store
+              i32.const 72
+              i32.const 4
+              i32.store offset=4
+              i32.const 72))
+          (core instance $instance (instantiate $module))
+          (alias core export $instance "memory" (core memory $memory))
+          (alias core export $instance "cabi_realloc" (core func $realloc))
+          (alias core export $instance "on-event" (core func $on-event-core))
+          (alias core export $instance "view" (core func $view-core))
+          (type $on-event-type
+            (func (param "event-json" string) (result string)))
+          (type $view-type
+            (func (param "contribution-id" string) (result string)))
+          (func $on-event (type $on-event-type)
+            (canon lift
+              (core func $on-event-core)
+              (memory $memory)
+              (realloc $realloc)))
+          (func $view (type $view-type)
+            (canon lift
+              (core func $view-core)
+              (memory $memory)
+              (realloc $realloc)))
+          (export "on-event" (func $on-event))
+          (export "view" (func $view)))
+    "#;
+
+    const RUNAWAY_COMPONENT: &str = r#"
+        (component
+          (core module $module
+            (memory (export "memory") 1)
+            (global $heap (mut i32) (i32.const 4096))
+            (func (export "cabi_realloc")
+              (param i32 i32 i32 i32) (result i32)
+              global.get $heap
+              global.get $heap
+              local.get 3
+              i32.add
+              global.set $heap)
+            (data (i32.const 16) "null")
+            (func (export "on-event") (param i32 i32) (result i32)
+              (loop $forever
+                br $forever)
+              unreachable)
+            (func (export "view") (param i32 i32) (result i32)
+              i32.const 72
+              i32.const 16
+              i32.store
+              i32.const 72
+              i32.const 4
+              i32.store offset=4
+              i32.const 72))
+          (core instance $instance (instantiate $module))
+          (alias core export $instance "memory" (core memory $memory))
+          (alias core export $instance "cabi_realloc" (core func $realloc))
+          (alias core export $instance "on-event" (core func $on-event-core))
+          (alias core export $instance "view" (core func $view-core))
+          (type $on-event-type
+            (func (param "event-json" string) (result string)))
+          (type $view-type
+            (func (param "contribution-id" string) (result string)))
+          (func $on-event (type $on-event-type)
+            (canon lift
+              (core func $on-event-core)
+              (memory $memory)
+              (realloc $realloc)))
+          (func $view (type $view-type)
+            (canon lift
+              (core func $view-core)
+              (memory $memory)
+              (realloc $realloc)))
+          (export "on-event" (func $on-event))
+          (export "view" (func $view)))
     "#;
 
     struct ClockGuest;
@@ -123,6 +236,10 @@ mod tests {
         ));
         assert_eq!(result.rejected.len(), 1);
         assert!(matches!(result.rejected[0], HostEffect::HttpRequest { .. }));
+        assert_eq!(
+            host.diagnostics().last().map(|diagnostic| diagnostic.code),
+            Some(DiagnosticCode::CapabilityDenied)
+        );
     }
 
     #[test]
@@ -207,5 +324,384 @@ mod tests {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../schema/extension-v1.schema.json")).unwrap();
         assert_eq!(fixture, generated);
+    }
+
+    #[test]
+    fn circuit_breaker_trips_after_max_failures() {
+        let mut cb = CircuitBreaker::new(2);
+        let id = ExtensionId::new("io.github.test.failing").unwrap();
+
+        assert!(!cb.is_tripped(&id));
+        cb.record_failure(&id, DiagnosticCode::RuntimeTrap, "first failure");
+        assert!(!cb.is_tripped(&id));
+        cb.record_success(&id);
+
+        cb.record_failure(&id, DiagnosticCode::RuntimeTrap, "second failure");
+        assert!(!cb.is_tripped(&id));
+        cb.record_failure(&id, DiagnosticCode::RuntimeTrap, "third failure");
+        assert!(cb.is_tripped(&id));
+
+        cb.reset(&id);
+        assert!(!cb.is_tripped(&id));
+    }
+
+    #[test]
+    fn wasm_adapter_executes_the_component_contract_repeatedly() {
+        let error = WasmRuntime::validate_module(b"(component)").unwrap_err();
+        assert_eq!(error.kind(), RuntimeFailureKind::Load);
+        assert!(
+            error
+                .message()
+                .contains("missing required component export")
+        );
+
+        let id = ExtensionId::new("io.github.test.wasm").unwrap();
+        let mut runtime = WasmRuntime::new().unwrap();
+        runtime
+            .load(
+                &id,
+                WasmModule::from_bytes(VALID_COMPONENT.as_bytes()),
+                RuntimeBudget::default(),
+            )
+            .unwrap();
+
+        for _ in 0..2 {
+            assert_eq!(
+                runtime
+                    .dispatch(&id, &ExtensionEvent::ShellStarted, RuntimeBudget::default(),)
+                    .unwrap(),
+                Vec::<HostEffect>::new()
+            );
+            assert_eq!(
+                runtime.view(&id, "bar", RuntimeBudget::default()).unwrap(),
+                None
+            );
+        }
+
+        let invalid_id = ExtensionId::new("io.github.test.invalid-output").unwrap();
+        let invalid_component = VALID_COMPONENT.replacen(
+            "(data (i32.const 0) \"[]\")",
+            "(data (i32.const 0) \"!!\")",
+            1,
+        );
+        runtime
+            .load(
+                &invalid_id,
+                WasmModule::from_bytes(invalid_component.into_bytes()),
+                RuntimeBudget::default(),
+            )
+            .unwrap();
+        let error = runtime
+            .dispatch(
+                &invalid_id,
+                &ExtensionEvent::ShellStarted,
+                RuntimeBudget::default(),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeFailureKind::InvalidOutput);
+    }
+
+    #[test]
+    fn wasm_adapter_enforces_fuel_and_deadline_budgets() {
+        let id = ExtensionId::new("io.github.test.runaway").unwrap();
+        let mut runtime = WasmRuntime::new().unwrap();
+        let budget = RuntimeBudget {
+            fuel: 1_000,
+            deadline: Duration::from_secs(1),
+            ..RuntimeBudget::default()
+        };
+        runtime
+            .load(
+                &id,
+                WasmModule::from_bytes(RUNAWAY_COMPONENT.as_bytes()),
+                budget,
+            )
+            .unwrap();
+        let error = runtime
+            .dispatch(&id, &ExtensionEvent::ShellStarted, budget)
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeFailureKind::FuelExhausted);
+
+        let timeout_id = ExtensionId::new("io.github.test.timeout").unwrap();
+        let timeout_budget = RuntimeBudget {
+            fuel: u64::MAX,
+            deadline: Duration::from_millis(5),
+            ..RuntimeBudget::default()
+        };
+        runtime
+            .load(
+                &timeout_id,
+                WasmModule::from_bytes(RUNAWAY_COMPONENT.as_bytes()),
+                timeout_budget,
+            )
+            .unwrap();
+        let error = runtime
+            .dispatch(&timeout_id, &ExtensionEvent::ShellStarted, timeout_budget)
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeFailureKind::Timeout);
+
+        let memory_id = ExtensionId::new("io.github.test.memory").unwrap();
+        let memory_budget = RuntimeBudget {
+            max_memory_bytes: 64 * 1024,
+            ..RuntimeBudget::default()
+        };
+        let oversized_component = VALID_COMPONENT.replacen(
+            "(memory (export \"memory\") 1)",
+            "(memory (export \"memory\") 2)",
+            1,
+        );
+        let error = runtime
+            .load(
+                &memory_id,
+                WasmModule::from_bytes(oversized_component.into_bytes()),
+                memory_budget,
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeFailureKind::MemoryLimit);
+    }
+
+    struct FailingRuntime;
+
+    impl ExtensionRuntime for FailingRuntime {
+        type Module = ();
+
+        fn load(
+            &mut self,
+            _: &ExtensionId,
+            _: Self::Module,
+            _: RuntimeBudget,
+        ) -> Result<(), RuntimeError> {
+            Ok(())
+        }
+
+        fn unload(&mut self, _: &ExtensionId) -> Result<(), RuntimeError> {
+            Ok(())
+        }
+
+        fn dispatch(
+            &mut self,
+            _: &ExtensionId,
+            _: &ExtensionEvent,
+            _: RuntimeBudget,
+        ) -> Result<Vec<HostEffect>, RuntimeError> {
+            Err(RuntimeError::with_kind(
+                RuntimeFailureKind::Trap,
+                "guest trapped",
+            ))
+        }
+
+        fn view(
+            &mut self,
+            _: &ExtensionId,
+            _: &str,
+            _: RuntimeBudget,
+        ) -> Result<Option<ViewTree>, RuntimeError> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn host_disables_an_extension_after_repeated_runtime_failures() {
+        let manifest = ExtensionManifest::from_toml(
+            r#"
+                id = "io.github.test.failing-host"
+                name = "Failing Host"
+                version = "1.0.0"
+            "#,
+        )
+        .unwrap();
+        let id = manifest.id.clone();
+        let mut host = ExtensionHost::new(FailingRuntime).with_failure_threshold(2);
+        host.register(manifest, (), vec![]).unwrap();
+
+        assert!(matches!(
+            host.dispatch_event(&id, &ExtensionEvent::ShellStarted),
+            Err(HostError::Runtime(_))
+        ));
+        assert!(!host.is_disabled(&id));
+        assert!(matches!(
+            host.dispatch_event(&id, &ExtensionEvent::ShellStarted),
+            Err(HostError::Runtime(_))
+        ));
+        assert!(host.is_disabled(&id));
+        assert!(matches!(
+            host.dispatch_event(&id, &ExtensionEvent::ShellStarted),
+            Err(HostError::Disabled(disabled)) if disabled == id
+        ));
+        assert_eq!(
+            host.diagnostics().last().map(|diagnostic| diagnostic.code),
+            Some(DiagnosticCode::CircuitOpen)
+        );
+    }
+
+    #[test]
+    fn extension_cli_validates_packages_and_persists_dev_reload_state() {
+        let temp_dir = make_temp_dir("cli");
+        let state_dir = temp_dir.join("state");
+        let extension_dir = temp_dir.join("extension");
+        fs::create_dir_all(&extension_dir).unwrap();
+
+        let manifest_content = r#"
+            id = "io.github.test.cli-sample"
+            name = "CLI Sample"
+            version = "1.0.0"
+
+            [library]
+            path = "extension.wasm"
+
+            [[contributions.settings_pages]]
+            id = "settings"
+            name = "Settings"
+            schema = "settings.schema.json"
+        "#;
+        fs::write(extension_dir.join("extension.toml"), manifest_content).unwrap();
+        fs::write(extension_dir.join("extension.wasm"), VALID_COMPONENT).unwrap();
+        fs::write(
+            extension_dir.join("settings.schema.json"),
+            r#"{
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "city": { "type": "string", "default": "Kolkata" }
+                }
+            }"#,
+        )
+        .unwrap();
+        fs::write(extension_dir.join("README.md"), "# CLI Sample").unwrap();
+
+        let check_res = ExtensionCli::check(&extension_dir);
+        assert!(check_res.success);
+        assert_eq!(
+            check_res.extension_id.as_deref(),
+            Some("io.github.test.cli-sample")
+        );
+
+        let pack_out = temp_dir.join("dist");
+        let pack_res = ExtensionCli::pack(&extension_dir, &pack_out);
+        assert!(pack_res.success);
+        let artifact = pack_res.artifact.unwrap();
+        assert_eq!(
+            artifact.file_name().and_then(|name| name.to_str()),
+            Some("io.github.test.cli-sample-1.0.0.shilpo-ext")
+        );
+        let archive = fs::File::open(&artifact).unwrap();
+        let mut archive = Archive::new(GzDecoder::new(archive));
+        let entries = archive
+            .entries()
+            .unwrap()
+            .map(|entry| entry.unwrap().path().unwrap().into_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            entries,
+            BTreeSet::from([
+                PathBuf::from("README.md"),
+                PathBuf::from("extension.toml"),
+                PathBuf::from("extension.wasm"),
+                PathBuf::from("settings.schema.json"),
+            ])
+        );
+        let second_pack_out = temp_dir.join("dist-again");
+        let second_pack = ExtensionCli::pack(&extension_dir, &second_pack_out);
+        assert!(second_pack.success);
+        assert_eq!(
+            fs::read(&artifact).unwrap(),
+            fs::read(second_pack.artifact.unwrap()).unwrap()
+        );
+
+        let dev = ExtensionCli::dev(&extension_dir, &state_dir);
+        assert!(dev.success);
+        let id = ExtensionId::new("io.github.test.cli-sample").unwrap();
+        let reload = ExtensionCli::reload(&id, &state_dir);
+        assert!(reload.success);
+        assert!(
+            reload
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.contains("generation 2") })
+        );
+        let logs = ExtensionCli::logs(&id, &state_dir);
+        assert!(logs.success);
+        assert_eq!(logs.diagnostics.len(), 2);
+        assert_eq!(ExtensionCli::list_dev(&state_dir).len(), 1);
+
+        #[cfg(unix)]
+        {
+            fs::write(temp_dir.join("outside-license"), "secret").unwrap();
+            std::os::unix::fs::symlink(
+                temp_dir.join("outside-license"),
+                extension_dir.join("LICENSE"),
+            )
+            .unwrap();
+            let result = ExtensionCli::check(&extension_dir);
+            assert!(!result.success);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.starts_with("error[file.type]"))
+            );
+        }
+
+        fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn extension_cli_rejects_invalid_settings_and_wasm() {
+        let temp_dir = make_temp_dir("invalid-cli");
+        fs::write(
+            temp_dir.join("extension.toml"),
+            r#"
+                id = "io.github.test.invalid"
+                name = "Invalid"
+                version = "1.0.0"
+
+                [library]
+                path = "extension.wasm"
+
+                [[contributions.settings_pages]]
+                id = "settings"
+                name = "Settings"
+                schema = "settings.schema.json"
+            "#,
+        )
+        .unwrap();
+        fs::write(temp_dir.join("extension.wasm"), b"not wasm").unwrap();
+        fs::write(
+            temp_dir.join("settings.schema.json"),
+            r#"{
+                "type": "object",
+                "required": ["city"],
+                "properties": { "city": { "type": "string" } }
+            }"#,
+        )
+        .unwrap();
+
+        let result = ExtensionCli::check(&temp_dir);
+        assert!(!result.success);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.starts_with("error[wasm.invalid]"))
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.starts_with("error[settings.defaults]"))
+        );
+
+        fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    fn make_temp_dir(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("shilpo-ext-{name}-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 }

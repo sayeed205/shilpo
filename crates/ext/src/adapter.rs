@@ -2,30 +2,82 @@ use crate::effects::HostEffect;
 use crate::events::ExtensionEvent;
 use crate::manifest::{CanonicalId, Capability, ExtensionId, ExtensionManifest, ManifestError};
 use crate::view::{ViewLimits, ViewTree, ViewValidationError};
+use crate::{CircuitBreaker, DiagnosticCode, ExtensionDiagnostic};
 use std::collections::HashMap;
 use std::fmt;
+use std::time::Duration;
 
 pub trait GuestExtension: Send + Sync {
     fn on_event(&mut self, event: &ExtensionEvent) -> Vec<HostEffect>;
     fn view(&self, contribution_id: &str) -> Option<ViewTree>;
 }
 
-#[derive(Debug)]
-pub struct RuntimeError(String);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeFailureKind {
+    Load,
+    Trap,
+    Timeout,
+    FuelExhausted,
+    MemoryLimit,
+    InvalidOutput,
+    Unavailable,
+}
+
+#[derive(Clone, Debug)]
+pub struct RuntimeError {
+    kind: RuntimeFailureKind,
+    message: String,
+}
 
 impl RuntimeError {
     pub fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
+        Self::with_kind(RuntimeFailureKind::Unavailable, message)
+    }
+
+    pub fn with_kind(kind: RuntimeFailureKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    pub fn kind(&self) -> RuntimeFailureKind {
+        self.kind
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        self.message.fmt(f)
     }
 }
 
 impl std::error::Error for RuntimeError {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuntimeBudget {
+    pub max_memory_bytes: usize,
+    pub fuel: u64,
+    pub deadline: Duration,
+    pub max_hostcall_bytes: usize,
+    pub max_output_bytes: usize,
+}
+
+impl Default for RuntimeBudget {
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: 32 * 1024 * 1024,
+            fuel: 10_000_000,
+            deadline: Duration::from_millis(100),
+            max_hostcall_bytes: 1024 * 1024,
+            max_output_bytes: 1024 * 1024,
+        }
+    }
+}
 
 /// Execution boundary used by the policy-owning extension host.
 ///
@@ -38,17 +90,20 @@ pub trait ExtensionRuntime {
         &mut self,
         extension_id: &ExtensionId,
         module: Self::Module,
+        budget: RuntimeBudget,
     ) -> Result<(), RuntimeError>;
     fn unload(&mut self, extension_id: &ExtensionId) -> Result<(), RuntimeError>;
     fn dispatch(
         &mut self,
         extension_id: &ExtensionId,
         event: &ExtensionEvent,
+        budget: RuntimeBudget,
     ) -> Result<Vec<HostEffect>, RuntimeError>;
     fn view(
-        &self,
+        &mut self,
         extension_id: &ExtensionId,
         contribution_id: &str,
+        budget: RuntimeBudget,
     ) -> Result<Option<ViewTree>, RuntimeError>;
 }
 
@@ -64,6 +119,7 @@ impl ExtensionRuntime for InMemoryRuntime {
         &mut self,
         extension_id: &ExtensionId,
         module: Self::Module,
+        _budget: RuntimeBudget,
     ) -> Result<(), RuntimeError> {
         if self.guests.insert(extension_id.clone(), module).is_some() {
             return Err(RuntimeError::new(format!(
@@ -84,6 +140,7 @@ impl ExtensionRuntime for InMemoryRuntime {
         &mut self,
         extension_id: &ExtensionId,
         event: &ExtensionEvent,
+        _budget: RuntimeBudget,
     ) -> Result<Vec<HostEffect>, RuntimeError> {
         self.guests
             .get_mut(extension_id)
@@ -92,9 +149,10 @@ impl ExtensionRuntime for InMemoryRuntime {
     }
 
     fn view(
-        &self,
+        &mut self,
         extension_id: &ExtensionId,
         contribution_id: &str,
+        _budget: RuntimeBudget,
     ) -> Result<Option<ViewTree>, RuntimeError> {
         self.guests
             .get(extension_id)
@@ -112,6 +170,7 @@ pub enum HostError {
     NotRegistered(ExtensionId),
     UnknownContribution(CanonicalId),
     UndeclaredGrant(String),
+    Disabled(ExtensionId),
 }
 
 impl fmt::Display for HostError {
@@ -125,6 +184,9 @@ impl fmt::Display for HostError {
             Self::UnknownContribution(id) => write!(f, "unknown extension contribution '{id}'"),
             Self::UndeclaredGrant(kind) => {
                 write!(f, "cannot grant undeclared capability '{kind}'")
+            }
+            Self::Disabled(id) => {
+                write!(f, "extension '{id}' is disabled for this session")
             }
         }
     }
@@ -165,6 +227,8 @@ pub struct ExtensionHost<R> {
     runtime: R,
     registrations: HashMap<ExtensionId, Registration>,
     view_limits: ViewLimits,
+    runtime_budget: RuntimeBudget,
+    circuit_breaker: CircuitBreaker,
 }
 
 impl<R: ExtensionRuntime> ExtensionHost<R> {
@@ -173,11 +237,23 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             runtime,
             registrations: HashMap::new(),
             view_limits: ViewLimits::default(),
+            runtime_budget: RuntimeBudget::default(),
+            circuit_breaker: CircuitBreaker::default(),
         }
     }
 
     pub fn with_view_limits(mut self, limits: ViewLimits) -> Self {
         self.view_limits = limits;
+        self
+    }
+
+    pub fn with_runtime_budget(mut self, budget: RuntimeBudget) -> Self {
+        self.runtime_budget = budget;
+        self
+    }
+
+    pub fn with_failure_threshold(mut self, max_consecutive_failures: u32) -> Self {
+        self.circuit_breaker = CircuitBreaker::new(max_consecutive_failures);
         self
     }
 
@@ -202,7 +278,10 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
         }
 
         let id = manifest.id.clone();
-        self.runtime.load(&id, module)?;
+        if let Err(error) = self.runtime.load(&id, module, self.runtime_budget) {
+            self.record_runtime_failure(&id, &error);
+            return Err(error.into());
+        }
         self.registrations
             .insert(id, Registration { manifest, grants });
         Ok(())
@@ -212,7 +291,10 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
         if !self.registrations.contains_key(id) {
             return Err(HostError::NotRegistered(id.clone()));
         }
-        self.runtime.unload(id)?;
+        if let Err(error) = self.runtime.unload(id) {
+            self.record_runtime_failure(id, &error);
+            return Err(error.into());
+        }
         self.registrations.remove(id);
         Ok(())
     }
@@ -222,6 +304,7 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
         extension_id: &ExtensionId,
         event: &ExtensionEvent,
     ) -> Result<DispatchResult, HostError> {
+        self.ensure_enabled(extension_id)?;
         let registration = self
             .registrations
             .get(extension_id)
@@ -264,7 +347,16 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             }
         }
 
-        let effects = self.runtime.dispatch(extension_id, event)?;
+        let effects = match self
+            .runtime
+            .dispatch(extension_id, event, self.runtime_budget)
+        {
+            Ok(effects) => effects,
+            Err(error) => {
+                self.record_runtime_failure(extension_id, &error);
+                return Err(error.into());
+            }
+        };
         let mut result = DispatchResult::default();
         for effect in effects {
             let allowed = effect_is_unprivileged(&effect, &registration.manifest)
@@ -283,10 +375,23 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
                 result.rejected.push(effect);
             }
         }
+        if result.rejected.is_empty() {
+            self.circuit_breaker.record_success(extension_id);
+        } else {
+            self.circuit_breaker.record_failure(
+                extension_id,
+                DiagnosticCode::CapabilityDenied,
+                format!(
+                    "rejected {} effect(s) outside the extension's declared and granted capabilities",
+                    result.rejected.len()
+                ),
+            );
+        }
         Ok(result)
     }
 
-    pub fn render_view(&self, canonical: &CanonicalId) -> Result<Option<ViewTree>, HostError> {
+    pub fn render_view(&mut self, canonical: &CanonicalId) -> Result<Option<ViewTree>, HostError> {
+        self.ensure_enabled(&canonical.extension_id)?;
         let registration = self
             .registrations
             .get(&canonical.extension_id)
@@ -298,12 +403,28 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
         {
             return Err(HostError::UnknownContribution(canonical.clone()));
         }
-        let view = self
-            .runtime
-            .view(&canonical.extension_id, canonical.contribution_id.as_str())?;
-        if let Some(view) = &view {
-            view.validate(self.view_limits)?;
+        let view = match self.runtime.view(
+            &canonical.extension_id,
+            canonical.contribution_id.as_str(),
+            self.runtime_budget,
+        ) {
+            Ok(view) => view,
+            Err(error) => {
+                self.record_runtime_failure(&canonical.extension_id, &error);
+                return Err(error.into());
+            }
+        };
+        if let Some(view) = &view
+            && let Err(error) = view.validate(self.view_limits)
+        {
+            self.circuit_breaker.record_failure(
+                &canonical.extension_id,
+                DiagnosticCode::InvalidView,
+                error.to_string(),
+            );
+            return Err(error.into());
         }
+        self.circuit_breaker.record_success(&canonical.extension_id);
         Ok(view)
     }
 
@@ -315,6 +436,31 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
 
     pub fn runtime(&self) -> &R {
         &self.runtime
+    }
+
+    pub fn diagnostics(&self) -> &[ExtensionDiagnostic] {
+        self.circuit_breaker.diagnostics()
+    }
+
+    pub fn reset_extension(&mut self, id: &ExtensionId) {
+        self.circuit_breaker.reset(id);
+    }
+
+    pub fn is_disabled(&self, id: &ExtensionId) -> bool {
+        self.circuit_breaker.is_tripped(id)
+    }
+
+    fn ensure_enabled(&self, id: &ExtensionId) -> Result<(), HostError> {
+        if self.circuit_breaker.is_tripped(id) {
+            Err(HostError::Disabled(id.clone()))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn record_runtime_failure(&mut self, id: &ExtensionId, error: &RuntimeError) {
+        self.circuit_breaker
+            .record_failure(id, diagnostic_code(error.kind()), error.to_string());
     }
 }
 
@@ -332,5 +478,16 @@ fn effect_is_unprivileged(effect: &HostEffect, manifest: &ExtensionManifest) -> 
         }
         HostEffect::StateRead { .. } | HostEffect::StateWrite { .. } => true,
         _ => false,
+    }
+}
+
+fn diagnostic_code(kind: RuntimeFailureKind) -> DiagnosticCode {
+    match kind {
+        RuntimeFailureKind::Load | RuntimeFailureKind::Unavailable => DiagnosticCode::RuntimeLoad,
+        RuntimeFailureKind::Trap => DiagnosticCode::RuntimeTrap,
+        RuntimeFailureKind::Timeout => DiagnosticCode::RuntimeTimeout,
+        RuntimeFailureKind::FuelExhausted => DiagnosticCode::FuelExhausted,
+        RuntimeFailureKind::MemoryLimit => DiagnosticCode::MemoryLimit,
+        RuntimeFailureKind::InvalidOutput => DiagnosticCode::InvalidOutput,
     }
 }

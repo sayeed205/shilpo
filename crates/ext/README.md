@@ -1,11 +1,11 @@
 # Shilpo Extensions
 
-Status: Phase 1 (contract and catalog) is implemented. `shilpo-ext` provides validated manifest and ID types,
-contribution and capability declarations, typed events/effects, a bounded declarative view tree, and an in-memory
-host/runtime adapter for development and interface tests.
+Status: Phase 2 (host and development mode) is implemented. `shilpo-ext` provides the validated contract, the
+policy-owning host, in-memory and Wasmtime Component Model runtime adapters, resource budgets, structured diagnostics, a
+circuit breaker, package validation, development registrations, and deterministic `.shilpo-ext` archives.
 
-The WASM runtime, guest SDK, package installer, and `shilpo ext` commands described below belong to later phases and are
-not available yet.
+Shell-surface adapters, automatic file watching, the high-level guest SDK, package installation, signing, registries,
+updates, and Settings discovery belong to later phases.
 
 See [the extension architecture](../../docs/architecture/extensions.md) for the runtime, security, lifecycle, and
 implementation plan.
@@ -63,21 +63,21 @@ world-clock/
 Extensions that only provide static data may omit `Cargo.toml`, `src/`, and
 `extension.wasm`.
 
-## Planned authoring workflow
+## Authoring workflow
 
 ### Prerequisites
 
 - Rust installed through `rustup`;
 - the `wasm32-wasip2` target;
-- a Shilpo build that includes the extension host and CLI.
+- a Shilpo build that includes the extension host and CLI;
+- `wit-bindgen` for the current low-level Rust guest interface.
 
 ```bash
 rustup target add wasm32-wasip2
-shilpo ext new io.github.alice.world-clock
-cd world-clock
 ```
 
-The scaffold command will create a manifest, Rust guest crate, settings schema, README, license, and a minimal test.
+Use [`examples/world-clock`](../../examples/world-clock) as the working scaffold. A dedicated `shilpo ext new` command
+is planned with the higher-level guest SDK.
 
 ### Manifest
 
@@ -173,7 +173,7 @@ settings contribution will use the same schema and save/cancel contract.
 
 ### Guest logic
 
-The planned Rust SDK will compile to a WASM component:
+The current Phase 2 guest uses `wit-bindgen` and compiles to a WASI Preview 2 component:
 
 ```toml
 [package]
@@ -185,48 +185,28 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-shilpo-ext = "0.1"
+serde_json = "1"
+wit-bindgen = "0.57"
 ```
 
-The intended author interface is event-driven:
+The versioned contract lives in [`wit/extension.wit`](wit/extension.wit):
 
-```rust,ignore
-use shilpo_ext::{
-    Event, Extension, ExtensionContext, ExtensionResult, View, column, export_extension, text,
-};
+```wit
+package shilpo:extension@0.1.0;
 
-struct WorldClock;
-
-impl Extension for WorldClock {
-    fn new() -> Self {
-        Self
-    }
-
-    fn on_event(
-        &mut self,
-        event: Event,
-        context: &mut ExtensionContext,
-    ) -> ExtensionResult {
-        if event.is_timer("rotate-city") {
-            context.invalidate("bar");
-            context.invalidate("desktop");
-        }
-        Ok(())
-    }
-
-    fn view(&self, contribution: &str, context: &ExtensionContext) -> View {
-        column()
-            .child(text(context.setting_string("active_city")))
-            .child(text(context.local_time()))
-            .build()
-    }
+world extension {
+    export on-event: func(event-json: string) -> string;
+    export view: func(contribution-id: string) -> string;
 }
-
-export_extension!(WorldClock);
 ```
 
-This example describes the shape of the planned SDK, not its current Rust interface. Guest code will receive typed
-events and return views/effects. It will not receive GPUI contexts, shell runtime handles, or concrete service objects.
+The JSON strings carry the crate's typed `ExtensionEvent`, `Vec<HostEffect>`, and `Option<ViewTree>` wire formats. This
+keeps the Component Model ABI versioned while the ergonomic Rust SDK is designed. Guest code never receives GPUI
+contexts, shell runtime handles, or concrete service objects.
+
+The runtime supplies a closed WASI context only for the standard Rust component adapter. It inherits no files,
+environment variables, arguments, terminal streams, or network access. Privileged work still goes through host effects
+and capability checks.
 
 ### Capabilities
 
@@ -255,7 +235,7 @@ args = ["status"]
 There is no ambient filesystem, environment, network, or process access. Shilpo checks the manifest declaration and the
 user's stored grant for every privileged effect.
 
-## Phase 1 development checks
+## Contract development checks
 
 Validate the manifest contract through the crate tests:
 
@@ -273,16 +253,17 @@ cargo run -p shilpo-ext --example generate_schema -- \
 The generated schema is the machine-readable authoring contract. The tests compare it with the checked-in fixture to
 prevent an accidental schema change.
 
-### Planned validation and build
+### Validate, build, and package
 
 ```bash
-shilpo ext check .
 cargo test
 cargo build --target wasm32-wasip2 --release
+cp target/wasm32-wasip2/release/world_clock.wasm extension.wasm
+shilpo ext check .
 shilpo ext pack .
 ```
 
-`check` will validate:
+Build and copy the component to the manifest's `library.path` before running `check`. `check` validates:
 
 - manifest syntax and IDs;
 - schema and interface compatibility;
@@ -292,9 +273,27 @@ shilpo ext pack .
 - package size and view assets;
 - the WASM component's imported and exported interface.
 
-`pack` will produce a versioned `.shilpo-ext` archive containing only runtime files.
+`pack` produces a versioned `.shilpo-ext` archive containing only runtime files.
 
-## Planned development mode
+### Planned publishing
+
+Publishing keeps the extension and contribution IDs stable, increments `version`, and produces an immutable package:
+
+```bash
+shilpo ext check .
+shilpo ext pack .
+shilpo ext sign world-clock-1.0.0.shilpo-ext
+shilpo ext publish world-clock-1.0.0.shilpo-ext
+```
+
+The package signature establishes publisher identity. The registry separately signs its release index. A release entry
+records the extension and API versions, minimum Shilpo version, channel, package URL and hash, publisher key, capability
+digest, publication time, and whether the release has been yanked.
+
+Authors may also publish the package through a website or release service. A local archive can be installed manually. A
+direct URL supports automatic updates only when accompanied by a signed update feed or trusted registry entry.
+
+## Development mode
 
 Run an extension directly from its source directory:
 
@@ -304,12 +303,12 @@ shilpo ext dev /absolute/path/to/world-clock
 
 Development mode will:
 
-- validate and build the WASM component;
+- validate the already-built WASM component and its exact WIT exports;
+- instantiate it under the production sandbox, deadline, fuel, memory, and transfer budgets;
+- smoke-test startup plus bar and desktop view output without applying returned effects;
 - register the absolute path without copying it;
-- override an installed extension with the same ID;
-- watch the manifest, WASM component, settings schema, translations, and assets;
-- hot reload the guest while preserving compatible host-owned settings/state;
-- show diagnostics without taking down the shell.
+- persist the registration under the XDG state directory;
+- record validation and reload activity in a per-extension log.
 
 Useful commands:
 
@@ -317,19 +316,10 @@ Useful commands:
 shilpo ext list
 shilpo ext reload io.github.alice.world-clock
 shilpo ext logs io.github.alice.world-clock --follow
-shilpo ext stop-dev io.github.alice.world-clock
 ```
 
-Stopping development mode reveals the installed version again, if one exists.
-
-For work on Shilpo and an extension together, the planned environment override is:
-
-```bash
-SHILPO_EXTENSION_DEV_PATHS=/absolute/path/to/world-clock cargo run -p shilpo-shell
-```
-
-Multiple paths use the platform path separator. Duplicate IDs are an error unless one path is explicitly selected as the
-active override.
+Rebuild the component, then run `reload` to validate it and advance the persisted generation. Automatic file watching,
+live contribution replacement, stopping overrides, and state-preserving hot reload are Phase 3 shell-integration work.
 
 ## Placing contributions
 
@@ -407,19 +397,82 @@ Every installed extension appears under the planned Extensions category in the s
 
 Settings remain available when an extension is disabled or incompatible so users can recover it.
 
+## Publisher identity and trust
+
+Built-in functionality uses `builtin:*`. Every extension contribution—including an official Shilpo extension—uses
+`ext:*`.
+
+An extension cannot declare itself official. Shilpo derives trust from the verified package signature and installation
+source:
+
+- **Official**: signed by a Shilpo-controlled publisher key;
+- **Verified publisher**: signed by an identity verified by a trusted registry;
+- **Signed third-party**: valid signature without registry publisher verification;
+- **Unverified**: local or remote package without a trusted publisher identity.
+
+An `org.shilpo.*` ID is a naming convention, not proof of official status. Official extensions receive no hidden
+permissions and use the same sandbox, capability checks, resource limits, and permission review as third-party
+extensions.
+
+Shilpo stores the package source, publisher-key fingerprint, package hash, trust state, selected channel, and installed
+version in a host-owned installation receipt. Updates must preserve both the extension ID and publisher identity. A
+different key requires a signed key-rotation delegation; otherwise Shilpo reports a publisher conflict.
+
 ## End-user installation
 
-### Settings app
+### Discover in Settings
 
-The planned Extensions page will support:
+The future Settings app is the primary graphical discovery interface:
 
-1. Install from the Shilpo registry.
-2. Review source, version, requested capabilities, and package signature.
-3. Grant or deny optional capabilities.
-4. Enable the extension.
-5. Add its contributions to supported shell surfaces.
+```text
+Settings
+└── Extensions
+    ├── Discover
+    ├── Installed
+    ├── Updates
+    └── Sources
+```
+
+Discover searches verified registry metadata without downloading or executing extension code. Users can browse
+contribution categories, featured or recently updated collections, and filter by compatibility, official status,
+verified publisher, open-source status, or data-only extensions.
+
+Listings and detail pages show:
+
+- name, icon, description, license, repository, and latest version;
+- publisher identity, trust badge, and registry source;
+- supported contribution surfaces;
+- requested capabilities;
+- Shilpo and extension-interface compatibility;
+- signature, publication, and yanked-release status.
+
+The planned installation flow is:
+
+1. Open an extension from Discover.
+2. Review publisher, source, compatibility, and capabilities.
+3. Download and verify the package.
+4. Install it disabled.
+5. Grant or deny optional capabilities.
+6. Enable it.
+7. Add selected contributions to supported shell surfaces.
 
 An extension update requesting broader capabilities stays downloaded but inactive until the user reviews the new grants.
+
+Installed shows enablement, version, trust, grants, contribution instances, diagnostics, logs, and development
+overrides. Updates separates ordinary updates from permission reviews, incompatible releases, and rollback results.
+Sources manages the official registry and explicitly trusted third-party registries.
+
+The planned CLI and public web gallery use the same signed catalog:
+
+```bash
+shilpo ext search wallpaper
+shilpo ext info io.github.alice.world-clock
+shilpo ext install io.github.alice.world-clock
+```
+
+A web listing may open the corresponding Settings detail page, but cannot bypass signature verification or permission
+review. Local archives and signed URLs remain alternative installation routes rather than entries in the default
+gallery.
 
 ### Local package
 
@@ -450,6 +503,36 @@ shilpo ext uninstall io.github.alice.world-clock
 
 Disable keeps package files, settings, grants, and extension-owned data. Uninstall removes the package and contribution
 instances but asks separately whether persistent extension-owned data should also be removed.
+
+### Update discovery
+
+Shilpo checks for extension updates; extension guest code does not. The catalog selects the highest non-yanked semantic
+version that matches the extension ID, expected publisher, selected channel, current Shilpo version, and supported
+extension interface.
+
+```bash
+shilpo ext check-updates
+shilpo ext update io.github.alice.world-clock
+shilpo ext update --all
+shilpo ext update --all --dry-run
+```
+
+Update behavior follows the installation source:
+
+| Source                         | Behavior                                             |
+|--------------------------------|------------------------------------------------------|
+| Official or trusted registry   | Automatic discovery; optional automatic installation |
+| Explicitly trusted signed feed | Automatic discovery                                  |
+| One-off local archive or URL   | Manual replacement                                   |
+| System package                 | Updated by the operating-system package manager      |
+| Development path               | Never updated automatically                          |
+
+Updates are downloaded into staging, verified, compatibility-checked, and activated atomically. The previous working
+version remains available for rollback. Broader capabilities require new approval, and a publisher-key mismatch blocks
+the update.
+
+Settings exposes states such as up to date, update available, downloading, awaiting permission review, incompatible,
+publisher conflict, yanked, rollback active, and development override active.
 
 ## Installation paths
 
@@ -486,8 +569,10 @@ An invalid or failing extension must not make the shell unusable.
 1. Define the manifest, contribution, capability, settings, event/effect, and view-tree types in `shilpo-ext`.
 2. Refactor Shilpo's closed bar-widget and action enums into namespaced registries.
 3. Add an in-memory runtime adapter and host interface tests.
-4. Add the WASM runtime and development commands.
+4. ~~Add the WASM runtime and development commands.~~ Completed in Phase 2.
 5. Integrate bar and desktop contributions.
 6. Add side-panel, settings, control-center, launcher, and background-task contributions.
-7. Add package installation, rollback, permission review, and the settings extension manager.
-8. Define signing and registry policy before enabling a public gallery or automatic updates.
+7. Add installation receipts, publisher trust, signed release sources, update selection, atomic activation, and
+   rollback.
+8. Add the Settings Discover, Installed, Updates, and Sources views with permission review.
+9. Implement signing and registry policy before enabling a public gallery or automatic updates.

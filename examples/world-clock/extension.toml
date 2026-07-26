@@ -1,0 +1,42 @@
+id = "io.github.alice.world-clock"
+name = "World Clock"
+version = "1.0.0"
+schema_version = 1
+api_version = "0.1.0"
+min_shilpo_version = "0.1.0"
+authors = ["Alice <alice@example.com>"]
+description = "Shows local time for selected cities."
+repository = "https://github.com/alice/shilpo-world-clock"
+license = "MIT"
+
+[library]
+path = "extension.wasm"
+
+[[contributions.bar_widgets]]
+id = "bar"
+name = "World Clock"
+description = "A compact rotating city clock."
+
+[[contributions.desktop_widgets]]
+id = "desktop"
+name = "World Clock"
+description = "A resizable desktop clock."
+default_width = 320
+default_height = 180
+min_width = 180
+min_height = 100
+
+[[contributions.settings_pages]]
+id = "settings"
+name = "World Clock"
+schema = "settings.schema.json"
+
+[[subscriptions]]
+event = "palette_generated"
+
+[[capabilities]]
+kind = "events:subscribe"
+events = ["palette_generated"]
+
+[[capabilities]]
+kind = "notifications:show"

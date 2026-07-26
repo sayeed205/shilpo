@@ -60,6 +60,8 @@ serde_json = "1"
 serde_repr = "0.1"
 semver = { version = "1", features = ["serde"] }
 smallvec = "1"
+flate2 = "1"
+tar = "0.4"
 toml = "1"
 smol = "2"
 tracing = "0.1"
@@ -68,6 +70,15 @@ wasm-bindgen = "0.2"
 errno = { version = "0.3", default-features = false }
 mcu-material-color = { version = "0.2", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+jsonschema = { version = "0.49.1", default-features = false }
+wasmtime = { version = "47.0.2", default-features = false, features = [
+    "component-model",
+    "cranelift",
+    "runtime",
+    "std",
+    "wat",
+] }
+wasmtime-wasi = { version = "47.0.2", default-features = false, features = ["p2"] }
 
 [workspace.dependencies.windows]
 features = ["Wdk", "Wdk_System", "Wdk_System_SystemServices"]

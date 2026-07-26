@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "cities": {
+      "type": "array",
+      "title": "Cities",
+      "items": {
+        "type": "string"
+      },
+      "default": [
+        "Asia/Kolkata",
+        "Europe/London"
+      ]
+    },
+    "twenty_four_hour": {
+      "type": "boolean",
+      "title": "Use 24-hour time",
+      "default": true
+    }
+  }
+}

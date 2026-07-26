@@ -9,6 +9,14 @@ async fn main() {
     init_tracing();
     let args: Vec<String> = std::env::args().collect();
 
+    if args.get(1).is_some_and(|argument| argument == "ext") {
+        let exit_code = shilpo_ext::cli::run_cli(&args[2..]);
+        if exit_code != 0 {
+            std::process::exit(exit_code);
+        }
+        return;
+    }
+
     if args.len() > 1 && (args[1] == "doctor" || args[1] == "--doctor") {
         let auto_fix = args.iter().any(|a| a == "--fix");
         let doctor = shilpo_shell::DoctorChecker::new();
