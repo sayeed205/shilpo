@@ -400,6 +400,11 @@ impl Render for BarView {
     }
 }
 
+fn notification_timeout(notification: &Notification) -> Option<Duration> {
+    (notification.expire_timeout_ms > 0)
+        .then(|| Duration::from_millis(notification.expire_timeout_ms as u64))
+}
+
 pub fn open_notification_toast(cx: &mut App, notification: Notification) {
     use crate::notification::NotificationToastView;
     use gpui::{
@@ -408,11 +413,8 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
         point, px, size,
     };
 
-    ShellRuntime::push_notification_history(cx, notification.clone());
-    if ShellRuntime::is_dnd_active(cx) {
-        tracing::info!("DND active: suppressing notification toast popup");
-        return;
-    }
+    let timeout = notification_timeout(&notification);
+    let notification_id = notification.id;
 
     let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
         (display.bounds(), Some(display.id()))
@@ -446,14 +448,30 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
         ..Default::default()
     };
 
+    let generation = ShellRuntime::reserve_notification_generation(cx);
     if let Ok(handle) = cx.open_window(options, move |window, cx| {
-        NotificationToastView::view(notification.clone(), window, cx)
+        NotificationToastView::view(notification.clone(), generation, window, cx)
     }) {
-        let generation = ShellRuntime::register_notification(cx, handle);
-        cx.spawn(async move |cx| {
-            cx.background_executor().timer(Duration::from_secs(5)).await;
-            cx.update(|cx| ShellRuntime::expire_notification(cx, generation));
-        })
-        .detach();
+        ShellRuntime::register_notification(cx, generation, notification_id, handle);
+        if let Some(timeout) = timeout {
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(timeout).await;
+                cx.update(|cx| ShellRuntime::expire_notification(cx, generation));
+            })
+            .detach();
+        }
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+
+    #[test]
+    fn zero_timeout_never_schedules_expiry() {
+        let mut notification = Notification::new("Critical", "Keep visible");
+        notification.expire_timeout_ms = 0;
+
+        assert_eq!(notification_timeout(&notification), None);
     }
 }

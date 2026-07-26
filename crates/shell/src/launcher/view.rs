@@ -12,6 +12,7 @@ use shilpo_ui::{
     input::{Input, InputEvent, InputState},
     v_flex,
 };
+use std::{sync::mpsc::TryRecvError, time::Duration};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LauncherCategory {
@@ -85,6 +86,46 @@ pub enum LauncherSearchResult {
     Uri(String),
 }
 
+fn search_results(
+    scanner: &AppScanner,
+    text: &str,
+    category: LauncherCategory,
+    recent_apps: &[String],
+) -> Vec<LauncherSearchResult> {
+    let query = text.trim().to_lowercase();
+    let mut apps: Vec<Application> = scanner
+        .search(text)
+        .into_iter()
+        .filter(|app| category.matches(app))
+        .collect();
+
+    apps.sort_by_key(|app| {
+        recent_apps
+            .iter()
+            .position(|id| id == &app.exec)
+            .unwrap_or(usize::MAX)
+    });
+
+    let mut results = Vec::new();
+    if let Some(path) = expand_path(text) {
+        results.push(LauncherSearchResult::FilePath(path));
+    } else if is_uri_spec(text) {
+        results.push(LauncherSearchResult::Uri(text.trim().to_string()));
+    }
+    results.extend(apps.into_iter().map(LauncherSearchResult::App));
+    results.extend(
+        ActionRegistry::all()
+            .into_iter()
+            .filter(|action| {
+                query.is_empty()
+                    || action.label.to_lowercase().contains(&query)
+                    || action.name.contains(&query)
+            })
+            .map(LauncherSearchResult::Action),
+    );
+    results
+}
+
 fn expand_path(query: &str) -> Option<std::path::PathBuf> {
     let q = query.trim();
     if q.is_empty() {
@@ -127,11 +168,20 @@ pub struct LauncherView {
     selected_index: usize,
     active_category: LauncherCategory,
     pub loading: bool,
+    _catalog_task: gpui::Task<()>,
 }
 
 impl LauncherView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let scanner = AppScanner::new_empty();
+        let scanner = ShellRuntime::app_scanner(cx).unwrap_or_else(AppScanner::new_empty);
+        let catalog_updates = scanner.subscribe();
+        let loading = scanner.applications().is_empty();
+        let results = search_results(
+            &scanner,
+            "",
+            LauncherCategory::All,
+            &ShellRuntime::recent_apps(cx),
+        );
 
         let input_state =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search applications..."));
@@ -159,32 +209,49 @@ impl LauncherView {
         })
         .detach();
 
-        // Spawn background scan task so the launcher opens instantly on frame 1
-        cx.spawn(async move |this, cx| {
-            let scanned = cx
-                .background_executor()
-                .spawn(async move {
-                    let scanner = AppScanner::new().unwrap_or_default();
-                    scanner.applications()
-                })
-                .await;
+        let catalog_task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                match catalog_updates.try_recv() {
+                    Ok(()) => {
+                        while catalog_updates.try_recv().is_ok() {}
+                        if this
+                            .update(cx, |view, cx| {
+                                view.loading = false;
+                                view.update_search(cx);
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(TryRecvError::Empty) => {}
+                    Err(TryRecvError::Disconnected) => return,
+                }
+            }
+        });
 
-            let _ = this.update(cx, |view, cx| {
-                view.scanner = AppScanner::from_applications(scanned);
-                view.update_search(cx);
-                view.loading = false;
-                cx.notify();
-            });
-        })
-        .detach();
+        // Keep the launcher attached to the shared catalog while filling an empty cache.
+        if loading {
+            let scanner_clone = scanner.clone();
+            cx.spawn(async move |_, cx| {
+                cx.background_executor()
+                    .spawn(async move { scanner_clone.rescan() })
+                    .await;
+            })
+            .detach();
+        }
 
         Self {
             scanner,
             input_state,
-            results: Vec::new(),
+            results,
             selected_index: 0,
             active_category: LauncherCategory::All,
-            loading: true,
+            loading,
+            _catalog_task: catalog_task,
         }
     }
 
@@ -199,53 +266,8 @@ impl LauncherView {
 
     fn update_search(&mut self, cx: &mut Context<Self>) {
         let text = self.input_state.read(cx).value().to_string();
-        let q = text.trim().to_lowercase();
-        let category = self.active_category;
-
-        // Collect recent_apps for frequency ranking
         let recent_apps = ShellRuntime::recent_apps(cx);
-
-        // Filter and rank applications
-        let mut apps: Vec<Application> = self
-            .scanner
-            .search(&text)
-            .into_iter()
-            .filter(|app| category.matches(app))
-            .collect();
-
-        // Sort by frequency: apps appearing earlier in recent_apps rank higher
-        apps.sort_by(|a, b| {
-            let freq_a = recent_apps
-                .iter()
-                .position(|id| id == &a.exec)
-                .unwrap_or(usize::MAX);
-            let freq_b = recent_apps
-                .iter()
-                .position(|id| id == &b.exec)
-                .unwrap_or(usize::MAX);
-            freq_a.cmp(&freq_b)
-        });
-
-        let mut combined: Vec<LauncherSearchResult> = Vec::new();
-
-        if let Some(path) = expand_path(&text) {
-            combined.push(LauncherSearchResult::FilePath(path));
-        } else if is_uri_spec(&text) {
-            combined.push(LauncherSearchResult::Uri(text.trim().to_string()));
-        }
-
-        for app in apps {
-            combined.push(LauncherSearchResult::App(app));
-        }
-
-        for action in ActionRegistry::all() {
-            if q.is_empty() || action.label.to_lowercase().contains(&q) || action.name.contains(&q)
-            {
-                combined.push(LauncherSearchResult::Action(action));
-            }
-        }
-
-        self.results = combined;
+        self.results = search_results(&self.scanner, &text, self.active_category, &recent_apps);
         self.selected_index = 0;
         cx.notify();
     }
@@ -1007,5 +1029,34 @@ impl Render for LauncherView {
                             .child(search_web_item),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn populated_catalog_produces_initial_launcher_results() {
+        let app = Application {
+            name: "Editor".into(),
+            exec: "editor".into(),
+            icon: None,
+            icon_path: None,
+            description: None,
+            categories: vec!["Development".into()],
+            desktop_file: "/tmp/editor.desktop".into(),
+            working_dir: None,
+            terminal: false,
+            try_exec: None,
+        };
+        let scanner = AppScanner::from_applications(vec![app]);
+
+        let results = search_results(&scanner, "", LauncherCategory::All, &[]);
+
+        assert!(matches!(
+            results.first(),
+            Some(LauncherSearchResult::App(app)) if app.name == "Editor"
+        ));
     }
 }

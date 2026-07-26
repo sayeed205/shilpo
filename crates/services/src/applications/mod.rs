@@ -6,7 +6,7 @@ use std::{
     io::{BufRead, BufReader},
     path::PathBuf,
     process::Command,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread,
 };
 
@@ -323,6 +323,8 @@ pub fn parse_exec(exec: &str, icon: Option<&str>) -> Result<Vec<String>> {
 #[derive(Clone)]
 pub struct AppScanner {
     apps: Arc<Mutex<Vec<Application>>>,
+    directories: Arc<Vec<PathBuf>>,
+    subscribers: Arc<Mutex<Vec<mpsc::SyncSender<()>>>>,
 }
 
 impl Default for AppScanner {
@@ -334,15 +336,15 @@ impl Default for AppScanner {
 impl AppScanner {
     /// Creates an empty AppScanner without running synchronous disk I/O.
     pub fn new_empty() -> Self {
-        Self {
-            apps: Arc::new(Mutex::new(Vec::new())),
-        }
+        Self::with_directories(application_directories())
     }
 
     /// Creates an AppScanner initialized with a pre-scanned list of applications.
     pub fn from_applications(apps: Vec<Application>) -> Self {
         Self {
             apps: Arc::new(Mutex::new(apps)),
+            directories: Arc::new(application_directories()),
+            subscribers: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -356,16 +358,7 @@ impl AppScanner {
     /// Rescans XDG application directories for .desktop files.
     pub fn rescan(&self) {
         let mut scanned = Vec::new();
-        let mut dirs = vec![
-            PathBuf::from("/usr/share/applications"),
-            PathBuf::from("/usr/local/share/applications"),
-        ];
-
-        if let Ok(home) = std::env::var("HOME") {
-            dirs.push(PathBuf::from(home).join(".local/share/applications"));
-        }
-
-        for dir in dirs {
+        for dir in self.directories.iter() {
             if let Ok(entries) = fs::read_dir(dir) {
                 for entry in entries.filter_map(Result::ok) {
                     let path = entry.path();
@@ -379,26 +372,14 @@ impl AppScanner {
         }
 
         scanned.sort_by_key(|a| a.name.to_lowercase());
-        let mut lock = self.apps.lock().unwrap();
-        *lock = scanned;
+        self.replace_applications(scanned);
     }
 
     /// Starts watching XDG and Flatpak application directories for .desktop file changes.
     pub fn start_watcher(&self) -> Option<notify::RecommendedWatcher> {
         use notify::Watcher;
 
-        let apps_arc = self.apps.clone();
-        let mut dirs = vec![
-            PathBuf::from("/usr/share/applications"),
-            PathBuf::from("/usr/local/share/applications"),
-            PathBuf::from("/var/lib/flatpak/exports/share/applications"),
-        ];
-
-        if let Ok(home) = std::env::var("HOME") {
-            let home_path = PathBuf::from(home);
-            dirs.push(home_path.join(".local/share/applications"));
-            dirs.push(home_path.join(".local/share/flatpak/exports/share/applications"));
-        }
+        let catalog = self.clone();
 
         match notify::RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
@@ -409,45 +390,17 @@ impl AppScanner {
                         .any(|p| p.extension().and_then(|e| e.to_str()) == Some("desktop"))
                 {
                     icons::clear_icon_cache();
-                    let mut scanned = Vec::new();
-                    let mut scan_dirs = vec![
-                        PathBuf::from("/usr/share/applications"),
-                        PathBuf::from("/usr/local/share/applications"),
-                        PathBuf::from("/var/lib/flatpak/exports/share/applications"),
-                    ];
-                    if let Ok(home) = std::env::var("HOME") {
-                        let home_path = PathBuf::from(home);
-                        scan_dirs.push(home_path.join(".local/share/applications"));
-                        scan_dirs.push(
-                            home_path.join(".local/share/flatpak/exports/share/applications"),
-                        );
-                    }
-                    for dir in scan_dirs {
-                        if let Ok(entries) = fs::read_dir(dir) {
-                            for entry in entries.filter_map(Result::ok) {
-                                let path = entry.path();
-                                if path.extension().and_then(|s| s.to_str()) == Some("desktop")
-                                    && let Ok(app) = parse_desktop_file(&path)
-                                {
-                                    scanned.push(app);
-                                }
-                            }
-                        }
-                    }
-                    scanned.sort_by_key(|a| a.name.to_lowercase());
-                    if let Ok(mut lock) = apps_arc.lock() {
-                        *lock = scanned;
-                    }
+                    catalog.rescan();
                 }
             },
             notify::Config::default(),
         ) {
             Ok(mut watcher) => {
                 let mut watched_any = false;
-                for dir in dirs {
+                for dir in self.directories.iter() {
                     if dir.exists()
                         && watcher
-                            .watch(&dir, notify::RecursiveMode::NonRecursive)
+                            .watch(dir, notify::RecursiveMode::NonRecursive)
                             .is_ok()
                     {
                         watched_any = true;
@@ -465,6 +418,13 @@ impl AppScanner {
     /// Returns all scanned applications.
     pub fn applications(&self) -> Vec<Application> {
         self.apps.lock().unwrap().clone()
+    }
+
+    /// Subscribes to catalog changes. Notifications are coalesced while a caller is busy.
+    pub fn subscribe(&self) -> mpsc::Receiver<()> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.subscribers.lock().unwrap().push(sender);
+        receiver
     }
 
     /// Performs case-insensitive search with category filtering and relevance ranking score.
@@ -530,6 +490,41 @@ impl AppScanner {
     pub fn search(&self, query: &str) -> Vec<Application> {
         self.search_with_category(query, None)
     }
+
+    fn with_directories(directories: Vec<PathBuf>) -> Self {
+        Self {
+            apps: Arc::new(Mutex::new(Vec::new())),
+            directories: Arc::new(directories),
+            subscribers: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn replace_applications(&self, applications: Vec<Application>) {
+        *self.apps.lock().unwrap() = applications;
+        self.subscribers
+            .lock()
+            .unwrap()
+            .retain(|subscriber| match subscriber.try_send(()) {
+                Ok(()) | Err(mpsc::TrySendError::Full(())) => true,
+                Err(mpsc::TrySendError::Disconnected(())) => false,
+            });
+    }
+}
+
+fn application_directories() -> Vec<PathBuf> {
+    let mut directories = vec![
+        PathBuf::from("/usr/share/applications"),
+        PathBuf::from("/usr/local/share/applications"),
+        PathBuf::from("/var/lib/flatpak/exports/share/applications"),
+    ];
+
+    if let Ok(home) = std::env::var("HOME") {
+        let home = PathBuf::from(home);
+        directories.push(home.join(".local/share/applications"));
+        directories.push(home.join(".local/share/flatpak/exports/share/applications"));
+    }
+
+    directories
 }
 
 fn parse_desktop_file(path: &PathBuf) -> Result<Application> {
@@ -979,5 +974,28 @@ mod tests {
         let results = scanner.search_with_category("Browser", Some("Network"));
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "Firefox");
+    }
+
+    #[test]
+    fn test_live_app_catalog_rescan_notifies_subscriber() {
+        let fixture_dir =
+            std::env::temp_dir().join(format!("shilpo-live-catalog-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&fixture_dir);
+        fs::create_dir_all(&fixture_dir).unwrap();
+        fs::write(
+            fixture_dir.join("live.desktop"),
+            "[Desktop Entry]\nName=Live App\nExec=live-app\n",
+        )
+        .unwrap();
+
+        let scanner = AppScanner::with_directories(vec![fixture_dir.clone()]);
+        let updates = scanner.subscribe();
+        scanner.rescan();
+
+        updates
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .expect("rescan must notify catalog subscribers");
+        assert_eq!(scanner.applications()[0].name, "Live App");
+        fs::remove_dir_all(fixture_dir).unwrap();
     }
 }

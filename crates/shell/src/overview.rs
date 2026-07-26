@@ -70,16 +70,15 @@ impl WorkspaceOverview {
     }
 
     pub fn view(window: &mut Window, cx: &mut App) -> Entity<shilpo_ui::Root> {
-        let (workspaces, windows, active_ws) =
-            if let Ok(niri) = shilpo_services::NiriCompositorService::new() {
-                use shilpo_services::CompositorAdapter;
-                let ws = CompositorAdapter::workspaces(&niri);
-                let win = CompositorAdapter::windows(&niri);
-                let active = ws.iter().find(|w| w.is_active).map(|w| w.id);
-                (ws, win, active)
-            } else {
-                (Vec::new(), Vec::new(), None)
-            };
+        let (workspaces, windows, active_ws) = if let Some(niri) = ShellRuntime::niri(cx) {
+            use shilpo_services::CompositorAdapter;
+            let ws = CompositorAdapter::workspaces(&niri);
+            let win = CompositorAdapter::windows(&niri);
+            let active = ws.iter().find(|w| w.is_active).map(|w| w.id);
+            (ws, win, active)
+        } else {
+            (Vec::new(), Vec::new(), None)
+        };
 
         window.on_window_should_close(cx, |_, cx| {
             ShellRuntime::forget_overview(cx);

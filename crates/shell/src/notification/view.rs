@@ -13,16 +13,26 @@ pub struct NotificationToastView {
 }
 
 impl NotificationToastView {
-    pub fn new(notification: Notification, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        window.on_window_should_close(cx, |_, cx| {
-            ShellRuntime::forget_notification(cx);
+    pub fn new(
+        notification: Notification,
+        generation: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        window.on_window_should_close(cx, move |_, cx| {
+            ShellRuntime::forget_notification(cx, generation);
             true
         });
         Self { notification }
     }
 
-    pub fn view(notification: Notification, window: &mut Window, cx: &mut App) -> Entity<Self> {
-        cx.new(|cx| Self::new(notification, window, cx))
+    pub fn view(
+        notification: Notification,
+        generation: u64,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        cx.new(|cx| Self::new(notification, generation, window, cx))
     }
 }
 

@@ -564,9 +564,12 @@ fn handle_client(
         return Ok(());
     }
     let is_status = matches!(&env.request, IpcRequest::GetStatus);
-    let queue_full = !is_status && pending.lock().unwrap().len() >= MAX_QUEUE;
+    let is_telemetry = matches!(&env.request, IpcRequest::GetTelemetry);
+    let queue_full = !is_status && !is_telemetry && pending.lock().unwrap().len() >= MAX_QUEUE;
     let result = if is_status {
         Some(IpcResult::Status(status.lock().unwrap().clone()))
+    } else if is_telemetry {
+        Some(IpcResult::Telemetry(status.lock().unwrap().health.clone()))
     } else if queue_full {
         None
     } else {
@@ -645,6 +648,28 @@ mod tests {
             server.pop_pending_requests().as_slice(),
             [IpcRequest::ToggleBar]
         ));
+        drop(server);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn telemetry_is_returned_directly_without_entering_command_queue() {
+        let (root, path) = fixture();
+        let server = ShellIpcServer::new_at(&root, &path).unwrap();
+        let health = ServiceHealth {
+            compositor_connected: true,
+            uptime_seconds: 42,
+            ..Default::default()
+        };
+        server.update_status(IpcStatus {
+            health: health.clone(),
+            ..Default::default()
+        });
+
+        let response = ShellIpcServer::send_command_at(&path, IpcRequest::GetTelemetry).unwrap();
+
+        assert_eq!(response.result, Some(IpcResult::Telemetry(health)));
+        assert!(server.pop_pending_requests().is_empty());
         drop(server);
         fs::remove_dir_all(root).unwrap();
     }

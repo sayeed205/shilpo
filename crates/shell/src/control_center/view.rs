@@ -71,6 +71,7 @@ impl ControlCenterView {
             .as_ref()
             .map(|service| service.info().is_active)
             .unwrap_or(false);
+        let initial_dnd = ShellRuntime::is_dnd_active(cx);
 
         let audio_available = audio_service
             .as_ref()
@@ -154,7 +155,7 @@ impl ControlCenterView {
             screen_capture_service,
             volume_state,
             brightness_state,
-            dnd_active: false,
+            dnd_active: initial_dnd,
             night_light_active: initial_night_light,
             bluetooth_active: initial_bluetooth,
             is_recording: initial_is_recording,

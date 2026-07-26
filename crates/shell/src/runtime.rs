@@ -27,6 +27,7 @@ pub struct ServiceHub {
     pub niri: Option<NiriCompositorService>,
     pub notification: Option<NotificationService>,
     pub clipboard: shilpo_services::ClipboardService,
+    pub app_scanner: shilpo_services::AppScanner,
     pub service_commands: CommandSender,
     pub notif_rx: Arc<Mutex<mpsc::Receiver<shilpo_services::Notification>>>,
     pub updates_rx: Arc<Mutex<UpdateReceiver>>,
@@ -42,7 +43,8 @@ impl ServiceHub {
         let audio = AudioService::new().ok();
         let network = NetworkService::new().ok();
         let clipboard = shilpo_services::ClipboardService::new();
-        let app_scanner = shilpo_services::AppScanner::new_empty();
+        let app_scanner = shilpo_services::AppScanner::new()
+            .unwrap_or_else(|_| shilpo_services::AppScanner::new_empty());
         let app_watcher = app_scanner.start_watcher();
         let notification = match NotificationService::new() {
             Ok(s) => Some(s),
@@ -79,9 +81,16 @@ impl ServiceHub {
 
         use notify::Watcher;
         let watcher_commands = service_commands.clone();
+        let target_file_name = config_path.file_name().map(|n| n.to_os_string());
         let watcher = match notify::RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
-                if let Some(_event) = res.ok().filter(|e| e.kind.is_modify()) {
+                if let Some(event) = res.ok().filter(|e| e.kind.is_modify())
+                    && (target_file_name.is_none()
+                        || event
+                            .paths
+                            .iter()
+                            .any(|p| p.file_name() == target_file_name.as_deref()))
+                {
                     let _ = service_worker::try_send_command(
                         &watcher_commands,
                         WorkerCommand::ReloadConfig,
@@ -107,6 +116,7 @@ impl ServiceHub {
             niri,
             notification,
             clipboard,
+            app_scanner,
             service_commands,
             notif_rx: Arc::new(Mutex::new(notif_rx)),
             updates_rx: Arc::new(Mutex::new(updates_rx)),
@@ -114,6 +124,12 @@ impl ServiceHub {
             _watcher: watcher,
             _app_watcher: app_watcher,
         }
+    }
+}
+
+fn apply_notification_dnd(notification: Option<&NotificationService>, enabled: bool) {
+    if let Some(notification) = notification {
+        notification.set_dnd_enabled(enabled);
     }
 }
 
@@ -129,10 +145,10 @@ pub struct ShellRuntime {
     overview: Option<WindowHandle<shilpo_ui::Root>>,
     notification: Option<(
         u64,
+        u32,
         WindowHandle<crate::notification::NotificationToastView>,
     )>,
     notification_generation: u64,
-    notification_history: Vec<shilpo_services::Notification>,
     prior_window_id: Option<u64>,
     osd: Option<(
         u64,
@@ -171,12 +187,14 @@ impl ShellRuntime {
         let active_config = shilpo_config::ShellConfig::load_or_create(&config_path)
             .unwrap_or_else(|_| shilpo_config::ShellConfig::default());
         let session_path = shilpo_config::ShellSessionState::default_session_path();
-        let session_state = shilpo_config::ShellSessionState::load_or_default(&session_path);
+        let (session_state, _restored_fallback) =
+            shilpo_config::ShellSessionState::restore_with_fallback(&session_path);
         let heed_dir = shilpo_config::HeedSessionStore::default_db_dir();
         let heed_store = shilpo_config::HeedSessionStore::open_or_repair(&heed_dir)
             .ok()
             .map(Arc::new);
         let hub = ServiceHub::new(cx.background_executor().clone(), config_path);
+        apply_notification_dnd(hub.notification.as_ref(), session_state.dnd_active);
 
         cx.set_global(Self {
             ipc_server,
@@ -190,7 +208,6 @@ impl ShellRuntime {
             overview: None,
             notification: None,
             notification_generation: 0,
-            notification_history: Vec::new(),
             prior_window_id: None,
             osd: None,
             _osd_generation: 0,
@@ -229,7 +246,7 @@ impl ShellRuntime {
             if runtime
                 .notification
                 .as_ref()
-                .is_some_and(|(_, handle)| handle.window_id() == window_id)
+                .is_some_and(|(_, _, handle)| handle.window_id() == window_id)
             {
                 runtime.notification = None;
             }
@@ -375,7 +392,11 @@ impl ShellRuntime {
 
     fn publish_status(&self) {
         let health = shilpo_services::ServiceHealth {
-            compositor_connected: shilpo_services::NiriCompositorService::new().is_ok(),
+            compositor_connected: self
+                .service_hub
+                .as_ref()
+                .and_then(|h| h.niri.as_ref())
+                .is_some(),
             battery_service_available: shilpo_services::BatteryService::new().is_ok(),
             audio_service_available: shilpo_services::AudioService::new().is_ok(),
             network_service_available: shilpo_services::NetworkService::new().is_ok(),
@@ -538,7 +559,7 @@ impl ShellRuntime {
 
     fn capture_prior_focus(cx: &mut App) {
         if cx.global::<Self>().prior_window_id.is_none()
-            && let Ok(service) = shilpo_services::NiriCompositorService::new()
+            && let Some(service) = Self::niri(cx)
             && let Some(win_id) = service.active_window_id()
         {
             cx.global_mut::<Self>().prior_window_id = Some(win_id);
@@ -548,7 +569,7 @@ impl ShellRuntime {
     fn restore_prior_focus(cx: &mut App) {
         let prior_id = cx.global_mut::<Self>().prior_window_id.take();
         if let Some(win_id) = prior_id
-            && let Ok(service) = shilpo_services::NiriCompositorService::new()
+            && let Some(service) = Self::niri(cx)
             && let Err(error) = service.focus_window(win_id)
         {
             tracing::warn!(error = %error, window_id = win_id, "failed to restore prior Niri window focus");
@@ -762,17 +783,16 @@ impl ShellRuntime {
 
     pub fn is_dnd_active(cx: &App) -> bool {
         if cx.has_global::<Self>() {
-            cx.global::<Self>().session_state.dnd_active
+            let runtime = cx.global::<Self>();
+            runtime
+                .service_hub
+                .as_ref()
+                .and_then(|hub| hub.notification.as_ref())
+                .map_or(runtime.session_state.dnd_active, |notification| {
+                    notification.is_dnd_enabled()
+                })
         } else {
             false
-        }
-    }
-
-    pub fn push_notification_history(cx: &mut App, notification: shilpo_services::Notification) {
-        let runtime = cx.global_mut::<Self>();
-        runtime.notification_history.push(notification);
-        if runtime.notification_history.len() > 50 {
-            runtime.notification_history.remove(0);
         }
     }
 
@@ -800,24 +820,65 @@ impl ShellRuntime {
         }
     }
 
-    pub fn notification_history(cx: &App) -> &[shilpo_services::Notification] {
-        &cx.global::<Self>().notification_history
+    pub fn notification_history(cx: &App) -> Vec<shilpo_services::Notification> {
+        if cx.has_global::<Self>()
+            && let Some(notification) = cx
+                .global::<Self>()
+                .service_hub
+                .as_ref()
+                .and_then(|hub| hub.notification.as_ref())
+        {
+            notification.history()
+        } else {
+            Vec::new()
+        }
     }
 
     pub fn clear_notification_history(cx: &mut App) {
-        if cx.has_global::<Self>() {
-            cx.global_mut::<Self>().notification_history.clear();
+        if cx.has_global::<Self>()
+            && let Some(notification) = cx
+                .global::<Self>()
+                .service_hub
+                .as_ref()
+                .and_then(|hub| hub.notification.as_ref())
+        {
+            notification.clear_history();
         }
     }
 
     pub fn set_dnd_enabled(cx: &mut App, enabled: bool) {
         if cx.has_global::<Self>() {
             let runtime = cx.global_mut::<Self>();
+            runtime.session_state.dnd_active = enabled;
+            let path = runtime.session_path.clone();
+            let session = runtime.session_state.clone();
+            let _ = session.save_atomic(&path);
+
             if let Some(ref hub) = runtime.service_hub
                 && let Some(ref notif) = hub.notification
             {
                 notif.set_dnd_enabled(enabled);
             }
+        }
+    }
+
+    pub fn app_scanner(cx: &App) -> Option<shilpo_services::AppScanner> {
+        if cx.has_global::<Self>()
+            && let Some(ref hub) = cx.global::<Self>().service_hub
+        {
+            Some(hub.app_scanner.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn niri(cx: &App) -> Option<shilpo_services::NiriCompositorService> {
+        if cx.has_global::<Self>()
+            && let Some(ref hub) = cx.global::<Self>().service_hub
+        {
+            hub.niri.clone()
+        } else {
+            None
         }
     }
 
@@ -876,22 +937,27 @@ impl ShellRuntime {
         }
     }
 
-    pub fn register_notification(
+    pub(crate) fn reserve_notification_generation(cx: &mut App) -> u64 {
+        let runtime = cx.global_mut::<Self>();
+        runtime.notification_generation = runtime.notification_generation.wrapping_add(1);
+        runtime.notification_generation
+    }
+
+    pub(crate) fn register_notification(
         cx: &mut App,
+        generation: u64,
+        notification_id: u32,
         handle: WindowHandle<crate::notification::NotificationToastView>,
-    ) -> u64 {
-        let (generation, prev) = {
+    ) {
+        let prev = {
             let runtime = cx.global_mut::<Self>();
-            runtime.notification_generation = runtime.notification_generation.wrapping_add(1);
-            let generation = runtime.notification_generation;
             let prev = runtime.notification.take();
-            runtime.notification = Some((generation, handle));
-            (generation, prev)
+            runtime.notification = Some((generation, notification_id, handle));
+            prev
         };
-        if let Some((_, prev_handle)) = prev {
+        if let Some((_, _, prev_handle)) = prev {
             let _ = cx.update_window(*prev_handle, |_, window, _| window.remove_window());
         }
-        generation
     }
 
     pub fn invoke_notification_action(cx: &App, id: u32, action_key: &str) {
@@ -905,27 +971,51 @@ impl ShellRuntime {
 
     pub fn close_active_notification(cx: &mut App) {
         let entry = cx.global_mut::<Self>().notification.take();
-        if let Some((_, handle)) = entry {
+        if let Some((_, notification_id, handle)) = entry {
+            Self::dismiss_notification(cx, notification_id);
             let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         }
     }
 
     pub fn expire_notification(cx: &mut App, generation: u64) {
         let entry = cx.global_mut::<Self>().notification.take();
-        let Some((current_generation, handle)) = entry else {
+        let Some((current_generation, notification_id, handle)) = entry else {
             return;
         };
         if current_generation != generation {
-            cx.global_mut::<Self>().notification = Some((current_generation, handle));
+            cx.global_mut::<Self>().notification =
+                Some((current_generation, notification_id, handle));
             return;
         }
         // Generation check above makes delayed expiry harmless after replacement.
         // Entry is taken before close so stale expiry cannot retain registry state.
+        Self::dismiss_notification(cx, notification_id);
         let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
     }
 
-    pub fn forget_notification(cx: &mut App) {
-        cx.global_mut::<Self>().notification = None;
+    pub fn forget_notification(cx: &mut App, generation: u64) {
+        let is_current = cx
+            .global::<Self>()
+            .notification
+            .as_ref()
+            .is_some_and(|(current_generation, _, _)| *current_generation == generation);
+        if is_current
+            && let Some((_, notification_id, _)) = cx.global_mut::<Self>().notification.take()
+        {
+            Self::dismiss_notification(cx, notification_id);
+        }
+    }
+
+    fn dismiss_notification(cx: &App, notification_id: u32) {
+        if cx.has_global::<Self>()
+            && let Some(notification) = cx
+                .global::<Self>()
+                .service_hub
+                .as_ref()
+                .and_then(|hub| hub.notification.as_ref())
+        {
+            notification.dismiss(notification_id);
+        }
     }
 
     pub fn forget_osd(cx: &mut App) {
@@ -1122,7 +1212,7 @@ impl ShellRuntime {
                 Self::enqueue_worker(cx, IpcRequest::FocusWorkspace(id));
             }
             ActionInvocation::CreateWorkspace(name) => {
-                if let Ok(service) = shilpo_services::NiriCompositorService::new() {
+                if let Some(service) = Self::niri(cx) {
                     let _ = service.create_workspace(name);
                 }
             }
@@ -1130,7 +1220,7 @@ impl ShellRuntime {
                 window_id,
                 workspace_id,
             } => {
-                if let Ok(service) = shilpo_services::NiriCompositorService::new() {
+                if let Some(service) = Self::niri(cx) {
                     let _ = service.move_window_to_workspace(window_id, workspace_id);
                 }
             }
@@ -1287,7 +1377,7 @@ impl ShellRuntime {
         if let Some(handle) = control_center {
             let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         }
-        if let Some((_, handle)) = notification {
+        if let Some((_, _, handle)) = notification {
             let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         }
         let runtime = cx.global_mut::<Self>();
@@ -1513,5 +1603,15 @@ mod tests {
         assert_eq!(overview.selected_window_id(), Some(101));
         overview.select_next_window();
         assert_eq!(overview.selected_window_id(), Some(101));
+    }
+
+    #[test]
+    fn restored_dnd_is_applied_to_notification_lifecycle() {
+        let notification = NotificationService::new_offline();
+        assert!(!notification.is_dnd_enabled());
+
+        apply_notification_dnd(Some(&notification), true);
+
+        assert!(notification.is_dnd_enabled());
     }
 }

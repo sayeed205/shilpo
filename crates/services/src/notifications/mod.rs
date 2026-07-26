@@ -47,6 +47,7 @@ impl Notification {
 /// Dynamic Notification Daemon Service implementing org.freedesktop.Notifications.
 pub struct NotificationService {
     notifications: Arc<Mutex<Vec<Notification>>>,
+    history: Arc<Mutex<Vec<Notification>>>,
     new_notif_sender: Arc<Mutex<Option<std::sync::mpsc::Sender<Notification>>>>,
     dnd_enabled: Arc<Mutex<bool>>,
     _connection: Option<Connection>,
@@ -76,6 +77,7 @@ impl NotificationService {
     pub fn new_offline() -> Self {
         Self {
             notifications: Arc::new(Mutex::new(Vec::new())),
+            history: Arc::new(Mutex::new(Vec::new())),
             new_notif_sender: Arc::new(Mutex::new(None)),
             dnd_enabled: Arc::new(Mutex::new(false)),
             _connection: None,
@@ -85,12 +87,14 @@ impl NotificationService {
     /// Registers the notification daemon on an existing zbus Connection.
     pub async fn new_with_connection(connection: Connection) -> Result<Self> {
         let notifications = Arc::new(Mutex::new(Vec::new()));
+        let history = Arc::new(Mutex::new(Vec::new()));
         let next_id = Arc::new(Mutex::new(0));
         let new_notif_sender = Arc::new(Mutex::new(None));
         let dnd_enabled = Arc::new(Mutex::new(false));
 
         let service = Self {
             notifications: notifications.clone(),
+            history: history.clone(),
             new_notif_sender: new_notif_sender.clone(),
             dnd_enabled: dnd_enabled.clone(),
             _connection: Some(connection.clone()),
@@ -98,6 +102,7 @@ impl NotificationService {
 
         let server = NotificationServer {
             notifications,
+            history,
             next_id,
             new_notif_sender,
             dnd_enabled,
@@ -185,6 +190,16 @@ impl NotificationService {
         Ok(())
     }
 
+    /// Returns historical notifications up to cap.
+    pub fn history(&self) -> Vec<Notification> {
+        self.history.lock().unwrap().clone()
+    }
+
+    /// Clears history notifications.
+    pub fn clear_history(&self) {
+        self.history.lock().unwrap().clear();
+    }
+
     /// Service boundary helper method for standalone notification daemon process execution.
     pub fn run_daemon_boundary(&self) -> Result<()> {
         if !self.is_dbus_connected() {
@@ -198,6 +213,7 @@ impl NotificationService {
 
 struct NotificationServer {
     notifications: Arc<Mutex<Vec<Notification>>>,
+    history: Arc<Mutex<Vec<Notification>>>,
     next_id: Arc<Mutex<u32>>,
     new_notif_sender: Arc<Mutex<Option<std::sync::mpsc::Sender<Notification>>>>,
     dnd_enabled: Arc<Mutex<bool>>,
@@ -254,14 +270,14 @@ impl NotificationServer {
         }
 
         // Calculate expire timeout
-        let expire_timeout_ms = if expire_timeout > 0 {
-            expire_timeout
-        } else {
-            match urgency {
+        let expire_timeout_ms = match expire_timeout {
+            0 => 0,
+            timeout if timeout > 0 => timeout,
+            _ => match urgency {
                 NotificationUrgency::Low => 3000,
                 NotificationUrgency::Normal => 5000,
                 NotificationUrgency::Critical => 0,
-            }
+            },
         };
 
         let notification = Notification {
@@ -288,6 +304,14 @@ impl NotificationServer {
                 list[pos] = notification.clone();
             } else {
                 list.push(notification.clone());
+            }
+        }
+
+        {
+            let mut hist = self.history.lock().unwrap();
+            hist.push(notification.clone());
+            if hist.len() > 50 {
+                hist.remove(0);
             }
         }
 
@@ -335,6 +359,7 @@ mod tests {
 
         let server = NotificationServer {
             notifications: service.notifications.clone(),
+            history: service.history.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
@@ -355,6 +380,10 @@ mod tests {
         let list = service.notifications();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].app_name, "test-app");
+        assert_eq!(
+            list[0].expire_timeout_ms, 0,
+            "an explicit zero timeout must never expire"
+        );
 
         let received = rx.recv().unwrap();
         assert_eq!(received.id, 1);
@@ -367,6 +396,7 @@ mod tests {
     fn test_notification_urgency_and_action_parsing() {
         let server = NotificationServer {
             notifications: Arc::new(Mutex::new(Vec::new())),
+            history: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: Arc::new(Mutex::new(None)),
             dnd_enabled: Arc::new(Mutex::new(false)),
@@ -401,6 +431,7 @@ mod tests {
         let service = NotificationService::new_offline();
         let server = NotificationServer {
             notifications: service.notifications.clone(),
+            history: service.history.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
@@ -437,6 +468,7 @@ mod tests {
         let service = NotificationService::new_offline();
         let server = NotificationServer {
             notifications: service.notifications.clone(),
+            history: service.history.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
@@ -479,6 +511,7 @@ mod tests {
         let service = NotificationService::new_offline();
         let server = NotificationServer {
             notifications: service.notifications.clone(),
+            history: service.history.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
@@ -518,6 +551,7 @@ mod tests {
         let service = NotificationService::new_offline();
         let server = NotificationServer {
             notifications: service.notifications.clone(),
+            history: service.history.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
@@ -547,6 +581,7 @@ mod tests {
 
         let server = NotificationServer {
             notifications: service.notifications.clone(),
+            history: service.history.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
@@ -590,6 +625,7 @@ mod tests {
 
         let server = NotificationServer {
             notifications: service.notifications.clone(),
+            history: service.history.clone(),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
@@ -608,6 +644,7 @@ mod tests {
         );
         assert!(rx.try_recv().is_err());
         assert_eq!(service.notifications().len(), 1);
+        assert_eq!(service.history().len(), 1);
 
         // Critical urgency - bypasses DND
         server.notify(
@@ -623,6 +660,7 @@ mod tests {
         let critical_msg = rx.recv().unwrap();
         assert_eq!(critical_msg.summary, "Critical Alert");
         assert_eq!(service.notifications().len(), 2);
+        assert_eq!(service.history().len(), 2);
     }
 
     #[test]
@@ -714,5 +752,44 @@ mod tests {
         let start = Instant::now();
         let simulated_tick = start + Duration::from_secs(60);
         assert!(simulated_tick > start);
+    }
+
+    #[test]
+    fn test_notification_history_ring_buffer_and_clear() {
+        let service = NotificationService::new_offline();
+        let server = NotificationServer {
+            notifications: service.notifications.clone(),
+            history: service.history.clone(),
+            next_id: Arc::new(Mutex::new(0)),
+            new_notif_sender: service.new_notif_sender.clone(),
+            dnd_enabled: service.dnd_enabled.clone(),
+        };
+        assert!(service.history().is_empty());
+
+        for index in 0..51 {
+            server.notify(
+                "test-app".to_string(),
+                0,
+                String::new(),
+                format!("H{index}"),
+                "Body".to_string(),
+                Vec::new(),
+                HashMap::new(),
+                -1,
+            );
+        }
+        let history = service.history();
+        assert_eq!(history.len(), 50);
+        assert_eq!(
+            history.first().map(|item| item.summary.as_str()),
+            Some("H1")
+        );
+        assert_eq!(
+            history.last().map(|item| item.summary.as_str()),
+            Some("H50")
+        );
+
+        service.clear_history();
+        assert!(service.history().is_empty());
     }
 }
