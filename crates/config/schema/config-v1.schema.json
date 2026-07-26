@@ -80,7 +80,7 @@
         "opacity": {
           "type": "number",
           "format": "float",
-          "default": 0.9200000166893004
+          "default": 0.9200000166893005
         },
         "padding": {
           "type": "integer",
@@ -152,18 +152,7 @@
     },
     "BarWidget": {
       "type": "string",
-      "enum": [
-        "Launcher",
-        "Workspaces",
-        "ActiveWindow",
-        "Clock",
-        "Media",
-        "Sysinfo",
-        "Network",
-        "Audio",
-        "Battery",
-        "Settings"
-      ]
+      "pattern": "^(builtin:(launcher|workspaces|active_window|clock|media|sysinfo|network|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
     },
     "BarWidgets": {
       "type": "object",

@@ -156,6 +156,7 @@ pub struct ShellRuntime {
         Entity<crate::osd::OsdView>,
     )>,
     _osd_generation: u64,
+    actions: ActionRegistry,
     keybindings: crate::actions::KeybindingManager,
     session_state: shilpo_config::ShellSessionState,
     session_path: PathBuf,
@@ -211,6 +212,7 @@ impl ShellRuntime {
             prior_window_id: None,
             osd: None,
             _osd_generation: 0,
+            actions: ActionRegistry::default(),
             keybindings: crate::actions::KeybindingManager::with_defaults(),
             session_state,
             session_path,
@@ -804,6 +806,25 @@ impl ShellRuntime {
         runtime.keybindings.register(shortcut, action)
     }
 
+    pub fn action_descriptors(cx: &App) -> Vec<crate::actions::ActionDescriptor> {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>().actions.all()
+        } else {
+            ActionRegistry::default().all()
+        }
+    }
+
+    pub fn register_extension_action(
+        cx: &mut App,
+        id: shilpo_ext::CanonicalId,
+        name: impl Into<String>,
+        label: impl Into<String>,
+    ) -> Result<ActionId, String> {
+        cx.global_mut::<Self>()
+            .actions
+            .register_extension(id, name, label)
+    }
+
     pub fn update_shortcut_with_override(
         cx: &mut App,
         spec: &str,
@@ -1186,9 +1207,12 @@ impl ShellRuntime {
         cx: &mut App,
         invocation: ActionInvocation,
     ) -> Result<(), ShellError> {
-        let descriptor = ActionRegistry::all()
-            .into_iter()
-            .find(|d| d.id == invocation.id())
+        let action_id = invocation.id();
+        let descriptor = cx
+            .global::<Self>()
+            .actions
+            .descriptor(&action_id)
+            .cloned()
             .ok_or_else(|| ShellError::ActionFailed("unknown action id".into()))?;
 
         if !invocation.matches_descriptor(&descriptor) {
@@ -1305,6 +1329,11 @@ impl ShellRuntime {
                 if let Ok(capture) = shilpo_services::ScreenCaptureService::new() {
                     capture.toggle_recording(true, shilpo_services::RecordMode::Region);
                 }
+            }
+            ActionInvocation::Extension { id, .. } => {
+                return Err(ShellError::ActionFailed(format!(
+                    "extension action 'ext:{id}' has no loaded runtime"
+                )));
             }
         }
         Ok(())

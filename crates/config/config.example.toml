@@ -19,6 +19,6 @@ horizontal = 180
 vertical = 8
 
 [bar.widgets]
-start = ["Launcher", "Workspaces", "ActiveWindow"]
-center = ["Clock", "Media"]
-end = ["Sysinfo", "Network", "Audio", "Battery", "Settings"]
+start = ["builtin:launcher", "builtin:workspaces", "builtin:active_window"]
+center = ["builtin:clock", "builtin:media"]
+end = ["builtin:sysinfo", "builtin:network", "builtin:audio", "builtin:battery", "builtin:settings"]

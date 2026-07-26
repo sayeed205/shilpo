@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use shilpo_ext::CanonicalId;
+use std::{borrow::Cow, collections::BTreeMap, fmt, str::FromStr};
 
-/// Stable identifier for registered shell actions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ActionId {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum BuiltinActionId {
     ToggleLauncher,
     ToggleControlCenter,
     ToggleBar,
@@ -22,8 +22,8 @@ pub enum ActionId {
     RecordScreen,
 }
 
-impl ActionId {
-    pub const ALL: &'static [Self] = &[
+impl BuiltinActionId {
+    const ALL: &'static [Self] = &[
         Self::ToggleLauncher,
         Self::ToggleControlCenter,
         Self::ToggleBar,
@@ -42,7 +42,7 @@ impl ActionId {
         Self::RecordScreen,
     ];
 
-    pub fn name(self) -> &'static str {
+    fn name(self) -> &'static str {
         match self {
             Self::ToggleLauncher => "toggle_launcher",
             Self::ToggleControlCenter => "toggle_control_center",
@@ -64,6 +64,96 @@ impl ActionId {
     }
 }
 
+/// Stable, namespaced identifier for built-in and extension-provided actions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ActionId(Cow<'static, str>);
+
+#[allow(non_upper_case_globals)]
+impl ActionId {
+    pub const ToggleLauncher: Self = Self(Cow::Borrowed("builtin:toggle_launcher"));
+    pub const ToggleControlCenter: Self = Self(Cow::Borrowed("builtin:toggle_control_center"));
+    pub const ToggleBar: Self = Self(Cow::Borrowed("builtin:toggle_bar"));
+    pub const ToggleOverview: Self = Self(Cow::Borrowed("builtin:toggle_overview"));
+    pub const FocusWorkspace: Self = Self(Cow::Borrowed("builtin:focus_workspace"));
+    pub const CreateWorkspace: Self = Self(Cow::Borrowed("builtin:create_workspace"));
+    pub const MoveWindowToWorkspace: Self = Self(Cow::Borrowed("builtin:move_window_to_workspace"));
+    pub const ReloadConfig: Self = Self(Cow::Borrowed("builtin:reload_config"));
+    pub const Quit: Self = Self(Cow::Borrowed("builtin:quit"));
+    pub const VolumeUp: Self = Self(Cow::Borrowed("builtin:volume_up"));
+    pub const VolumeDown: Self = Self(Cow::Borrowed("builtin:volume_down"));
+    pub const VolumeMute: Self = Self(Cow::Borrowed("builtin:volume_mute"));
+    pub const BrightnessUp: Self = Self(Cow::Borrowed("builtin:brightness_up"));
+    pub const BrightnessDown: Self = Self(Cow::Borrowed("builtin:brightness_down"));
+    pub const TakeScreenshot: Self = Self(Cow::Borrowed("builtin:take_screenshot"));
+    pub const RecordScreen: Self = Self(Cow::Borrowed("builtin:record_screen"));
+
+    pub fn name(&self) -> &str {
+        self.0
+            .strip_prefix("builtin:")
+            .or_else(|| self.0.rsplit_once('/').map(|(_, name)| name))
+            .unwrap_or(&self.0)
+    }
+
+    pub fn extension(id: CanonicalId) -> Self {
+        Self(Cow::Owned(format!("ext:{id}")))
+    }
+
+    pub fn extension_id(&self) -> Option<CanonicalId> {
+        self.0.strip_prefix("ext:")?.parse().ok()
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ActionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for ActionId {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if let Some(name) = value.strip_prefix("builtin:") {
+            return BuiltinActionId::ALL
+                .iter()
+                .copied()
+                .find(|id| id.name() == name)
+                .map(action_id)
+                .ok_or_else(|| format!("unknown built-in action '{name}'"));
+        }
+        let id = value
+            .strip_prefix("ext:")
+            .ok_or_else(|| format!("action ID '{value}' is missing its namespace"))?
+            .parse()
+            .map_err(|error: shilpo_ext::ManifestError| error.to_string())?;
+        Ok(Self::extension(id))
+    }
+}
+
+impl Serialize for ActionId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for ActionId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(de::Error::custom)
+    }
+}
+
 /// Category classification for shell actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,6 +161,7 @@ pub enum ActionCategory {
     Navigation,
     Overlay,
     System,
+    Extension,
 }
 
 /// Typed action invocation payload carrying optional parameters (e.g. workspace target).
@@ -83,7 +174,10 @@ pub enum ActionInvocation {
     ToggleOverview,
     FocusWorkspace(u64),
     CreateWorkspace(Option<String>),
-    MoveWindowToWorkspace { window_id: u64, workspace_id: u64 },
+    MoveWindowToWorkspace {
+        window_id: u64,
+        workspace_id: u64,
+    },
     ReloadConfig,
     Quit,
     VolumeUp,
@@ -93,6 +187,10 @@ pub enum ActionInvocation {
     BrightnessDown,
     TakeScreenshot,
     RecordScreen,
+    Extension {
+        id: CanonicalId,
+        payload: Option<serde_json::Value>,
+    },
 }
 
 impl ActionInvocation {
@@ -114,6 +212,7 @@ impl ActionInvocation {
             Self::BrightnessDown => ActionId::BrightnessDown,
             Self::TakeScreenshot => ActionId::TakeScreenshot,
             Self::RecordScreen => ActionId::RecordScreen,
+            Self::Extension { id, .. } => ActionId::extension(id.clone()),
         }
     }
 
@@ -125,26 +224,45 @@ impl ActionInvocation {
 
 impl From<ActionId> for ActionInvocation {
     fn from(id: ActionId) -> Self {
-        match id {
-            ActionId::ToggleLauncher => Self::ToggleLauncher,
-            ActionId::ToggleControlCenter => Self::ToggleControlCenter,
-            ActionId::ToggleBar => Self::ToggleBar,
-            ActionId::ToggleOverview => Self::ToggleOverview,
-            ActionId::FocusWorkspace => Self::FocusWorkspace(1),
-            ActionId::CreateWorkspace => Self::CreateWorkspace(None),
-            ActionId::MoveWindowToWorkspace => Self::MoveWindowToWorkspace {
+        if id == ActionId::ToggleLauncher {
+            Self::ToggleLauncher
+        } else if id == ActionId::ToggleControlCenter {
+            Self::ToggleControlCenter
+        } else if id == ActionId::ToggleBar {
+            Self::ToggleBar
+        } else if id == ActionId::ToggleOverview {
+            Self::ToggleOverview
+        } else if id == ActionId::FocusWorkspace {
+            Self::FocusWorkspace(1)
+        } else if id == ActionId::CreateWorkspace {
+            Self::CreateWorkspace(None)
+        } else if id == ActionId::MoveWindowToWorkspace {
+            Self::MoveWindowToWorkspace {
                 window_id: 0,
                 workspace_id: 1,
-            },
-            ActionId::ReloadConfig => Self::ReloadConfig,
-            ActionId::Quit => Self::Quit,
-            ActionId::VolumeUp => Self::VolumeUp,
-            ActionId::VolumeDown => Self::VolumeDown,
-            ActionId::VolumeMute => Self::VolumeMute,
-            ActionId::BrightnessUp => Self::BrightnessUp,
-            ActionId::BrightnessDown => Self::BrightnessDown,
-            ActionId::TakeScreenshot => Self::TakeScreenshot,
-            ActionId::RecordScreen => Self::RecordScreen,
+            }
+        } else if id == ActionId::ReloadConfig {
+            Self::ReloadConfig
+        } else if id == ActionId::Quit {
+            Self::Quit
+        } else if id == ActionId::VolumeUp {
+            Self::VolumeUp
+        } else if id == ActionId::VolumeDown {
+            Self::VolumeDown
+        } else if id == ActionId::VolumeMute {
+            Self::VolumeMute
+        } else if id == ActionId::BrightnessUp {
+            Self::BrightnessUp
+        } else if id == ActionId::BrightnessDown {
+            Self::BrightnessDown
+        } else if id == ActionId::TakeScreenshot {
+            Self::TakeScreenshot
+        } else if id == ActionId::RecordScreen {
+            Self::RecordScreen
+        } else if let Some(id) = id.extension_id() {
+            Self::Extension { id, payload: None }
+        } else {
+            unreachable!("ActionId construction validates its namespace")
         }
     }
 }
@@ -153,135 +271,119 @@ impl From<ActionId> for ActionInvocation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionDescriptor {
     pub id: ActionId,
-    pub name: &'static str,
-    pub label: &'static str,
+    pub name: String,
+    pub label: String,
     pub category: ActionCategory,
     pub enabled: bool,
 }
 
 /// Registry of authoritative shell actions and enablement predicates.
-#[derive(Debug, Clone, Default)]
-pub struct ActionRegistry;
+#[derive(Debug, Clone)]
+pub struct ActionRegistry {
+    descriptors: BTreeMap<ActionId, ActionDescriptor>,
+}
+
+impl Default for ActionRegistry {
+    fn default() -> Self {
+        let descriptors = BuiltinActionId::ALL
+            .iter()
+            .copied()
+            .map(builtin_descriptor)
+            .map(|descriptor| (descriptor.id.clone(), descriptor))
+            .collect();
+        Self { descriptors }
+    }
+}
 
 impl ActionRegistry {
-    pub fn all() -> Vec<ActionDescriptor> {
-        ActionId::ALL
-            .iter()
-            .map(|&id| match id {
-                ActionId::ToggleLauncher => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Toggle Launcher Overlay",
-                    category: ActionCategory::Overlay,
-                    enabled: true,
-                },
-                ActionId::ToggleControlCenter => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Toggle Control Center",
-                    category: ActionCategory::Overlay,
-                    enabled: true,
-                },
-                ActionId::ToggleBar => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Toggle Desktop Bar",
-                    category: ActionCategory::System,
-                    enabled: true,
-                },
-                ActionId::ToggleOverview => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Toggle Workspace Overview",
-                    category: ActionCategory::Overlay,
-                    enabled: true,
-                },
-                ActionId::FocusWorkspace => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Focus Compositor Workspace",
-                    category: ActionCategory::Navigation,
-                    enabled: true,
-                },
-                ActionId::CreateWorkspace => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Create Workspace",
-                    category: ActionCategory::Navigation,
-                    enabled: true,
-                },
-                ActionId::MoveWindowToWorkspace => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Move Focused Window to Workspace",
-                    category: ActionCategory::Navigation,
-                    enabled: true,
-                },
-                ActionId::ReloadConfig => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Reload Shell Configuration",
-                    category: ActionCategory::System,
-                    enabled: true,
-                },
-                ActionId::Quit => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Quit Shell Runtime",
-                    category: ActionCategory::System,
-                    enabled: true,
-                },
-                ActionId::VolumeUp => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Increase Volume",
-                    category: ActionCategory::System,
-                    enabled: true,
-                },
-                ActionId::VolumeDown => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Decrease Volume",
-                    category: ActionCategory::System,
-                    enabled: true,
-                },
-                ActionId::VolumeMute => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Mute Volume",
-                    category: ActionCategory::System,
-                    enabled: true,
-                },
-                ActionId::BrightnessUp => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Increase Brightness",
-                    category: ActionCategory::System,
-                    enabled: true,
-                },
-                ActionId::BrightnessDown => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Decrease Brightness",
-                    category: ActionCategory::System,
-                    enabled: true,
-                },
-                ActionId::TakeScreenshot => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Take Screenshot",
-                    category: ActionCategory::System,
-                    enabled: true,
-                },
-                ActionId::RecordScreen => ActionDescriptor {
-                    id,
-                    name: id.name(),
-                    label: "Record Screen Video",
-                    category: ActionCategory::System,
-                    enabled: true,
-                },
-            })
-            .collect()
+    pub fn all(&self) -> Vec<ActionDescriptor> {
+        self.descriptors.values().cloned().collect()
+    }
+
+    pub fn descriptor(&self, id: &ActionId) -> Option<&ActionDescriptor> {
+        self.descriptors.get(id)
+    }
+
+    pub fn register_extension(
+        &mut self,
+        id: CanonicalId,
+        name: impl Into<String>,
+        label: impl Into<String>,
+    ) -> Result<ActionId, String> {
+        let id = ActionId::extension(id);
+        if self.descriptors.contains_key(&id) {
+            return Err(format!("action '{id}' is already registered"));
+        }
+        self.descriptors.insert(
+            id.clone(),
+            ActionDescriptor {
+                id: id.clone(),
+                name: name.into(),
+                label: label.into(),
+                category: ActionCategory::Extension,
+                enabled: true,
+            },
+        );
+        Ok(id)
+    }
+
+    pub fn unregister_extension(&mut self, id: &CanonicalId) -> Option<ActionDescriptor> {
+        self.descriptors.remove(&ActionId::extension(id.clone()))
+    }
+}
+
+fn builtin_descriptor(id: BuiltinActionId) -> ActionDescriptor {
+    let (label, category) = match id {
+        BuiltinActionId::ToggleLauncher => ("Toggle Launcher Overlay", ActionCategory::Overlay),
+        BuiltinActionId::ToggleControlCenter => ("Toggle Control Center", ActionCategory::Overlay),
+        BuiltinActionId::ToggleBar => ("Toggle Desktop Bar", ActionCategory::System),
+        BuiltinActionId::ToggleOverview => ("Toggle Workspace Overview", ActionCategory::Overlay),
+        BuiltinActionId::FocusWorkspace => {
+            ("Focus Compositor Workspace", ActionCategory::Navigation)
+        }
+        BuiltinActionId::CreateWorkspace => ("Create Workspace", ActionCategory::Navigation),
+        BuiltinActionId::MoveWindowToWorkspace => (
+            "Move Focused Window to Workspace",
+            ActionCategory::Navigation,
+        ),
+        BuiltinActionId::ReloadConfig => ("Reload Shell Configuration", ActionCategory::System),
+        BuiltinActionId::Quit => ("Quit Shell Runtime", ActionCategory::System),
+        BuiltinActionId::VolumeUp => ("Increase Volume", ActionCategory::System),
+        BuiltinActionId::VolumeDown => ("Decrease Volume", ActionCategory::System),
+        BuiltinActionId::VolumeMute => ("Mute Volume", ActionCategory::System),
+        BuiltinActionId::BrightnessUp => ("Increase Brightness", ActionCategory::System),
+        BuiltinActionId::BrightnessDown => ("Decrease Brightness", ActionCategory::System),
+        BuiltinActionId::TakeScreenshot => ("Take Screenshot", ActionCategory::System),
+        BuiltinActionId::RecordScreen => ("Record Screen Video", ActionCategory::System),
+    };
+    let id = action_id(id);
+    ActionDescriptor {
+        name: id.name().to_owned(),
+        id,
+        label: label.to_owned(),
+        category,
+        enabled: true,
+    }
+}
+
+fn action_id(id: BuiltinActionId) -> ActionId {
+    match id {
+        BuiltinActionId::ToggleLauncher => ActionId::ToggleLauncher,
+        BuiltinActionId::ToggleControlCenter => ActionId::ToggleControlCenter,
+        BuiltinActionId::ToggleBar => ActionId::ToggleBar,
+        BuiltinActionId::ToggleOverview => ActionId::ToggleOverview,
+        BuiltinActionId::FocusWorkspace => ActionId::FocusWorkspace,
+        BuiltinActionId::CreateWorkspace => ActionId::CreateWorkspace,
+        BuiltinActionId::MoveWindowToWorkspace => ActionId::MoveWindowToWorkspace,
+        BuiltinActionId::ReloadConfig => ActionId::ReloadConfig,
+        BuiltinActionId::Quit => ActionId::Quit,
+        BuiltinActionId::VolumeUp => ActionId::VolumeUp,
+        BuiltinActionId::VolumeDown => ActionId::VolumeDown,
+        BuiltinActionId::VolumeMute => ActionId::VolumeMute,
+        BuiltinActionId::BrightnessUp => ActionId::BrightnessUp,
+        BuiltinActionId::BrightnessDown => ActionId::BrightnessDown,
+        BuiltinActionId::TakeScreenshot => ActionId::TakeScreenshot,
+        BuiltinActionId::RecordScreen => ActionId::RecordScreen,
     }
 }
 
@@ -372,7 +474,7 @@ impl KeybindingManager {
     }
 
     pub fn action_for(&self, shortcut: &Shortcut) -> Option<ActionId> {
-        self.bindings.get(shortcut).copied()
+        self.bindings.get(shortcut).cloned()
     }
 
     pub fn register_with_override(
@@ -384,10 +486,10 @@ impl KeybindingManager {
     }
 
     pub fn find_conflict(&self, shortcut: &Shortcut, action: ActionId) -> Option<ActionId> {
-        if let Some(&existing) = self.bindings.get(shortcut)
-            && existing != action
+        if let Some(existing) = self.bindings.get(shortcut)
+            && existing != &action
         {
-            Some(existing)
+            Some(existing.clone())
         } else {
             None
         }
@@ -408,8 +510,8 @@ mod tests {
 
     #[test]
     fn action_registry_completeness_and_serialization() {
-        let descriptors = ActionRegistry::all();
-        assert_eq!(descriptors.len(), ActionId::ALL.len());
+        let descriptors = ActionRegistry::default().all();
+        assert_eq!(descriptors.len(), BuiltinActionId::ALL.len());
 
         for desc in &descriptors {
             assert!(!desc.name.is_empty());
@@ -417,7 +519,7 @@ mod tests {
             assert!(desc.enabled);
 
             let json = serde_json::to_string(desc).unwrap();
-            assert!(json.contains(desc.name));
+            assert!(json.contains(&desc.name));
         }
     }
 
@@ -469,7 +571,7 @@ mod tests {
         let inv = ActionInvocation::FocusWorkspace(7);
         assert_eq!(inv.id(), ActionId::FocusWorkspace);
 
-        let descriptors = ActionRegistry::all();
+        let descriptors = ActionRegistry::default().all();
         let fw_desc = descriptors
             .iter()
             .find(|d| d.id == ActionId::FocusWorkspace)
@@ -479,5 +581,24 @@ mod tests {
         let json = serde_json::to_string(&inv).unwrap();
         let deserialized: ActionInvocation = serde_json::from_str(&json).unwrap();
         assert_eq!(inv, deserialized);
+    }
+
+    #[test]
+    fn extension_actions_use_namespaced_ids_and_reject_duplicates() {
+        let canonical: CanonicalId = "io.github.alice.world-clock/refresh".parse().unwrap();
+        let mut registry = ActionRegistry::default();
+        let id = registry
+            .register_extension(canonical.clone(), "refresh", "Refresh World Clock")
+            .unwrap();
+
+        assert_eq!(id.to_string(), "ext:io.github.alice.world-clock/refresh");
+        assert_eq!(id.to_string().parse::<ActionId>().unwrap(), id);
+        assert!(registry.descriptor(&id).is_some());
+        assert!(
+            registry
+                .register_extension(canonical, "refresh", "Duplicate")
+                .is_err()
+        );
+        assert!("refresh".parse::<ActionId>().is_err());
     }
 }

@@ -4,7 +4,7 @@ use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Path, PathBuilder, Pixels, Point,
     Render, Styled, Window, div, prelude::*, px,
 };
-use shilpo_config::{BarPosition, BarWidget, ShellConfig};
+use shilpo_config::{BarPosition, BarWidget, BuiltinBarWidget, ShellConfig};
 use shilpo_services::{AudioInfo, BatteryInfo, NetworkInfo, NiriWorkspaceInfo, Notification};
 use shilpo_ui::{ActiveTheme, h_flex, v_flex};
 use std::time::Duration;
@@ -263,7 +263,9 @@ impl BarView {
 
         for name in widget_names {
             match name {
-                BarWidget::Launcher | BarWidget::ActiveWindow if !rendered.win => {
+                BarWidget::Builtin(BuiltinBarWidget::Launcher | BuiltinBarWidget::ActiveWindow)
+                    if !rendered.win =>
+                {
                     elements.push(
                         WindowInfoCapsule::new(
                             "mod-win",
@@ -275,13 +277,15 @@ impl BarView {
                     );
                     rendered.win = true;
                 }
-                BarWidget::Workspaces if !rendered.ws => {
+                BarWidget::Builtin(BuiltinBarWidget::Workspaces) if !rendered.ws => {
                     elements.push(
                         WorkspacesWidget::new("mod-ws", self.workspaces.clone()).into_any_element(),
                     );
                     rendered.ws = true;
                 }
-                BarWidget::Clock | BarWidget::Battery if !rendered.clock_bat => {
+                BarWidget::Builtin(BuiltinBarWidget::Clock | BuiltinBarWidget::Battery)
+                    if !rendered.clock_bat =>
+                {
                     elements.push(
                         ClockBatteryCapsule::new(
                             "mod-clock",
@@ -292,16 +296,20 @@ impl BarView {
                     );
                     rendered.clock_bat = true;
                 }
-                BarWidget::Media | BarWidget::Sysinfo if !rendered.perf_media => {
+                BarWidget::Builtin(BuiltinBarWidget::Media | BuiltinBarWidget::Sysinfo)
+                    if !rendered.perf_media =>
+                {
                     elements.push(
                         PerfMediaCapsule::new("mod-perf", 40, 66, 3, self.media_track.clone())
                             .into_any_element(),
                     );
                     rendered.perf_media = true;
                 }
-                BarWidget::Network | BarWidget::Audio | BarWidget::Settings
-                    if !rendered.toggles =>
-                {
+                BarWidget::Builtin(
+                    BuiltinBarWidget::Network
+                    | BuiltinBarWidget::Audio
+                    | BuiltinBarWidget::Settings,
+                ) if !rendered.toggles => {
                     elements.push(
                         StatusTogglesCapsule::new(
                             "mod-toggles",
@@ -312,6 +320,9 @@ impl BarView {
                         .into_any_element(),
                     );
                     rendered.toggles = true;
+                }
+                BarWidget::Extension(_) => {
+                    // Extension contribution widget rendering seam
                 }
                 _ => {}
             }

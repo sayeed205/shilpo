@@ -1,4 +1,4 @@
-use crate::actions::{ActionDescriptor, ActionRegistry};
+use crate::actions::ActionDescriptor;
 use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
@@ -91,6 +91,7 @@ fn search_results(
     text: &str,
     category: LauncherCategory,
     recent_apps: &[String],
+    actions: &[ActionDescriptor],
 ) -> Vec<LauncherSearchResult> {
     let query = text.trim().to_lowercase();
     let mut apps: Vec<Application> = scanner
@@ -114,13 +115,14 @@ fn search_results(
     }
     results.extend(apps.into_iter().map(LauncherSearchResult::App));
     results.extend(
-        ActionRegistry::all()
-            .into_iter()
+        actions
+            .iter()
             .filter(|action| {
                 query.is_empty()
                     || action.label.to_lowercase().contains(&query)
                     || action.name.contains(&query)
             })
+            .cloned()
             .map(LauncherSearchResult::Action),
     );
     results
@@ -181,6 +183,7 @@ impl LauncherView {
             "",
             LauncherCategory::All,
             &ShellRuntime::recent_apps(cx),
+            &ShellRuntime::action_descriptors(cx),
         );
 
         let input_state =
@@ -267,7 +270,13 @@ impl LauncherView {
     fn update_search(&mut self, cx: &mut Context<Self>) {
         let text = self.input_state.read(cx).value().to_string();
         let recent_apps = ShellRuntime::recent_apps(cx);
-        self.results = search_results(&self.scanner, &text, self.active_category, &recent_apps);
+        self.results = search_results(
+            &self.scanner,
+            &text,
+            self.active_category,
+            &recent_apps,
+            &ShellRuntime::action_descriptors(cx),
+        );
         self.selected_index = 0;
         cx.notify();
     }
@@ -300,7 +309,7 @@ impl LauncherView {
                     window.remove_window();
                 }
                 LauncherSearchResult::Action(action) => {
-                    let _ = ShellRuntime::dispatch_action(cx, action.id);
+                    let _ = ShellRuntime::dispatch_action(cx, action.id.clone());
                     ShellRuntime::forget_launcher(cx);
                     window.remove_window();
                 }
@@ -494,7 +503,7 @@ impl Render for LauncherView {
                                             .text_base()
                                             .font_bold()
                                             .text_color(cx.theme().on_surface)
-                                            .child(action.label),
+                                            .child(action.label.clone()),
                                     )
                                     .child(
                                         div()
@@ -731,7 +740,9 @@ impl Render for LauncherView {
                             .child(
                                 v_flex()
                                     .gap_0p5()
-                                    .child(div().text_sm().font_semibold().child(action.label))
+                                    .child(
+                                        div().text_sm().font_semibold().child(action.label.clone()),
+                                    )
                                     .child(
                                         div()
                                             .text_xs()
@@ -1052,7 +1063,13 @@ mod tests {
         };
         let scanner = AppScanner::from_applications(vec![app]);
 
-        let results = search_results(&scanner, "", LauncherCategory::All, &[]);
+        let results = search_results(
+            &scanner,
+            "",
+            LauncherCategory::All,
+            &[],
+            &crate::actions::ActionRegistry::default().all(),
+        );
 
         assert!(matches!(
             results.first(),

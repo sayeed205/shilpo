@@ -1,10 +1,13 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use shilpo_ext::CanonicalId;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fmt, fs,
     ops::Range,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -146,9 +149,100 @@ pub enum BarStyle {
     Rect,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BarWidget {
+    Builtin(BuiltinBarWidget),
+    Extension(CanonicalId),
+}
+
+impl BarWidget {
+    pub fn is_builtin(&self) -> bool {
+        matches!(self, Self::Builtin(_))
+    }
+
+    pub fn is_extension(&self) -> bool {
+        matches!(self, Self::Extension(_))
+    }
+}
+
+impl fmt::Display for BarWidget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Builtin(widget) => write!(f, "builtin:{widget}"),
+            Self::Extension(id) => write!(f, "ext:{id}"),
+        }
+    }
+}
+
+impl FromStr for BarWidget {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if let Some(value) = value.strip_prefix("builtin:") {
+            return BuiltinBarWidget::from_str(value).map(Self::Builtin);
+        }
+        if let Some(value) = value.strip_prefix("ext:") {
+            return value
+                .parse()
+                .map(Self::Extension)
+                .map_err(|error| error.to_string());
+        }
+
+        // Read the old built-in spelling so existing configurations can be
+        // rewritten canonically without treating arbitrary strings as extensions.
+        BuiltinBarWidget::from_legacy_str(value)
+            .map(Self::Builtin)
+            .ok_or_else(|| {
+                format!(
+                    "invalid bar widget reference '{value}': expected 'builtin:<name>' or 'ext:<extension>/<contribution>'"
+                )
+            })
+    }
+}
+
+impl Serialize for BarWidget {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for BarWidget {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(de::Error::custom)
+    }
+}
+
+impl JsonSchema for BarWidget {
+    fn schema_name() -> Cow<'static, str> {
+        "BarWidget".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = generator.subschema_for::<String>();
+        if let Some(object) = schema.as_object_mut() {
+            object.insert(
+                "pattern".into(),
+                serde_json::Value::String(
+                    r"^(builtin:(launcher|workspaces|active_window|clock|media|sysinfo|network|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
+                        .into(),
+                ),
+            );
+        }
+        schema
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
 #[serde(rename_all = "PascalCase")]
-pub enum BarWidget {
+pub enum BuiltinBarWidget {
     Launcher,
     Workspaces,
     ActiveWindow,
@@ -159,6 +253,62 @@ pub enum BarWidget {
     Audio,
     Battery,
     Settings,
+}
+
+impl BuiltinBarWidget {
+    fn from_legacy_str(value: &str) -> Option<Self> {
+        match value {
+            "Launcher" => Some(Self::Launcher),
+            "Workspaces" => Some(Self::Workspaces),
+            "ActiveWindow" => Some(Self::ActiveWindow),
+            "Clock" => Some(Self::Clock),
+            "Media" => Some(Self::Media),
+            "Sysinfo" => Some(Self::Sysinfo),
+            "Network" => Some(Self::Network),
+            "Audio" => Some(Self::Audio),
+            "Battery" => Some(Self::Battery),
+            "Settings" => Some(Self::Settings),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for BuiltinBarWidget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Launcher => "launcher",
+            Self::Workspaces => "workspaces",
+            Self::ActiveWindow => "active_window",
+            Self::Clock => "clock",
+            Self::Media => "media",
+            Self::Sysinfo => "sysinfo",
+            Self::Network => "network",
+            Self::Audio => "audio",
+            Self::Battery => "battery",
+            Self::Settings => "settings",
+        };
+        value.fmt(f)
+    }
+}
+
+impl FromStr for BuiltinBarWidget {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "launcher" => Ok(Self::Launcher),
+            "workspaces" => Ok(Self::Workspaces),
+            "active_window" => Ok(Self::ActiveWindow),
+            "clock" => Ok(Self::Clock),
+            "media" => Ok(Self::Media),
+            "sysinfo" => Ok(Self::Sysinfo),
+            "network" => Ok(Self::Network),
+            "audio" => Ok(Self::Audio),
+            "battery" => Ok(Self::Battery),
+            "settings" => Ok(Self::Settings),
+            _ => Err(format!("unknown built-in bar widget '{value}'")),
+        }
+    }
 }
 
 impl Default for ShellConfig {
@@ -205,17 +355,20 @@ impl Default for BarConfig {
             exclusive_zone: None,
             widgets: BarWidgets {
                 start: vec![
-                    BarWidget::Launcher,
-                    BarWidget::Workspaces,
-                    BarWidget::ActiveWindow,
+                    BarWidget::Builtin(BuiltinBarWidget::Launcher),
+                    BarWidget::Builtin(BuiltinBarWidget::Workspaces),
+                    BarWidget::Builtin(BuiltinBarWidget::ActiveWindow),
                 ],
-                center: vec![BarWidget::Clock, BarWidget::Media],
+                center: vec![
+                    BarWidget::Builtin(BuiltinBarWidget::Clock),
+                    BarWidget::Builtin(BuiltinBarWidget::Media),
+                ],
                 end: vec![
-                    BarWidget::Sysinfo,
-                    BarWidget::Network,
-                    BarWidget::Audio,
-                    BarWidget::Battery,
-                    BarWidget::Settings,
+                    BarWidget::Builtin(BuiltinBarWidget::Sysinfo),
+                    BarWidget::Builtin(BuiltinBarWidget::Network),
+                    BarWidget::Builtin(BuiltinBarWidget::Audio),
+                    BarWidget::Builtin(BuiltinBarWidget::Battery),
+                    BarWidget::Builtin(BuiltinBarWidget::Settings),
                 ],
             },
         }
@@ -317,7 +470,7 @@ impl BarConfig {
             ("end", &self.widgets.end),
         ] {
             for widget in widgets {
-                if !seen.insert(*widget) {
+                if !seen.insert(widget.clone()) {
                     d.push(ConfigDiagnostic::new(
                         format!("{prefix}.widgets.{section}"),
                         format!("duplicate widget {widget:?}"),
@@ -1012,8 +1165,34 @@ mod tests {
     #[test]
     fn duplicate_widget() {
         let mut c = valid();
-        c.bar.widgets.end.push(BarWidget::Clock);
+        c.bar
+            .widgets
+            .end
+            .push(BarWidget::Builtin(BuiltinBarWidget::Clock));
         assert!(c.validate().is_err());
+    }
+    #[test]
+    fn bar_widget_references_are_strict_and_namespaced() {
+        assert_eq!(
+            "builtin:clock".parse::<BarWidget>().unwrap(),
+            BarWidget::Builtin(BuiltinBarWidget::Clock)
+        );
+        assert!(matches!(
+            "ext:io.github.alice.world-clock/bar"
+                .parse::<BarWidget>()
+                .unwrap(),
+            BarWidget::Extension(_)
+        ));
+        assert!("Clok".parse::<BarWidget>().is_err());
+        assert!(
+            "io.github.alice.world-clock/bar"
+                .parse::<BarWidget>()
+                .is_err()
+        );
+        assert_eq!(
+            serde_json::to_string(&BarWidget::Builtin(BuiltinBarWidget::Clock)).unwrap(),
+            "\"builtin:clock\""
+        );
     }
     #[test]
     fn schema_fixture_matches_generated_schema() {
