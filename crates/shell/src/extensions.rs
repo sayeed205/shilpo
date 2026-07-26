@@ -5,11 +5,12 @@
 //! one place while the bar, desktop, launcher, and settings remain thin views.
 
 use shilpo_ext::{
-    CanonicalId, Capability, DevelopmentRegistration, ExtensionEvent, ExtensionHost, ExtensionId,
-    ExtensionManifest, ExtensionRuntime, HostEffect, ViewTree, WasmModule, WasmRuntime,
+    CanonicalId, Capability, CatalogPaths, DevelopmentRegistration, ExtensionCatalog,
+    ExtensionEvent, ExtensionHost, ExtensionId, ExtensionManifest, ExtensionRuntime, HostEffect,
+    InstalledExtension, ViewTree, WasmModule, WasmRuntime,
 };
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     fs,
     hash::{Hash, Hasher},
     path::{Component, Path, PathBuf},
@@ -288,15 +289,18 @@ struct SourcePackage {
     root: PathBuf,
     manifest: ExtensionManifest,
     module: Option<Vec<u8>>,
+    grants: Vec<Capability>,
+    development: bool,
     fingerprint: u64,
 }
 
 /// The one extension owner held by [`crate::ShellRuntime`].
 ///
-/// Development registrations are intentionally auto-granted only for
-/// capabilities declared by their manifest. End-user grants belong to Phase 4.
+/// Development registrations are auto-granted only for capabilities declared
+/// by their manifest. Installed packages use the host-owned grant store.
 pub struct ShellExtensions {
     state_dir: PathBuf,
+    catalog: ExtensionCatalog,
     session: ExtensionSession<WasmRuntime>,
     sources: BTreeMap<ExtensionId, SourcePackage>,
     diagnostics: Vec<String>,
@@ -306,13 +310,29 @@ pub struct ShellExtensions {
 
 impl ShellExtensions {
     pub fn load_default() -> Result<Self, String> {
-        Self::load_from(shilpo_ext::default_extension_state_dir())
+        Self::load_from_paths(
+            shilpo_ext::default_extension_state_dir(),
+            CatalogPaths::platform_default(),
+        )
     }
 
     pub fn load_from(state_dir: PathBuf) -> Result<Self, String> {
+        let paths = CatalogPaths::new(state_dir.join("data"), state_dir.join("config"));
+        Self::load_from_paths(state_dir, paths)
+    }
+
+    pub fn load_from_paths(
+        state_dir: PathBuf,
+        catalog_paths: CatalogPaths,
+    ) -> Result<Self, String> {
         let runtime = WasmRuntime::new().map_err(|error| error.to_string())?;
         let mut this = Self {
             state_dir,
+            catalog: ExtensionCatalog::open(
+                catalog_paths,
+                semver::Version::parse(shilpo_ext::CURRENT_SHILPO_VERSION)
+                    .expect("Shilpo version is valid semver"),
+            ),
             session: ExtensionSession::new(runtime),
             sources: BTreeMap::new(),
             diagnostics: Vec::new(),
@@ -421,12 +441,20 @@ impl ShellExtensions {
         self.last_scan = Some(Instant::now());
         let (registrations, mut diagnostics) =
             shilpo_ext::development_registrations(&self.state_dir);
-        let registered_ids = registrations
-            .iter()
-            .map(|registration| registration.id.clone())
-            .collect::<HashSet<_>>();
-        let mut next_sources = self.sources.clone();
-        next_sources.retain(|id, _| registered_ids.contains(id));
+        let mut next_sources = BTreeMap::new();
+        match self.catalog.active_packages() {
+            Ok(packages) => {
+                for package in packages {
+                    match read_installed_source(package) {
+                        Ok(source) => {
+                            next_sources.insert(source.manifest.id.clone(), source);
+                        }
+                        Err(error) => diagnostics.push(error),
+                    }
+                }
+            }
+            Err(error) => diagnostics.push(format!("installed extension catalog: {error}")),
+        }
 
         for registration in registrations {
             match read_source(&registration) {
@@ -439,10 +467,20 @@ impl ShellExtensions {
                 {
                     next_sources.insert(registration.id, source);
                 }
-                Ok(_) => {}
+                Ok(source) => {
+                    next_sources.insert(registration.id, source);
+                }
                 Err(error) => {
                     diagnostics.push(error);
-                    // Keep the last known-good package active during a broken edit.
+                    if let Some(previous) = self
+                        .sources
+                        .get(&registration.id)
+                        .filter(|source| source.development)
+                        .cloned()
+                    {
+                        // Keep the last known-good development generation active.
+                        next_sources.insert(registration.id, previous);
+                    }
                 }
             }
         }
@@ -492,11 +530,7 @@ fn build_session(
     let mut session = ExtensionSession::new(runtime);
     for source in sources.values() {
         let module = source.module.clone().map(WasmModule::from_bytes);
-        session.register(
-            source.manifest.clone(),
-            module,
-            source.manifest.capabilities.clone(),
-        )?;
+        session.register(source.manifest.clone(), module, source.grants.clone())?;
     }
     Ok(session)
 }
@@ -537,8 +571,37 @@ fn read_source(registration: &DevelopmentRegistration) -> Result<SourcePackage, 
 
     Ok(SourcePackage {
         root,
+        grants: manifest.capabilities.clone(),
         manifest,
         module,
+        development: true,
+        fingerprint: hasher.finish(),
+    })
+}
+
+fn read_installed_source(extension: InstalledExtension) -> Result<SourcePackage, String> {
+    let root = extension.package_dir;
+    let module = extension
+        .manifest
+        .library
+        .as_ref()
+        .map(|library| {
+            let path = safe_child(&root, &library.path)?;
+            fs::read(&path).map_err(|error| format!("failed to read {}: {error}", path.display()))
+        })
+        .transpose()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    extension.receipt.active.version.hash(&mut hasher);
+    extension.receipt.active.package_hash.hash(&mut hasher);
+    serde_json::to_vec(&extension.grants)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    Ok(SourcePackage {
+        root,
+        manifest: extension.manifest,
+        module,
+        grants: extension.grants.granted_capabilities,
+        development: false,
         fingerprint: hasher.finish(),
     })
 }
@@ -710,8 +773,10 @@ fn manifest_descriptors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shilpo_ext::{GuestExtension, InMemoryRuntime, TextNode, ViewNode};
+    use shilpo_ext::{ExtensionCli, GuestExtension, InMemoryRuntime, TextNode, ViewNode};
+    use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     struct Guest {
         events: Arc<Mutex<Vec<ExtensionEvent>>>,
@@ -907,5 +972,53 @@ name = "Worker"
                 value: Some(serde_json::Value::String(value)),
             } if key == "timezone" && value == "UTC"
         )));
+    }
+
+    #[test]
+    fn installed_enablement_is_reconciled_through_the_shell_owner() {
+        let root = std::env::temp_dir().join(format!(
+            "shilpo-shell-installed-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = root.join("source");
+        let output = root.join("dist");
+        let state = root.join("state");
+        let paths = CatalogPaths::new(root.join("data"), root.join("config"));
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("extension.toml"),
+            r#"
+id = "io.github.shilpo.installed-test"
+name = "Installed Test"
+version = "1.0.0"
+
+[[contributions.bar_widgets]]
+id = "bar"
+name = "Installed Bar"
+"#,
+        )
+        .unwrap();
+        let package = ExtensionCli::pack(&source, &output).artifact.unwrap();
+        let catalog = ExtensionCatalog::open(
+            paths.clone(),
+            semver::Version::parse(shilpo_ext::CURRENT_SHILPO_VERSION).unwrap(),
+        );
+        let receipt = catalog.install_local(&package).unwrap();
+
+        let disabled = ShellExtensions::load_from_paths(state.clone(), paths.clone()).unwrap();
+        assert!(disabled.descriptors().is_empty());
+
+        catalog.set_enabled(&receipt.id, true).unwrap();
+        let enabled = ShellExtensions::load_from_paths(state.clone(), paths.clone()).unwrap();
+        assert_eq!(enabled.descriptors_for(ContributionSurface::Bar).len(), 1);
+
+        catalog.set_enabled(&receipt.id, false).unwrap();
+        let disabled_again = ShellExtensions::load_from_paths(state, paths).unwrap();
+        assert!(disabled_again.descriptors().is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
 }

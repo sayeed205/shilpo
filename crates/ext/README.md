@@ -1,11 +1,9 @@
 # Shilpo Extensions
 
-Status: Phase 2 (host and development mode) is implemented. `shilpo-ext` provides the validated contract, the
-policy-owning host, in-memory and Wasmtime Component Model runtime adapters, resource budgets, structured diagnostics, a
-circuit breaker, package validation, development registrations, and deterministic `.shilpo-ext` archives.
-
-Shell-surface adapters, automatic file watching, the high-level guest SDK, package installation, signing, registries,
-updates, and Settings discovery belong to later phases.
+Status: Phases 1 through 4 are implemented. `shilpo-ext` provides the validated contract, policy-owning host, in-memory
+and Wasmtime Component Model runtime adapters, resource budgets, structured diagnostics, deterministic
+`.shilpo-ext` archives, Ed25519 signing, atomic installation and rollback, host-owned receipts and grants, signed
+registry resolution, update selection, and the catalog snapshots consumed by the shell, CLI, and Settings app.
 
 See [the extension architecture](../../docs/architecture/extensions.md) for the runtime, security, lifecycle, and
 implementation plan.
@@ -248,7 +246,12 @@ Regenerate the checked-in manifest schema after changing contract types:
 ```bash
 cargo run -p shilpo-ext --example generate_schema -- \
   crates/ext/schema/extension-v1.schema.json
+cargo run -p shilpo-ext --example generate_distribution_schemas -- \
+  crates/ext/schema
 ```
+
+The generated distribution schemas define the package-signature sidecar and signed registry-index envelope consumed by
+Phase 4.
 
 The generated schema is the machine-readable authoring contract. The tests compare it with the checked-in fixture to
 prevent an accidental schema change.
@@ -275,20 +278,24 @@ Build and copy the component to the manifest's `library.path` before running `ch
 
 `pack` produces a versioned `.shilpo-ext` archive containing only runtime files.
 
-### Planned publishing
+### Signing and publishing
 
 Publishing keeps the extension and contribution IDs stable, increments `version`, and produces an immutable package:
 
 ```bash
 shilpo ext check .
 shilpo ext pack .
-shilpo ext sign world-clock-1.0.0.shilpo-ext
-shilpo ext publish world-clock-1.0.0.shilpo-ext
+shilpo ext keygen alice.shilpo-key
+shilpo ext sign world-clock-1.0.0.shilpo-ext \
+  --key alice.shilpo-key \
+  --publisher Alice
 ```
 
-The package signature establishes publisher identity. The registry separately signs its release index. A release entry
-records the extension and API versions, minimum Shilpo version, channel, package URL and hash, publisher key, capability
-digest, publication time, and whether the release has been yanked.
+Keep the generated private key offline and publish the `.pub` file. `sign` writes
+`<package>.sig.json`; the signature binds the publisher identity to the package SHA-256 digest. Uploading the immutable
+archive and its release metadata is registry-specific. The registry independently signs its complete index. A release
+entry records the extension and API versions, minimum Shilpo version, channel, package URL and hash, publisher key,
+capability digest, publication time, and whether the release has been yanked.
 
 Authors may also publish the package through a website or release service. A local archive can be installed manually. A
 direct URL supports automatic updates only when accompanied by a signed update feed or trusted registry entry.
@@ -389,7 +396,7 @@ constraints.
 
 ### Settings
 
-Every installed extension appears under the planned Extensions category in the settings app. The page includes:
+Every installed extension appears under the Extensions category in the settings app. The page includes:
 
 - enable/disable and version status;
 - granted and requested capabilities;
@@ -424,7 +431,7 @@ different key requires a signed key-rotation delegation; otherwise Shilpo report
 
 ### Discover in Settings
 
-The future Settings app is the primary graphical discovery interface:
+The Settings app is the primary graphical discovery and management interface:
 
 ```text
 Settings
@@ -448,7 +455,7 @@ Listings and detail pages show:
 - Shilpo and extension-interface compatibility;
 - signature, publication, and yanked-release status.
 
-The planned installation flow is:
+The installation flow is:
 
 1. Open an extension from Discover.
 2. Review publisher, source, compatibility, and capabilities.
@@ -464,7 +471,7 @@ Installed shows enablement, version, trust, grants, contribution instances, diag
 overrides. Updates separates ordinary updates from permission reviews, incompatible releases, and rollback results.
 Sources manages the official registry and explicitly trusted third-party registries.
 
-The planned CLI and public web gallery use the same signed catalog:
+The CLI and a future public web gallery use the same signed catalog:
 
 ```bash
 shilpo ext search wallpaper
@@ -475,6 +482,25 @@ shilpo ext install io.github.alice.world-clock
 A web listing may open the corresponding Settings detail page, but cannot bypass signature verification or permission
 review. Local archives and signed URLs remain alternative installation routes rather than entries in the default
 gallery.
+
+Configure a registry only with its independently obtained Ed25519 root public key:
+
+```bash
+shilpo ext source add community "Community" \
+  https://extensions.example.org/index.json community-root.pub
+shilpo ext refresh-sources
+```
+
+For offline development or registry testing, verify and cache an already downloaded index with:
+
+```bash
+shilpo ext source sync community ./signed-index.json
+```
+
+Indexes are reverified from the configured root key whenever read. Removing a third-party source also removes its cached
+index. Official status is not configurable: release builds embed it through
+`SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY` (and optionally `SHILPO_OFFICIAL_EXTENSIONS_INDEX_URL`). User-added sources are
+always third-party sources, even if they use an `org.shilpo.*` extension ID.
 
 ### Local package
 
@@ -487,6 +513,8 @@ shilpo ext enable io.github.alice.world-clock
 
 ```bash
 shilpo ext install https://example.com/world-clock-1.0.0.shilpo-ext
+shilpo ext install https://example.com/world-clock-1.0.0.shilpo-ext \
+  --hash sha256:<digest>
 ```
 
 URL installs require a package hash or trusted signed registry entry. Installing arbitrary Git repository source is a
@@ -498,6 +526,8 @@ development workflow, not the default end-user workflow.
 shilpo ext list
 shilpo ext info io.github.alice.world-clock
 shilpo ext update io.github.alice.world-clock
+shilpo ext approve io.github.alice.world-clock --grant-all
+shilpo ext rollback io.github.alice.world-clock
 shilpo ext disable io.github.alice.world-clock
 shilpo ext enable io.github.alice.world-clock
 shilpo ext uninstall io.github.alice.world-clock
@@ -517,6 +547,7 @@ shilpo ext check-updates
 shilpo ext update io.github.alice.world-clock
 shilpo ext update --all
 shilpo ext update --all --dry-run
+shilpo ext channel io.github.alice.world-clock beta
 ```
 
 Update behavior follows the installation source:
@@ -538,12 +569,15 @@ publisher conflict, yanked, rollback active, and development override active.
 
 ## Installation paths
 
-On Linux, the proposed paths are:
+On Linux, the implemented paths are:
 
 ```text
-$XDG_CONFIG_HOME/shilpo/extensions.toml
-$XDG_CONFIG_HOME/shilpo/extensions/<id>.toml
+$XDG_CONFIG_HOME/shilpo/extensions/sources.toml
+$XDG_CONFIG_HOME/shilpo/extensions/grants/<id>.toml
 $XDG_DATA_HOME/shilpo/extensions/installed/<id>/<version>/
+$XDG_DATA_HOME/shilpo/extensions/receipts/<id>.toml
+$XDG_DATA_HOME/shilpo/extensions/indexes/<source>.json
+$XDG_DATA_HOME/shilpo/extensions/staging/
 $XDG_DATA_HOME/shilpo/extensions/data/<id>/
 $XDG_CACHE_HOME/shilpo/extensions/compiled/
 $XDG_STATE_HOME/shilpo/extensions/logs/
@@ -574,7 +608,8 @@ An invalid or failing extension must not make the shell unusable.
 4. ~~Add the WASM runtime and development commands.~~ Completed in Phase 2.
 5. Integrate bar and desktop contributions.
 6. Add side-panel, settings, control-center, launcher, and background-task contributions.
-7. Add installation receipts, publisher trust, signed release sources, update selection, atomic activation, and
-   rollback.
-8. Add the Settings Discover, Installed, Updates, and Sources views with permission review.
-9. Implement signing and registry policy before enabling a public gallery or automatic updates.
+7. ~~Add installation receipts, publisher trust, signed release sources, update selection, atomic activation, and
+   rollback.~~ Completed in Phase 4.
+8. ~~Add the Settings Discover, Installed, Updates, and Sources views with permission review.~~ Completed in Phase 4.
+9. ~~Implement signing and registry policy before enabling a public gallery or automatic updates.~~ Completed in Phase
+    4.

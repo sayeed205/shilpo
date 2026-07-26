@@ -1,9 +1,9 @@
 # Shilpo Extension Architecture
 
-Status: accepted architecture. Phases 1 and 2 are implemented: the contract, policy host, in-memory and Component Model
-runtimes, schemas, namespaced shell references, resource/failure policy, development CLI, deterministic package
-creation, and a buildable example. Shell-surface adapters, automatic hot reload, installation, signing, registries,
-updates, and Settings discovery remain planned.
+Status: accepted architecture. Phases 1 through 4 are implemented: the extension contract and sandbox, shell-surface
+adapters, state-preserving development reload, deterministic packages, Ed25519 publisher and registry signatures, atomic
+installation/update/rollback, host-owned receipts and grants, signed catalog resolution, installed-package shell
+loading, and Settings discovery and management.
 
 ## Decision
 
@@ -226,15 +226,24 @@ review. Official status does not grant implicit permissions.
 Shilpo persists a host-owned installation receipt separately from immutable package files. The receipt records at least:
 
 ```toml
+schema_version = 1
 id = "io.github.alice.world-clock"
+selected_channel = "stable"
+
+[active]
 version = "1.3.0"
 source = "registry:https://extensions.shilpo.org/index.json"
 publisher = "alice"
 publisher_key = "sha256:<fingerprint>"
+publisher_public_key = "<base64-ed25519-public-key>"
 package_hash = "sha256:<digest>"
 trust = "verified-publisher"
 channel = "stable"
+installed_at_unix_seconds = 1785067200
 ```
+
+`previous` and `pending` use the same complete provenance shape. This ensures rollback restores the matching digest,
+source, publisher identity, trust, and channel rather than only changing a version string.
 
 An update must preserve the extension ID and publisher-key continuity. Publisher key rotation requires a delegation
 signed by the previous key or by a trusted registry root. A package with the same ID but an unrelated publisher key is a
@@ -242,39 +251,50 @@ conflict, not an update.
 
 ## Publication and registry model
 
-Publication produces an immutable, versioned `.shilpo-ext` archive. The planned author workflow is:
+Publication produces an immutable, versioned `.shilpo-ext` archive. The author workflow is:
 
 ```text
 source → check → build WASM → pack → sign → publish archive and release metadata
 ```
 
 `shilpo ext check` validates the manifest, referenced files, settings defaults, capabilities, package limits, and WASM
-interface. `shilpo ext pack` includes runtime files only. `shilpo ext sign` signs the package digest and publisher
-metadata. `shilpo ext
-publish` submits the immutable package and release entry to a registry.
+interface. `shilpo ext pack` includes runtime files only. `shilpo ext keygen` creates an Ed25519 publisher key and
+`shilpo ext sign` signs the package digest and publisher metadata. Uploading the immutable package and release entry is
+registry-specific; Shilpo's client does not receive registry publishing credentials.
 
 A signed registry release entry contains:
 
 ```json
 {
   "id": "io.github.alice.world-clock",
+  "name": "World Clock",
+  "description": "Shows several time zones",
+  "publisher": "alice",
   "version": "1.3.0",
   "api_version": "0.2.0",
   "min_shilpo_version": "0.2.0",
   "channel": "stable",
   "package_url": "https://extensions.shilpo.org/packages/world-clock-1.3.0.shilpo-ext",
   "package_hash": "sha256:<digest>",
-  "publisher_key": "sha256:<fingerprint>",
-  "signature": "<signature>",
+  "publisher_public_key": "<base64-ed25519-public-key>",
+  "publisher_signature": "<base64-ed25519-signature>",
   "capabilities_hash": "sha256:<digest>",
+  "capabilities": [],
   "published_at": "2026-07-26T12:00:00Z",
-  "yanked": false
+  "yanked": false,
+  "verified_publisher": true,
+  "open_source": true,
+  "data_only": false,
+  "key_rotation": null
 }
 ```
 
-The registry signs its index independently from publisher package signatures. This lets Shilpo verify both who published
-a package and which release metadata the registry served. The official registry is configured by default. Advanced users
-may add explicitly trusted third-party registries.
+The release entries are wrapped in an index containing `schema_version`, `source_id`, and `generated_at`; the outer
+envelope contains that index and its Ed25519 `signature`. The exact JSON contracts are generated as
+`package-signature-v1.schema.json` and `registry-index-v1.schema.json`. The registry signature is independent from
+publisher package signatures, allowing Shilpo to verify both who published a package and which release metadata the
+registry served. Advanced users may add explicitly trusted third-party registries with an independently obtained root
+public key.
 
 Direct distribution through a website or release service is supported by installing a local archive or signed URL. A
 one-off package URL has no update-discovery contract. Automatic updates from a direct source require a signed update
@@ -534,8 +554,8 @@ Installed shows enablement, current version, trust, grants, contribution instanc
 overrides. Updates groups ordinary updates, updates awaiting permission review, incompatible releases, and rollback
 results. Sources manages the official registry and explicitly trusted third-party registries.
 
-The planned `shilpo ext search` CLI and public web gallery consume the same signed catalog metadata. A web listing may
-deep-link into the Settings detail page, but cannot bypass package verification or permission review.
+The implemented `shilpo ext search` CLI and a future public web gallery consume the same signed catalog metadata. A web
+listing may deep-link into the Settings detail page, but cannot bypass package verification or permission review.
 
 Two sources cannot silently replace the same extension ID with different publisher keys. The catalog reports the
 collision and requires an explicit user decision.
@@ -591,11 +611,17 @@ Reconciliation runs after output, configuration, and catalog changes.
 
 ### Phase 4: end-user distribution
 
-- Implement atomic local package installation, updates, rollback, disable, and uninstall.
-- Add host-owned installation receipts, publisher trust, signed-feed resolution, and key continuity checks.
-- Add the Settings Discover, Installed, Updates, and Sources views with permission review.
-- Define and implement the signed registry index and package integrity policy before enabling a public gallery or
+- [x] Implement atomic local package installation, updates, rollback, disable, and uninstall.
+- [x] Add host-owned installation receipts, publisher trust, signed-feed resolution, and key continuity checks.
+- [x] Add the Settings Discover, Installed, Updates, and Sources views with permission review.
+- [x] Define and implement the signed registry index and package integrity policy before enabling a public gallery or
   automatic updates.
+
+The implementation lives behind `ExtensionCatalog`. Immutable version directories are populated in same-filesystem
+staging and become visible only after an atomic receipt replacement. Receipts retain complete active, previous, and
+pending provenance. Cached indexes are reverified against their configured registry root whenever read; package and
+release hashes, publisher signatures, capability hashes, compatibility, channel, yanked state, source collisions, and
+publisher-key rotations are checked before selection. Settings, CLI, and `ShellExtensions` consume this same interface.
 
 ## Test surface
 

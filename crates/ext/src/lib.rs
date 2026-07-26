@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod catalog;
 pub mod circuit_breaker;
 pub mod cli;
 pub mod effects;
@@ -10,6 +11,14 @@ pub mod wasm;
 pub use adapter::{
     DispatchResult, ExtensionHost, ExtensionRuntime, GuestExtension, HostError, InMemoryRuntime,
     RuntimeBudget, RuntimeError, RuntimeFailureKind,
+};
+pub use catalog::{
+    CURRENT_SHILPO_VERSION, CatalogError, CatalogExtension, CatalogPaths, ExtensionCatalog,
+    ExtensionCatalogSnapshot, ExtensionUpdate, InstallationReceipt, InstalledExtension,
+    InstalledVersionReceipt, PackageSignature, RegistryIndex, RegistryRelease, RegistrySource,
+    ReleaseChannel, SignedRegistryIndex, StoredGrants, TrustState, UpdateState,
+    default_extension_config_dir, default_extension_data_dir, generate_signing_key,
+    package_signature_path, sign_package, sign_registry_index, sign_release,
 };
 pub use circuit_breaker::{CircuitBreaker, DiagnosticCode, DiagnosticLevel, ExtensionDiagnostic};
 pub use cli::{

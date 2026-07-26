@@ -22,3 +22,4 @@ tracing-subscriber.workspace = true
 notify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+semver.workspace = true

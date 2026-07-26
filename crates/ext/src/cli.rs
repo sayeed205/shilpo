@@ -1,4 +1,8 @@
 use crate::adapter::{ExtensionRuntime, RuntimeBudget};
+use crate::catalog::{
+    ExtensionCatalog, RegistrySource, ReleaseChannel, UpdateState, generate_signing_key,
+    sign_package,
+};
 use crate::events::ExtensionEvent;
 use crate::manifest::{ExtensionId, ExtensionManifest};
 use crate::view::ViewLimits;
@@ -271,6 +275,111 @@ impl ExtensionCli {
             .collect()
     }
 
+    pub fn install(package: &Path, catalog: &ExtensionCatalog) -> ExtensionCliResult {
+        match catalog.install_local(package) {
+            Ok(receipt) => ExtensionCliResult {
+                success: true,
+                extension_id: Some(receipt.id.to_string()),
+                artifact: None,
+                diagnostics: vec![format!(
+                    "installed '{}' {} disabled; review permissions before enabling",
+                    receipt.id, receipt.active.version
+                )],
+            },
+            Err(error) => {
+                ExtensionCliResult::failure(None, vec![format!("error[install.failed]: {error}")])
+            }
+        }
+    }
+
+    pub fn install_from_catalog(
+        id: &ExtensionId,
+        catalog: &ExtensionCatalog,
+    ) -> ExtensionCliResult {
+        match catalog.install_from_catalog(id) {
+            Ok(receipt) => ExtensionCliResult {
+                success: true,
+                extension_id: Some(receipt.id.to_string()),
+                artifact: None,
+                diagnostics: vec![if let Some(pending) = &receipt.pending {
+                    format!(
+                        "staged '{}' {}; permission review is required",
+                        receipt.id, pending.version
+                    )
+                } else {
+                    format!("installed '{}' {}", receipt.id, receipt.active.version)
+                }],
+            },
+            Err(error) => ExtensionCliResult::failure(
+                Some(id.to_string()),
+                vec![format!("error[update.failed]: {error}")],
+            ),
+        }
+    }
+
+    pub fn enable(id: &ExtensionId, catalog: &ExtensionCatalog) -> ExtensionCliResult {
+        match catalog.set_enabled(id, true) {
+            Ok(()) => ExtensionCliResult {
+                success: true,
+                extension_id: Some(id.to_string()),
+                artifact: None,
+                diagnostics: vec![format!("extension '{id}' enabled")],
+            },
+            Err(error) => ExtensionCliResult::failure(
+                Some(id.to_string()),
+                vec![format!("error[enable.failed]: {error}")],
+            ),
+        }
+    }
+
+    pub fn disable(id: &ExtensionId, catalog: &ExtensionCatalog) -> ExtensionCliResult {
+        match catalog.set_enabled(id, false) {
+            Ok(()) => ExtensionCliResult {
+                success: true,
+                extension_id: Some(id.to_string()),
+                artifact: None,
+                diagnostics: vec![format!("extension '{id}' disabled")],
+            },
+            Err(error) => ExtensionCliResult::failure(
+                Some(id.to_string()),
+                vec![format!("error[disable.failed]: {error}")],
+            ),
+        }
+    }
+
+    pub fn uninstall(id: &ExtensionId, catalog: &ExtensionCatalog) -> ExtensionCliResult {
+        match catalog.uninstall(id) {
+            Ok(()) => ExtensionCliResult {
+                success: true,
+                extension_id: Some(id.to_string()),
+                artifact: None,
+                diagnostics: vec![format!("extension '{id}' uninstalled")],
+            },
+            Err(error) => ExtensionCliResult::failure(
+                Some(id.to_string()),
+                vec![format!("error[uninstall.failed]: {error}")],
+            ),
+        }
+    }
+
+    pub fn rollback(id: &ExtensionId, catalog: &ExtensionCatalog) -> ExtensionCliResult {
+        match catalog.rollback(id) {
+            Ok(receipt) => ExtensionCliResult {
+                success: true,
+                extension_id: Some(id.to_string()),
+                artifact: None,
+                diagnostics: vec![format!(
+                    "rolled '{}' back to {}",
+                    receipt.id, receipt.active.version
+                )],
+            },
+            Err(error) => ExtensionCliResult::failure(
+                Some(id.to_string()),
+                vec![format!("error[rollback.failed]: {error}")],
+            ),
+        }
+    }
+
     pub fn list(dev_paths: &[PathBuf]) -> Vec<ExtensionCliResult> {
         dev_paths.iter().map(|path| Self::check(path)).collect()
     }
@@ -282,6 +391,7 @@ pub fn run_cli(args: &[String]) -> i32 {
         return 2;
     };
     let state_dir = default_extension_state_dir();
+    let catalog = ExtensionCatalog::open_default();
     let result = match command {
         "check" => ExtensionCli::check(Path::new(args.get(1).map_or(".", String::as_str))),
         "pack" => {
@@ -317,10 +427,328 @@ pub fn run_cli(args: &[String]) -> i32 {
             }
             return (!result.success) as i32;
         }
+        "install" => {
+            let Some(target) = args.get(1) else {
+                eprintln!("shilpo ext install requires a package path or extension ID");
+                return 2;
+            };
+            if target.starts_with("https://") {
+                match catalog.install_url(target, option_value(args, "--hash")) {
+                    Ok(receipt) => ExtensionCliResult {
+                        success: true,
+                        extension_id: Some(receipt.id.to_string()),
+                        artifact: None,
+                        diagnostics: vec![format!(
+                            "installed '{}' {} disabled",
+                            receipt.id, receipt.active.version
+                        )],
+                    },
+                    Err(error) => ExtensionCliResult::failure(
+                        None,
+                        vec![format!("error[install.url]: {error}")],
+                    ),
+                }
+            } else {
+                match ExtensionId::new(target.clone()) {
+                    Ok(id) if !Path::new(target).exists() => {
+                        ExtensionCli::install_from_catalog(&id, &catalog)
+                    }
+                    _ => ExtensionCli::install(Path::new(target), &catalog),
+                }
+            }
+        }
+        "update" => {
+            if args.get(1).is_some_and(|argument| argument == "--all") {
+                let snapshot = catalog_snapshot(&catalog, &state_dir);
+                let available = snapshot
+                    .updates
+                    .into_iter()
+                    .filter(|update| update.state == UpdateState::Available)
+                    .map(|update| update.id)
+                    .collect::<Vec<_>>();
+                if args.iter().any(|argument| argument == "--dry-run") {
+                    for id in available {
+                        println!("would update {id}");
+                    }
+                    return 0;
+                }
+                let results = available
+                    .iter()
+                    .map(|id| ExtensionCli::install_from_catalog(id, &catalog))
+                    .collect::<Vec<_>>();
+                let failed = results.iter().any(|result| !result.success);
+                for result in results {
+                    print_result(&result);
+                }
+                return failed as i32;
+            }
+            let Some(id) = parse_id(args.get(1)) else {
+                return 2;
+            };
+            ExtensionCli::install_from_catalog(&id, &catalog)
+        }
+        "channel" => {
+            let Some(id) = parse_id(args.get(1)) else {
+                return 2;
+            };
+            let channel = match args.get(2).map(String::as_str) {
+                Some("stable") => ReleaseChannel::Stable,
+                Some("beta") => ReleaseChannel::Beta,
+                Some("development") => ReleaseChannel::Development,
+                _ => {
+                    eprintln!("channel must be stable, beta, or development");
+                    return 2;
+                }
+            };
+            match catalog.set_channel(&id, channel) {
+                Ok(()) => ExtensionCliResult {
+                    success: true,
+                    extension_id: Some(id.to_string()),
+                    artifact: None,
+                    diagnostics: vec![format!("selected {channel:?} channel for '{id}'")],
+                },
+                Err(error) => ExtensionCliResult::failure(
+                    Some(id.to_string()),
+                    vec![format!("error[channel.failed]: {error}")],
+                ),
+            }
+        }
+        "enable" => {
+            let Some(id) = parse_id(args.get(1)) else {
+                return 2;
+            };
+            ExtensionCli::enable(&id, &catalog)
+        }
+        "disable" => {
+            let Some(id) = parse_id(args.get(1)) else {
+                return 2;
+            };
+            ExtensionCli::disable(&id, &catalog)
+        }
+        "uninstall" => {
+            let Some(id) = parse_id(args.get(1)) else {
+                return 2;
+            };
+            ExtensionCli::uninstall(&id, &catalog)
+        }
+        "rollback" => {
+            let Some(id) = parse_id(args.get(1)) else {
+                return 2;
+            };
+            ExtensionCli::rollback(&id, &catalog)
+        }
+        "approve" => {
+            let Some(id) = parse_id(args.get(1)) else {
+                return 2;
+            };
+            let capabilities = if args.iter().any(|argument| argument == "--grant-all") {
+                match catalog.pending_capabilities(&id) {
+                    Ok(capabilities) => capabilities,
+                    Err(error) => {
+                        eprintln!("failed to inspect pending permissions: {error}");
+                        return 1;
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+            match catalog.approve_pending(&id, capabilities) {
+                Ok(receipt) => ExtensionCliResult {
+                    success: true,
+                    extension_id: Some(id.to_string()),
+                    artifact: None,
+                    diagnostics: vec![format!(
+                        "permission review completed; '{}' {} is active",
+                        receipt.id, receipt.active.version
+                    )],
+                },
+                Err(error) => ExtensionCliResult::failure(
+                    Some(id.to_string()),
+                    vec![format!("error[permissions.review]: {error}")],
+                ),
+            }
+        }
+        "keygen" => {
+            let Some(path) = args.get(1).map(PathBuf::from) else {
+                eprintln!("shilpo ext keygen requires an output path");
+                return 2;
+            };
+            match write_signing_key(&path) {
+                Ok(public_path) => ExtensionCliResult {
+                    success: true,
+                    extension_id: None,
+                    artifact: Some(path),
+                    diagnostics: vec![format!(
+                        "created Ed25519 signing key; public key: {}",
+                        public_path.display()
+                    )],
+                },
+                Err(error) => ExtensionCliResult::failure(
+                    None,
+                    vec![format!("error[keygen.failed]: {error}")],
+                ),
+            }
+        }
+        "sign" => {
+            let Some(package) = args.get(1).map(PathBuf::from) else {
+                eprintln!("shilpo ext sign requires a package path");
+                return 2;
+            };
+            let Some(key_path) = option_value(args, "--key").map(PathBuf::from) else {
+                eprintln!("shilpo ext sign requires --key <private-key>");
+                return 2;
+            };
+            let Some(publisher) = option_value(args, "--publisher") else {
+                eprintln!("shilpo ext sign requires --publisher <name>");
+                return 2;
+            };
+            match fs::read_to_string(&key_path)
+                .map_err(|error| error.to_string())
+                .and_then(|key| {
+                    sign_package(&package, publisher, &key).map_err(|error| error.to_string())
+                }) {
+                Ok(sidecar) => ExtensionCliResult {
+                    success: true,
+                    extension_id: None,
+                    artifact: Some(sidecar.clone()),
+                    diagnostics: vec![format!("signed package; signature: {}", sidecar.display())],
+                },
+                Err(error) => {
+                    ExtensionCliResult::failure(None, vec![format!("error[sign.failed]: {error}")])
+                }
+            }
+        }
+        "refresh-sources" => match catalog.refresh_sources() {
+            Ok(diagnostics) => ExtensionCliResult {
+                success: true,
+                extension_id: None,
+                artifact: None,
+                diagnostics,
+            },
+            Err(error) => {
+                ExtensionCliResult::failure(None, vec![format!("error[source.refresh]: {error}")])
+            }
+        },
+        "source" => {
+            let Some(action) = args.get(1).map(String::as_str) else {
+                eprintln!("shilpo ext source requires add, remove, or sync");
+                return 2;
+            };
+            match run_source_command(action, args, &catalog) {
+                Ok(message) => ExtensionCliResult {
+                    success: true,
+                    extension_id: None,
+                    artifact: None,
+                    diagnostics: vec![message],
+                },
+                Err(error) => ExtensionCliResult::failure(
+                    None,
+                    vec![format!("error[source.{action}]: {error}")],
+                ),
+            }
+        }
+        "search" => {
+            let query = args.get(1).map_or("", String::as_str).to_lowercase();
+            let snapshot = catalog_snapshot(&catalog, &state_dir);
+            for entry in snapshot.discover.iter().filter(|entry| {
+                query.is_empty()
+                    || entry.release.name.to_lowercase().contains(&query)
+                    || entry.release.id.as_str().contains(&query)
+                    || entry
+                        .release
+                        .description
+                        .as_deref()
+                        .is_some_and(|description| description.to_lowercase().contains(&query))
+            }) {
+                println!(
+                    "{} {} — {} ({})",
+                    entry.release.id, entry.release.version, entry.release.name, entry.trust
+                );
+            }
+            for diagnostic in snapshot.diagnostics {
+                eprintln!("{diagnostic}");
+            }
+            return 0;
+        }
+        "info" => {
+            let Some(id) = parse_id(args.get(1)) else {
+                return 2;
+            };
+            let snapshot = catalog_snapshot(&catalog, &state_dir);
+            if let Some(installed) = snapshot
+                .installed
+                .iter()
+                .find(|extension| extension.receipt.id == id)
+            {
+                println!(
+                    "{} {} — {} [{}; {}]",
+                    installed.manifest.name,
+                    installed.receipt.active.version,
+                    installed.receipt.id,
+                    installed.receipt.active.trust,
+                    if installed.grants.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
+                println!(
+                    "Source: {}\nCapabilities: {} requested, {} granted",
+                    installed.receipt.active.source,
+                    installed.manifest.capabilities.len(),
+                    installed.grants.granted_capabilities.len()
+                );
+                return 0;
+            }
+            if let Some(entry) = snapshot
+                .discover
+                .iter()
+                .find(|entry| entry.release.id == id)
+            {
+                println!(
+                    "{} {} — {} [{}; source {}]",
+                    entry.release.name,
+                    entry.release.version,
+                    entry.release.id,
+                    entry.trust,
+                    entry.source.id
+                );
+                return 0;
+            }
+            eprintln!("extension '{id}' was not found");
+            return 1;
+        }
+        "check-updates" => {
+            let snapshot = catalog_snapshot(&catalog, &state_dir);
+            for update in &snapshot.updates {
+                println!(
+                    "{} {}: {:?}",
+                    update.id, update.installed_version, update.state
+                );
+            }
+            for diagnostic in snapshot.diagnostics {
+                eprintln!("{diagnostic}");
+            }
+            return 0;
+        }
         "list" => {
+            let snapshot = catalog_snapshot(&catalog, &state_dir);
+            for extension in &snapshot.installed {
+                println!(
+                    "{} {} [{}; {}]",
+                    extension.receipt.id,
+                    extension.receipt.active.version,
+                    extension.receipt.active.trust,
+                    if extension.grants.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
+            }
             let results = ExtensionCli::list_dev(&state_dir);
-            if results.is_empty() {
-                println!("No development extensions registered.");
+            if snapshot.installed.is_empty() && results.is_empty() {
+                println!("No extensions installed or registered for development.");
                 return 0;
             }
             let failed = results.iter().any(|result| !result.success);
@@ -338,6 +766,17 @@ pub fn run_cli(args: &[String]) -> i32 {
 
     print_result(&result);
     (!result.success) as i32
+}
+
+fn catalog_snapshot(
+    catalog: &ExtensionCatalog,
+    state_dir: &Path,
+) -> crate::catalog::ExtensionCatalogSnapshot {
+    let ids = development_registrations(state_dir)
+        .0
+        .into_iter()
+        .map(|registration| registration.id);
+    catalog.snapshot_with_development(ids)
 }
 
 fn inspect_extension(dir: &Path) -> Result<CheckedExtension, (Option<String>, Vec<String>)> {
@@ -444,7 +883,96 @@ fn inspect_extension(dir: &Path) -> Result<CheckedExtension, (Option<String>, Ve
     }
 }
 
-fn probe_runtime(dir: &Path, manifest: &ExtensionManifest) -> Result<(), String> {
+fn option_value<'a>(args: &'a [String], option: &str) -> Option<&'a str> {
+    args.windows(2)
+        .find(|pair| pair[0] == option)
+        .map(|pair| pair[1].as_str())
+}
+
+fn write_signing_key(path: &Path) -> Result<PathBuf, String> {
+    let (private_key, public_key) = generate_signing_key().map_err(|error| error.to_string())?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut private_file = options.open(path).map_err(|error| error.to_string())?;
+    private_file
+        .write_all(private_key.as_bytes())
+        .map_err(|error| error.to_string())?;
+    private_file.sync_all().map_err(|error| error.to_string())?;
+    let public_path = PathBuf::from(format!("{}.pub", path.display()));
+    fs::write(&public_path, public_key).map_err(|error| error.to_string())?;
+    Ok(public_path)
+}
+
+fn run_source_command(
+    action: &str,
+    args: &[String],
+    catalog: &ExtensionCatalog,
+) -> Result<String, String> {
+    match action {
+        "add" => {
+            let id = args
+                .get(2)
+                .ok_or_else(|| "source add requires <id> <name> <url> <root-key>".to_owned())?;
+            let name = args
+                .get(3)
+                .ok_or_else(|| "source add requires <id> <name> <url> <root-key>".to_owned())?;
+            let index_url = args
+                .get(4)
+                .ok_or_else(|| "source add requires <id> <name> <url> <root-key>".to_owned())?;
+            let key_argument = args
+                .get(5)
+                .ok_or_else(|| "source add requires <id> <name> <url> <root-key>".to_owned())?;
+            let root_public_key = fs::read_to_string(key_argument)
+                .unwrap_or_else(|_| key_argument.clone())
+                .trim()
+                .to_owned();
+            catalog
+                .add_source(RegistrySource {
+                    id: id.clone(),
+                    name: name.clone(),
+                    index_url: index_url.clone(),
+                    root_public_key,
+                    official: false,
+                    enabled: true,
+                })
+                .map_err(|error| error.to_string())?;
+            Ok(format!("added extension source '{id}'"))
+        }
+        "remove" => {
+            let id = args
+                .get(2)
+                .ok_or_else(|| "source remove requires <id>".to_owned())?;
+            catalog
+                .remove_source(id)
+                .map_err(|error| error.to_string())?;
+            Ok(format!("removed extension source '{id}'"))
+        }
+        "sync" => {
+            let id = args
+                .get(2)
+                .ok_or_else(|| "source sync requires <id> <signed-index.json>".to_owned())?;
+            let path = args
+                .get(3)
+                .ok_or_else(|| "source sync requires <id> <signed-index.json>".to_owned())?;
+            let bytes = fs::read(path).map_err(|error| error.to_string())?;
+            catalog
+                .store_index_bytes(id, &bytes)
+                .map_err(|error| error.to_string())?;
+            Ok(format!("verified and cached source '{id}'"))
+        }
+        _ => Err(format!("unknown source action '{action}'")),
+    }
+}
+
+pub(crate) fn probe_runtime(dir: &Path, manifest: &ExtensionManifest) -> Result<(), String> {
     let Some(library) = &manifest.library else {
         return Ok(());
     };
@@ -802,7 +1330,7 @@ fn print_result(result: &ExtensionCliResult) {
 
 fn print_usage() {
     eprintln!(
-        "Usage: shilpo ext <check|pack|dev|reload|logs|list> [path-or-id] [--output DIR] [--follow]"
+        "Usage: shilpo ext <check|pack|sign|keygen|dev|reload|logs|list|search|info|install|update|enable|disable|approve|rollback|uninstall|channel|check-updates|source|refresh-sources> [arguments]"
     );
 }
 

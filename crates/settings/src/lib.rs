@@ -16,7 +16,35 @@ pub enum SettingsCategory {
     Bluetooth,
     Appearance,
     Shortcuts,
+    Extensions,
     About,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExtensionsSection {
+    #[default]
+    Discover,
+    Installed,
+    Updates,
+    Sources,
+}
+
+impl ExtensionsSection {
+    const ALL: [Self; 4] = [
+        Self::Discover,
+        Self::Installed,
+        Self::Updates,
+        Self::Sources,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Discover => "Discover",
+            Self::Installed => "Installed",
+            Self::Updates => "Updates",
+            Self::Sources => "Sources",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +130,7 @@ impl SettingsCategory {
             Self::Bluetooth => "Bluetooth",
             Self::Appearance => "Appearance",
             Self::Shortcuts => "Shortcuts",
+            Self::Extensions => "Extensions",
             Self::About => "About",
         }
     }
@@ -115,6 +144,7 @@ impl SettingsCategory {
             Self::Bluetooth => IconName::SquareTerminal,
             Self::Appearance => IconName::Palette,
             Self::Shortcuts => IconName::Copy,
+            Self::Extensions => IconName::SquareTerminal,
             Self::About => IconName::Check,
         }
     }
@@ -127,6 +157,7 @@ impl SettingsCategory {
         Self::Bluetooth,
         Self::Appearance,
         Self::Shortcuts,
+        Self::Extensions,
         Self::About,
     ];
 }
@@ -144,11 +175,17 @@ pub struct SettingsView {
     pub clock_format: String,
     pub temperature_unit: String,
     pub active_locale: String,
+    pub extensions_section: ExtensionsSection,
+    pub extension_snapshot: shilpo_ext::ExtensionCatalogSnapshot,
+    pub extension_action_error: Option<String>,
+    extension_catalog: shilpo_ext::ExtensionCatalog,
 }
 
 impl SettingsView {
     pub fn new() -> Self {
         let page_registry = SettingsPageRegistry::discover();
+        let extension_catalog = shilpo_ext::ExtensionCatalog::open_default();
+        let extension_snapshot = extension_snapshot(&extension_catalog);
         Self {
             active_page: SettingsPageId::Builtin(SettingsCategory::default()),
             page_registry,
@@ -161,7 +198,15 @@ impl SettingsView {
             clock_format: "%H:%M".to_string(),
             temperature_unit: "Celsius".to_string(),
             active_locale: "en-US".to_string(),
+            extensions_section: ExtensionsSection::default(),
+            extension_snapshot,
+            extension_action_error: None,
+            extension_catalog,
         }
+    }
+
+    fn refresh_extensions(&mut self) {
+        self.extension_snapshot = extension_snapshot(&self.extension_catalog);
     }
 
     pub fn view(window: &mut Window, cx: &mut App) -> Entity<shilpo_ui::Root> {
@@ -180,6 +225,17 @@ impl Default for SettingsView {
     }
 }
 
+fn extension_snapshot(
+    catalog: &shilpo_ext::ExtensionCatalog,
+) -> shilpo_ext::ExtensionCatalogSnapshot {
+    let state = shilpo_ext::default_extension_state_dir();
+    let ids = shilpo_ext::development_registrations(&state)
+        .0
+        .into_iter()
+        .map(|registration| registration.id);
+    catalog.snapshot_with_development(ids)
+}
+
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.active_page.clone();
@@ -196,6 +252,130 @@ impl Render for SettingsView {
         let active_label = active_descriptor
             .as_ref()
             .map_or_else(|| "Settings".to_owned(), |page| page.label.clone());
+        let extension_rows = match self.extensions_section {
+            ExtensionsSection::Discover => self
+                .extension_snapshot
+                .discover
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{}\n{} {} · {} · {} requested capabilities\n{}",
+                        entry.release.name,
+                        entry.release.id,
+                        entry.release.version,
+                        entry.trust,
+                        entry.release.capabilities.len(),
+                        entry
+                            .release
+                            .description
+                            .as_deref()
+                            .unwrap_or("No description")
+                    )
+                })
+                .collect::<Vec<_>>(),
+            ExtensionsSection::Installed => self
+                .extension_snapshot
+                .installed
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{}\n{} · {} · {} · {} granted capabilities",
+                        entry.manifest.name,
+                        entry.receipt.active.version,
+                        entry.receipt.active.trust,
+                        if entry.grants.enabled {
+                            "Enabled"
+                        } else {
+                            "Disabled"
+                        },
+                        entry.grants.granted_capabilities.len()
+                    )
+                })
+                .collect(),
+            ExtensionsSection::Updates => self
+                .extension_snapshot
+                .updates
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{}\nInstalled {} · {:?}{}",
+                        entry.id,
+                        entry.installed_version,
+                        entry.state,
+                        entry
+                            .available
+                            .as_ref()
+                            .map_or_else(String::new, |available| {
+                                format!(" · Available {}", available.release.version)
+                            })
+                    )
+                })
+                .collect(),
+            ExtensionsSection::Sources => self
+                .extension_snapshot
+                .sources
+                .iter()
+                .map(|source| {
+                    format!(
+                        "{}\n{} · {} · {}",
+                        source.name,
+                        source.id,
+                        if source.official {
+                            "Official"
+                        } else {
+                            "Third-party"
+                        },
+                        if source.enabled {
+                            "Enabled"
+                        } else {
+                            "Disabled"
+                        }
+                    )
+                })
+                .collect(),
+        };
+        let pending_reviews = self
+            .extension_snapshot
+            .updates
+            .iter()
+            .filter(|update| update.state == shilpo_ext::UpdateState::AwaitingPermissionReview)
+            .map(|update| {
+                let capabilities = self
+                    .extension_catalog
+                    .pending_capabilities(&update.id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|capability| format!("{:?}", capability.kind()))
+                    .collect::<Vec<_>>();
+                (update.id.clone(), capabilities)
+            })
+            .collect::<Vec<_>>();
+        let discover_actions = self
+            .extension_snapshot
+            .discover
+            .iter()
+            .filter(|entry| !entry.publisher_conflict)
+            .map(|entry| (entry.release.id.clone(), entry.release.name.clone()))
+            .collect::<Vec<_>>();
+        let installed_actions = self
+            .extension_snapshot
+            .installed
+            .iter()
+            .map(|entry| (entry.receipt.id.clone(), entry.grants.enabled))
+            .collect::<Vec<_>>();
+        let update_actions = self
+            .extension_snapshot
+            .updates
+            .iter()
+            .filter(|entry| entry.state == shilpo_ext::UpdateState::Available)
+            .map(|entry| entry.id.clone())
+            .collect::<Vec<_>>();
+        let source_actions = self
+            .extension_snapshot
+            .sources
+            .iter()
+            .map(|source| (source.id.clone(), source.official))
+            .collect::<Vec<_>>();
 
         h_flex()
             .size_full()
@@ -267,6 +447,17 @@ impl Render for SettingsView {
                                 active_label
                             )),
                     )
+                    .when_some(self.extension_action_error.clone(), |this, error| {
+                        this.child(
+                            div()
+                                .p_3()
+                                .rounded_xl()
+                                .bg(cx.theme().error_container)
+                                .text_color(cx.theme().on_error_container)
+                                .text_xs()
+                                .child(error),
+                        )
+                    })
                     .when(active_builtin == Some(SettingsCategory::Display), |this| {
                         let active_scale = self.active_scale;
                         this.child(
@@ -561,6 +752,337 @@ impl Render for SettingsView {
                                 ),
                         )
                     })
+                    .when(active_builtin == Some(SettingsCategory::Extensions), |this| {
+                        let selected = self.extensions_section;
+                        this.child(
+                            v_flex()
+                                .gap_4()
+                                .child(
+                                    h_flex().gap_2().children(
+                                        ExtensionsSection::ALL.into_iter().enumerate().map(
+                                            |(index, section)| {
+                                                let is_active = selected == section;
+                                                div()
+                                                    .id(("extensions-section", index))
+                                                    .role(Role::Button)
+                                                    .cursor_pointer()
+                                                    .px_3()
+                                                    .py_1p5()
+                                                    .rounded_full()
+                                                    .bg(if is_active {
+                                                        cx.theme().primary
+                                                    } else {
+                                                        cx.theme().surface_container
+                                                    })
+                                                    .text_color(if is_active {
+                                                        cx.theme().on_primary
+                                                    } else {
+                                                        cx.theme().on_surface
+                                                    })
+                                                    .text_xs()
+                                                    .font_semibold()
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            this.extensions_section = section;
+                                                            this.refresh_extensions();
+                                                            cx.notify();
+                                                        },
+                                                    ))
+                                                    .child(section.label())
+                                            },
+                                        ),
+                                    ),
+                                )
+                                .children(extension_rows.into_iter().enumerate().map(
+                                    |(index, row)| {
+                                        div()
+                                            .id(("extension-row", index))
+                                            .p_4()
+                                            .rounded_2xl()
+                                            .bg(cx.theme().surface_container)
+                                            .text_xs()
+                                            .child(row)
+                                    },
+                                ))
+                                .when(selected == ExtensionsSection::Discover, |this| {
+                                    this.children(discover_actions.into_iter().enumerate().map(
+                                        |(index, (extension_id, name))| {
+                                            div()
+                                                .id(("install-extension", index))
+                                                .role(Role::Button)
+                                                .cursor_pointer()
+                                                .px_3()
+                                                .py_1p5()
+                                                .rounded_full()
+                                                .bg(cx.theme().primary)
+                                                .text_color(cx.theme().on_primary)
+                                                .text_xs()
+                                                .child(format!("Install {name}"))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    let catalog = this.extension_catalog.clone();
+                                                    let extension_id = extension_id.clone();
+                                                    cx.spawn(async move |this, cx| {
+                                                        let result = cx
+                                                            .background_executor()
+                                                            .spawn(async move {
+                                                                catalog.install_from_catalog(
+                                                                    &extension_id,
+                                                                )
+                                                            })
+                                                            .await;
+                                                        this.update(cx, |this, cx| {
+                                                            this.extension_action_error =
+                                                                result.err().map(|error| {
+                                                                    error.to_string()
+                                                                });
+                                                            this.refresh_extensions();
+                                                            cx.notify();
+                                                        })
+                                                            .ok();
+                                                    })
+                                                        .detach();
+                                                }))
+                                        },
+                                    ))
+                                })
+                                .when(selected == ExtensionsSection::Installed, |this| {
+                                    this.children(installed_actions.into_iter().enumerate().map(
+                                        |(index, (extension_id, enabled))| {
+                                            let uninstall_id = extension_id.clone();
+                                            h_flex()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .id(("toggle-extension", index))
+                                                        .role(Role::Button)
+                                                        .cursor_pointer()
+                                                        .px_3()
+                                                        .py_1p5()
+                                                        .rounded_full()
+                                                        .bg(cx.theme().primary_container)
+                                                        .child(if enabled {
+                                                            "Disable"
+                                                        } else {
+                                                            "Enable"
+                                                        })
+                                                        .on_click(cx.listener(
+                                                            move |this, _, _, cx| {
+                                                                this.extension_action_error = this
+                                                                    .extension_catalog
+                                                                    .set_enabled(
+                                                                        &extension_id,
+                                                                        !enabled,
+                                                                    )
+                                                                    .err()
+                                                                    .map(|error| error.to_string());
+                                                                this.refresh_extensions();
+                                                                cx.notify();
+                                                            },
+                                                        )),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id(("uninstall-extension", index))
+                                                        .role(Role::Button)
+                                                        .cursor_pointer()
+                                                        .px_3()
+                                                        .py_1p5()
+                                                        .rounded_full()
+                                                        .bg(cx.theme().error_container)
+                                                        .text_color(cx.theme().on_error_container)
+                                                        .child("Uninstall")
+                                                        .on_click(cx.listener(
+                                                            move |this, _, _, cx| {
+                                                                this.extension_action_error = this
+                                                                    .extension_catalog
+                                                                    .uninstall(&uninstall_id)
+                                                                    .err()
+                                                                    .map(|error| error.to_string());
+                                                                this.refresh_extensions();
+                                                                cx.notify();
+                                                            },
+                                                        )),
+                                                )
+                                        },
+                                    ))
+                                })
+                                .when(selected == ExtensionsSection::Updates, |this| {
+                                    this.children(update_actions.into_iter().enumerate().map(
+                                        |(index, extension_id)| {
+                                            div()
+                                                .id(("update-extension", index))
+                                                .role(Role::Button)
+                                                .cursor_pointer()
+                                                .px_3()
+                                                .py_1p5()
+                                                .rounded_full()
+                                                .bg(cx.theme().primary)
+                                                .text_color(cx.theme().on_primary)
+                                                .child(format!("Update {extension_id}"))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    let catalog = this.extension_catalog.clone();
+                                                    let extension_id = extension_id.clone();
+                                                    cx.spawn(async move |this, cx| {
+                                                        let result = cx
+                                                            .background_executor()
+                                                            .spawn(async move {
+                                                                catalog.install_from_catalog(
+                                                                    &extension_id,
+                                                                )
+                                                            })
+                                                            .await;
+                                                        this.update(cx, |this, cx| {
+                                                            this.extension_action_error =
+                                                                result.err().map(|error| {
+                                                                    error.to_string()
+                                                                });
+                                                            this.refresh_extensions();
+                                                            cx.notify();
+                                                        })
+                                                            .ok();
+                                                    })
+                                                        .detach();
+                                                }))
+                                        },
+                                    ))
+                                })
+                                .when(selected == ExtensionsSection::Sources, |this| {
+                                    this.child(
+                                        div()
+                                            .id("refresh-extension-sources")
+                                            .role(Role::Button)
+                                            .cursor_pointer()
+                                            .px_3()
+                                            .py_1p5()
+                                            .rounded_full()
+                                            .bg(cx.theme().primary)
+                                            .text_color(cx.theme().on_primary)
+                                            .child("Check sources")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                let catalog = this.extension_catalog.clone();
+                                                cx.spawn(async move |this, cx| {
+                                                    let result = cx
+                                                        .background_executor()
+                                                        .spawn(async move {
+                                                            catalog.refresh_sources()
+                                                        })
+                                                        .await;
+                                                    this.update(cx, |this, cx| {
+                                                        this.extension_action_error =
+                                                            result.err().map(|error| {
+                                                                error.to_string()
+                                                            });
+                                                        this.refresh_extensions();
+                                                        cx.notify();
+                                                    })
+                                                        .ok();
+                                                })
+                                                    .detach();
+                                            })),
+                                    )
+                                        .children(source_actions.into_iter().enumerate().filter_map(
+                                            |(index, (source_id, official))| {
+                                                (!official).then(|| {
+                                                    div()
+                                                        .id(("remove-extension-source", index))
+                                                        .role(Role::Button)
+                                                        .cursor_pointer()
+                                                        .px_3()
+                                                        .py_1p5()
+                                                        .rounded_full()
+                                                        .bg(cx.theme().error_container)
+                                                        .text_color(cx.theme().on_error_container)
+                                                        .child(format!("Remove {source_id}"))
+                                                        .on_click(cx.listener(
+                                                            move |this, _, _, cx| {
+                                                                this.extension_action_error = this
+                                                                    .extension_catalog
+                                                                    .remove_source(&source_id)
+                                                                    .err()
+                                                                    .map(|error| error.to_string());
+                                                                this.refresh_extensions();
+                                                                cx.notify();
+                                                            },
+                                                        ))
+                                                })
+                                            },
+                                        ))
+                                })
+                                .when(
+                                    selected == ExtensionsSection::Updates
+                                        && !pending_reviews.is_empty(),
+                                    |this| {
+                                        this.child(
+                                            v_flex()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .font_bold()
+                                                        .child("Permission review"),
+                                                )
+                                                .children(pending_reviews.into_iter().enumerate().map(
+                                                    |(index, (extension_id, capabilities))| {
+                                                        let approve_id = extension_id.clone();
+                                                        let deny_id = extension_id.clone();
+                                                        v_flex()
+                                                            .gap_2()
+                                                            .p_4()
+                                                            .rounded_2xl()
+                                                            .bg(cx.theme().secondary_container)
+                                                            .child(format!(
+                                                                "{extension_id} requests: {}",
+                                                                if capabilities.is_empty() {
+                                                                    "no additional grants".to_owned()
+                                                                } else {
+                                                                    capabilities.join(", ")
+                                                                }
+                                                            ))
+                                                            .child(
+                                                                h_flex()
+                                                                    .gap_2()
+                                                                    .child(
+                                                                        div()
+                                                                            .id(("approve-capabilities", index))
+                                                                            .role(Role::Button)
+                                                                            .cursor_pointer()
+                                                                            .px_3()
+                                                                            .py_1p5()
+                                                                            .rounded_full()
+                                                                            .bg(cx.theme().primary)
+                                                                            .text_color(cx.theme().on_primary)
+                                                                            .child("Grant requested")
+                                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                                if let Ok(capabilities) = this.extension_catalog.pending_capabilities(&approve_id) {
+                                                                                    this.extension_action_error = this.extension_catalog.approve_pending(&approve_id, capabilities).err().map(|error| error.to_string());
+                                                                                    this.refresh_extensions();
+                                                                                    cx.notify();
+                                                                                }
+                                                                            })),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .id(("deny-capabilities", index))
+                                                                            .role(Role::Button)
+                                                                            .cursor_pointer()
+                                                                            .px_3()
+                                                                            .py_1p5()
+                                                                            .rounded_full()
+                                                                            .bg(cx.theme().surface_container_high)
+                                                                            .child("Continue without grants")
+                                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                                this.extension_action_error = this.extension_catalog.approve_pending(&deny_id, Vec::new()).err().map(|error| error.to_string());
+                                                                                this.refresh_extensions();
+                                                                                cx.notify();
+                                                                            })),
+                                                                    ),
+                                                            )
+                                                    },
+                                                )),
+                                        )
+                                    },
+                                ),
+                        )
+                    })
                     .when_some(
                         active_descriptor.and_then(|page| page.schema),
                         |this, schema| {
@@ -594,7 +1116,12 @@ mod tests {
 
     #[test]
     fn test_settings_categories() {
-        assert_eq!(SettingsCategory::ALL.len(), 8);
+        assert_eq!(SettingsCategory::ALL.len(), 9);
         assert_eq!(SettingsCategory::System.label(), "System");
+        assert_eq!(SettingsCategory::Extensions.label(), "Extensions");
+        assert_eq!(
+            ExtensionsSection::ALL.map(ExtensionsSection::label),
+            ["Discover", "Installed", "Updates", "Sources"]
+        );
     }
 }

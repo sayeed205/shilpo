@@ -738,6 +738,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9"
+
+[[package]]
 name = "beul"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7579,7 +7585,7 @@ checksum = "7bd22781911de0ca6debda95f073c8f18bec65d1a94f1fa9573f3102e514cea4"
 dependencies = [
  "ahash 0.8.12",
  "annotate-snippets",
- "base64",
+ "base64 0.22.1",
  "encoding_rs_io",
  "getrandom 0.3.4",
  "granit-parser",
@@ -7788,16 +7794,21 @@ version = "0.1.0"
 name = "shilpo-ext"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.0",
  "flate2",
+ "hex",
  "jsonschema",
+ "ring",
  "schemars",
  "semver",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tar",
  "toml 1.1.3+spec-1.1.0",
  "wasmtime",
  "wasmtime-wasi",
+ "zed-reqwest",
 ]
 
 [[package]]
@@ -7858,6 +7869,7 @@ dependencies = [
  "gpui_platform",
  "log",
  "notify",
+ "semver",
  "serde",
  "serde_json",
  "shilpo-assets",
@@ -9666,7 +9678,7 @@ version = "0.45.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80be9b06fbae3b8b303400ab20778c80bbaf338f563afe567cf3c9eea17b47ef"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "data-url",
  "flate2",
  "fontdb",
@@ -9693,7 +9705,7 @@ version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e419dff010bb12512b0ae9e3d2f318dfbdf0167fde7eb05465134d4e8756076f"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "data-url",
  "flate2",
  "fontdb",
@@ -11619,9 +11631,10 @@ name = "zed-reqwest"
 version = "0.12.15-zed"
 source = "git+https://github.com/zed-industries/reqwest.git?rev=c15662463bda39148ba154100dd44d3fba5873a4#c15662463bda39148ba154100dd44d3fba5873a4"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
