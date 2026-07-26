@@ -134,7 +134,7 @@ markdown = { version = "1", features = ["serde"] }
 
 # HTML Parser
 html5ever = "0.39"
-markup5ever_rcdom = "0.39.0+unofficial"
+markup5ever_rcdom = "0.39"
 
 # Calendar
 chrono = "0.4"
