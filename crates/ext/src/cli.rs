@@ -541,25 +541,47 @@ pub fn run_cli(args: &[String]) -> i32 {
             let Some(id) = parse_id(args.get(1)) else {
                 return 2;
             };
+            let receipt = match catalog.receipt(&id) {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    eprintln!("failed to inspect extension permissions: {error}");
+                    return 1;
+                }
+            };
+            let pending = receipt.pending.is_some();
             let capabilities = if args.iter().any(|argument| argument == "--grant-all") {
-                match catalog.pending_capabilities(&id) {
+                let requested = if pending {
+                    catalog.pending_capabilities(&id)
+                } else {
+                    catalog.requested_capabilities(&id)
+                };
+                match requested {
                     Ok(capabilities) => capabilities,
                     Err(error) => {
-                        eprintln!("failed to inspect pending permissions: {error}");
+                        eprintln!("failed to inspect requested permissions: {error}");
                         return 1;
                     }
                 }
             } else {
                 Vec::new()
             };
-            match catalog.approve_pending(&id, capabilities) {
-                Ok(receipt) => ExtensionCliResult {
+            let result = if pending {
+                catalog
+                    .approve_pending(&id, capabilities)
+                    .map(|receipt| receipt.active.version.to_string())
+            } else {
+                catalog
+                    .approve_capabilities(&id, capabilities)
+                    .map(|_| receipt.active.version.to_string())
+            };
+            match result {
+                Ok(version) => ExtensionCliResult {
                     success: true,
                     extension_id: Some(id.to_string()),
                     artifact: None,
                     diagnostics: vec![format!(
                         "permission review completed; '{}' {} is active",
-                        receipt.id, receipt.active.version
+                        id, version
                     )],
                 },
                 Err(error) => ExtensionCliResult::failure(

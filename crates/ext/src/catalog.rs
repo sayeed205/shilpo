@@ -548,6 +548,34 @@ impl ExtensionCatalog {
         Ok(receipt)
     }
 
+    pub fn approve_capabilities(
+        &self,
+        extension_id: &ExtensionId,
+        granted_capabilities: Vec<Capability>,
+    ) -> Result<StoredGrants, CatalogError> {
+        let requested = self.requested_capabilities(extension_id)?;
+        if granted_capabilities
+            .iter()
+            .any(|capability| !requested.contains(capability))
+        {
+            return Err(CatalogError::InvalidPackage(
+                "a grant is not declared by the active extension manifest".into(),
+            ));
+        }
+        let mut grants = self.load_grants(extension_id)?;
+        grants.granted_capabilities = granted_capabilities;
+        self.save_grants(&grants)?;
+        Ok(grants)
+    }
+
+    pub fn requested_capabilities(
+        &self,
+        extension_id: &ExtensionId,
+    ) -> Result<Vec<Capability>, CatalogError> {
+        let receipt = self.receipt(extension_id)?;
+        self.capabilities_for_version(extension_id, &receipt.active.version)
+    }
+
     pub fn pending_capabilities(
         &self,
         extension_id: &ExtensionId,
@@ -556,8 +584,16 @@ impl ExtensionCatalog {
         let pending = receipt.pending.ok_or_else(|| {
             CatalogError::NotFound(format!("extension '{extension_id}' has no pending update"))
         })?;
+        self.capabilities_for_version(extension_id, &pending.version)
+    }
+
+    fn capabilities_for_version(
+        &self,
+        extension_id: &ExtensionId,
+        version: &Version,
+    ) -> Result<Vec<Capability>, CatalogError> {
         let manifest_path = self
-            .package_dir(extension_id, &pending.version)
+            .package_dir(extension_id, version)
             .join("extension.toml");
         let source =
             fs::read_to_string(&manifest_path).map_err(|error| io_error(&manifest_path, error))?;
@@ -1835,6 +1871,35 @@ version = "{version}"
         fs::write(catalog.grants_path(&receipt.id), "not valid toml").unwrap();
         assert!(catalog.load_grants(&receipt.id).is_err());
         assert!(catalog.active_packages().is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn active_install_capabilities_can_be_reviewed_without_a_pending_update() {
+        let root = test_root("active-grants");
+        let catalog = catalog(&root);
+        let package = package(
+            &root,
+            "1.0.0",
+            r#"
+[[capabilities]]
+kind = "network:http"
+hosts = ["api.open-meteo.com"]
+paths = ["/v1/forecast*"]
+"#,
+        );
+        let receipt = catalog.install_local(&package).unwrap();
+        let requested = catalog.requested_capabilities(&receipt.id).unwrap();
+        assert_eq!(requested.len(), 1);
+        let grants = catalog
+            .approve_capabilities(&receipt.id, requested.clone())
+            .unwrap();
+        assert_eq!(grants.granted_capabilities, requested);
+        assert!(
+            catalog
+                .approve_capabilities(&receipt.id, vec![Capability::ClipboardRead])
+                .is_err()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

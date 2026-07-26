@@ -18,6 +18,7 @@ use std::{
 };
 
 const RELOAD_SCAN_INTERVAL: Duration = Duration::from_millis(500);
+const EXTENSION_TIMER_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ContributionSurface {
@@ -306,6 +307,7 @@ pub struct ShellExtensions {
     diagnostics: Vec<String>,
     generation: u64,
     last_scan: Option<Instant>,
+    last_timer_tick: Instant,
 }
 
 impl ShellExtensions {
@@ -338,6 +340,7 @@ impl ShellExtensions {
             diagnostics: Vec::new(),
             generation: 0,
             last_scan: None,
+            last_timer_tick: Instant::now(),
         };
         let _ = this.refresh(true);
         Ok(this)
@@ -428,13 +431,21 @@ impl ShellExtensions {
     }
 
     pub fn poll_hot_reload(&mut self) -> ExtensionChanges {
-        if self
+        let mut changes = if self
             .last_scan
             .is_some_and(|last| last.elapsed() < RELOAD_SCAN_INTERVAL)
         {
-            return ExtensionChanges::default();
+            ExtensionChanges::default()
+        } else {
+            self.refresh(false)
+        };
+        if self.last_timer_tick.elapsed() >= EXTENSION_TIMER_INTERVAL {
+            self.last_timer_tick = Instant::now();
+            changes.merge(self.dispatch_all(&ExtensionEvent::TimerFired {
+                name: "minute".into(),
+            }));
         }
-        self.refresh(false)
+        changes
     }
 
     fn refresh(&mut self, force: bool) -> ExtensionChanges {

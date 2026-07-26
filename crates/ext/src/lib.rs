@@ -184,6 +184,7 @@ mod tests {
                     icon: None,
                 },
                 HostEffect::HttpRequest {
+                    request_id: "weather".into(),
                     url: "https://evil.example/clock/current".into(),
                     method: "GET".into(),
                 },

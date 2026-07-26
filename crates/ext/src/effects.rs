@@ -47,6 +47,8 @@ pub enum HostEffect {
         value: serde_json::Value,
     },
     HttpRequest {
+        #[serde(default)]
+        request_id: String,
         url: String,
         method: String,
     },
@@ -61,4 +63,24 @@ pub enum HostEffect {
         path: String,
         contents: Vec<u8>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HostEffect;
+
+    #[test]
+    fn legacy_http_requests_default_the_correlation_id() {
+        let effect: HostEffect = serde_json::from_value(serde_json::json!({
+            "kind": "http_request",
+            "url": "https://example.com/weather",
+            "method": "GET"
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            effect,
+            HostEffect::HttpRequest { request_id, .. } if request_id.is_empty()
+        ));
+    }
 }

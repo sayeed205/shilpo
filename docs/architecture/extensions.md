@@ -1,13 +1,8 @@
 # Shilpo Extension Architecture
 
-Status: accepted architecture. Phases 1 through 4 are implemented: the extension contract and sandbox, shell-surface
-adapters, state-preserving development reload, deterministic packages, Ed25519 publisher and registry signatures, atomic
-installation/update/rollback, host-owned receipts and grants, signed catalog resolution, installed-package shell
-loading, and Settings discovery and management.
-
 ## Decision
 
-Shilpo extensions will use:
+Shilpo extensions use:
 
 - a versioned TOML manifest for static metadata, contributions, settings, and permissions;
 - WebAssembly Component Model modules for optional extension logic;
@@ -42,7 +37,7 @@ The system must also keep the shell usable when an extension is invalid, slow, i
 
 ## Non-goals
 
-The first version will not support:
+The extension runtime does not support:
 
 - native Rust dynamic libraries;
 - direct construction of arbitrary GPUI elements;
@@ -50,7 +45,7 @@ The first version will not support:
 - extensions replacing core surfaces such as the lock screen or notification daemon;
 - extension-to-extension dependencies;
 - arbitrary code execution without a narrow manifest declaration and user grant;
-- marketplace auto-publishing before package verification and update rollback exist.
+- registry hosting or marketplace publisher credentials inside the Shilpo client.
 
 ## Why WASM and declarative UI
 
@@ -71,29 +66,37 @@ flowchart LR
     BAR[Bar adapter]
     DESKTOP[Desktop adapter]
     PANEL[Side-panel adapter]
-    SETTINGS[Settings adapter]
+    SURFACE_SETTINGS[Extension settings adapter]
     ACTIONS[Action adapter]
     EVENTS[Shell event adapters]
-    BAR --> HOST
-    DESKTOP --> HOST
-    PANEL --> HOST
-    SETTINGS --> HOST
-    ACTIONS --> HOST
-    EVENTS --> HOST
+    SETTINGS[Settings app]
+    CLI[Extension CLI]
+    BAR --> SHELL
+    DESKTOP --> SHELL
+    PANEL --> SHELL
+    SURFACE_SETTINGS --> SHELL
+    ACTIONS --> SHELL
+    EVENTS --> SHELL
+    SHELL[ShellExtensions lifecycle]
+    SHELL --> CATALOG
+    SHELL --> HOST
+    SETTINGS --> CATALOG
+    CLI --> CATALOG
     HOST[ExtensionHost deep module]
-    HOST --> CATALOG[Manifest catalog]
-    HOST --> STORE[Settings and state store]
     HOST --> POLICY[Capability policy]
     HOST --> RUNTIME[Runtime seam]
     RUNTIME --> WASM[WASM runtime adapter]
     RUNTIME --> MEMORY[In-memory test adapter]
     HOST --> VIEW[Validated view tree]
     HOST --> EFFECTS[Validated host effects]
+    CATALOG[ExtensionCatalog deep module]
+    CATALOG --> PACKAGES[Packages and receipts]
+    CATALOG --> REGISTRIES[Signed registries]
 ```
 
 ### `shilpo-ext`
 
-`crates/ext` becomes the stable contract shared with extension authors. It owns:
+`crates/ext` is the stable contract shared with extension authors. It owns:
 
 - identifiers and semantic-version compatibility types;
 - manifest parsing and validation;
@@ -102,40 +105,24 @@ flowchart LR
 - shell event and host-effect messages;
 - capability declarations;
 - the declarative view tree and UI event types;
-- generated WIT bindings and the Rust guest SDK.
+- the versioned WIT contract and low-level Rust guest interface.
 
-It should not depend on GPUI, `shilpo-ui`, `shilpo-shell`, or concrete service implementations. Its current
-`ShellExtension` trait and GPUI dependency should be replaced when implementation begins.
+It does not depend on GPUI, `shilpo-ui`, `shilpo-shell`, or concrete service implementations.
 
 ### `ExtensionHost`
 
-The host is a deep module owned by `ShellRuntime`. It hides:
+The host is a deep module owned within the shell's `ShellExtensions` lifecycle module. It hides:
 
-- discovery and source precedence;
 - manifest and compatibility validation;
-- WASM compilation and instance lifecycle;
+- WASM loading and instance dispatch;
 - capability decisions;
-- scheduling, timeouts, memory limits, and failure fuses;
-- settings and state persistence;
-- hot reload and update rollback;
+- deadlines, memory limits, fuel budgets, and failure fuses;
 - view-tree validation and effect dispatch;
 - extension diagnostics.
 
-Shell surfaces call the host through a small interface:
-
-```rust,ignore
-pub struct ExtensionHost;
-
-impl ExtensionHost {
-    pub async fn reconcile(&mut self, sources: ExtensionSources) -> ExtensionCatalogSnapshot;
-    pub async fn dispatch(&mut self, input: ExtensionInput) -> ExtensionChanges;
-    pub fn view(&self, instance: &ContributionInstanceId) -> Option<&ViewTree>;
-    pub async fn shutdown(&mut self);
-}
-```
-
-The exact Rust types may change during implementation. The invariant is that shell callers send typed inputs and consume
-snapshots/changes; they do not manage WASM instances, permissions, files, or extension tasks themselves.
+Shell callers use the host to register validated extensions, deliver typed events, request validated views, and inspect
+diagnostics. They do not manage WASM instances, permissions, files, or extension tasks themselves. Package discovery,
+installation, and update decisions remain behind the separate `ExtensionCatalog` interface.
 
 ### Runtime seam
 
@@ -149,9 +136,9 @@ validation remain in `ExtensionHost`.
 
 The component ABI remains versioned as `shilpo:extension@0.1.0` and exports `on-event(string) -> string` and
 `view(string) -> string`. The strings encode the contract crate's typed events, effects, and view trees as JSON. The
-small ABI avoids duplicating policy or UI types in generated bindings; a later guest SDK will wrap this wire format.
-Phase 3 advances the JSON contract's `api_version` to `0.2.0` for instance-aware lifecycle/input events and host-owned
-state responses without changing those two component exports.
+small ABI avoids duplicating policy or UI types in generated bindings and leaves room for a higher-level guest SDK. The
+manifest's `api_version = "0.2.0"` contract adds instance-aware lifecycle/input events and host-owned state responses
+without changing those two component exports.
 
 Rust-generated WASI Preview 2 components receive a default-deny WASI context so the Rust component adapter can
 initialize. It has closed stdin, discarded stdout/stderr, no arguments or environment, no preopened directories, and
@@ -172,6 +159,11 @@ Each surface owns a thin adapter from a contribution to an existing Shilpo surfa
 
 Adapters translate surface context into `ExtensionInput` and translate a validated
 `ViewTree` into GPUI elements. They never expose the surface implementation to the guest.
+
+`ShellRuntime` owns the single production `ShellExtensions` lifecycle module. Development registrations are scanned for
+manifest, component, settings-schema, and asset changes. A replacement generation is built completely before activation,
+so a broken edit leaves the last valid runtime and view tree active. Reconciliation runs after output, configuration,
+and catalog changes.
 
 ## Package model
 
@@ -297,11 +289,11 @@ registry served. Advanced users may add explicitly trusted third-party registrie
 public key.
 
 Direct distribution through a website or release service is supported by installing a local archive or signed URL. A
-one-off package URL has no update-discovery contract. Automatic updates from a direct source require a signed update
-feed or trusted registry entry. Installing Git repository source remains a development workflow.
+one-off package URL has no update-discovery contract. Publishing through a trusted signed registry provides update
+discovery. Installing Git repository source remains a development workflow.
 
-No public gallery or automatic registry publishing is enabled until package signature verification, publisher
-continuity, atomic activation, and rollback are implemented.
+Public gallery hosting and automated registry publishing are deployment concerns outside the Shilpo client. They must
+produce the same signed index and immutable package contracts described here.
 
 ## Contribution model
 
@@ -373,6 +365,11 @@ Extensions return effects instead of directly mutating the shell or operating sy
 The host validates every effect against the manifest, the user's grants, and current shell policy before calling a
 concrete adapter.
 
+HTTP effects carry a guest-defined request ID. The host currently permits bounded HTTPS `GET` requests, disables
+redirects, limits response bodies to 1 MiB, and returns status/body/error through a correlated `http_response` event.
+The guest never receives a socket or ambient network stack. A host-generated `timer_fired` event named `minute` provides
+a coarse refresh heartbeat without giving guests their own schedulers.
+
 ## Capabilities
 
 Contribution declarations and capabilities are separate. A clock can render without filesystem or process access.
@@ -420,14 +417,16 @@ atomic and retain the previous working package for rollback.
 
 ## Storage and source precedence
 
-Proposed Linux paths:
+Linux catalog paths:
 
 ```text
-$XDG_CONFIG_HOME/shilpo/extensions.toml
-$XDG_CONFIG_HOME/shilpo/extensions/<id>.toml
+$XDG_CONFIG_HOME/shilpo/extensions/sources.toml
+$XDG_CONFIG_HOME/shilpo/extensions/grants/<id>.toml
 $XDG_DATA_HOME/shilpo/extensions/installed/<id>/<version>/
-$XDG_DATA_HOME/shilpo/extensions/data/<id>/
-$XDG_CACHE_HOME/shilpo/extensions/compiled/
+$XDG_DATA_HOME/shilpo/extensions/receipts/<id>.toml
+$XDG_DATA_HOME/shilpo/extensions/indexes/<source>.json
+$XDG_DATA_HOME/shilpo/extensions/staging/
+$XDG_STATE_HOME/shilpo/extensions/dev/<id>.toml
 $XDG_STATE_HOME/shilpo/extensions/logs/
 ```
 
@@ -435,7 +434,6 @@ Source precedence is deterministic:
 
 1. explicit development path;
 2. user-installed package;
-3. system-installed package.
 
 A higher-precedence source with the same ID overrides, rather than combines with, the lower source. Removing a
 development override reveals the installed version again.
@@ -453,6 +451,8 @@ incompatible extension is discoverable in settings but is never executed.
 
 Contribution and setting IDs are persistent data keys. Renaming one requires a manifest migration. Extension settings
 are validated before activation, and the previous valid settings remain active after a failed edit or migration.
+Extension-wide settings live under `extensions.settings."<extension-id>"`; surface instances may overlay values without
+giving the guest access to the shell's full configuration.
 
 ## Extension catalog and update discovery
 
@@ -468,9 +468,8 @@ themselves. It hides:
 - capability-difference calculation;
 - staged download, integrity verification, and rollback metadata.
 
-Official and third-party registries are production adapters at the release-source seam. Direct signed feeds are another
-adapter. Interface tests use an in-memory adapter with signed-index fixtures. Settings and CLI callers consume the same
-catalog snapshot so update decisions cannot diverge between interfaces.
+Official and third-party registries are production adapters at the release-source seam. Tests use signed-index fixtures.
+Settings and CLI callers consume the same catalog snapshot so update decisions cannot diverge between interfaces.
 
 An update check selects the highest non-yanked semantic version that:
 
@@ -481,18 +480,16 @@ An update check selects the highest non-yanked semantic version that:
 - uses a supported extension interface version;
 - has valid registry metadata and package signatures.
 
-Stable is the default channel. Prerelease versions require an explicit beta or development channel. Update checks use
-conditional requests and cached signed indexes. Users can check manually; the settings app may also check periodically
-according to a configurable policy. Extension guest code never performs its own update check.
+Stable is the default channel. Prerelease versions require an explicit beta or development channel. Users initiate
+registry refreshes and update installation through Settings or the CLI. Extension guest code never performs its own
+update check.
 
 Update behavior depends on the recorded installation source:
 
 | Source                       | Update behavior                                                              |
 |------------------------------|------------------------------------------------------------------------------|
-| Official or trusted registry | Automatic discovery; optional automatic installation                         |
-| Signed direct update feed    | Automatic discovery when the feed is explicitly trusted                      |
+| Official or trusted registry | Catalog discovery and user-triggered installation                            |
 | One-off local or URL package | Manual replacement only                                                      |
-| System-installed package     | Updated by the operating-system package manager                              |
 | Development path             | Never updated automatically; installed-version updates may still be reported |
 
 Activation is transactional:
@@ -510,13 +507,13 @@ An update that requests broader capabilities may be staged, but remains inactive
 A failed activation restores the previous version. Yanked releases are not selected for new updates; settings presents
 remediation when an installed release becomes yanked.
 
-Observable update states include `up-to-date`, `available`, `downloading`,
-`awaiting-permission-review`, `incompatible`, `publisher-conflict`, `yanked`,
-`failed-using-previous-version`, and `development-override-active`.
+Observable update states include `up-to-date`, `available`, `awaiting-permission-review`, `incompatible`,
+`publisher-conflict`, `yanked`, `failed-using-previous-version`, `rollback-active`, and
+`development-override-active`.
 
 ## Settings discovery experience
 
-The future settings app is the primary graphical discovery and management interface:
+The Settings app is the primary graphical discovery and management interface:
 
 ```text
 Settings
@@ -554,74 +551,21 @@ Installed shows enablement, current version, trust, grants, contribution instanc
 overrides. Updates groups ordinary updates, updates awaiting permission review, incompatible releases, and rollback
 results. Sources manages the official registry and explicitly trusted third-party registries.
 
-The implemented `shilpo ext search` CLI and a future public web gallery consume the same signed catalog metadata. A web
-listing may deep-link into the Settings detail page, but cannot bypass package verification or permission review.
+The `shilpo ext search` CLI consumes the same signed catalog metadata. A future web listing may deep-link into the
+Settings detail page, but cannot bypass package verification or permission review.
 
 Two sources cannot silently replace the same extension ID with different publisher keys. The catalog reports the
 collision and requires an explicit user decision.
 
-## Required Shilpo refactors
+## Operational ecosystem
 
-Full shell-surface integration depends on these seams:
+Shipping a public ecosystem additionally requires work that does not belong inside the runtime or distribution modules:
 
-1. Replace the closed `BarWidget` enum in `shilpo-config` with a stable `WidgetRef` that can represent both built-ins
-   and namespaced extension contributions.
-2. Replace the closed `ActionId` enum/registry with string-backed IDs and registered action handlers while preserving
-   typed payload validation.
-3. Add a shell-owned event stream for palette, theme, wallpaper, output, and service state changes. Extensions must not
-   observe concrete service objects.
-4. Add host modules for desktop widget instances and side-panel pages. The existing
-   `shilpo-ui` primitives are rendering building blocks, not lifecycle owners.
-5. Change the settings app from a fixed category enum to a registry that can consume built-in and extension settings
-   descriptors.
-6. Make `ShellRuntime` own one `ExtensionHost` and reconcile contributions after config, output, and extension-catalog
-   changes.
-
-## Delivery sequence
-
-### Phase 1: contract and catalog
-
-- [x] Replace the placeholder `shilpo-ext` interface with manifest, ID, contribution, capability, view-tree, and
-  event/effect types.
-- [x] Add schema generation and manifest validation.
-- [x] Add an in-memory runtime adapter and interface-level tests.
-- [x] Refactor bar widgets and actions to accept namespaced IDs.
-
-### Phase 2: host and development mode
-
-- [x] Add the WASM Component Model adapter.
-- [x] Add resource budgets, capability denial, diagnostics, and a circuit breaker.
-- [x] Implement `shilpo ext check`, `dev`, `reload`, `logs`, and `pack`.
-- [x] Ship one example extension exercising a bar widget, a desktop widget, and a palette event.
-
-### Phase 3: shell surfaces
-
-- [x] Integrate bar and desktop instances.
-- [x] Add side-panel, control-center, settings, action, and launcher contribution adapters.
-- [x] Add state-preserving hot reload and multi-output reconciliation.
-
-`ShellRuntime` owns the single production `ShellExtensions` lifecycle module. Surface code consumes catalog descriptors
-and validated view trees through that interface; it does not load modules or decide grants. Development registrations
-are scanned for manifest, component, settings-schema, and asset changes. A replacement generation is built completely
-before activation, and a broken edit leaves the last valid runtime and view tree active.
-
-Configured bar placements and desktop widgets become host-owned instances. Their stable instance IDs are included in
-mount, resize, settings, input, and unmount events, allowing multiple placements to share one loaded guest.
-Reconciliation runs after output, configuration, and catalog changes.
-
-### Phase 4: end-user distribution
-
-- [x] Implement atomic local package installation, updates, rollback, disable, and uninstall.
-- [x] Add host-owned installation receipts, publisher trust, signed-feed resolution, and key continuity checks.
-- [x] Add the Settings Discover, Installed, Updates, and Sources views with permission review.
-- [x] Define and implement the signed registry index and package integrity policy before enabling a public gallery or
-  automatic updates.
-
-The implementation lives behind `ExtensionCatalog`. Immutable version directories are populated in same-filesystem
-staging and become visible only after an atomic receipt replacement. Receipts retain complete active, previous, and
-pending provenance. Cached indexes are reverified against their configured registry root whenever read; package and
-release hashes, publisher signatures, capability hashes, compatibility, channel, yanked state, source collisions, and
-publisher-key rotations are checked before selection. Settings, CLI, and `ShellExtensions` consume this same interface.
+- host and curate the official signed registry;
+- provide publisher submission and registry-index signing automation;
+- add a configurable background update schedule if desired;
+- build a public web gallery if desired;
+- provide a higher-level guest SDK and extension scaffolding.
 
 ## Test surface
 

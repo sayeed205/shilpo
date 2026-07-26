@@ -7880,6 +7880,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zed-reqwest",
 ]
 
 [[package]]

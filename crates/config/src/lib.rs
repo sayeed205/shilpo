@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use shilpo_ext::CanonicalId;
+use shilpo_ext::{CanonicalId, ExtensionId};
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -19,6 +19,8 @@ pub struct ShellConfig {
     #[serde(default)]
     pub desktop: DesktopConfig,
     #[serde(default)]
+    pub extensions: ExtensionsConfig,
+    #[serde(default)]
     pub outputs: HashMap<String, OutputConfig>,
     #[serde(default)]
     pub clock_format: Option<String>,
@@ -28,6 +30,17 @@ pub struct ShellConfig {
     pub locale: Option<String>,
     #[serde(default)]
     pub startup: StartupConfig,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ExtensionsConfig {
+    /// Extension-wide settings keyed by extension ID.
+    ///
+    /// Every contribution instance receives the same validated JSON object.
+    /// Surface-specific placement and geometry remain owned by their surface.
+    #[serde(default)]
+    pub settings: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -418,6 +431,7 @@ impl Default for ShellConfig {
             theme: ThemeConfig::default(),
             bar: BarConfig::default(),
             desktop: DesktopConfig::default(),
+            extensions: ExtensionsConfig::default(),
             outputs: HashMap::new(),
             clock_format: None,
             temperature_unit: None,
@@ -696,6 +710,20 @@ impl ShellConfig {
                 d.push(ConfigDiagnostic::new(
                     prefix,
                     "width and height must be greater than zero",
+                ));
+            }
+        }
+        for (extension_id, settings) in &self.extensions.settings {
+            if ExtensionId::new(extension_id.clone()).is_err() {
+                d.push(ConfigDiagnostic::new(
+                    format!("extensions.settings.\"{extension_id}\""),
+                    "key must be a lowercase reverse-domain extension ID",
+                ));
+            }
+            if !settings.is_object() {
+                d.push(ConfigDiagnostic::new(
+                    format!("extensions.settings.\"{extension_id}\""),
+                    "must be an object",
                 ));
             }
         }
@@ -1321,6 +1349,25 @@ mod tests {
             serde_json::to_string(&BarWidget::Builtin(BuiltinBarWidget::Clock)).unwrap(),
             "\"builtin:clock\""
         );
+    }
+    #[test]
+    fn extension_settings_are_namespaced_objects() {
+        let mut config = valid();
+        config.extensions.settings.insert(
+            "org.shilpo.weather".into(),
+            serde_json::json!({"location": "Kolkata"}),
+        );
+        assert!(config.validate().is_ok());
+        assert_eq!(
+            toml::from_str::<ShellConfig>(&toml::to_string(&config).unwrap()).unwrap(),
+            config
+        );
+
+        config.extensions.settings.insert(
+            "Weather".into(),
+            serde_json::Value::String("Kolkata".into()),
+        );
+        assert!(config.validate().is_err());
     }
     #[test]
     fn desktop_extension_instances_are_namespaced_and_unique() {

@@ -334,7 +334,7 @@ impl Render for SettingsView {
                 })
                 .collect(),
         };
-        let pending_reviews = self
+        let mut permission_reviews = self
             .extension_snapshot
             .updates
             .iter()
@@ -347,9 +347,41 @@ impl Render for SettingsView {
                     .into_iter()
                     .map(|capability| format!("{:?}", capability.kind()))
                     .collect::<Vec<_>>();
-                (update.id.clone(), capabilities)
+                (update.id.clone(), capabilities, true)
             })
             .collect::<Vec<_>>();
+        let pending_review_ids = permission_reviews
+            .iter()
+            .map(|(id, _, _)| id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        permission_reviews.extend(
+            self.extension_snapshot
+                .installed
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .manifest
+                        .capabilities
+                        .iter()
+                        .any(|capability| !entry.grants.granted_capabilities.contains(capability))
+                        && !pending_review_ids.contains(&entry.receipt.id)
+                })
+                .map(|entry| {
+                    (
+                        entry.receipt.id.clone(),
+                        entry
+                            .manifest
+                            .capabilities
+                            .iter()
+                            .filter(|capability| {
+                                !entry.grants.granted_capabilities.contains(capability)
+                            })
+                            .map(|capability| format!("{:?}", capability.kind()))
+                            .collect(),
+                        false,
+                    )
+                }),
+        );
         let discover_actions = self
             .extension_snapshot
             .discover
@@ -1009,8 +1041,11 @@ impl Render for SettingsView {
                                         ))
                                 })
                                 .when(
-                                    selected == ExtensionsSection::Updates
-                                        && !pending_reviews.is_empty(),
+                                    permission_reviews.iter().any(|(_, _, pending)| {
+                                        (*pending && selected == ExtensionsSection::Updates)
+                                            || (!*pending
+                                            && selected == ExtensionsSection::Installed)
+                                    }),
                                     |this| {
                                         this.child(
                                             v_flex()
@@ -1020,8 +1055,17 @@ impl Render for SettingsView {
                                                         .font_bold()
                                                         .child("Permission review"),
                                                 )
-                                                .children(pending_reviews.into_iter().enumerate().map(
-                                                    |(index, (extension_id, capabilities))| {
+                                                .children(permission_reviews.into_iter().filter(
+                                                    |(_, _, pending)| {
+                                                        (*pending
+                                                            && selected
+                                                            == ExtensionsSection::Updates)
+                                                            || (!*pending
+                                                            && selected
+                                                            == ExtensionsSection::Installed)
+                                                    },
+                                                ).enumerate().map(
+                                                    |(index, (extension_id, capabilities, pending))| {
                                                         let approve_id = extension_id.clone();
                                                         let deny_id = extension_id.clone();
                                                         v_flex()
@@ -1052,8 +1096,17 @@ impl Render for SettingsView {
                                                                             .text_color(cx.theme().on_primary)
                                                                             .child("Grant requested")
                                                                             .on_click(cx.listener(move |this, _, _, cx| {
-                                                                                if let Ok(capabilities) = this.extension_catalog.pending_capabilities(&approve_id) {
-                                                                                    this.extension_action_error = this.extension_catalog.approve_pending(&approve_id, capabilities).err().map(|error| error.to_string());
+                                                                                let capabilities = if pending {
+                                                                                    this.extension_catalog.pending_capabilities(&approve_id)
+                                                                                } else {
+                                                                                    this.extension_catalog.requested_capabilities(&approve_id)
+                                                                                };
+                                                                                if let Ok(capabilities) = capabilities {
+                                                                                    this.extension_action_error = if pending {
+                                                                                        this.extension_catalog.approve_pending(&approve_id, capabilities).map(|_| ()).err().map(|error| error.to_string())
+                                                                                    } else {
+                                                                                        this.extension_catalog.approve_capabilities(&approve_id, capabilities).map(|_| ()).err().map(|error| error.to_string())
+                                                                                    };
                                                                                     this.refresh_extensions();
                                                                                     cx.notify();
                                                                                 }
@@ -1070,7 +1123,11 @@ impl Render for SettingsView {
                                                                             .bg(cx.theme().surface_container_high)
                                                                             .child("Continue without grants")
                                                                             .on_click(cx.listener(move |this, _, _, cx| {
-                                                                                this.extension_action_error = this.extension_catalog.approve_pending(&deny_id, Vec::new()).err().map(|error| error.to_string());
+                                                                                this.extension_action_error = if pending {
+                                                                                    this.extension_catalog.approve_pending(&deny_id, Vec::new()).map(|_| ()).err().map(|error| error.to_string())
+                                                                                } else {
+                                                                                    this.extension_catalog.approve_capabilities(&deny_id, Vec::new()).map(|_| ()).err().map(|error| error.to_string())
+                                                                                };
                                                                                 this.refresh_extensions();
                                                                                 cx.notify();
                                                                             })),

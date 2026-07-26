@@ -3,6 +3,7 @@ pub mod bar;
 pub mod control_center;
 pub mod doctor;
 pub mod error;
+mod extension_http;
 pub mod extension_surface;
 pub mod extensions;
 pub mod launcher;

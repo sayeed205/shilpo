@@ -1,12 +1,12 @@
 # Shilpo Extensions
 
-Status: Phases 1 through 4 are implemented. `shilpo-ext` provides the validated contract, policy-owning host, in-memory
-and Wasmtime Component Model runtime adapters, resource budgets, structured diagnostics, deterministic
-`.shilpo-ext` archives, Ed25519 signing, atomic installation and rollback, host-owned receipts and grants, signed
-registry resolution, update selection, and the catalog snapshots consumed by the shell, CLI, and Settings app.
+`shilpo-ext` provides the validated extension contract, policy-owning host, in-memory and Wasmtime Component Model
+runtime adapters, resource budgets, structured diagnostics, deterministic `.shilpo-ext` archives, Ed25519 signing,
+atomic installation and rollback, host-owned receipts and grants, signed registry resolution, update selection, and the
+catalog snapshots consumed by the shell, CLI, and Settings app.
 
 See [the extension architecture](../../docs/architecture/extensions.md) for the runtime, security, lifecycle, and
-implementation plan.
+distribution decisions.
 
 ## What an extension can add
 
@@ -27,6 +27,9 @@ using the network—require an explicit capability declaration and user grant.
 
 An extension cannot import shell internals or create arbitrary GPUI elements. It returns a small declarative view tree
 that Shilpo renders with `shilpo-ui`, preserving theme, accessibility, layout, and performance rules.
+
+Official extension sources live in [`extensions`](../../extensions). They use a dedicated WASI guest workspace so the
+native Shilpo workspace does not compile every guest during ordinary development.
 
 ## Extension layout
 
@@ -74,8 +77,8 @@ Extensions that only provide static data may omit `Cargo.toml`, `src/`, and
 rustup target add wasm32-wasip2
 ```
 
-Use [`examples/world-clock`](../../examples/world-clock) as the working scaffold. A dedicated `shilpo ext new` command
-is planned with the higher-level guest SDK.
+Use [`examples/world-clock`](../../examples/world-clock) as the working scaffold. The CLI does not currently provide an
+extension scaffolding command.
 
 ### Manifest
 
@@ -166,12 +169,12 @@ supported.
 }
 ```
 
-The host owns persistence and validation. The extension receives only the last valid settings snapshot. A later custom
-settings contribution will use the same schema and save/cancel contract.
+The host owns persistence and validation. The extension receives only the last valid settings snapshot. Custom settings
+views must use the same schema and save/cancel contract.
 
 ### Guest logic
 
-The current Phase 2 guest uses `wit-bindgen` and compiles to a WASI Preview 2 component:
+The current low-level Rust guest interface uses `wit-bindgen` and compiles to a WASI Preview 2 component:
 
 ```toml
 [package]
@@ -199,8 +202,8 @@ world extension {
 ```
 
 The JSON strings carry the crate's typed `ExtensionEvent`, `Vec<HostEffect>`, and `Option<ViewTree>` wire formats. This
-keeps the Component Model ABI versioned while the ergonomic Rust SDK is designed. Guest code never receives GPUI
-contexts, shell runtime handles, or concrete service objects.
+keeps the Component Model ABI versioned while allowing a higher-level guest SDK to wrap it later. Guest code never
+receives GPUI contexts, shell runtime handles, or concrete service objects.
 
 The runtime supplies a closed WASI context only for the standard Rust component adapter. It inherits no files,
 environment variables, arguments, terminal streams, or network access. Privileged work still goes through host effects
@@ -251,7 +254,7 @@ cargo run -p shilpo-ext --example generate_distribution_schemas -- \
 ```
 
 The generated distribution schemas define the package-signature sidecar and signed registry-index envelope consumed by
-Phase 4.
+the extension catalog.
 
 The generated schema is the machine-readable authoring contract. The tests compare it with the checked-in fixture to
 prevent an accidental schema change.
@@ -298,7 +301,7 @@ entry records the extension and API versions, minimum Shilpo version, channel, p
 capability digest, publication time, and whether the release has been yanked.
 
 Authors may also publish the package through a website or release service. A local archive can be installed manually. A
-direct URL supports automatic updates only when accompanied by a signed update feed or trusted registry entry.
+direct URL is a one-off installation source; publish releases through a signed registry to provide update discovery.
 
 ## Development mode
 
@@ -332,7 +335,7 @@ last valid runtime and view visible when a development edit is broken.
 
 ## Placing contributions
 
-The proposed configuration uses namespaced contribution references.
+Configuration uses namespaced contribution references.
 
 ### Bar widget
 
@@ -343,26 +346,16 @@ center = ["ext:io.github.alice.world-clock/bar"]
 end = ["builtin:network", "builtin:battery"]
 ```
 
-An extension contribution can appear more than once by creating named instances:
+Extension-wide settings are keyed by extension ID and delivered to each contribution:
 
 ```toml
-[[extensions.instances]]
-id = "london-clock"
-contribution = "ext:io.github.alice.world-clock/bar"
-
-[extensions.instances.settings]
-cities = ["Europe/London"]
-
-[[extensions.instances]]
-id = "tokyo-clock"
-contribution = "ext:io.github.alice.world-clock/bar"
-
-[extensions.instances.settings]
-cities = ["Asia/Tokyo"]
+[extensions.settings."io.github.alice.world-clock"]
+cities = ["Europe/London", "Asia/Tokyo"]
 ```
 
 The bar owns orientation, available height, section placement, spacing, and error presentation. The extension renders
-for the supplied surface context.
+for the supplied surface context. Desktop widgets may additionally override extension-wide values through their instance
+`settings`.
 
 ### Desktop widget
 
@@ -396,15 +389,16 @@ constraints.
 
 ### Settings
 
-Every installed extension appears under the Extensions category in the settings app. The page includes:
+The Extensions category in the Settings app exposes:
 
-- enable/disable and version status;
-- granted and requested capabilities;
-- schema-generated extension settings;
-- contribution instances and placement;
-- diagnostics, logs, reload, update, and uninstall actions.
+- Discover, Installed, Updates, and Sources views;
+- enable, disable, update, and uninstall actions;
+- version, trust, source, and capability summaries;
+- permission review for updates requesting broader capabilities;
+- registry refresh and third-party source removal.
 
-Settings remain available when an extension is disabled or incompatible so users can recover it.
+Development extensions that contribute a settings page also expose their JSON Schema fields through the Settings page
+registry.
 
 ## Publisher identity and trust
 
@@ -442,36 +436,24 @@ Settings
     └── Sources
 ```
 
-Discover searches verified registry metadata without downloading or executing extension code. Users can browse
-contribution categories, featured or recently updated collections, and filter by compatibility, official status,
-verified publisher, open-source status, or data-only extensions.
-
-Listings and detail pages show:
-
-- name, icon, description, license, repository, and latest version;
-- publisher identity, trust badge, and registry source;
-- supported contribution surfaces;
-- requested capabilities;
-- Shilpo and extension-interface compatibility;
-- signature, publication, and yanked-release status.
+Discover lists verified registry metadata without downloading or executing extension code. Entries show the extension
+identity, version, description, trust state, and requested capability count.
 
 The installation flow is:
 
-1. Open an extension from Discover.
-2. Review publisher, source, compatibility, and capabilities.
-3. Download and verify the package.
-4. Install it disabled.
-5. Grant or deny optional capabilities.
-6. Enable it.
-7. Add selected contributions to supported shell surfaces.
+1. Install an extension from Discover.
+2. Shilpo downloads and verifies the package.
+3. The package is installed disabled.
+4. Enable it from Installed.
+5. Configure its contribution instances in the corresponding shell surface.
 
 An extension update requesting broader capabilities stays downloaded but inactive until the user reviews the new grants.
 
-Installed shows enablement, version, trust, grants, contribution instances, diagnostics, logs, and development
-overrides. Updates separates ordinary updates from permission reviews, incompatible releases, and rollback results.
-Sources manages the official registry and explicitly trusted third-party registries.
+Installed shows enablement, version, trust, and grant summaries. Updates separates ordinary updates from permission
+reviews, incompatible releases, and rollback results. Sources lists configured registries, refreshes their signed
+indexes, and removes third-party registries.
 
-The CLI and a future public web gallery use the same signed catalog:
+The CLI uses the same signed catalog metadata as Settings:
 
 ```bash
 shilpo ext search wallpaper
@@ -479,9 +461,9 @@ shilpo ext info io.github.alice.world-clock
 shilpo ext install io.github.alice.world-clock
 ```
 
-A web listing may open the corresponding Settings detail page, but cannot bypass signature verification or permission
-review. Local archives and signed URLs remain alternative installation routes rather than entries in the default
-gallery.
+A future web listing may open the corresponding Settings detail page, but cannot bypass signature verification or
+permission review. Local archives and signed URLs remain alternative installation routes rather than entries in the
+default gallery.
 
 Configure a registry only with its independently obtained Ed25519 root public key:
 
@@ -552,20 +534,18 @@ shilpo ext channel io.github.alice.world-clock beta
 
 Update behavior follows the installation source:
 
-| Source                         | Behavior                                             |
-|--------------------------------|------------------------------------------------------|
-| Official or trusted registry   | Automatic discovery; optional automatic installation |
-| Explicitly trusted signed feed | Automatic discovery                                  |
-| One-off local archive or URL   | Manual replacement                                   |
-| System package                 | Updated by the operating-system package manager      |
-| Development path               | Never updated automatically                          |
+| Source                       | Behavior                                          |
+|------------------------------|---------------------------------------------------|
+| Official or trusted registry | Catalog discovery and user-triggered installation |
+| One-off local archive or URL | Manual replacement                                |
+| Development path             | Never updated automatically                       |
 
 Updates are downloaded into staging, verified, compatibility-checked, and activated atomically. The previous working
 version remains available for rollback. Broader capabilities require new approval, and a publisher-key mismatch blocks
 the update.
 
-Settings exposes states such as up to date, update available, downloading, awaiting permission review, incompatible,
-publisher conflict, yanked, rollback active, and development override active.
+Settings exposes states such as up to date, update available, awaiting permission review, incompatible, publisher
+conflict, yanked, failed while using the previous version, rollback active, and development override active.
 
 ## Installation paths
 
@@ -578,15 +558,14 @@ $XDG_DATA_HOME/shilpo/extensions/installed/<id>/<version>/
 $XDG_DATA_HOME/shilpo/extensions/receipts/<id>.toml
 $XDG_DATA_HOME/shilpo/extensions/indexes/<source>.json
 $XDG_DATA_HOME/shilpo/extensions/staging/
-$XDG_DATA_HOME/shilpo/extensions/data/<id>/
-$XDG_CACHE_HOME/shilpo/extensions/compiled/
+$XDG_STATE_HOME/shilpo/extensions/dev/<id>.toml
 $XDG_STATE_HOME/shilpo/extensions/logs/
 ```
 
 If an XDG variable is unset, Shilpo uses its standard home-directory fallback.
 
-Installed package files are immutable. Extension-owned data survives updates. Compiled artifacts are disposable. Logs
-and crash diagnostics live outside configuration.
+Installed package files are immutable. Downloads and extraction use the data-directory staging area. Development
+registrations and their logs live outside configuration.
 
 ## Failure behavior
 
@@ -599,17 +578,3 @@ An invalid or failing extension must not make the shell unusable.
 - Repeated traps, timeouts, invalid effects, or resource violations disable the extension for the session.
 - Updates are atomic and preserve the previous working package for rollback.
 - Removing a development override restores the installed package.
-
-## First implementation milestones
-
-1. Define the manifest, contribution, capability, settings, event/effect, and view-tree types in `shilpo-ext`.
-2. Refactor Shilpo's closed bar-widget and action enums into namespaced registries.
-3. Add an in-memory runtime adapter and host interface tests.
-4. ~~Add the WASM runtime and development commands.~~ Completed in Phase 2.
-5. Integrate bar and desktop contributions.
-6. Add side-panel, settings, control-center, launcher, and background-task contributions.
-7. ~~Add installation receipts, publisher trust, signed release sources, update selection, atomic activation, and
-   rollback.~~ Completed in Phase 4.
-8. ~~Add the Settings Discover, Installed, Updates, and Sources views with permission review.~~ Completed in Phase 4.
-9. ~~Implement signing and registry policy before enabling a public gallery or automatic updates.~~ Completed in Phase
-    4.

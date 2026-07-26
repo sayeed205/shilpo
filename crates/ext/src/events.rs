@@ -82,6 +82,12 @@ pub enum ExtensionEvent {
         key: String,
         value: Option<serde_json::Value>,
     },
+    HttpResponse {
+        request_id: String,
+        status: Option<u16>,
+        body: String,
+        error: Option<String>,
+    },
 }
 
 impl ExtensionEvent {
@@ -94,7 +100,8 @@ impl ExtensionEvent {
             | Self::ContributionResized { .. }
             | Self::ContributionSettingsChanged { .. }
             | Self::Input { .. }
-            | Self::StateValue { .. } => None,
+            | Self::StateValue { .. }
+            | Self::HttpResponse { .. } => None,
             Self::OutputsChanged => Some(EventKind::OutputsChanged),
             Self::ThemeChanged { .. } => Some(EventKind::ThemeChanged),
             Self::PaletteGenerated { .. } => Some(EventKind::PaletteGenerated),

@@ -168,6 +168,7 @@ pub struct ShellRuntime {
     extension_surfaces: HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
     extension_panel: Option<(WindowHandle<shilpo_ui::Root>, shilpo_ext::CanonicalId)>,
     extension_output_ids: std::collections::HashSet<DisplayId>,
+    extension_http_in_flight: std::collections::HashSet<(shilpo_ext::ExtensionId, String)>,
     actions: ActionRegistry,
     keybindings: crate::actions::KeybindingManager,
     session_state: shilpo_config::ShellSessionState,
@@ -235,6 +236,7 @@ impl ShellRuntime {
             extension_surfaces: HashMap::new(),
             extension_panel: None,
             extension_output_ids: std::collections::HashSet::new(),
+            extension_http_in_flight: std::collections::HashSet::new(),
             actions: ActionRegistry::default(),
             keybindings: crate::actions::KeybindingManager::with_defaults(),
             session_state,
@@ -681,6 +683,59 @@ impl ShellRuntime {
                         );
                     }
                 }
+                shilpo_ext::HostEffect::HttpRequest {
+                    request_id,
+                    url,
+                    method,
+                } => {
+                    let key = (extension_id.clone(), request_id.clone());
+                    let accepted = {
+                        let in_flight = &mut cx.global_mut::<Self>().extension_http_in_flight;
+                        request_id.len() <= 128
+                            && !request_id.is_empty()
+                            && in_flight.len() < 8
+                            && in_flight.insert(key.clone())
+                    };
+                    if !accepted {
+                        let changes = cx
+                            .global_mut::<Self>()
+                            .extensions
+                            .as_mut()
+                            .map(|extensions| {
+                                extensions.dispatch_to(
+                                    &extension_id,
+                                    &shilpo_ext::ExtensionEvent::HttpResponse {
+                                        request_id,
+                                        status: None,
+                                        body: String::new(),
+                                        error: Some(
+                                            "request ID is invalid, duplicated, or the HTTP limit was reached"
+                                                .into(),
+                                        ),
+                                    },
+                                )
+                            })
+                            .unwrap_or_default();
+                        Self::apply_extension_changes(cx, changes);
+                        continue;
+                    }
+                    cx.spawn(async move |cx| {
+                        let response = crate::extension_http::fetch(request_id, url, method).await;
+                        cx.update(|cx| {
+                            cx.global_mut::<Self>()
+                                .extension_http_in_flight
+                                .remove(&key);
+                            let changes = cx
+                                .global_mut::<Self>()
+                                .extensions
+                                .as_mut()
+                                .map(|extensions| extensions.dispatch_to(&extension_id, &response))
+                                .unwrap_or_default();
+                            Self::apply_extension_changes(cx, changes);
+                        });
+                    })
+                    .detach();
+                }
                 effect => tracing::debug!(
                     extension = %extension_id,
                     ?effect,
@@ -918,7 +973,7 @@ impl ShellRuntime {
                             output: Some(format!("{display_id:?}")),
                             width: spec.geometry.bounds.size.width.as_f32(),
                             height: spec.config.height as f32,
-                            settings: serde_json::json!({}),
+                            settings: extension_settings(&config, &contribution.extension_id, None),
                         });
                     }
                 }
@@ -957,7 +1012,11 @@ impl ShellRuntime {
                 output: Some(widget.output.clone()),
                 width: widget.width as f32,
                 height: widget.height as f32,
-                settings: widget.settings.clone(),
+                settings: extension_settings(
+                    &config,
+                    &widget.contribution.0.extension_id,
+                    Some(&widget.settings),
+                ),
             });
         }
 
@@ -2107,6 +2166,26 @@ impl ShellRuntime {
     }
 }
 
+fn extension_settings(
+    config: &shilpo_config::ShellConfig,
+    extension_id: &shilpo_ext::ExtensionId,
+    instance_settings: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let mut settings = config
+        .extensions
+        .settings
+        .get(extension_id.as_str())
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let (Some(base), Some(overrides)) = (
+        settings.as_object_mut(),
+        instance_settings.and_then(serde_json::Value::as_object),
+    ) {
+        base.extend(overrides.clone());
+    }
+    settings
+}
+
 fn bar_window_options(geometry: &BarGeometry, with_display_geometry: bool) -> WindowOptions {
     let bounds = if with_display_geometry {
         geometry.bounds
@@ -2189,6 +2268,30 @@ mod tests {
                 .is_ok()
         );
         drop(updates_tx);
+    }
+
+    #[test]
+    fn extension_settings_merge_global_values_with_instance_overrides() {
+        let mut config = shilpo_config::ShellConfig::default();
+        config.extensions.settings.insert(
+            "org.shilpo.weather".into(),
+            serde_json::json!({
+                "location": "Kolkata",
+                "show_condition": false
+            }),
+        );
+        let id = shilpo_ext::ExtensionId::new("org.shilpo.weather").unwrap();
+        assert_eq!(
+            extension_settings(
+                &config,
+                &id,
+                Some(&serde_json::json!({"show_condition": true}))
+            ),
+            serde_json::json!({
+                "location": "Kolkata",
+                "show_condition": true
+            })
+        );
     }
 
     #[test]

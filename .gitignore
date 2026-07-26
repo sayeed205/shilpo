@@ -1,5 +1,7 @@
-/target
 /examples/world-clock/extension.wasm
 /examples/world-clock/target/
 .idea
 .slim/deepwork/
+
+target
+*.wasm

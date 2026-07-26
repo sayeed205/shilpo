@@ -19,6 +19,12 @@
         "widgets": []
       }
     },
+    "extensions": {
+      "$ref": "#/$defs/ExtensionsConfig",
+      "default": {
+        "settings": {}
+      }
+    },
     "locale": {
       "type": [
         "string",
@@ -250,6 +256,18 @@
     "ExtensionContributionRef": {
       "type": "string",
       "pattern": "^ext:[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*$"
+    },
+    "ExtensionsConfig": {
+      "type": "object",
+      "properties": {
+        "settings": {
+          "description": "Extension-wide settings keyed by extension ID.\n\nEvery contribution instance receives the same validated JSON object.\nSurface-specific placement and geometry remain owned by their surface.",
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      },
+      "additionalProperties": false
     },
     "OutputConfig": {
       "type": "object",
