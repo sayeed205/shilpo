@@ -319,6 +319,8 @@ pub enum CapabilityKind {
     FilesystemRead,
     #[serde(rename = "filesystem:write")]
     FilesystemWrite,
+    #[serde(rename = "location:read")]
+    LocationRead,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -358,6 +360,8 @@ pub enum Capability {
     FilesystemRead { paths: Vec<String> },
     #[serde(rename = "filesystem:write")]
     FilesystemWrite { paths: Vec<String> },
+    #[serde(rename = "location:read")]
+    LocationRead,
 }
 
 impl Capability {
@@ -376,6 +380,7 @@ impl Capability {
             Self::ProcessExec { .. } => CapabilityKind::ProcessExec,
             Self::FilesystemRead { .. } => CapabilityKind::FilesystemRead,
             Self::FilesystemWrite { .. } => CapabilityKind::FilesystemWrite,
+            Self::LocationRead => CapabilityKind::LocationRead,
         }
     }
 
@@ -422,6 +427,7 @@ impl Capability {
             (Self::FilesystemWrite { paths }, HostEffect::WriteFile { path, .. }) => {
                 paths.iter().any(|pattern| wildcard_matches(pattern, path))
             }
+            (Self::LocationRead, HostEffect::LocationRead) => true,
             _ => false,
         }
     }
@@ -658,7 +664,8 @@ fn validate_capabilities(capabilities: &[Capability]) -> Result<(), ManifestErro
             | Capability::ThemeSetSource
             | Capability::NotificationsShow
             | Capability::ClipboardRead
-            | Capability::ClipboardWrite => true,
+            | Capability::ClipboardWrite
+            | Capability::LocationRead => true,
             Capability::ActionsInvoke { actions } => {
                 !actions.is_empty() && actions.iter().all(|action| !action.trim().is_empty())
             }

@@ -6,6 +6,7 @@ pub mod clipboard;
 pub mod compositor;
 pub mod error;
 pub mod ipc;
+pub mod location;
 pub mod network;
 pub mod night_light;
 pub mod notifications;
@@ -33,6 +34,7 @@ pub use ipc::{
     BarState, IpcError, IpcRequest, IpcResponse, IpcResult, IpcStatus, ServiceHealth,
     ShellIpcServer,
 };
+pub use location::{LocationInfo, LocationService};
 pub use network::{NetworkInfo, NetworkService, VpnConnection};
 pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_use_dark_mode};
 pub use notifications::{Notification, NotificationService, NotificationUrgency};
@@ -59,6 +61,7 @@ pub fn platform_capabilities() -> Vec<&'static str> {
             "tray",
             "network",
             "upower",
+            "location",
         ]
     } else {
         vec!["offline_fallback"]

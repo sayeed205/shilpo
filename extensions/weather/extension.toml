@@ -34,6 +34,9 @@ events = ["network_changed", "timer_fired"]
 
 [[capabilities]]
 kind = "network:http"
-hosts = ["geocoding-api.open-meteo.com", "api.open-meteo.com"]
-paths = ["/v1/search*", "/v1/forecast*"]
+hosts = ["geocoding-api.open-meteo.com", "api.open-meteo.com", "ipwho.is"]
+paths = ["/v1/search*", "/v1/forecast*", "/"]
+
+[[capabilities]]
+kind = "location:read"
 

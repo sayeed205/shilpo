@@ -32,8 +32,8 @@ pub use manifest::{
     ManifestError,
 };
 pub use view::{
-    ContainerDirection, ContainerNode, SemanticColorToken, TextNode, ViewLimits, ViewNode,
-    ViewStyle, ViewTree, ViewValidationError,
+    ContainerDirection, ContainerNode, LoadingIndicatorNode, SemanticColorToken, TextNode,
+    ViewLimits, ViewNode, ViewStyle, ViewTree, ViewValidationError,
 };
 pub use wasm::{WasmModule, WasmRuntime};
 
@@ -324,6 +324,13 @@ mod tests {
             ExtensionManifest::from_toml(&invalid),
             Err(ManifestError::Validation(message)) if message.contains("invalid scope")
         ));
+    }
+
+    #[test]
+    fn location_read_capability_allows_location_read_effect() {
+        let capability = Capability::LocationRead;
+        assert!(capability.allows_effect(&HostEffect::LocationRead));
+        assert!(!capability.allows_effect(&HostEffect::ClipboardRead));
     }
 
     #[test]

@@ -7,8 +7,9 @@ use shilpo_ext::{
     CanonicalId, ContainerDirection, SemanticColorToken, ViewNode, ViewStyle, ViewTree,
 };
 use shilpo_ui::{
-    ActiveTheme, Icon,
+    ActiveTheme, Icon, Sizable, Size,
     input::{Input, InputEvent, InputState},
+    progress::LoadingIndicator,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
 };
 
@@ -33,7 +34,7 @@ fn render_view_node(
         ViewNode::Container(c) => {
             let mut container = div().flex();
             container = match c.direction {
-                ContainerDirection::Row => container.flex_row(),
+                ContainerDirection::Row => container.flex_row().items_center(),
                 ContainerDirection::Column => container.flex_col(),
                 ContainerDirection::Stack => container.relative(),
             };
@@ -71,8 +72,7 @@ fn render_view_node(
             el.into_any_element()
         }
         ViewNode::Icon(icon) => {
-            let mut glyph =
-                Icon::default().path(format!("icons/{}.svg", icon.name.replace('_', "-")));
+            let mut glyph = Icon::default().path(format!("icons/{}.svg", icon.name));
             if let Some(size) = icon.size {
                 glyph = glyph.size(px(size));
             }
@@ -134,9 +134,7 @@ fn render_view_node(
                 .p_1()
                 .rounded_full()
                 .bg(cx.theme().surface_container)
-                .child(
-                    Icon::default().path(format!("icons/{}.svg", ibtn.icon_name.replace('_', "-"))),
-                );
+                .child(Icon::default().path(format!("icons/{}.svg", ibtn.icon_name)));
             if let Some(style) = &ibtn.style {
                 base = apply_view_style(base, style, cx);
             }
@@ -299,6 +297,28 @@ fn render_view_node(
             }
             el.into_any_element()
         }
+        ViewNode::LoadingIndicator(indicator) => {
+            let id = format!(
+                "ext:{contribution}:{}:loading-indicator",
+                instance_id.unwrap_or("shared")
+            );
+            let size = indicator
+                .size
+                .map_or(Size::XSmall, |size| Size::Size(px(size)));
+            let color = indicator
+                .color
+                .map(|token| resolve_color_token(token, cx))
+                .unwrap_or(cx.theme().primary);
+            let mut el = div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(LoadingIndicator::new(id).with_size(size).color(color));
+            if let Some(style) = &indicator.style {
+                el = apply_view_style(el, style, cx);
+            }
+            el.into_any_element()
+        }
     }
 }
 
@@ -340,6 +360,8 @@ fn resolve_color_token(token: SemanticColorToken, cx: &App) -> gpui::Hsla {
         SemanticColorToken::Secondary => cx.theme().secondary,
         SemanticColorToken::Surface => cx.theme().surface,
         SemanticColorToken::SurfaceContainer => cx.theme().surface_container,
+        SemanticColorToken::OnSurface => cx.theme().on_surface,
+        SemanticColorToken::OnSurfaceVariant => cx.theme().on_surface_variant,
         SemanticColorToken::Outline => cx.theme().outline,
         SemanticColorToken::Error => cx.theme().error,
     }

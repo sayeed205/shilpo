@@ -59,6 +59,11 @@ The extension runtime does not support:
 The constrained view protocol is intentional. The shell owns layout safety, theme tokens, accessibility, focus behavior,
 and rendering performance. Extensions supply state and intent, not raw drawing access.
 
+The protocol supports both basic layout primitives and semantic host-rendered components. A component such as
+`loading_indicator` is expressed by the guest and rendered by the shell with the corresponding `shilpo-ui` component.
+Semantic color tokens are resolved against the surface and active theme at render time; guests should request tokens
+such as `on_surface_variant` instead of selecting separate light and dark colors.
+
 ## Module shape
 
 ```mermaid
@@ -359,6 +364,7 @@ Extensions return effects instead of directly mutating the shell or operating sy
 - set a wallpaper;
 - request a new palette source;
 - read or write extension-owned state;
+- read system location coordinates (`location_read`);
 - make an HTTP request;
 - execute an allow-listed command.
 
@@ -369,6 +375,19 @@ HTTP effects carry a guest-defined request ID. The host currently permits bounde
 redirects, limits response bodies to 1 MiB, and returns status/body/error through a correlated `http_response` event.
 The guest never receives a socket or ambient network stack. A host-generated `timer_fired` event named `minute` provides
 a coarse refresh heartbeat without giving guests their own schedulers.
+
+### Host-Owned Location Capability & Privacy Model
+
+System location access uses a host-owned `location:read` capability rather than in-extension IP geocoding:
+
+1. **Manifest Declaration**: Extensions requesting location must declare `[[capabilities]] kind = "location:read"`.
+2. **Host Location Provider**: On Linux, the host queries the desktop location daemon (`org.freedesktop.GeoClue2` via
+   D-Bus).
+3. **Location Response & Caching**: The host returns `{ latitude, longitude, accuracy_meters }` via `location_response`
+   event and caches coordinates to minimize battery and IPC overhead.
+4. **Location Modes**: Extensions (such as Weather) support `automatic` (GeoClue system location), `manual` (configured
+   city/coordinates), and `ip` (explicit opt-in fallback). If system location is temporarily unavailable, extensions
+   retain their last valid snapshot.
 
 ## Capabilities
 

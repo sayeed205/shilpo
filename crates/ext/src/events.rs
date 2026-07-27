@@ -88,6 +88,16 @@ pub enum ExtensionEvent {
         body: String,
         error: Option<String>,
     },
+    LocationResponse {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latitude: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        longitude: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        accuracy_meters: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
 
 impl ExtensionEvent {
@@ -101,7 +111,8 @@ impl ExtensionEvent {
             | Self::ContributionSettingsChanged { .. }
             | Self::Input { .. }
             | Self::StateValue { .. }
-            | Self::HttpResponse { .. } => None,
+            | Self::HttpResponse { .. }
+            | Self::LocationResponse { .. } => None,
             Self::OutputsChanged => Some(EventKind::OutputsChanged),
             Self::ThemeChanged { .. } => Some(EventKind::ThemeChanged),
             Self::PaletteGenerated { .. } => Some(EventKind::PaletteGenerated),

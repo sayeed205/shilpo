@@ -4,11 +4,22 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 const GEOCODE_REQUEST: &str = "weather-geocode";
+const IP_GEOCODE_REQUEST: &str = "weather-ip-geocode";
 const FORECAST_REQUEST: &str = "weather-forecast";
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum LocationMode {
+    #[default]
+    Automatic,
+    Manual,
+    Ip,
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default)]
 struct WeatherSettings {
+    location_mode: LocationMode,
     location: String,
     latitude: Option<f64>,
     longitude: Option<f64>,
@@ -20,6 +31,7 @@ struct WeatherSettings {
 impl Default for WeatherSettings {
     fn default() -> Self {
         Self {
+            location_mode: LocationMode::Automatic,
             location: String::new(),
             latitude: None,
             longitude: None,
@@ -101,6 +113,7 @@ struct WeatherState {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum RequestKind {
     Geocode,
+    IpGeocode,
     Forecast,
 }
 
@@ -141,6 +154,22 @@ impl WeatherState {
                     Vec::new()
                 }
             }
+            Event::LocationResponse {
+                latitude,
+                longitude,
+                ..
+            } => {
+                self.loading = false;
+                if let (Some(lat), Some(lon)) = (latitude, longitude) {
+                    self.location = Some(Location {
+                        latitude: lat,
+                        longitude: lon,
+                    });
+                    self.request_forecast()
+                } else {
+                    self.refresh_manual_or_fallback()
+                }
+            }
             Event::HttpResponse {
                 request_id,
                 status,
@@ -161,6 +190,20 @@ impl WeatherState {
             return Vec::new();
         }
         self.error = None;
+        match self.settings.location_mode {
+            LocationMode::Automatic => {
+                self.loading = true;
+                vec![json!({ "kind": "location_read" })]
+            }
+            LocationMode::Ip => {
+                let url = "https://ipwho.is/".to_string();
+                vec![self.http_request(RequestKind::IpGeocode, IP_GEOCODE_REQUEST, url)]
+            }
+            LocationMode::Manual => self.refresh_manual_or_fallback(),
+        }
+    }
+
+    fn refresh_manual_or_fallback(&mut self) -> Vec<Value> {
         if self.settings.has_coordinates() {
             self.location = Some(Location {
                 latitude: self.settings.latitude.unwrap_or_default(),
@@ -174,7 +217,10 @@ impl WeatherState {
             );
             vec![self.http_request(RequestKind::Geocode, GEOCODE_REQUEST, url)]
         } else {
-            self.error = Some("Set a weather location".into());
+            if self.snapshot.is_none() {
+                self.error = Some("Set a weather location".into());
+            }
+            self.loading = false;
             vec![invalidate_bar()]
         }
     }
@@ -225,6 +271,13 @@ impl WeatherState {
                 }
                 Err(error) => self.fail(error),
             },
+            RequestKind::IpGeocode => match parse_ip_location(body) {
+                Ok(location) => {
+                    self.location = Some(location);
+                    self.request_forecast()
+                }
+                Err(_error) => self.refresh_manual_or_fallback(),
+            },
             RequestKind::Forecast => match parse_forecast(body, self.settings.temperature_unit) {
                 Ok(snapshot) => {
                     self.snapshot = Some(snapshot);
@@ -251,35 +304,63 @@ impl WeatherState {
     }
 
     fn view(&self) -> Value {
-        let (symbol, temperature, condition) = if let Some(snapshot) = &self.snapshot {
+        let (icon, temperature, condition) = if let Some(snapshot) = &self.snapshot {
             (
-                weather_symbol(snapshot.weather_code, snapshot.is_day),
+                weather_icon(snapshot.weather_code, snapshot.is_day),
                 format!("{:.0}{}", snapshot.temperature, snapshot.unit),
                 weather_description(snapshot.weather_code),
             )
         } else if self.loading {
-            ("◌", "Loading".into(), "")
+            ("", String::new(), "")
         } else if self.error.is_some() {
-            ("!", "Weather".into(), "")
+            ("warning", "Weather".into(), "")
         } else {
-            ("○", "Weather".into(), "")
+            ("cloud", "Weather".into(), "")
         };
-        let mut children = vec![
+        let mut children = vec![if self.loading {
             json!({
-                "kind": "text",
-                "content": symbol,
-                "font_size": 16.0,
-                "bold": false,
+                "kind": "loading_indicator",
+                "size": 24.0,
+                "color": "on_surface_variant",
                 "style": null
-            }),
+            })
+        } else {
             json!({
+                "kind": "icon",
+                "name": icon,
+                "size": 16.0,
+                "style": {
+                    "padding": null,
+                    "margin": null,
+                    "width": null,
+                    "height": null,
+                    "corner_radius": null,
+                    "opacity": null,
+                    "color": "on_surface_variant",
+                    "background": null,
+                    "flex_grow": null
+                }
+            })
+        }];
+        if !temperature.is_empty() {
+            children.push(json!({
                 "kind": "text",
                 "content": temperature,
                 "font_size": 13.0,
                 "bold": true,
-                "style": null
-            }),
-        ];
+                "style": {
+                    "padding": null,
+                    "margin": null,
+                    "width": null,
+                    "height": null,
+                    "corner_radius": null,
+                    "opacity": null,
+                    "color": "on_surface",
+                    "background": null,
+                    "flex_grow": null
+                }
+            }));
+        }
         if self.settings.show_condition && !condition.is_empty() {
             children.push(json!({
                 "kind": "text",
@@ -293,7 +374,7 @@ impl WeatherState {
                     "height": null,
                     "corner_radius": null,
                     "opacity": 0.75,
-                    "color": null,
+                    "color": "on_surface_variant",
                     "background": null,
                     "flex_grow": null
                 }
@@ -328,6 +409,18 @@ enum Event {
         request_id: String,
         status: Option<u16>,
         body: String,
+        error: Option<String>,
+    },
+    LocationResponse {
+        #[serde(default)]
+        latitude: Option<f64>,
+        #[serde(default)]
+        longitude: Option<f64>,
+        #[allow(dead_code)]
+        #[serde(default)]
+        accuracy_meters: Option<f64>,
+        #[allow(dead_code)]
+        #[serde(default)]
         error: Option<String>,
     },
     Input {
@@ -383,6 +476,29 @@ fn parse_location(body: &str) -> Result<Location, String> {
     })
 }
 
+#[derive(Deserialize)]
+struct IpLocationResponse {
+    success: bool,
+    latitude: f64,
+    longitude: f64,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+fn parse_ip_location(body: &str) -> Result<Location, String> {
+    let response: IpLocationResponse = serde_json::from_str(body)
+        .map_err(|error| format!("invalid ip location response: {error}"))?;
+    if !response.success {
+        return Err(response
+            .message
+            .unwrap_or_else(|| "IP geolocation failed".into()));
+    }
+    Ok(Location {
+        latitude: response.latitude,
+        longitude: response.longitude,
+    })
+}
+
 fn parse_forecast(body: &str, unit: TemperatureUnit) -> Result<WeatherSnapshot, String> {
     let response: ForecastResponse = serde_json::from_str(body)
         .map_err(|error| format!("invalid forecast response: {error}"))?;
@@ -426,22 +542,33 @@ fn encode_query(value: &str) -> String {
     encoded
 }
 
-fn weather_symbol(code: i32, is_day: bool) -> &'static str {
+fn weather_icon(code: i32, is_day: bool) -> &'static str {
     match code {
         0 => {
             if is_day {
-                "☀"
+                "clear_day"
             } else {
-                "☾"
+                "bedtime"
             }
         }
-        1 | 2 => "◒",
-        3 => "☁",
-        45 | 48 => "≋",
-        51..=67 | 80..=82 => "☂",
-        71..=77 | 85..=86 => "❄",
-        95..=99 => "ϟ",
-        _ => "○",
+        1 | 2 => {
+            if is_day {
+                "partly_cloudy_day"
+            } else {
+                "partly_cloudy_night"
+            }
+        }
+        3 => "cloud",
+        45 | 48 => "foggy",
+        51..=55 => "rainy_light",
+        56..=57 | 66..=67 => "rainy_snow",
+        61..=63 | 80..=81 => "rainy",
+        65 | 82 => "rainy_heavy",
+        71..=77 => "weather_snowy",
+        85..=86 => "snowing_heavy",
+        95 => "thunderstorm",
+        96 | 99 => "weather_hail",
+        _ => "cloud_alert",
     }
 }
 
@@ -507,12 +634,70 @@ mod tests {
         Event::ContributionSettingsChanged {
             contribution_id: "bar".into(),
             settings: json!({
+                "location_mode": "manual",
                 "location": location,
                 "temperature_unit": "celsius",
                 "refresh_minutes": 30,
                 "show_condition": true
             }),
         }
+    }
+
+    #[test]
+    fn automatic_mode_emits_location_read_and_handles_location_response() {
+        let mut state = WeatherState::default();
+        let effects = state.handle_event(Event::ContributionSettingsChanged {
+            contribution_id: "bar".into(),
+            settings: json!({
+                "location_mode": "automatic"
+            }),
+        });
+        assert_eq!(effects, vec![json!({ "kind": "location_read" })]);
+
+        let effects = state.handle_event(Event::LocationResponse {
+            latitude: Some(22.5726),
+            longitude: Some(88.3639),
+            accuracy_meters: Some(500.0),
+            error: None,
+        });
+        let forecast_request = effects[0]["request_id"].as_str().unwrap().to_owned();
+        assert!(forecast_request.starts_with(FORECAST_REQUEST));
+        assert!(effects[0]["url"]
+            .as_str()
+            .unwrap()
+            .contains("latitude=22.5726"));
+    }
+
+    #[test]
+    fn ip_mode_fetches_ip_geocoding() {
+        let mut state = WeatherState::default();
+        let effects = state.handle_event(Event::ContributionSettingsChanged {
+            contribution_id: "bar".into(),
+            settings: json!({
+                "location_mode": "ip"
+            }),
+        });
+        let ip_request = effects[0]["request_id"].as_str().unwrap().to_owned();
+        assert!(ip_request.starts_with(IP_GEOCODE_REQUEST));
+        assert!(effects[0]["url"].as_str().unwrap().contains("ipwho.is"));
+
+        let effects = state.handle_event(Event::HttpResponse {
+            request_id: ip_request,
+            status: Some(200),
+            body: json!({
+                "success": true,
+                "latitude": 22.5726,
+                "longitude": 88.3639
+            })
+            .to_string(),
+            error: None,
+        });
+        let forecast_request = effects[0]["request_id"].as_str().unwrap().to_owned();
+        assert!(forecast_request.starts_with(FORECAST_REQUEST));
+        assert!(effects[0]["url"]
+            .as_str()
+            .unwrap()
+            .contains("latitude=22.5726"));
     }
 
     #[test]
@@ -573,6 +758,7 @@ mod tests {
         let effects = state.handle_event(Event::ContributionSettingsChanged {
             contribution_id: "bar".into(),
             settings: json!({
+                "location_mode": "manual",
                 "location": "Kolkata",
                 "latitude": 22.5726,
                 "longitude": 88.3639
@@ -590,6 +776,7 @@ mod tests {
         let _ = state.handle_event(Event::ContributionSettingsChanged {
             contribution_id: "bar".into(),
             settings: json!({
+                "location_mode": "manual",
                 "latitude": 1.0,
                 "longitude": 2.0,
                 "refresh_minutes": 1
@@ -638,9 +825,13 @@ mod tests {
 
     #[test]
     fn weather_codes_have_stable_fallbacks() {
-        assert_eq!(weather_symbol(0, true), "☀");
-        assert_eq!(weather_symbol(0, false), "☾");
+        assert_eq!(weather_icon(0, true), "clear_day");
+        assert_eq!(weather_icon(0, false), "bedtime");
+        assert_eq!(weather_icon(53, true), "rainy_light");
+        assert_eq!(weather_icon(63, true), "rainy");
+        assert_eq!(weather_icon(95, true), "thunderstorm");
         assert_eq!(weather_description(95), "Thunderstorm");
+        assert_eq!(weather_icon(999, true), "cloud_alert");
         assert_eq!(weather_description(999), "Weather");
     }
 

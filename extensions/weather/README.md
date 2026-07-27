@@ -4,8 +4,13 @@ The official Weather extension adds `ext:org.shilpo.weather/bar`. It uses Open-M
 through Shilpo's capability-checked HTTP transport. The guest has no direct network, filesystem, environment, or
 location access.
 
-Location is explicit: configure a city/postal code or exact coordinates. The extension does not infer location from the
-public IP address. Exact coordinates avoid geocoding and take precedence over `location`.
+Location determination supports three modes configured via `location_mode`:
+
+- `automatic` (default): Queries host system location (`location:read` capability via GeoClue D-Bus) and retains the
+  last valid snapshot if system location is temporarily unavailable.
+- `manual`: Configured city/postal code (`location`) or exact coordinates (`latitude` and `longitude`). Exact
+  coordinates take precedence over city text.
+- `ip`: Explicit opt-in for IP-based geolocation fallback through `ipwho.is`; this sends the public IP to that provider.
 
 ## Build and run
 
@@ -60,16 +65,17 @@ end = [
 ]
 
 [extensions.settings."org.shilpo.weather"]
-location = "Kolkata"
+location_mode = "automatic"
 temperature_unit = "celsius"
 refresh_minutes = 30
 show_condition = false
 ```
 
-Coordinates may be used instead:
+Manual city or exact coordinates can be configured explicitly:
 
 ```toml
 [extensions.settings."org.shilpo.weather"]
+location_mode = "manual"
 location = "Kolkata"
 latitude = 22.5726
 longitude = 88.3639
@@ -106,7 +112,7 @@ cargo run -p shilpo-shell -- ext reload org.shilpo.weather
 
 The widget normally moves through these states:
 
-- `◌ Loading` while location or forecast data is being fetched;
+- the M3 Expressive loading indicator while location or forecast data is being fetched;
 - a weather symbol and temperature after a successful response;
 - `! Weather` when the location is missing or after a network, provider, or response error;
 - `○ Weather` briefly before the first settings event is delivered.

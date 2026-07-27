@@ -67,6 +67,7 @@ pub enum ViewNode {
     Divider,
     Badge(BadgeNode),
     Progress(ProgressNode),
+    LoadingIndicator(LoadingIndicatorNode),
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -85,6 +86,8 @@ pub enum SemanticColorToken {
     Secondary,
     Surface,
     SurfaceContainer,
+    OnSurface,
+    OnSurfaceVariant,
     Outline,
     Error,
 }
@@ -209,6 +212,14 @@ pub struct ProgressNode {
     pub style: Option<ViewStyle>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct LoadingIndicatorNode {
+    pub size: Option<f32>,
+    pub color: Option<SemanticColorToken>,
+    pub style: Option<ViewStyle>,
+}
+
 #[derive(Default)]
 struct ValidationState {
     nodes: usize,
@@ -316,6 +327,14 @@ fn validate_node(
                 return invalid("progress value must be between zero and one");
             }
             validate_style(progress.style.as_ref())?;
+        }
+        ViewNode::LoadingIndicator(indicator) => {
+            if let Some(size) = indicator.size
+                && (!size.is_finite() || size <= 0.0)
+            {
+                return invalid("loading indicator size must be positive");
+            }
+            validate_style(indicator.style.as_ref())?;
         }
     }
     Ok(())

@@ -22,11 +22,17 @@ An extension may contribute one or more:
 - background tasks that react to typed shell events.
 
 Extensions can react to events such as palette generation, theme changes, wallpaper changes, output changes, network
-state, or timers. Operations that affect the system—such as changing wallpaper, running a command, reading files, or
-using the network—require an explicit capability declaration and user grant.
+state, or timers. Operations that affect the system—such as changing wallpaper, running a command, reading files,
+reading system location (`location:read`), or using the network—require an explicit capability declaration and user
+grant.
 
 An extension cannot import shell internals or create arbitrary GPUI elements. It returns a small declarative view tree
 that Shilpo renders with `shilpo-ui`, preserving theme, accessibility, layout, and performance rules.
+
+The view protocol also exposes semantic host components for behaviors that need native rendering or animation. For
+example, an extension can return a `loading_indicator` node and the shell renders the Material 3 Expressive loader.
+Semantic color tokens such as `on_surface_variant` are resolved by the host against the active theme, so extensions do
+not hardcode light- or dark-mode colors.
 
 Official extension sources live in [`extensions`](../../extensions). They use a dedicated WASI guest workspace so the
 native Shilpo workspace does not compile every guest during ordinary development.

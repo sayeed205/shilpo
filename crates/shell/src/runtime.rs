@@ -169,6 +169,7 @@ pub struct ShellRuntime {
     extension_panel: Option<(WindowHandle<shilpo_ui::Root>, shilpo_ext::CanonicalId)>,
     extension_output_ids: std::collections::HashSet<DisplayId>,
     extension_http_in_flight: std::collections::HashSet<(shilpo_ext::ExtensionId, String)>,
+    extension_location_service: shilpo_services::LocationService,
     actions: ActionRegistry,
     keybindings: crate::actions::KeybindingManager,
     session_state: shilpo_config::ShellSessionState,
@@ -237,6 +238,7 @@ impl ShellRuntime {
             extension_panel: None,
             extension_output_ids: std::collections::HashSet::new(),
             extension_http_in_flight: std::collections::HashSet::new(),
+            extension_location_service: shilpo_services::LocationService::new(),
             actions: ActionRegistry::default(),
             keybindings: crate::actions::KeybindingManager::with_defaults(),
             session_state,
@@ -730,6 +732,36 @@ impl ShellRuntime {
                                 .extensions
                                 .as_mut()
                                 .map(|extensions| extensions.dispatch_to(&extension_id, &response))
+                                .unwrap_or_default();
+                            Self::apply_extension_changes(cx, changes);
+                        });
+                    })
+                    .detach();
+                }
+                shilpo_ext::HostEffect::LocationRead => {
+                    let location_service = cx.global::<Self>().extension_location_service.clone();
+                    cx.spawn(async move |cx| {
+                        let result = location_service.read_location_async().await;
+                        let event = match result {
+                            Ok(info) => shilpo_ext::ExtensionEvent::LocationResponse {
+                                latitude: Some(info.latitude),
+                                longitude: Some(info.longitude),
+                                accuracy_meters: Some(info.accuracy_meters),
+                                error: None,
+                            },
+                            Err(error) => shilpo_ext::ExtensionEvent::LocationResponse {
+                                latitude: None,
+                                longitude: None,
+                                accuracy_meters: None,
+                                error: Some(error),
+                            },
+                        };
+                        cx.update(|cx| {
+                            let changes = cx
+                                .global_mut::<Self>()
+                                .extensions
+                                .as_mut()
+                                .map(|extensions| extensions.dispatch_to(&extension_id, &event))
                                 .unwrap_or_default();
                             Self::apply_extension_changes(cx, changes);
                         });

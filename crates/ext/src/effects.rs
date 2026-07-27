@@ -63,6 +63,7 @@ pub enum HostEffect {
         path: String,
         contents: Vec<u8>,
     },
+    LocationRead,
 }
 
 #[cfg(test)]

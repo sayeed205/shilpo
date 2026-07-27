@@ -3,6 +3,17 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "location_mode": {
+      "type": "string",
+      "title": "Location mode",
+      "description": "How location is determined: automatic (system GeoClue), manual, or ip",
+      "enum": [
+        "automatic",
+        "manual",
+        "ip"
+      ],
+      "default": "automatic"
+    },
     "location": {
       "type": "string",
       "title": "Location",
