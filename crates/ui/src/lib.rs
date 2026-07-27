@@ -57,6 +57,7 @@ pub mod list;
 pub mod menu;
 pub mod motion;
 pub mod native_menu;
+pub mod navigation_rail;
 pub mod notification;
 pub mod pagination;
 pub mod plot;
@@ -89,6 +90,10 @@ pub mod toggle_button;
 pub mod tooltip;
 pub mod tree;
 
+pub use navigation_rail::{
+    NavigationRail, NavigationRailArrangement, NavigationRailFooter, NavigationRailHeader,
+    NavigationRailItem,
+};
 pub use side_panel::{SidePanel, SidePanelPosition};
 
 pub use crate::Disableable;

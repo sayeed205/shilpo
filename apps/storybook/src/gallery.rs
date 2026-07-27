@@ -84,6 +84,7 @@ impl Gallery {
                     StoryContainer::panel::<ListStory>(window, cx),
                     StoryContainer::panel::<MenuStory>(window, cx),
                     StoryContainer::panel::<NativeMenuStory>(window, cx),
+                    StoryContainer::panel::<NavigationRailStory>(window, cx),
                     StoryContainer::panel::<NotificationStory>(window, cx),
                     StoryContainer::panel::<NumberInputStory>(window, cx),
                     StoryContainer::panel::<OtpInputStory>(window, cx),

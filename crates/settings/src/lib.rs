@@ -1,8 +1,11 @@
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Role,
-    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder,
 };
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
+use shilpo_ui::{
+    ActiveTheme, IconName, NavigationRail, NavigationRailHeader, NavigationRailItem, Selectable,
+    StyledExt, button::IconButton, h_flex, v_flex,
+};
 use std::fs;
 
 /// Settings App Navigation Category.
@@ -165,6 +168,7 @@ impl SettingsCategory {
 /// Standalone Settings Application View.
 pub struct SettingsView {
     pub active_page: SettingsPageId,
+    pub previous_page: Option<SettingsPageId>,
     pub page_registry: SettingsPageRegistry,
     pub active_scale: f32,
     pub selected_font: String,
@@ -178,6 +182,7 @@ pub struct SettingsView {
     pub extensions_section: ExtensionsSection,
     pub extension_snapshot: shilpo_ext::ExtensionCatalogSnapshot,
     pub extension_action_error: Option<String>,
+    pub rail_collapsed: bool,
     extension_catalog: shilpo_ext::ExtensionCatalog,
 }
 
@@ -188,6 +193,7 @@ impl SettingsView {
         let extension_snapshot = extension_snapshot(&extension_catalog);
         Self {
             active_page: SettingsPageId::Builtin(SettingsCategory::default()),
+            previous_page: None,
             page_registry,
             active_scale: 1.0,
             selected_font: "sans-serif".to_string(),
@@ -201,6 +207,7 @@ impl SettingsView {
             extensions_section: ExtensionsSection::default(),
             extension_snapshot,
             extension_action_error: None,
+            rail_collapsed: false,
             extension_catalog,
         }
     }
@@ -419,52 +426,64 @@ impl Render for SettingsView {
             .size_full()
             .bg(cx.theme().surface)
             .text_color(cx.theme().on_surface)
-            // Left Navigation Sidebar
-            .child(
-                v_flex()
-                    .w_64()
-                    .h_full()
-                    .p_4()
-                    .gap_2()
-                    .border_r_1()
-                    .border_color(cx.theme().outline_variant)
-                    .bg(cx.theme().surface_container)
-                    .children(self.page_registry.pages().iter().cloned().enumerate().map(
-                        |(index, page)| {
-                            let is_active = active == page.id;
-                        let (bg, fg) = if is_active {
-                            (cx.theme().primary_container, cx.theme().on_primary_container)
-                        } else {
-                            (cx.theme().surface_container, cx.theme().on_surface_variant)
-                        };
-                            let icon = match &page.id {
-                                SettingsPageId::Builtin(category) => category.icon(),
-                                SettingsPageId::Extension(_) => IconName::Terminal,
-                            };
-                            let selected_page = page.id.clone();
+            // Left Navigation Sidebar (M3 Expressive Navigation Rail)
+            .child({
+                let toggle_icon = if self.rail_collapsed {
+                    IconName::Menu
+                } else {
+                    IconName::MenuOpen
+                };
+                let rail_header = NavigationRailHeader::new("settings-rail-header").child(
+                    IconButton::new("rail-toggle")
+                        .icon(toggle_icon)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.rail_collapsed = !this.rail_collapsed;
+                            cx.notify();
+                        })),
+                );
 
-                        h_flex()
-                            .id(("settings-page", index))
-                            .role(Role::Button)
-                            .px_3()
-                            .py_2()
-                            .rounded_xl()
-                            .bg(bg)
-                            .text_color(fg)
-                            .gap_3()
-                            .items_center()
-                            .cursor_pointer()
+                let rail_items: Vec<_> = self
+                    .page_registry
+                    .pages()
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(index, page)| {
+                        let is_active = active == page.id;
+                        let icon = match &page.id {
+                            SettingsPageId::Builtin(category) => category.icon(),
+                            SettingsPageId::Extension(_) => IconName::Terminal,
+                        };
+                        let selected_page = page.id.clone();
+                        NavigationRailItem::new(("settings-page", index))
+                            .icon(icon)
+                            .label(page.label)
+                            .selected(is_active)
                             .on_click(cx.listener(move |this, _, _, cx| {
+                                this.previous_page = Some(this.active_page.clone());
                                 this.active_page = selected_page.clone();
                                 cx.notify();
                             }))
-                            .child(Icon::new(icon).size(px(16.)))
-                            .child(div().text_xs().font_medium().child(page.label))
-                    })),
-            )
+                    })
+                    .collect();
+
+                let previous_index = self.previous_page.as_ref().and_then(|prev| {
+                    self.page_registry.pages().iter().position(|p| &p.id == prev)
+                });
+
+                NavigationRail::new("settings-nav-rail")
+                    .collapsed(self.rail_collapsed)
+                    .previous_selected_index(previous_index)
+                    .header(rail_header)
+                    .items(rail_items)
+            })
             // Main Content Area
             .child(
                 v_flex()
+                    .id(gpui::ElementId::Name(gpui::SharedString::from(format!(
+                        "settings-page-content-{:?}",
+                        active
+                    ))))
                     .flex_1()
                     .h_full()
                     .p_6()
