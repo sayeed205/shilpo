@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Shilpo Settings
+GenericName=Desktop Configuration
+Comment=Configure Shilpo desktop environment, extensions, themes, and capabilities
+Exec=shilpo-settings
+Icon=com.shilpo.settings
+Terminal=false
+Categories=Settings;DesktopSettings;
+StartupWMClass=com.shilpo.settings

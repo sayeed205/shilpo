@@ -210,6 +210,12 @@ impl SettingsView {
     }
 
     pub fn view(window: &mut Window, cx: &mut App) -> Entity<shilpo_ui::Root> {
+        #[cfg(target_os = "linux")]
+        {
+            register_desktop_entry();
+            update_desktop_icon_for_theme(cx);
+        }
+
         let view = cx.new(|_| Self::new());
         cx.new(|cx| {
             shilpo_ui::Root::new(view, window, cx)
@@ -1164,6 +1170,114 @@ impl Render for SettingsView {
                         },
                     ),
             )
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn register_desktop_entry() {
+    if let Some(home) = dirs::home_dir() {
+        let apps_dir = home.join(".local/share/applications");
+        let icons_scalable_dir = home.join(".local/share/icons/hicolor/scalable/apps");
+
+        let _ = std::fs::create_dir_all(&apps_dir);
+        let _ = std::fs::create_dir_all(&icons_scalable_dir);
+
+        let desktop_file = apps_dir.join("com.shilpo.settings.desktop");
+        let icon_svg_file = icons_scalable_dir.join("com.shilpo.settings.svg");
+
+        let desktop_content = include_str!("../resources/com.shilpo.settings.desktop");
+        let icon_svg_content = include_bytes!("../resources/com.shilpo.settings.svg");
+
+        let _ = std::fs::write(&desktop_file, desktop_content);
+        let _ = std::fs::write(&icon_svg_file, icon_svg_content);
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn update_desktop_icon_for_theme(cx: &App) {
+    if let Some(home) = dirs::home_dir() {
+        let icons_scalable_dir = home.join(".local/share/icons/hicolor/scalable/apps");
+        let pixmaps_dir = home.join(".local/share/pixmaps");
+        let _ = std::fs::create_dir_all(&icons_scalable_dir);
+        let _ = std::fs::create_dir_all(&pixmaps_dir);
+
+        let icon_svg_file = icons_scalable_dir.join("com.shilpo.settings.svg");
+
+        let is_dark = cx.theme().mode.is_dark();
+        let bg_hsla = if is_dark {
+            cx.theme().surface_container_high
+        } else {
+            cx.theme().primary_container
+        };
+        let bg_rgb = bg_hsla.to_rgb();
+        let bg_color = format!(
+            "#{:02x}{:02x}{:02x}",
+            (bg_rgb.r * 255.0) as u8,
+            (bg_rgb.g * 255.0) as u8,
+            (bg_rgb.b * 255.0) as u8
+        );
+
+        let primary_rgb = cx.theme().primary.to_rgb();
+        let glyph_color = format!(
+            "#{:02x}{:02x}{:02x}",
+            (primary_rgb.r * 255.0) as u8,
+            (primary_rgb.g * 255.0) as u8,
+            (primary_rgb.b * 255.0) as u8
+        );
+
+        let svg_content = format!(
+            r#"<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect width="512" height="512" rx="160" fill="{bg_color}"/>
+    <g transform="translate(64, 448) scale(0.4)">
+        <path fill="{glyph_color}" d="M433-80q-27 0-46.5-18T363-142l-9-66q-13-5-24.5-12T307-235l-62 26q-25 11-50 2t-39-32l-47-82q-14-23-8-49t27-43l53-40q-1-7-1-13.5v-27q0-6.5 1-13.5l-53-40q-21-17-27-43t8-49l47-82q14-23 39-32t50 2l62 26q11-8 23-15t24-12l9-66q4-26 23.5-44t46.5-18h94q27 0 46.5 18t23.5 44l9 66q13 5 24.5 12t22.5 15l62-26q25-11 50-2t39 32l47 82q14-23 8 49t-27 43l-53 40q1 7 1 13.5v27q0 6.5-2 13.5l53 40q21 17 27 43t-8 49l-48 82q-14 23-39 32t-50-2l-60-26q-11 8-23 15t-24 12l-9 66q-4 26-23.5 44T527-80h-94Zm49-260q58 0 99-41t41-99q0-58-41-99t-99-41q-59 0-99.5 41T342-480q0 58 40.5 99t99.5 41Z"/>
+    </g>
+</svg>"#
+        );
+
+        let _ = std::fs::write(&icon_svg_file, &svg_content);
+
+        cx.background_executor()
+            .spawn(async move {
+                for size in [512, 256, 128, 64, 48, 32] {
+                    let size_dir =
+                        home.join(format!(".local/share/icons/hicolor/{size}x{size}/apps"));
+                    let _ = std::fs::create_dir_all(&size_dir);
+                    let png_file = size_dir.join("com.shilpo.settings.png");
+                    let _ = std::process::Command::new("rsvg-convert")
+                        .args([
+                            "-w",
+                            &size.to_string(),
+                            "-h",
+                            &size.to_string(),
+                            icon_svg_file.to_str().unwrap(),
+                            "-o",
+                            png_file.to_str().unwrap(),
+                        ])
+                        .status();
+                }
+
+                let pixmap_png = pixmaps_dir.join("com.shilpo.settings.png");
+                let _ = std::process::Command::new("rsvg-convert")
+                    .args([
+                        "-w",
+                        "512",
+                        "-h",
+                        "512",
+                        icon_svg_file.to_str().unwrap(),
+                        "-o",
+                        pixmap_png.to_str().unwrap(),
+                    ])
+                    .status();
+
+                let _ = std::process::Command::new("gtk-update-icon-cache")
+                    .args([
+                        "-f",
+                        "-t",
+                        home.join(".local/share/icons/hicolor").to_str().unwrap(),
+                    ])
+                    .status();
+            })
+            .detach();
     }
 }
 
