@@ -1,21 +1,21 @@
-use crate::{
-    ActiveTheme, Selectable,
-    animation::{Transition, cubic_bezier},
-    v_flex,
-};
+use crate::{ActiveTheme, Selectable, v_flex};
 use gpui::{
-    AnyElement, App, ElementId, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
-    StyleRefinement, Styled, Window, div, px,
+    Animation, AnimationExt as _, AnyElement, App, ElementId, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, StyleRefinement, Styled, Window, div,
 };
-use std::time::Duration;
 
 mod footer;
 mod header;
 mod item;
+mod menu_button;
+mod motion;
 
 pub use footer::*;
 pub use header::*;
 pub use item::*;
+pub use menu_button::*;
+
+use motion::{RailMotionState, RailTarget, spring_progress};
 
 /// Vertical item arrangement in [`NavigationRail`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -26,19 +26,16 @@ pub enum NavigationRailArrangement {
     Bottom,
 }
 
-const COLLAPSED_WIDTH: Pixels = px(80.);
-const EXPANDED_WIDTH: Pixels = px(240.);
-
 /// Material 3 Expressive Navigation Rail component.
 ///
 /// Provides access to primary destinations in desktop and wide-screen apps.
-/// Features smooth spatial active indicator pill gliding matching QML `NavigationRailTabArray.qml`.
+/// The rail owns its retargetable active-indicator motion, so callers only
+/// declare the current selection and layout state.
 #[derive(IntoElement)]
 pub struct NavigationRail {
     id: ElementId,
     collapsed: bool,
     show_collapsed_label: bool,
-    previous_selected_index: Option<usize>,
     header: Option<AnyElement>,
     footer: Option<AnyElement>,
     items: Vec<NavigationRailItem>,
@@ -52,7 +49,6 @@ impl NavigationRail {
             id: id.into(),
             collapsed: true,
             show_collapsed_label: false,
-            previous_selected_index: None,
             header: None,
             footer: None,
             items: Vec::new(),
@@ -70,12 +66,6 @@ impl NavigationRail {
     /// Sets whether to show text labels below item icons when collapsed.
     pub fn show_collapsed_label(mut self, show: bool) -> Self {
         self.show_collapsed_label = show;
-        self
-    }
-
-    /// Sets the previously selected item index to animate spatial indicator gliding.
-    pub fn previous_selected_index(mut self, index: Option<usize>) -> Self {
-        self.previous_selected_index = index;
         self
     }
 
@@ -117,58 +107,70 @@ impl Styled for NavigationRail {
 }
 
 impl RenderOnce for NavigationRail {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let width = if self.collapsed {
-            COLLAPSED_WIDTH
-        } else {
-            EXPANDED_WIDTH
-        };
-
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let is_collapsed = self.collapsed;
         let show_collapsed_label = self.show_collapsed_label;
-
-        // Find active item index to position the single sliding active indicator pill (NavigationRailTabArray.qml behavior)
         let selected_index = self.items.iter().position(|item| item.is_selected());
-        let prev_index = self.previous_selected_index.or(selected_index);
-
-        let stride = if is_collapsed {
-            if show_collapsed_label {
-                px(48.)
-            } else {
-                px(40.)
-            }
-        } else {
-            px(56.)
+        let target = RailTarget {
+            selected_index,
+            collapsed: is_collapsed,
         };
+        let motion_key = format!("navigation-rail-motion:{}", self.id);
+        let indicator_animation_name = format!("navigation-rail-indicator-motion:{}", self.id);
+        let layout_animation_name = format!("navigation-rail-layout-motion:{}", self.id);
+        let motion = window.use_keyed_state(motion_key, cx, |_, _| RailMotionState::new(target));
+        let snapshot = motion.read(cx).clone();
 
-        let active_pill = selected_index.map(|idx| {
-            let from_idx = prev_index.unwrap_or(idx);
-            let from_top = if is_collapsed {
-                stride * (from_idx as f32) + px(4.)
-            } else {
-                stride * (from_idx as f32)
-            };
+        if snapshot.target != target {
+            let generation = motion.update(cx, |state, _| state.retarget(target));
+            let duration = motion.read(cx).duration;
+            let motion = motion.clone();
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(duration).await;
+                _ = motion.update(cx, |state, cx| {
+                    if state.generation == generation {
+                        state.active = false;
+                        state.current.set(target.geometry());
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
 
-            let to_top = if is_collapsed {
-                stride * (idx as f32) + px(4.)
-            } else {
-                stride * (idx as f32)
-            };
+        let state = motion.read(cx);
+        let from_geometry = state.from;
+        let target_geometry = target.geometry();
+        let generation = state.generation;
+        let duration = state.duration;
+        let spring = state.spring;
+        let active = state.active;
 
-            let pill_el = div()
-                .w(if is_collapsed { px(56.) } else { px(216.) })
-                .h(if is_collapsed { px(32.) } else { px(48.) })
+        let active_pill = selected_index.map(|_| {
+            let pill = div()
+                .absolute()
+                .left_0()
+                .top(target_geometry.indicator_top)
+                .w(target_geometry.indicator_width)
+                .h(target_geometry.indicator_height)
                 .rounded_full()
                 .bg(cx.theme().secondary_container);
 
-            if from_top != to_top {
-                Transition::new(Duration::from_millis(220))
-                    .ease(cubic_bezier(0.2, 0.0, 0.0, 1.0))
-                    .slide_y(from_top, to_top)
-                    .apply(pill_el.absolute().left_0(), ("nav-rail-pill-anim", idx))
-                    .into_any_element()
+            if active {
+                pill.with_animation(
+                    ElementId::NamedInteger(indicator_animation_name.into(), generation),
+                    Animation::new(duration),
+                    move |pill, delta| {
+                        let progress = spring_progress(delta, duration, spring);
+                        let geometry = from_geometry.spring_lerp(target_geometry, progress);
+                        pill.top(geometry.indicator_top)
+                            .w(geometry.indicator_width)
+                            .h(geometry.indicator_height)
+                    },
+                )
+                .into_any_element()
             } else {
-                pill_el.absolute().top(to_top).left_0().into_any_element()
+                pill.into_any_element()
             }
         });
 
@@ -194,18 +196,38 @@ impl RenderOnce for NavigationRail {
             NavigationRailArrangement::Bottom => div().w_full().mt_auto().child(items_container),
         };
 
-        v_flex()
+        let rail_container = v_flex()
             .id(self.id)
-            .w(width)
+            .w(target_geometry.rail_width)
             .h_full()
             .py_4()
             .px_3()
             .gap_4()
-            .bg(cx.theme().surface_container)
-            .border_r_1()
-            .border_color(cx.theme().outline_variant)
+            .bg(cx.theme().surface)
+            .overflow_x_hidden()
             .children(self.header)
             .child(div().flex_1().child(content_area))
-            .children(self.footer)
+            .children(self.footer);
+
+        if active {
+            let current_geometry = state.current.clone();
+            let active_generation = state.active_generation.clone();
+            rail_container
+                .with_animation(
+                    ElementId::NamedInteger(layout_animation_name.into(), generation),
+                    Animation::new(duration),
+                    move |rail, delta| {
+                        let progress = spring_progress(delta, duration, spring);
+                        let geometry = from_geometry.spring_lerp(target_geometry, progress);
+                        if active_generation.get() == generation {
+                            current_geometry.set(geometry);
+                        }
+                        rail.w(geometry.rail_width)
+                    },
+                )
+                .into_any_element()
+        } else {
+            rail_container.into_any_element()
+        }
     }
 }

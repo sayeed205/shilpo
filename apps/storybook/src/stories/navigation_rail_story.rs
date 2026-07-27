@@ -3,8 +3,8 @@ use gpui::{
     Styled, Window, div, px,
 };
 use shilpo_ui::{
-    IconName, NavigationRail, NavigationRailHeader, NavigationRailItem, Selectable, StyledExt,
-    badge::Badge, button::IconButton, h_flex, v_flex,
+    IconName, NavigationRail, NavigationRailHeader, NavigationRailItem, NavigationRailMenuButton,
+    Selectable, StyledExt, badge::Badge, h_flex, v_flex,
 };
 
 use crate::section;
@@ -12,7 +12,6 @@ use crate::section;
 pub struct NavigationRailStory {
     focus_handle: FocusHandle,
     selected_index: usize,
-    previous_selected_index: Option<usize>,
     collapsed: bool,
 }
 
@@ -21,7 +20,6 @@ impl NavigationRailStory {
         Self {
             focus_handle: cx.focus_handle(),
             selected_index: 0,
-            previous_selected_index: None,
             collapsed: true,
         }
     }
@@ -61,15 +59,10 @@ impl Render for NavigationRailStory {
         let is_collapsed = self.collapsed;
         let selected_index = self.selected_index;
 
-        let toggle_button = {
+        let menu_button = {
             let entity = entity.clone();
-            let icon = if is_collapsed {
-                IconName::Menu
-            } else {
-                IconName::MenuOpen
-            };
-            IconButton::new("rail-toggle")
-                .icon(icon)
+            NavigationRailMenuButton::new("rail-toggle")
+                .collapsed(is_collapsed)
                 .on_click(move |_, _, cx| {
                     entity.update(cx, |this, cx| {
                         this.collapsed = !this.collapsed;
@@ -78,7 +71,7 @@ impl Render for NavigationRailStory {
                 })
         };
 
-        let header = NavigationRailHeader::new("rail-header").child(toggle_button);
+        let header = NavigationRailHeader::new("rail-header").child(menu_button);
 
         let items = vec![
             ("home", IconName::Star, "Home", false),
@@ -98,7 +91,6 @@ impl Render for NavigationRailStory {
                     .selected(selected_index == idx)
                     .on_click(move |_, _, cx| {
                         entity.update(cx, |this, cx| {
-                            this.previous_selected_index = Some(this.selected_index);
                             this.selected_index = idx;
                             cx.notify();
                         });
@@ -114,7 +106,6 @@ impl Render for NavigationRailStory {
 
         let rail = NavigationRail::new("story-rail")
             .collapsed(is_collapsed)
-            .previous_selected_index(self.previous_selected_index)
             .header(header)
             .items(rail_items);
 

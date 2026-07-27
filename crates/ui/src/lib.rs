@@ -92,7 +92,7 @@ pub mod tree;
 
 pub use navigation_rail::{
     NavigationRail, NavigationRailArrangement, NavigationRailFooter, NavigationRailHeader,
-    NavigationRailItem,
+    NavigationRailItem, NavigationRailMenuButton,
 };
 pub use side_panel::{SidePanel, SidePanelPosition};
 

@@ -3,8 +3,8 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder,
 };
 use shilpo_ui::{
-    ActiveTheme, IconName, NavigationRail, NavigationRailHeader, NavigationRailItem, Selectable,
-    StyledExt, button::IconButton, h_flex, v_flex,
+    ActiveTheme, IconName, NavigationRail, NavigationRailHeader, NavigationRailItem,
+    NavigationRailMenuButton, Selectable, StyledExt, h_flex, v_flex,
 };
 use std::fs;
 
@@ -168,7 +168,6 @@ impl SettingsCategory {
 /// Standalone Settings Application View.
 pub struct SettingsView {
     pub active_page: SettingsPageId,
-    pub previous_page: Option<SettingsPageId>,
     pub page_registry: SettingsPageRegistry,
     pub active_scale: f32,
     pub selected_font: String,
@@ -193,7 +192,6 @@ impl SettingsView {
         let extension_snapshot = extension_snapshot(&extension_catalog);
         Self {
             active_page: SettingsPageId::Builtin(SettingsCategory::default()),
-            previous_page: None,
             page_registry,
             active_scale: 1.0,
             selected_font: "sans-serif".to_string(),
@@ -217,13 +215,24 @@ impl SettingsView {
     }
 
     pub fn view(window: &mut Window, cx: &mut App) -> Entity<shilpo_ui::Root> {
+        shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
+
         #[cfg(target_os = "linux")]
         {
             register_desktop_entry();
             update_desktop_icon_for_theme(cx);
         }
 
-        let view = cx.new(|_| Self::new());
+        let view = cx.new(|cx| {
+            cx.observe_window_appearance(window, |_, window, cx| {
+                shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
+                #[cfg(target_os = "linux")]
+                update_desktop_icon_for_theme(cx);
+                window.refresh();
+            })
+            .detach();
+            Self::new()
+        });
         cx.new(|cx| {
             shilpo_ui::Root::new(view, window, cx)
                 .bordered(true)
@@ -428,19 +437,15 @@ impl Render for SettingsView {
             .text_color(cx.theme().on_surface)
             // Left Navigation Sidebar (M3 Expressive Navigation Rail)
             .child({
-                let toggle_icon = if self.rail_collapsed {
-                    IconName::Menu
-                } else {
-                    IconName::MenuOpen
-                };
-                let rail_header = NavigationRailHeader::new("settings-rail-header").child(
-                    IconButton::new("rail-toggle")
-                        .icon(toggle_icon)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.rail_collapsed = !this.rail_collapsed;
-                            cx.notify();
-                        })),
-                );
+                let menu_button = NavigationRailMenuButton::new("rail-toggle")
+                    .collapsed(self.rail_collapsed)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.rail_collapsed = !this.rail_collapsed;
+                        cx.notify();
+                    }));
+
+                let rail_header =
+                    NavigationRailHeader::new("settings-rail-header").child(menu_button);
 
                 let rail_items: Vec<_> = self
                     .page_registry
@@ -460,41 +465,44 @@ impl Render for SettingsView {
                             .label(page.label)
                             .selected(is_active)
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.previous_page = Some(this.active_page.clone());
                                 this.active_page = selected_page.clone();
                                 cx.notify();
                             }))
                     })
                     .collect();
 
-                let previous_index = self.previous_page.as_ref().and_then(|prev| {
-                    self.page_registry.pages().iter().position(|p| &p.id == prev)
-                });
-
                 NavigationRail::new("settings-nav-rail")
                     .collapsed(self.rail_collapsed)
-                    .previous_selected_index(previous_index)
                     .header(rail_header)
                     .items(rail_items)
             })
-            // Main Content Area
+            // Main Content Area (Pocket Card UI matching Storybook gallery)
             .child(
-                v_flex()
-                    .id(gpui::ElementId::Name(gpui::SharedString::from(format!(
-                        "settings-page-content-{:?}",
-                        active
-                    ))))
+                div()
                     .flex_1()
                     .h_full()
-                    .p_6()
-                    .gap_4()
+                    .py_3()
+                    .pr_3()
+                    .pl_1()
                     .child(
-                        div()
-                            .text_lg()
-                            .font_bold()
-                            .text_color(cx.theme().on_surface)
-                            .child(active_label.clone()),
-                    )
+                        v_flex()
+                            .id(gpui::ElementId::Name(gpui::SharedString::from(format!(
+                                "settings-page-content-{:?}",
+                                active
+                            ))))
+                            .size_full()
+                            .overflow_y_scroll()
+                            .bg(cx.theme().surface_container_low)
+                            .rounded_2xl()
+                            .p_6()
+                            .gap_4()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_bold()
+                                    .text_color(cx.theme().on_surface)
+                                    .child(active_label.clone()),
+                            )
                     .child(
                         div()
                             .text_xs()
@@ -557,26 +565,33 @@ impl Render for SettingsView {
                             fonts.into_iter().take(5).collect()
                         };
                         let selected_font = self.selected_font.clone();
-                        let active_theme_mode = self.active_theme_mode.clone();
                         let active_radius = self.active_corner_radius_scale;
 
                         this.child(
                             v_flex()
                                 .gap_4()
-                                // Theme Mode / Auto Schedule
+                                // Theme Mode (Dark / Light / System matching Storybook)
                                 .child(
                                     v_flex()
                                         .gap_2()
-                                        .child(div().text_xs().font_bold().child("System Theme & Auto-Schedule Policy"))
+                                        .child(div().text_xs().font_bold().child("System Theme Mode"))
                                         .child(h_flex().gap_2().children(
-                                            ["Dark", "Light", "Auto (Sunset-to-Sunrise)"].into_iter().enumerate().map(|(i, mode)| {
-                                                let is_active = active_theme_mode == mode;
+                                            [
+                                                ("Dark", shilpo_ui::ThemeMode::Dark),
+                                                ("Light", shilpo_ui::ThemeMode::Light),
+                                                ("System", shilpo_ui::ThemeMode::System),
+                                            ]
+                                                .into_iter()
+                                                .enumerate()
+                                                .map(|(i, (label, target_mode))| {
+                                                    let current_selected = cx.theme().selected_mode();
+                                                    let is_active = current_selected == target_mode;
                                                 let (bg, fg) = if is_active {
                                                     (cx.theme().primary, cx.theme().on_primary)
                                                 } else {
                                                     (cx.theme().surface_container, cx.theme().on_surface)
                                                 };
-                                                let mode_str = mode.to_string();
+                                                    let label_str = label.to_string();
                                                 div()
                                                     .id(("theme-mode-pill", i))
                                                     .role(Role::Button)
@@ -589,10 +604,13 @@ impl Render for SettingsView {
                                                     .text_xs()
                                                     .font_semibold()
                                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.active_theme_mode = mode_str.clone();
+                                                        this.active_theme_mode = label_str.clone();
+                                                        shilpo_ui::Theme::change(target_mode, None, cx);
+                                                        #[cfg(target_os = "linux")]
+                                                        update_desktop_icon_for_theme(cx);
                                                         cx.notify();
                                                     }))
-                                                    .child(mode)
+                                                    .child(label)
                                             }),
                                         )),
                                 )
@@ -1188,6 +1206,7 @@ impl Render for SettingsView {
                             )
                         },
                     ),
+            )
             )
     }
 }
