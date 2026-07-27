@@ -1,0 +1,39 @@
+id = "org.shilpo.weather"
+name = "Weather"
+version = "1.0.0"
+schema_version = 1
+api_version = "0.2.0"
+min_shilpo_version = "0.2.0"
+authors = ["Shilpo contributors"]
+description = "Current weather from Open-Meteo in the Shilpo bar."
+repository = "https://github.com/shilpo-shell/shilpo"
+license = "MIT"
+
+[library]
+path = "extension.wasm"
+
+[[contributions.bar_widgets]]
+id = "bar"
+name = "Weather"
+description = "Current conditions and temperature."
+
+[[contributions.settings_pages]]
+id = "settings"
+name = "Weather"
+schema = "settings.schema.json"
+
+[[subscriptions]]
+event = "network_changed"
+
+[[subscriptions]]
+event = "timer_fired"
+
+[[capabilities]]
+kind = "events:subscribe"
+events = ["network_changed", "timer_fired"]
+
+[[capabilities]]
+kind = "network:http"
+hosts = ["geocoding-api.open-meteo.com", "api.open-meteo.com"]
+paths = ["/v1/search*", "/v1/forecast*"]
+
