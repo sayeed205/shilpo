@@ -91,7 +91,7 @@ impl RenderOnce for WindowInfoCapsule {
             .context_menu(|menu, _, _| {
                 menu.item(
                     PopupMenuItem::new("Close Active Overlay")
-                        .icon(IconName::SquareTerminal)
+                        .icon(IconName::Terminal)
                         .on_click(|_, window, cx| {
                             let _ = ShellRuntime::dispatch_action(cx, ActionInvocation::Quit);
                             window.remove_window();

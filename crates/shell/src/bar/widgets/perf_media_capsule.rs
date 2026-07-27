@@ -58,7 +58,7 @@ impl RenderOnce for PerfMediaCapsule {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .child(Icon::new(IconName::Cpu).size(px(13.)))
+                    .child(Icon::new(IconName::Memory).size(px(13.)))
                     .child(
                         div()
                             .text_xs()
@@ -70,7 +70,7 @@ impl RenderOnce for PerfMediaCapsule {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .child(Icon::new(IconName::MemoryStick).size(px(13.)))
+                    .child(Icon::new(IconName::Memory).size(px(13.)))
                     .child(
                         div()
                             .text_xs()
@@ -102,7 +102,7 @@ impl RenderOnce for PerfMediaCapsule {
                         .text_color(cx.theme().on_secondary_container)
                         .text_xs()
                         .font_medium()
-                        .child(Icon::new(IconName::Play).size(px(11.)))
+                        .child(Icon::new(IconName::PlayArrow).size(px(11.)))
                         .child(div().max_w(px(140.)).overflow_hidden().child(self.track)),
                 )
             })

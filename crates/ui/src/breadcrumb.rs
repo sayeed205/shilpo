@@ -140,7 +140,7 @@ impl Breadcrumb {
 struct BreadcrumbSeparator;
 impl RenderOnce for BreadcrumbSeparator {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        Icon::new(IconName::ChevronRight)
+        Icon::new(IconName::KeyboardArrowRight)
             .text_color(cx.theme().on_surface_variant)
             .size_3p5()
             .into_any_element()

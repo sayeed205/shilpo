@@ -154,7 +154,7 @@ impl RenderOnce for Carousel {
                             .shadow_md()
                             .cursor_pointer()
                             .hover(|s| s.bg(cx.theme().primary).text_color(cx.theme().on_primary))
-                            .child(Icon::new(IconName::ChevronLeft).size(px(22.)))
+                            .child(Icon::new(IconName::KeyboardArrowLeft).size(px(22.)))
                             .when_some(on_prev, move |this, handler| {
                                 this.on_click(move |evt, window, cx| {
                                     handler(prev_idx, evt, window, cx);
@@ -175,7 +175,7 @@ impl RenderOnce for Carousel {
                             .shadow_md()
                             .cursor_pointer()
                             .hover(|s| s.bg(cx.theme().primary).text_color(cx.theme().on_primary))
-                            .child(Icon::new(IconName::ChevronRight).size(px(22.)))
+                            .child(Icon::new(IconName::KeyboardArrowRight).size(px(22.)))
                             .when_some(on_next, move |this, handler| {
                                 this.on_click(move |evt, window, cx| {
                                     handler(next_idx, evt, window, cx);

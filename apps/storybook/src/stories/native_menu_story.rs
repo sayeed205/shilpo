@@ -38,7 +38,7 @@ fn demo_menu(word_wrap: bool) -> NativeMenu {
         .menu("Copy", click("Copy"))
         .menu("Paste", click("Paste"))
         .separator()
-        .menu_with_icon("Github", IconName::Github, Box::new(OpenGitHub))
+        .menu_with_icon("Github", IconName::Globe, Box::new(OpenGitHub))
         .menu_with_icon("Inbox", IconName::Inbox, click("Inbox"))
         .separator()
         .menu_with_disabled("Disabled item", true, click("Disabled"))

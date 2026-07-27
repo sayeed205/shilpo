@@ -31,7 +31,7 @@ impl Avatar {
             src: None,
             name: None,
             short_name: SharedString::default(),
-            placeholder: Icon::new(IconName::User),
+            placeholder: Icon::new(IconName::Person),
             size: Size::Medium,
         }
     }
@@ -52,10 +52,16 @@ impl Avatar {
         self
     }
 
-    /// Set placeholder icon, default: [`IconName::User`]
+    /// Set placeholder icon, default: [`IconName::Person`]
     pub fn placeholder(mut self, icon: impl Into<Icon>) -> Self {
         self.placeholder = icon.into();
         self
+    }
+}
+
+impl Default for Avatar {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -158,7 +164,7 @@ mod tests {
     fn test_avatar_builder(_cx: &mut gpui::TestAppContext) {
         let avatar = Avatar::new()
             .name("Jason Lee")
-            .placeholder(Icon::new(IconName::User))
+            .placeholder(Icon::new(IconName::Person))
             .large();
 
         assert_eq!(avatar.name, Some(SharedString::from("Jason Lee")));

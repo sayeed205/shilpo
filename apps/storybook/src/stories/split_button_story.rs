@@ -154,7 +154,7 @@ impl Render for SplitButtonStory {
                         SplitButton::new(
                             "icon-filled",
                             Button::new("icon-filled-leading")
-                                .icon(IconName::Plus)
+                                .icon(IconName::Add)
                                 .label("Create")
                                 .on_click(|_, _, _| {}),
                             menu_button("icon-filled-trailing"),

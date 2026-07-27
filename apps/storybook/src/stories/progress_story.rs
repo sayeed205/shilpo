@@ -125,7 +125,7 @@ impl Render for ProgressStory {
                             .child(
                                 Button::new("circle-animation-button")
                                     .small()
-                                    .icon(IconName::Play)
+                                    .icon(IconName::PlayArrow)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.start_animation(cx);
                                     })),
@@ -146,14 +146,14 @@ impl Render for ProgressStory {
                             .gap_2()
                             .child(
                                 Button::new("circle-button-5")
-                                    .icon(IconName::Minus)
+                                    .icon(IconName::Remove)
                                     .on_click(cx.listener(|this, _, _, _| {
                                         this.set_value((this.value - 1.).max(0.));
                                     })),
                             )
                             .child(
                                 Button::new("circle-button-6")
-                                    .icon(IconName::Plus)
+                                    .icon(IconName::Add)
                                     .on_click(cx.listener(|this, _, _, _| {
                                         this.set_value((this.value + 1.).min(100.));
                                     })),

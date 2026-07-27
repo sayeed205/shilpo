@@ -1244,7 +1244,7 @@ impl PopupMenu {
                                     .gap_1p5()
                                     .child(label.clone())
                                     .child(
-                                        Icon::new(IconName::ExternalLink)
+                                        Icon::new(IconName::OpenInNew)
                                             .with_size(Size::Size(px(16.)))
                                             .text_color(cx.theme().on_surface_variant),
                                     ),
@@ -1283,7 +1283,7 @@ impl PopupMenu {
                                 .justify_between()
                                 .child(label.clone())
                                 .child(
-                                    Icon::new(IconName::ChevronRight)
+                                    Icon::new(IconName::KeyboardArrowRight)
                                         .with_size(Size::Size(px(16.)))
                                         .text_color(cx.theme().on_surface_variant),
                                 ),

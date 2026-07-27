@@ -122,7 +122,7 @@ impl Render for RatingStory {
                                     Button::new("r-dec")
                                         .small()
                                         .outline()
-                                        .icon(IconName::Minus)
+                                        .icon(IconName::Remove)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             let v = this.value.saturating_sub(1);
                                             this.value = v;
@@ -133,7 +133,7 @@ impl Render for RatingStory {
                                     Button::new("r-inc")
                                         .small()
                                         .outline()
-                                        .icon(IconName::Plus)
+                                        .icon(IconName::Add)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             let v = (this.value + 1).min(5);
                                             this.value = v;

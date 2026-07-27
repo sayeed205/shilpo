@@ -431,7 +431,7 @@ mod tests {
                     .size(px(48.))
                     .child(
                         IconButton::new("icon-button")
-                            .icon(IconName::Plus)
+                            .icon(IconName::Add)
                             .disabled(self.disabled)
                             .loading(self.loading)
                             .on_click(move |_, _, cx| {

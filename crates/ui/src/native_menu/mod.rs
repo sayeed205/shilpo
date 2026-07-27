@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn test_native_menu_builder_accepts_icon() {
         let menu =
-            NativeMenu::new().menu_with_icon("Github", IconName::Github, Box::new(TestAction));
+            NativeMenu::new().menu_with_icon("Github", IconName::Globe, Box::new(TestAction));
 
         assert_eq!(menu.items.len(), 1);
         let NativeMenuItem::Item {
@@ -360,7 +360,7 @@ mod tests {
         assert_eq!(label, "Github");
         assert!(!disabled);
         assert!(!checked);
-        assert!(icon.path_ref().ends_with("github.svg"));
+        assert!(icon.path_ref().ends_with("globe.svg"));
     }
 
     #[test]

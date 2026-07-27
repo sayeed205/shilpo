@@ -280,7 +280,7 @@ impl RenderOnce for AccordionItem {
                             this.hover(|this| this.bg(cx.theme().surface_container_high))
                                 .child(
                                     Icon::new(if self.open {
-                                        IconName::ChevronUp
+                                        IconName::KeyboardArrowUp
                                     } else {
                                         IconName::KeyboardArrowDown
                                     })
@@ -289,8 +289,9 @@ impl RenderOnce for AccordionItem {
                                 )
                                 .when_some(self.on_toggle_click, |this, on_toggle_click| {
                                     this.on_click({
+                                        let open = self.open;
                                         move |_, window, cx| {
-                                            on_toggle_click(&!self.open, window, cx);
+                                            on_toggle_click(&!open, window, cx);
                                         }
                                     })
                                 })

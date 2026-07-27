@@ -181,7 +181,7 @@ impl SettingPage {
                             .when(self.is_resettable(cx), |this| {
                                 this.child(
                                     Button::new("reset")
-                                        .icon(IconName::Undo2)
+                                        .icon(IconName::Undo)
                                         .text()
                                         .small()
                                         .tooltip(t!("Settings.Reset All"))

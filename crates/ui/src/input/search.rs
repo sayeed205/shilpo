@@ -503,7 +503,7 @@ impl Render for SearchPanel {
                                             .xsmall()
                                             .compact()
                                             .plain()
-                                            .icon(IconName::CaseSensitive)
+                                            .icon(IconName::MatchCase)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.case_insensitive = !this.case_insensitive;
                                                 this.update_search_query(cx);
@@ -526,7 +526,7 @@ impl Render for SearchPanel {
                             Button::new("replace-mode")
                                 .xsmall()
                                 .plain()
-                                .icon(IconName::Replace)
+                                .icon(IconName::Redo)
                                 .selected(self.replace_mode)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.replace_mode = !this.replace_mode;
@@ -551,7 +551,7 @@ impl Render for SearchPanel {
                         Button::new("prev")
                             .xsmall()
                             .plain()
-                            .icon(IconName::ChevronLeft)
+                            .icon(IconName::KeyboardArrowLeft)
                             .disabled(!has_matches)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.prev(window, cx);
@@ -561,7 +561,7 @@ impl Render for SearchPanel {
                         Button::new("next")
                             .xsmall()
                             .plain()
-                            .icon(IconName::ChevronRight)
+                            .icon(IconName::KeyboardArrowRight)
                             .disabled(!has_matches)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.next(window, cx);

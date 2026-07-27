@@ -492,7 +492,7 @@ impl TabPanel {
             })
             .child(
                 Button::new("menu")
-                    .icon(IconName::Ellipsis)
+                    .icon(IconName::MoreHoriz)
                     .xsmall()
                     .text()
                     .tab_stop(false)
@@ -567,23 +567,23 @@ impl TabPanel {
         let icon = match placement {
             DockPlacement::Left => {
                 if is_open {
-                    IconName::PanelLeft
+                    IconName::LeftPanelClose
                 } else {
-                    IconName::PanelLeftOpen
+                    IconName::LeftPanelOpen
                 }
             }
             DockPlacement::Right => {
                 if is_open {
-                    IconName::PanelRight
+                    IconName::RightPanelClose
                 } else {
-                    IconName::PanelRightOpen
+                    IconName::RightPanelOpen
                 }
             }
             DockPlacement::Bottom => {
                 if is_open {
-                    IconName::PanelBottom
+                    IconName::DockToBottom
                 } else {
-                    IconName::PanelBottomOpen
+                    IconName::BottomPanelOpen
                 }
             }
             DockPlacement::Center => unreachable!(),

@@ -49,7 +49,7 @@ impl RenderOnce for ActiveWindowWidget {
             .context_menu(|menu, _, _| {
                 menu.item(
                     PopupMenuItem::new("Close Active Overlay")
-                        .icon(IconName::SquareTerminal)
+                        .icon(IconName::Terminal)
                         .accelerator("Super+Q")
                         .on_click(|_, window, cx| {
                             let _ = ShellRuntime::dispatch_action(cx, ActionInvocation::Quit);
@@ -61,7 +61,7 @@ impl RenderOnce for ActiveWindowWidget {
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(Icon::new(IconName::SquareTerminal).size(px(16.)))
+                    .child(Icon::new(IconName::Terminal).size(px(16.)))
                     .child(self.title),
             )
     }

@@ -49,14 +49,14 @@ impl RenderOnce for SysInfoWidget {
                         h_flex()
                             .gap_1()
                             .items_center()
-                            .child(Icon::new(IconName::Cpu).size(px(14.)))
+                            .child(Icon::new(IconName::Memory).size(px(14.)))
                             .child(format!("{}%", self.cpu_percent)),
                     )
                     .child(
                         h_flex()
                             .gap_1()
                             .items_center()
-                            .child(Icon::new(IconName::MemoryStick).size(px(14.)))
+                            .child(Icon::new(IconName::Memory).size(px(14.)))
                             .child(format!("{}%", self.ram_percent)),
                     ),
             )

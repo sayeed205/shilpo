@@ -138,7 +138,7 @@ impl SettingsStory {
             SettingPage::new("General")
                 .resettable(resettable)
                 .default_open(true)
-                .icon(Icon::new(IconName::Settings2))
+                .icon(Icon::new(IconName::Settings))
                 .title_suffix(|_, _| {
                     Button::new("help")
                         .icon(IconName::Info)
@@ -423,7 +423,7 @@ impl SettingsStory {
                 ]),
             SettingPage::new("Software Update")
                 .resettable(resettable)
-                .icon(Icon::new(IconName::Cpu))
+                .icon(Icon::new(IconName::Memory))
                 .groups(vec![SettingGroup::new().title("Updates").items(vec![
                     SettingItem::new(
                         "Enable Notifications",
@@ -460,7 +460,7 @@ impl SettingsStory {
                             .w_full()
                             .items_center()
                             .justify_center()
-                            .child(Icon::new(IconName::GalleryVerticalEnd).size_16())
+                            .child(Icon::new(IconName::Dashboard).size_16())
                             .child("GPUI Component")
                             .child(
                                 Label::new(

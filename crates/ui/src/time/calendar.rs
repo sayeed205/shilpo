@@ -638,7 +638,7 @@ impl Calendar {
             .items_center()
             .child(
                 Button::new("prev")
-                    .icon(IconName::ArrowLeft)
+                    .icon(IconName::ArrowBack)
                     .tab_stop(false)
                     .text()
                     .disabled(disabled)
@@ -717,7 +717,7 @@ impl Calendar {
             })
             .child(
                 Button::new("next")
-                    .icon(IconName::ArrowRight)
+                    .icon(IconName::ArrowForward)
                     .text()
                     .tab_stop(false)
                     .disabled(disabled)

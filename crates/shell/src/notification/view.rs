@@ -58,7 +58,7 @@ impl Render for NotificationToastView {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(Icon::new(IconName::Bell).size(px(18.)))
+                    .child(Icon::new(IconName::Notifications).size(px(18.)))
             }
         } else {
             div()
@@ -70,7 +70,7 @@ impl Render for NotificationToastView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(Icon::new(IconName::Bell).size(px(18.)))
+                .child(Icon::new(IconName::Notifications).size(px(18.)))
         };
 
         let (bg, fg) = match self.notification.urgency {

@@ -138,13 +138,13 @@ impl SettingsCategory {
     pub fn icon(&self) -> IconName {
         match self {
             Self::System => IconName::Star,
-            Self::Display => IconName::Sun,
-            Self::Sound => IconName::Bell,
-            Self::Network => IconName::Network,
-            Self::Bluetooth => IconName::SquareTerminal,
+            Self::Display => IconName::Sunny,
+            Self::Sound => IconName::Notifications,
+            Self::Network => IconName::Lan,
+            Self::Bluetooth => IconName::Terminal,
             Self::Appearance => IconName::Palette,
-            Self::Shortcuts => IconName::Copy,
-            Self::Extensions => IconName::SquareTerminal,
+            Self::Shortcuts => IconName::ContentCopy,
+            Self::Extensions => IconName::Terminal,
             Self::About => IconName::Check,
         }
     }
@@ -433,7 +433,7 @@ impl Render for SettingsView {
                         };
                             let icon = match &page.id {
                                 SettingsPageId::Builtin(category) => category.icon(),
-                                SettingsPageId::Extension(_) => IconName::SquareTerminal,
+                                SettingsPageId::Extension(_) => IconName::Terminal,
                             };
                             let selected_page = page.id.clone();
 

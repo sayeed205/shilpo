@@ -395,10 +395,10 @@ mod tests {
     fn test_switch_checked_unchecked_icons() {
         let switch = Switch::new("test-sw")
             .checked_icon(IconName::Check)
-            .unchecked_icon(IconName::Minus);
+            .unchecked_icon(IconName::Remove);
 
         assert_eq!(switch.get_checked_icon(), Some(IconName::Check));
-        assert_eq!(switch.get_unchecked_icon(), Some(IconName::Minus));
+        assert_eq!(switch.get_unchecked_icon(), Some(IconName::Remove));
     }
 
     #[gpui::test]

@@ -78,7 +78,7 @@ impl RenderOnce for Clipboard {
             .icon(if copied {
                 IconName::Check
             } else {
-                IconName::Copy
+                IconName::ContentCopy
             })
             .text()
             .xsmall()

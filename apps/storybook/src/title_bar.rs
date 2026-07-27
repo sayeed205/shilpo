@@ -126,7 +126,7 @@ impl Render for AppTitleBar {
                         .child(
                             Button::new("github")
                                 .plain()
-                                .icon(IconName::Github)
+                                .icon(IconName::Globe)
                                 .small()
                                 .on_click(|_, _, cx| {
                                     cx.open_url("https://github.com/sayeed205/shilpo")
@@ -139,7 +139,7 @@ impl Render for AppTitleBar {
                                         .plain()
                                         .small()
                                         .compact()
-                                        .icon(IconName::Bell),
+                                        .icon(IconName::Notifications),
                                 ),
                             ),
                         ),
@@ -223,7 +223,7 @@ impl Render for FontSizeSelector {
                 Button::new("btn")
                     .small()
                     .plain()
-                    .icon(IconName::Settings2)
+                    .icon(IconName::Settings)
                     .dropdown_menu(move |this, _, cx| {
                         this.scrollable(true)
                             .check_side(Side::Right)

@@ -83,7 +83,7 @@ impl Render for ToggleButtonStory {
                         .child(
                             ToggleButton::tonal("tb-4")
                                 .label("Tonal")
-                                .icon(IconName::Plus)
+                                .icon(IconName::Add)
                                 .checked(self.checked_tonal),
                         ),
                 ),

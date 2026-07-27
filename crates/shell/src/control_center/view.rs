@@ -470,7 +470,7 @@ impl Render for ControlCenterView {
                                 h_flex()
                                     .gap_2()
                                     .items_center()
-                                    .child(Icon::new(IconName::Network).size(px(16.)))
+                                    .child(Icon::new(IconName::Lan).size(px(16.)))
                                     .child(div().text_sm().font_bold().child(
                                         if network.available {
                                             network.ssid.unwrap_or_else(|| "WiFi".into())
@@ -489,7 +489,7 @@ impl Render for ControlCenterView {
                                             .font_bold()
                                             .child(format!("{}%", battery.percentage)),
                                     )
-                                    .child(Icon::new(IconName::Battery).size(px(16.))),
+                                    .child(Icon::new(IconName::BatteryAndroidFull).size(px(16.))),
                             ),
                     )
                     // Grid Toggles (WiFi, Bluetooth, DND, Night Light)
@@ -518,7 +518,7 @@ impl Render for ControlCenterView {
                                             .text_color(wifi_fg)
                                             .gap_2_5()
                                             .items_center()
-                                            .child(Icon::new(IconName::Network).size(px(16.)))
+                                            .child(Icon::new(IconName::Lan).size(px(16.)))
                                             .child(div().text_xs().font_bold().child("WiFi")),
                                     )
                                     // DND Toggle
@@ -536,7 +536,7 @@ impl Render for ControlCenterView {
                                             .text_color(dnd_fg)
                                             .gap_2_5()
                                             .items_center()
-                                            .child(Icon::new(IconName::Copy).size(px(16.)))
+                                            .child(Icon::new(IconName::ContentCopy).size(px(16.)))
                                             .child(div().text_xs().font_bold().child("DND")),
                                     ),
                             )
@@ -562,7 +562,7 @@ impl Render for ControlCenterView {
                                             .gap_2_5()
                                             .items_center()
                                             .child(
-                                                Icon::new(IconName::SquareTerminal).size(px(16.)),
+                                                Icon::new(IconName::Terminal).size(px(16.)),
                                             )
                                             .child(div().text_xs().font_bold().child("Bluetooth")),
                                     )
@@ -625,7 +625,7 @@ impl Render for ControlCenterView {
                                             })
                                             .gap_2_5()
                                             .items_center()
-                                            .child(Icon::new(IconName::Sun).size(px(16.)))
+                                            .child(Icon::new(IconName::Sunny).size(px(16.)))
                                             .child(
                                                 div().text_xs().font_bold().child("Airplane Mode"),
                                             ),
@@ -652,7 +652,7 @@ impl Render for ControlCenterView {
                                             .text_color(cx.theme().on_surface_variant)
                                             .gap_2_5()
                                             .items_center()
-                                            .child(Icon::new(IconName::Copy).size(px(16.)))
+                                            .child(Icon::new(IconName::ResizeWindow).size(px(16.)))
                                             .child(div().text_xs().font_bold().child("Screenshot")),
                                     )
                                     // Screen Record Button
@@ -673,7 +673,7 @@ impl Render for ControlCenterView {
                                             .text_color(record_fg)
                                             .gap_2_5()
                                             .items_center()
-                                            .child(Icon::new(IconName::Play).size(px(16.)))
+                                            .child(Icon::new(IconName::PlayArrow).size(px(16.)))
                                             .child(div().text_xs().font_bold().child(
                                                 if self.is_recording {
                                                     "Recording"
@@ -918,7 +918,7 @@ impl Render for ControlCenterView {
                                     .hover(|s| {
                                         s.bg(cx.theme().surface_container_highest.darken(0.1))
                                     })
-                                    .child(Icon::new(IconName::SquareTerminal).size(px(16.))),
+                                    .child(Icon::new(IconName::Terminal).size(px(16.))),
                             )
                             .child(
                                 div()
@@ -941,7 +941,7 @@ impl Render for ControlCenterView {
                                         ShellRuntime::forget_control_center(cx);
                                         window.remove_window();
                                     })
-                                    .child(Icon::new(IconName::Copy).size(px(16.))),
+                                    .child(Icon::new(IconName::ContentCopy).size(px(16.))),
                             )
                             .child(
                                 div()
@@ -964,7 +964,7 @@ impl Render for ControlCenterView {
                                         ShellRuntime::forget_control_center(cx);
                                         window.remove_window();
                                     })
-                                    .child(Icon::new(IconName::Network).size(px(16.))),
+                                    .child(Icon::new(IconName::Lan).size(px(16.))),
                             )
                             .child(
                                 div()

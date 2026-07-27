@@ -32,13 +32,13 @@ impl Styled for BatteryWidget {
 impl RenderOnce for BatteryWidget {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let (icon, fg) = if self.info.is_charging {
-            (IconName::BatteryCharging, cx.theme().primary)
+            (IconName::BatteryAndroidBolt, cx.theme().primary)
         } else if self.info.percentage <= 20 {
-            (IconName::BatteryWarning, cx.theme().error)
+            (IconName::BatteryAndroidAlert, cx.theme().error)
         } else if self.info.percentage >= 80 {
-            (IconName::BatteryFull, cx.theme().on_surface)
+            (IconName::BatteryAndroid6, cx.theme().on_surface)
         } else {
-            (IconName::BatteryLow, cx.theme().on_surface)
+            (IconName::BatteryAndroid1, cx.theme().on_surface)
         };
 
         div()

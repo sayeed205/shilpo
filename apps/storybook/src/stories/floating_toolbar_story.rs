@@ -67,10 +67,10 @@ impl Render for FloatingToolbarStory {
                                     .child(IconButton::new("ft-btn-3").icon(IconName::Folder))
                                     .child(
                                         IconButton::new("ft-btn-4")
-                                            .icon(IconName::EllipsisVertical),
+                                            .icon(IconName::MoreVert),
                                     ),
                             )
-                            .child(IconButton::new("ft-fab-1").icon(IconName::Plus)),
+                            .child(IconButton::new("ft-fab-1").icon(IconName::Add)),
                     ),
             )
             .child(
@@ -80,8 +80,8 @@ impl Render for FloatingToolbarStory {
                         h_flex().gap_3().items_center().child(
                             FloatingToolbar::horizontal("ft-h-2")
                                 .vibrant(true)
-                                .child(IconButton::new("ft-btn-5").icon(IconName::Calendar))
-                                .child(IconButton::new("ft-btn-6").icon(IconName::User))
+                                .child(IconButton::new("ft-btn-5").icon(IconName::CalendarToday))
+                                .child(IconButton::new("ft-btn-6").icon(IconName::Person))
                                 .child(IconButton::new("ft-btn-7").icon(IconName::Close)),
                         ),
                     ),
@@ -90,7 +90,7 @@ impl Render for FloatingToolbarStory {
                 section("Vertical Floating Toolbar").max_w_lg().child(
                     v_flex().child(
                         FloatingToolbar::vertical("ft-v-1")
-                            .child(IconButton::new("ft-vbtn-1").icon(IconName::Plus))
+                            .child(IconButton::new("ft-vbtn-1").icon(IconName::Add))
                             .child(IconButton::new("ft-vbtn-2").icon(IconName::Folder))
                             .child(IconButton::new("ft-vbtn-3").icon(IconName::Star)),
                     ),

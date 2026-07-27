@@ -104,14 +104,14 @@ impl Alert {
     pub fn warning(id: impl Into<ElementId>, message: impl Into<Text>) -> Self {
         Self::new(id, message)
             .with_variant(AlertVariant::Warning)
-            .icon(IconName::TriangleAlert)
+            .icon(IconName::Info)
     }
 
     /// Create a new [`AlertVariant::Error`] alert with the given message.
     pub fn error(id: impl Into<ElementId>, message: impl Into<Text>) -> Self {
         Self::new(id, message)
             .with_variant(AlertVariant::Error)
-            .icon(IconName::CircleX)
+            .icon(IconName::Cancel)
     }
 
     /// Sets the [`AlertVariant`] of the alert.

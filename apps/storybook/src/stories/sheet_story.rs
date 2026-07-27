@@ -85,7 +85,7 @@ impl ListDelegate for ListItemDeletegate {
                 .suffix(|_, _| {
                     Button::new("like")
                         .tab_stop(false)
-                        .icon(IconName::Heart)
+                        .icon(IconName::Favorite)
                         .with_variant(ButtonVariant::Text)
                         .size(px(18.))
                         .on_click(move |_, window, cx| {

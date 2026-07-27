@@ -352,10 +352,10 @@ fn food_groups() -> SearchableVec<SearchableGroup<FoodItem>> {
 
 fn industries() -> SearchableVec<Industry> {
     SearchableVec::new(vec![
-        Industry::new("Information Technology", IconName::Cpu),
-        Industry::new("Healthcare", IconName::Heart),
+        Industry::new("Information Technology", IconName::Memory),
+        Industry::new("Healthcare", IconName::Favorite),
         Industry::new("Finance", IconName::Globe),
-        Industry::new("Education", IconName::BookOpen),
+        Industry::new("Education", IconName::ImportContacts),
         Industry::new("Entertainment", IconName::Star),
     ])
 }
@@ -612,7 +612,7 @@ impl Render for ComboboxStory {
                             Button::new("add-new")
                                 .text()
                                 .label("New university")
-                                .icon(Icon::new(IconName::Plus))
+                                .icon(Icon::new(IconName::Add))
                                 .text_color(cx.theme().on_surface)
                                 .w_full()
                                 .justify_start()

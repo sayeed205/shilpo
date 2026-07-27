@@ -136,7 +136,7 @@ impl Render for AlertDialogStory {
                             .child(
                                 DialogHeader::new()
                                     .items_center()
-                                    .child(Icon::new(IconName::TriangleAlert).size_10().text_color(cx.theme().tertiary))
+                                    .child(Icon::new(IconName::Info).size_10().text_color(cx.theme().tertiary))
                                     .child(
                                         DialogTitle::new().child("Network Permission Required"),
                                     ).child(

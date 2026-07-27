@@ -186,13 +186,13 @@ impl Render for TabsStory {
                                     Button::new("back")
                                         .text()
                                         .xsmall()
-                                        .icon(IconName::ArrowLeft),
+                                        .icon(IconName::ArrowBack),
                                 )
                                 .child(
                                     Button::new("forward")
                                         .text()
                                         .xsmall()
-                                        .icon(IconName::ArrowRight),
+                                        .icon(IconName::ArrowForward),
                                 ),
                         )
                         .child(Tab::new().label("Account"))
@@ -208,7 +208,7 @@ impl Render for TabsStory {
                                 .mx_1()
                                 .child(Button::new("inbox").text().xsmall().icon(IconName::Inbox))
                                 .child(
-                                    Button::new("more").text().xsmall().icon(IconName::Ellipsis),
+                                    Button::new("more").text().xsmall().icon(IconName::MoreHoriz),
                                 ),
                         ),
                 ),
@@ -234,10 +234,10 @@ impl Render for TabsStory {
                         .child(
                             Tab::new()
                                 .label("Calendar")
-                                .icon(IconName::Calendar)
+                                .icon(IconName::CalendarToday)
                                 .badge_count(3),
                         )
-                        .child(Tab::new().label("Documents").icon(IconName::BookOpen))
+                        .child(Tab::new().label("Documents").icon(IconName::ImportContacts))
                         .child(Tab::new().label("Settings").icon(IconName::Settings)),
                 ),
             )
@@ -283,7 +283,7 @@ impl Render for TabsStory {
                         .child(
                             Tab::new()
                                 .label("Library")
-                                .icon(IconName::BookOpen)
+                                .icon(IconName::ImportContacts)
                                 .badge_count(5)
                                 .stacked(true),
                         ),
@@ -363,8 +363,8 @@ impl Render for TabsStory {
                         .on_click(cx.listener(|this, ix: &usize, window, cx| {
                             this.set_active_tab(*ix, window, cx);
                         }))
-                        .child(IconName::Bot)
-                        .child(IconName::Calendar)
+                        .child(IconName::Robot)
+                        .child(IconName::CalendarToday)
                         .child(IconName::Map)
                         .children(vec!["Appearance", "Settings", "About", "License"]),
                 ),
@@ -407,7 +407,7 @@ impl Render for TabsStory {
                                 let label = format!("Tab {id}");
                                 Tab::new()
                                     .px_2()
-                                    .prefix(Icon::new(IconName::BookOpen))
+                                    .prefix(Icon::new(IconName::ImportContacts))
                                     .label(label)
                                     .suffix(
                                         IconButton::new(format!("dynamic-tab-close-{id}"))

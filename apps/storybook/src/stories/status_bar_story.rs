@@ -68,7 +68,7 @@ impl Render for StatusBarStory {
                                 Button::new("branch")
                                     .text()
                                     .xsmall()
-                                    .icon(IconName::Github)
+                                    .icon(IconName::Globe)
                                     .label("main")
                                     .tooltip("Git branch")
                                     .on_click(|_, window, cx| {
@@ -158,7 +158,7 @@ impl Render for StatusBarStory {
                                 Button::new("notifications")
                                     .text()
                                     .xsmall()
-                                    .icon(IconName::Bell)
+                                    .icon(IconName::Notifications)
                                     .label("3")
                                     .tooltip("3 notifications")
                                     .on_click(|_, window, cx| {

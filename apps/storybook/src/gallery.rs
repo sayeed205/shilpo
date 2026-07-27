@@ -308,7 +308,7 @@ impl Render for Gallery {
             .child(div().flex_1().min_h_0().child(body))
             .child(
                 StatusBar::new()
-                    .child(Icon::new(IconName::GalleryVerticalEnd).xsmall())
+                    .child(Icon::new(IconName::Dashboard).xsmall())
                     .child(format!("{total_components} components"))
                     .child(Separator::vertical())
                     .when(!current_story.is_empty(), |this| {
@@ -320,7 +320,7 @@ impl Render for Gallery {
                         Button::new("assistant")
                             .text()
                             .xsmall()
-                            .icon(IconName::Github)
+                            .icon(IconName::Globe)
                             .tooltip("GPUI Component GitHub repository")
                             .on_click(|_, _, cx| {
                                 cx.open_url("https://github.com/sayeed205/shilpo")

@@ -99,7 +99,7 @@ impl Render for AvatarStory {
                     .child(Avatar::new())
                     .child(Avatar::new().small())
                     .child(Avatar::new().xsmall())
-                    .child(Avatar::new().placeholder(IconName::Building2)),
+                    .child(Avatar::new().placeholder(IconName::Apartment)),
             )
             .child(
                 section("Avatar Group")

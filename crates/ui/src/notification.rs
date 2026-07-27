@@ -34,8 +34,8 @@ impl NotificationType {
         match self {
             Self::Info => Icon::new(IconName::Info).text_color(cx.theme().primary),
             Self::Success => Icon::new(IconName::CircleCheck).text_color(cx.theme().tertiary),
-            Self::Warning => Icon::new(IconName::TriangleAlert).text_color(cx.theme().tertiary),
-            Self::Error => Icon::new(IconName::CircleX).text_color(cx.theme().error),
+            Self::Warning => Icon::new(IconName::Info).text_color(cx.theme().tertiary),
+            Self::Error => Icon::new(IconName::Cancel).text_color(cx.theme().error),
         }
     }
 }

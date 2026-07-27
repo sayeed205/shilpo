@@ -133,8 +133,8 @@ mod tests {
 
     #[gpui::test]
     fn test_button_icon_builder(_cx: &mut gpui::TestAppContext) {
-        let custom_icon = Icon::new(IconName::Loader);
-        let icon = ButtonIcon::new(IconName::Plus)
+        let custom_icon = Icon::new(IconName::ProgressActivity);
+        let icon = ButtonIcon::new(IconName::Add)
             .loading(true)
             .loading_icon(Some(custom_icon))
             .large();
@@ -147,7 +147,7 @@ mod tests {
     #[gpui::test]
     fn test_button_icon_variant_types(_cx: &mut gpui::TestAppContext) {
         // Test Icon variant
-        let icon_variant = ButtonIconVariant::Icon(Box::new(Icon::new(IconName::Plus)));
+        let icon_variant = ButtonIconVariant::Icon(Box::new(Icon::new(IconName::Add)));
         assert!(!icon_variant.is_progress());
 
         // Test Progress variant

@@ -62,11 +62,11 @@ impl Render for ChipStory {
                             .gap_2()
                             .child(
                                 Chip::assist("assist-1", "Add to Calendar")
-                                    .leading_icon(Icon::new(IconName::Calendar)),
+                                    .leading_icon(Icon::new(IconName::CalendarToday)),
                             )
                             .child(
                                 Chip::assist("assist-2", "Add Tag")
-                                    .leading_icon(Icon::new(IconName::Plus)),
+                                    .leading_icon(Icon::new(IconName::Add)),
                             )
                             .child(
                                 Chip::assist("assist-3", "Elevated")
@@ -166,7 +166,7 @@ impl Render for ChipStory {
                         .gap_2()
                         .child(
                             Chip::input("input-1", "antigravity@google.com")
-                                .leading_icon(Icon::new(IconName::User))
+                                .leading_icon(Icon::new(IconName::Person))
                                 .on_dismiss(|_, _, _| {}),
                         )
                         .child(

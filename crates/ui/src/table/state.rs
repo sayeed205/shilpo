@@ -1398,9 +1398,9 @@ where
         };
 
         let (icon, is_on) = match sort {
-            ColumnSort::Ascending => (IconName::SortAscending, true),
-            ColumnSort::Descending => (IconName::SortDescending, true),
-            ColumnSort::Default => (IconName::ChevronsUpDown, false),
+            ColumnSort::Ascending => (IconName::ArrowUpward, true),
+            ColumnSort::Descending => (IconName::ArrowDownward, true),
+            ColumnSort::Default => (IconName::UnfoldMore, false),
         };
 
         Some(

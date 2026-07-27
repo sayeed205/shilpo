@@ -144,10 +144,10 @@ impl Render for StepperStory {
                         .selected_index(self.stepper1_step)
                         .items([
                             StepperItem::new()
-                                .icon(IconName::Calendar)
+                                .icon(IconName::CalendarToday)
                                 .child("Order Details"),
                             StepperItem::new().icon(IconName::Inbox).child("Shipping"),
-                            StepperItem::new().icon(IconName::Frame).child("Preview"),
+                            StepperItem::new().icon(IconName::Dashboard).child("Preview"),
                             StepperItem::new().icon(IconName::Info).child("Finish"),
                         ])
                         .on_click(cx.listener(|this, step, _, cx| {
@@ -167,7 +167,7 @@ impl Render for StepperStory {
                         .items([
                             StepperItem::new()
                                 .pb_8()
-                                .icon(IconName::Building2)
+                                .icon(IconName::Apartment)
                                 .child(v_flex().child("Step 1").child("Description for step 1.")),
                             StepperItem::new()
                                 .pb_8()

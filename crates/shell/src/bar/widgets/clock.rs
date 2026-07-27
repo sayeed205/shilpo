@@ -43,7 +43,7 @@ impl RenderOnce for ClockWidget {
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(Icon::new(IconName::Calendar).size(px(16.)))
+                    .child(Icon::new(IconName::CalendarToday).size(px(16.)))
                     .child(self.time_str),
             )
     }

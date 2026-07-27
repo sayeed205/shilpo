@@ -157,7 +157,7 @@ impl Render for IconButtonStory {
                     ))
                     .child(cell(
                         IconButton::new("variant-outlined")
-                            .icon(IconName::Settings2)
+                            .icon(IconName::Settings)
                             .outlined()
                             .into_any_element(),
                         "Outlined",
@@ -171,7 +171,7 @@ impl Render for IconButtonStory {
                         sizes.into_iter().map(|(label, note, size)| {
                             size_cell(
                                 IconButton::new(format!("size-{label}"))
-                                    .icon(IconName::Settings2)
+                                    .icon(IconName::Settings)
                                     .size(size)
                                     .filled_tonal()
                                     .into_any_element(),
@@ -187,7 +187,7 @@ impl Render for IconButtonStory {
                     .child(cell(
                         IconButton::new("toggle-off")
                             .standard()
-                            .icon(IconName::Heart)
+                            .icon(IconName::Favorite)
                             .checkable(true)
                             .into_any_element(),
                         "Unchecked",
@@ -196,7 +196,7 @@ impl Render for IconButtonStory {
                     .child(cell(
                         IconButton::new("toggle-on")
                             .standard()
-                            .icon(IconName::Heart)
+                            .icon(IconName::Favorite)
                             .checkable(true)
                             .checked(true)
                             .into_any_element(),
@@ -206,7 +206,7 @@ impl Render for IconButtonStory {
                     .child(cell(
                         IconButton::new("disabled")
                             .filled_tonal()
-                            .icon(IconName::Bell)
+                            .icon(IconName::Notifications)
                             .disabled(true)
                             .into_any_element(),
                         "Disabled",
@@ -215,7 +215,7 @@ impl Render for IconButtonStory {
                     .child(cell(
                         IconButton::new("loading")
                             .filled()
-                            .icon(IconName::Bell)
+                            .icon(IconName::Notifications)
                             .loading(true)
                             .into_any_element(),
                         "Loading",
@@ -227,7 +227,7 @@ impl Render for IconButtonStory {
                     .sub_title("Round is default; square keeps M3 static corner tokens")
                     .child(cell(
                         IconButton::new("round")
-                            .icon(IconName::Plus)
+                            .icon(IconName::Add)
                             .filled_tonal()
                             .into_any_element(),
                         "Round",
@@ -235,7 +235,7 @@ impl Render for IconButtonStory {
                     ))
                     .child(cell(
                         IconButton::new("square")
-                            .icon(IconName::Plus)
+                            .icon(IconName::Add)
                             .filled_tonal()
                             .shape(shilpo_ui::button::IconButtonShape::Square)
                             .into_any_element(),
@@ -248,7 +248,7 @@ impl Render for IconButtonStory {
                     .sub_title("Narrow, Default, Wide, and Full Width options")
                     .child(cell(
                         IconButton::new("width-narrow")
-                            .icon(IconName::ArrowDown)
+                            .icon(IconName::ArrowDownward)
                             .filled_tonal()
                             .narrow()
                             .into_any_element(),
@@ -257,7 +257,7 @@ impl Render for IconButtonStory {
                     ))
                     .child(cell(
                         IconButton::new("width-default")
-                            .icon(IconName::ArrowDown)
+                            .icon(IconName::ArrowDownward)
                             .filled_tonal()
                             .into_any_element(),
                         "Default",
@@ -265,7 +265,7 @@ impl Render for IconButtonStory {
                     ))
                     .child(cell(
                         IconButton::new("width-wide")
-                            .icon(IconName::ArrowDown)
+                            .icon(IconName::ArrowDownward)
                             .filled_tonal()
                             .wide()
                             .into_any_element(),
@@ -279,7 +279,7 @@ impl Render for IconButtonStory {
                             .gap_1()
                             .child(
                                 IconButton::new("width-full")
-                                    .icon(IconName::ArrowDown)
+                                    .icon(IconName::ArrowDownward)
                                     .filled_tonal()
                                     .full_width(true),
                             )

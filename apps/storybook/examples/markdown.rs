@@ -469,9 +469,9 @@ impl MarkdownPlugin for TickerPlugin {
                             .text_color(trend)
                             .child(
                                 Icon::new(if up {
-                                    IconName::ArrowUp
+                                    IconName::ArrowUpward
                                 } else {
-                                    IconName::ArrowDown
+                                    IconName::ArrowDownward
                                 })
                                 .xsmall(),
                             )
@@ -1250,7 +1250,7 @@ impl Render for Example {
                                                         {
                                                             this.child(
                                                                 Button::new("run-terminal")
-                                                                    .icon(IconName::SquareTerminal)
+                                                                    .icon(IconName::Terminal)
                                                                     .text()
                                                                     .xsmall()
                                                                     .on_click(move |_, _, _cx| {

@@ -33,7 +33,7 @@ impl super::Story for IconStory {
     }
 
     fn description() -> &'static str {
-        "SVG Icons based on Lucide.dev"
+        "SVG Icons based on Google Material Symbols / Icons (Apache License 2.0, fonts.google.com)"
     }
 
     fn new_view(window: &mut Window, cx: &mut App) -> Entity<impl Render> {
@@ -60,11 +60,10 @@ impl Render for IconStory {
                     .text_lg()
                     .child(IconName::Info)
                     .child(IconName::Map)
-                    .child(IconName::Bot)
-                    .child(IconName::Github)
-                    .child(IconName::Calendar)
+                    .child(IconName::Robot)
+                    .child(IconName::CalendarToday)
                     .child(IconName::Globe)
-                    .child(IconName::Heart),
+                    .child(IconName::Favorite),
             )
             .child(
                 section("Color Icon")
@@ -86,7 +85,7 @@ impl Render for IconStory {
                         .child(
                             Button::new("like1")
                                 .icon(
-                                    Icon::new(IconName::Heart)
+                                    Icon::new(IconName::Favorite)
                                         .text_color(cx.theme().on_surface_variant)
                                         .size_6(),
                                 )
@@ -95,7 +94,7 @@ impl Render for IconStory {
                         .child(
                             Button::new("like2")
                                 .icon(
-                                    Icon::new(IconName::HeartOff)
+                                    Icon::new(IconName::Favorite)
                                         .text_color(cx.theme().primary)
                                         .size_6(),
                                 )
@@ -104,7 +103,7 @@ impl Render for IconStory {
                         .child(
                             Button::new("like3")
                                 .icon(
-                                    Icon::new(IconName::Heart)
+                                    Icon::new(IconName::Favorite)
                                         .text_color(cx.theme().primary)
                                         .size_6(),
                                 )

@@ -130,10 +130,10 @@ impl ControlIcon {
 
     fn icon(&self) -> IconName {
         match self {
-            Self::Minimize => IconName::WindowMinimize,
-            Self::Restore => IconName::WindowRestore,
-            Self::Maximize => IconName::WindowMaximize,
-            Self::Close { .. } => IconName::WindowClose,
+            Self::Minimize => IconName::Minimize,
+            Self::Restore => IconName::CloseFullscreen,
+            Self::Maximize => IconName::Maximize,
+            Self::Close { .. } => IconName::Close,
         }
     }
 

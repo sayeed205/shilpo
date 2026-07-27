@@ -222,9 +222,9 @@ impl Input {
         let masked = state.read(cx).masked;
         Button::new("toggle-mask")
             .icon(if masked {
-                IconName::Eye
+                IconName::Visibility
             } else {
-                IconName::EyeOff
+                IconName::VisibilityOff
             })
             .xsmall()
             .plain()

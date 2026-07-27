@@ -32,9 +32,9 @@ impl Styled for AudioWidget {
 impl RenderOnce for AudioWidget {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let (icon, fg) = if self.info.is_muted {
-            (IconName::HeartOff, cx.theme().on_surface_variant)
+            (IconName::BedtimeOff, cx.theme().on_surface_variant)
         } else {
-            (IconName::Heart, cx.theme().on_surface)
+            (IconName::Airwave, cx.theme().on_surface)
         };
 
         div()

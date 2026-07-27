@@ -446,7 +446,7 @@ impl Render for LauncherView {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(Icon::new(IconName::SquareTerminal).size(px(20.)))
+                            .child(Icon::new(IconName::Terminal).size(px(20.)))
                     };
 
                     Some(
@@ -680,7 +680,7 @@ impl Render for LauncherView {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(Icon::new(IconName::SquareTerminal).size(px(16.)))
+                                .child(Icon::new(IconName::Terminal).size(px(16.)))
                         };
 
                         let app_exec = app.exec.clone();
@@ -712,7 +712,7 @@ impl Render for LauncherView {
                                 let exec_launch = app_exec.clone();
                                 menu.item(
                                     PopupMenuItem::new("Launch Application")
-                                        .icon(IconName::Play)
+                                        .icon(IconName::PlayArrow)
                                         .accelerator("Enter")
                                         .on_click(move |_, window, cx| {
                                             let _ = std::process::Command::new("sh")
@@ -725,7 +725,7 @@ impl Render for LauncherView {
                                 )
                                 .item(
                                     PopupMenuItem::new("Copy Exec Command")
-                                        .icon(IconName::Copy)
+                                        .icon(IconName::ContentCopy)
                                         .accelerator("Ctrl+C")
                                         .on_click(move |_, _window, cx| {
                                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(
@@ -890,7 +890,7 @@ impl Render for LauncherView {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(Icon::new(IconName::SquareTerminal).size(px(16.))),
+                        .child(Icon::new(IconName::Terminal).size(px(16.))),
                 )
                 .child(
                     v_flex()

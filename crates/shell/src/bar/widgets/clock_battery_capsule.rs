@@ -44,11 +44,11 @@ impl RenderOnce for ClockBatteryCapsule {
         };
 
         let (bat_icon, bat_fg) = if self.battery.is_charging {
-            (IconName::BatteryCharging, cx.theme().primary)
+            (IconName::BatteryAndroidBolt, cx.theme().primary)
         } else if self.battery.percentage <= 20 {
-            (IconName::BatteryWarning, cx.theme().error)
+            (IconName::BatteryAndroidAlert, cx.theme().error)
         } else {
-            (IconName::BatteryFull, cx.theme().on_surface)
+            (IconName::BatteryAndroid6, cx.theme().on_surface)
         };
 
         let battery_pill = if self.battery.is_present {
@@ -75,7 +75,7 @@ impl RenderOnce for ClockBatteryCapsule {
                 .text_color(cx.theme().on_surface_variant.opacity(0.5))
                 .text_xs()
                 .font_medium()
-                .child(Icon::new(IconName::BatteryFull).size(px(13.)))
+                .child(Icon::new(IconName::BatteryAndroid6).size(px(13.)))
                 .child("AC")
         };
 

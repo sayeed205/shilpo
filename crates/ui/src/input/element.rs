@@ -1110,7 +1110,7 @@ impl TextElement {
             let mut icon = Button::new(("fold", ix))
                 .text()
                 .icon(if info.is_folded {
-                    IconName::ChevronRight
+                    IconName::KeyboardArrowRight
                 } else {
                     IconName::KeyboardArrowDown
                 })

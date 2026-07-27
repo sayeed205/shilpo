@@ -367,7 +367,7 @@ impl SidebarItem for SidebarMenuItem {
                                         .xsmall()
                                         .text()
                                         .icon(
-                                            Icon::new(IconName::ChevronRight)
+                                            Icon::new(IconName::KeyboardArrowRight)
                                                 .size_4()
                                                 .when(is_open, |this| {
                                                     this.rotate(percentage(90. / 360.))

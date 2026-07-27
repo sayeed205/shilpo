@@ -105,7 +105,7 @@ impl StoryWorkspace {
             AppTitleBar::new("Examples", window, cx).child({
                 move |_, cx| {
                     Button::new("add-panel")
-                        .icon(IconName::LayoutDashboard)
+                        .icon(IconName::Dashboard)
                         .small()
                         .text()
                         .dropdown_menu({
@@ -521,7 +521,7 @@ impl Render for StoryWorkspace {
                         Button::new("toggle-left-dock")
                             .text()
                             .xsmall()
-                            .icon(IconName::PanelLeft)
+                            .icon(IconName::DockToLeft)
                             .tooltip("Toggle Left Dock")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.dock_area.update(cx, |area, cx| {
@@ -533,7 +533,7 @@ impl Render for StoryWorkspace {
                         Button::new("toggle-bottom-dock")
                             .text()
                             .xsmall()
-                            .icon(IconName::PanelBottom)
+                            .icon(IconName::DockToBottom)
                             .tooltip("Toggle Bottom Dock")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.dock_area.update(cx, |area, cx| {
@@ -545,7 +545,7 @@ impl Render for StoryWorkspace {
                         Button::new("toggle-right-dock")
                             .text()
                             .xsmall()
-                            .icon(IconName::PanelRight)
+                            .icon(IconName::DockToRight)
                             .tooltip("Toggle Right Dock")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.dock_area.update(cx, |area, cx| {

@@ -74,7 +74,7 @@ impl Render for OsdView {
                 .border_color(cx.theme().outline_variant.opacity(0.35))
                 .shadow_2xl()
                 .items_center()
-                .child(Icon::new(IconName::Bell).size(px(20.)))
+                .child(Icon::new(IconName::Notifications).size(px(20.)))
                 .child(
                     v_flex()
                         .flex_1()
@@ -85,8 +85,8 @@ impl Render for OsdView {
         }
 
         let (icon, level, muted) = match self.kind {
-            OsdKind::Volume { level, muted } => (IconName::Bell, level, muted),
-            OsdKind::Brightness { level } => (IconName::Sun, level, false),
+            OsdKind::Volume { level, muted } => (IconName::Notifications, level, muted),
+            OsdKind::Brightness { level } => (IconName::Sunny, level, false),
             OsdKind::Notification(_) => unreachable!(),
         };
 

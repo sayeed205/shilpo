@@ -43,7 +43,7 @@ impl RenderOnce for MediaWidget {
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(Icon::new(IconName::Play).size(px(14.)))
+                    .child(Icon::new(IconName::PlayArrow).size(px(14.)))
                     .child(self.track),
             )
     }

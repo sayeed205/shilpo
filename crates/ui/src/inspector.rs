@@ -512,7 +512,7 @@ fn render_inspector(
                         .text_sm()
                         .child(
                             Button::new("inspect")
-                                .icon(IconName::Inspector)
+                                .icon(IconName::DeveloperBoard)
                                 .selected(inspector.is_picking())
                                 .small()
                                 .text()

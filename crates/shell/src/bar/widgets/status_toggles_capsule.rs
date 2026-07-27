@@ -53,19 +53,19 @@ impl RenderOnce for StatusTogglesCapsule {
         };
 
         let audio_icon = if self._audio.available {
-            div().child(Icon::new(IconName::Heart).size(px(14.)))
+            div().child(Icon::new(IconName::Favorite).size(px(14.)))
         } else {
             div()
                 .opacity(0.35)
-                .child(Icon::new(IconName::Heart).size(px(14.)))
+                .child(Icon::new(IconName::Favorite).size(px(14.)))
         };
 
         let network_icon = if self._network.available {
-            div().child(Icon::new(IconName::Network).size(px(14.)))
+            div().child(Icon::new(IconName::Lan).size(px(14.)))
         } else {
             div()
                 .opacity(0.35)
-                .child(Icon::new(IconName::Network).size(px(14.)))
+                .child(Icon::new(IconName::Lan).size(px(14.)))
         };
 
         let el = h_flex()
@@ -86,7 +86,7 @@ impl RenderOnce for StatusTogglesCapsule {
             .child(dot())
             .child(audio_icon)
             .child(dot())
-            .child(Icon::new(IconName::Bell).size(px(14.)))
+            .child(Icon::new(IconName::Notifications).size(px(14.)))
             .child(dot())
             .child(network_icon)
             .child(dot())

@@ -929,7 +929,7 @@ impl Example {
                 view.update(cx, |_, cx| {
                     let item = entry.item();
                     let icon = if !entry.is_folder() {
-                        IconName::File
+                        IconName::Draft
                     } else if entry.is_expanded() {
                         IconName::FolderOpen
                     } else {

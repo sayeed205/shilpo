@@ -200,12 +200,12 @@ impl Item {
 
     pub fn icon(&self) -> IconName {
         match self {
-            Self::Playground => IconName::SquareTerminal,
-            Self::Models => IconName::Bot,
-            Self::Documentation => IconName::BookOpen,
-            Self::Settings => IconName::Settings2,
-            Self::DesignEngineering => IconName::Frame,
-            Self::SalesAndMarketing => IconName::ChartPie,
+            Self::Playground => IconName::Terminal,
+            Self::Models => IconName::Robot,
+            Self::Documentation => IconName::ImportContacts,
+            Self::Settings => IconName::Settings,
+            Self::DesignEngineering => IconName::Dashboard,
+            Self::SalesAndMarketing => IconName::PieChart,
             Self::Travel => IconName::Map,
         }
     }
@@ -366,13 +366,13 @@ impl Render for SidebarStory {
                                     .size_8()
                                     .flex_shrink_0()
                                     .when(!icon_collapsed, |this| {
-                                        this.child(Icon::new(IconName::GalleryVerticalEnd))
+                                        this.child(Icon::new(IconName::Dashboard))
                                     })
                                     .when(icon_collapsed, |this| {
                                         this.size_4()
                                             .bg(cx.theme().transparent)
                                             .text_color(cx.theme().on_surface)
-                                            .child(Icon::new(IconName::GalleryVerticalEnd))
+                                            .child(Icon::new(IconName::Dashboard))
                                     }),
                             )
                             .when(!icon_collapsed, |this| {
@@ -390,7 +390,7 @@ impl Render for SidebarStory {
                             })
                             .when(!icon_collapsed, |this| {
                                 this.child(
-                                    Icon::new(IconName::ChevronsUpDown).size_4().flex_shrink_0(),
+                                    Icon::new(IconName::UnfoldMore).size_4().flex_shrink_0(),
                                 )
                             })
                             .dropdown_menu(|menu, _, _| {
@@ -481,12 +481,12 @@ impl Render for SidebarStory {
                                     .when(ix == 0, |this| {
                                         this.suffix(|_, _| {
                                             Badge::new().dot().count(1).child(
-                                                div().p_0p5().child(Icon::new(IconName::Bell)),
+                                                div().p_0p5().child(Icon::new(IconName::Notifications)),
                                             )
                                         })
                                     })
                                     .when(ix == 1, |this| {
-                                        this.suffix(|_, _| Icon::new(IconName::Settings2))
+                                        this.suffix(|_, _| Icon::new(IconName::Settings))
                                     })
                                     .on_click(cx.listener(item.handler()))
                             }),
@@ -498,11 +498,11 @@ impl Render for SidebarStory {
                             .child(
                                 h_flex()
                                     .gap_2()
-                                    .child(IconName::CircleUser)
+                                    .child(IconName::AccountCircle)
                                     .when(!icon_collapsed, |this| this.child("Jason Lee")),
                             )
                             .when(!icon_collapsed, |this| {
-                                this.child(Icon::new(IconName::ChevronsUpDown).size_4())
+                                this.child(Icon::new(IconName::UnfoldMore).size_4())
                             }),
                     ),
             )

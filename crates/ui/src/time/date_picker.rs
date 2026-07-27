@@ -442,7 +442,7 @@ impl RenderOnce for DatePicker {
                                 })
                                 .when(!show_clean, |this| {
                                     this.child(
-                                        Icon::new(IconName::Calendar)
+                                        Icon::new(IconName::CalendarToday)
                                             .xsmall()
                                             .text_color(cx.theme().on_surface_variant),
                                     )

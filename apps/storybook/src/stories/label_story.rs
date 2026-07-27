@@ -193,9 +193,9 @@ impl Render for LabelStory {
                                     Button::new("btn-mask")
                                         .with_variant(ButtonVariant::Text)
                                         .icon(if self.masked {
-                                            IconName::EyeOff
+                                            IconName::VisibilityOff
                                         } else {
-                                            IconName::Eye
+                                            IconName::Visibility
                                         })
                                         .on_click(cx.listener(|this, _, _, _| {
                                             this.masked = !this.masked;

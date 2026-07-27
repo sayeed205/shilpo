@@ -311,7 +311,7 @@ impl DialogStory {
                                             .bg(cx.theme().tertiary.opacity(0.2))
                                             .size_12()
                                             .text_color(cx.theme().tertiary)
-                                            .child(Icon::new(IconName::TriangleAlert).size_8()),
+                                            .child(Icon::new(IconName::Info).size_8()),
                                     )
                                     .child(
                                         "Update successful, \

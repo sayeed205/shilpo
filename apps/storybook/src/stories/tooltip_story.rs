@@ -129,7 +129,7 @@ impl Render for TooltipStory {
                         )
                         .child(
                             Button::new("toggle2")
-                                .icon(IconName::Heart)
+                                .icon(IconName::Favorite)
                                 .tooltip("Toggle favorite"),
                         ),
                 ),

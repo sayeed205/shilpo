@@ -59,7 +59,7 @@ impl Render for BadgeStory {
                     .child(
                         Badge::new()
                             .count(3)
-                            .child(Icon::new(IconName::Bell).large()),
+                            .child(Icon::new(IconName::Notifications).large()),
                     )
                     .child(
                         Badge::new()
@@ -162,7 +162,7 @@ impl Render for BadgeStory {
                     .child(
                         Badge::new().dot().child(
                             Badge::new()
-                                .icon(IconName::Sun)
+                                .icon(IconName::Sunny)
                                 .small()
                                 .color(cx.theme().primary)
                                 .child(

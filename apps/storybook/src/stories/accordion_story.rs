@@ -193,7 +193,7 @@ impl Render for AccordionStory {
                         })
                         .item(|this| {
                             this.open(self.open_ixs.contains(&2))
-                                .when(self.show_icon, |this| this.icon(IconName::Moon))
+                                .when(self.show_icon, |this| this.icon(IconName::Bedtime))
                                 .title("This is third accordion")
                                 .child(
                                     "This is the third accordion content. \

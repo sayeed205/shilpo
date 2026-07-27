@@ -46,7 +46,7 @@ impl RenderOnce for NetworkWidget {
                 h_flex()
                     .gap_1_5()
                     .items_center()
-                    .child(Icon::new(IconName::Network).size(px(16.)))
+                    .child(Icon::new(IconName::Lan).size(px(16.)))
                     .child(label),
             )
     }

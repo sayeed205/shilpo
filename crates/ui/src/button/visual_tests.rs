@@ -435,7 +435,7 @@ impl Render for IconRoot {
                 .size(dimensions.container)
                 .child(
                     IconButton::new("icon")
-                        .icon(IconName::Plus)
+                        .icon(IconName::Add)
                         .size(self.size)
                         .disabled(self.disabled)
                         .loading(self.loading)

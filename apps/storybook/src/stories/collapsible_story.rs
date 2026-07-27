@@ -90,7 +90,7 @@ impl Render for CollapsibleStory {
                                     .icon(IconName::KeyboardArrowDown)
                                     .label("Show more")
                                     .when(self.item1_open, |this| {
-                                        this.icon(IconName::ChevronUp).label("Show less")
+                                        this.icon(IconName::KeyboardArrowUp).label("Show less")
                                     })
                                     .xsmall()
                                     .text()
@@ -142,7 +142,7 @@ impl Render for CollapsibleStory {
                                                 .icon(IconName::KeyboardArrowDown)
                                                 .label("Details")
                                                 .when(self.item2_open, |this| {
-                                                    this.icon(IconName::ChevronUp)
+                                                    this.icon(IconName::KeyboardArrowUp)
                                                 })
                                                 .on_click({
                                                     cx.listener(move |this, _, _, cx| {
