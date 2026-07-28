@@ -138,15 +138,6 @@ pub fn create_new_window_with_size<F, E>(
                 let view = crate_view_fn(window, cx);
                 let story_root = cx.new(|cx| StoryRoot::new(title.clone(), view, window, cx));
 
-                story_root.update(cx, |story_root, cx| {
-                    story_root.appearance_subscription =
-                        Some(cx.observe_window_appearance(window, |_, window, cx| {
-                            window.defer(cx, |window, cx| {
-                                shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
-                            });
-                        }));
-                });
-
                 // Set focus to the StoryRoot to enable it's actions.
                 let focus_handle = story_root.focus_handle(cx);
                 window.defer(cx, move |window, cx| {
@@ -207,7 +198,26 @@ pub fn init(cx: &mut App) {
 
     #[cfg(not(target_family = "wasm"))]
     {
-        shilpo_ui::observe_system_accent_color(cx);
+        let theme_client = futures_lite::future::block_on(shilpo_theme::ThemeClient::new());
+        shilpo_ui::Theme::global_mut(cx).apply_state(&theme_client.current_state());
+        let mut rx = theme_client.subscribe();
+        let theme_client_for_task = theme_client.clone();
+        cx.spawn(async move |cx| {
+            loop {
+                let state = match rx.recv().await {
+                    Ok(state) => state,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        theme_client_for_task.current_state()
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+                cx.update(|cx| {
+                    shilpo_ui::Theme::global_mut(cx).apply_state(&state);
+                    cx.refresh_windows();
+                });
+            }
+        })
+        .detach();
     }
 
     #[cfg(target_os = "linux")]
@@ -668,7 +678,7 @@ pub struct StoryRoot {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) title_bar: Entity<AppTitleBar>,
     pub(crate) view: AnyView,
-    appearance_subscription: Option<Subscription>,
+    _appearance_subscription: Option<Subscription>,
 }
 
 impl StoryRoot {
@@ -683,7 +693,7 @@ impl StoryRoot {
             focus_handle: cx.focus_handle(),
             title_bar,
             view: view.into(),
-            appearance_subscription: None,
+            _appearance_subscription: None,
         }
     }
 

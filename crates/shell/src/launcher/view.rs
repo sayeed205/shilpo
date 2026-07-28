@@ -204,14 +204,6 @@ impl LauncherView {
             true
         });
 
-        // Dynamic theme synchronization with OS appearance
-        shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
-        cx.observe_window_appearance(window, |_, window, cx| {
-            shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
-            window.refresh();
-        })
-        .detach();
-
         let catalog_task = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()

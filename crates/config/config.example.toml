@@ -1,8 +1,6 @@
 version = 1
 
 [theme]
-mode = "Dark"
-accent = "#6750A4"
 font_family = "sans-serif"
 corner_radius_scale = 1.0
 

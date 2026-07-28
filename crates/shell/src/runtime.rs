@@ -201,29 +201,21 @@ impl ShellRuntime {
             .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));
         let active_config = shilpo_config::ShellConfig::load_or_create(&config_path)
             .unwrap_or_else(|_| shilpo_config::ShellConfig::default());
-        let wp_service = shilpo_services::WallpaperService::default();
-        wp_service.set_wallpaper_dir(&active_config.desktop.wallpaper_dir);
-        if let Some(state) = shilpo_services::WallpaperService::read_current() {
-            shilpo_ui::Theme::global_mut(cx).set_source_argb(state.source_argb);
-        } else if let Some(active_wp) = wp_service
-            .active_wallpaper()
-            .or_else(|| wp_service.scan_wallpapers().into_iter().next())
-        {
-            let _ = wp_service.set_wallpaper(&active_wp);
-        }
-
-        let rx = shilpo_services::WallpaperService::subscribe();
+        let theme_client = futures_lite::future::block_on(shilpo_theme::ThemeClient::new());
+        shilpo_ui::Theme::global_mut(cx).apply_state(&theme_client.current_state());
+        let mut rx = theme_client.subscribe();
+        let theme_client_for_task = theme_client.clone();
         cx.spawn(async move |cx| {
-            while let Ok(changed) = rx.recv().await {
+            loop {
+                let state = match rx.recv().await {
+                    Ok(state) => state,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        theme_client_for_task.current_state()
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
                 cx.update(|cx| {
-                    shilpo_ui::Theme::global_mut(cx).set_source_argb(changed.source_argb);
-                    // Apply theme mode from colors.json (written by Settings app / IPC)
-                    let target_mode = match changed.mode.as_str() {
-                        "dark" => shilpo_ui::ThemeMode::Dark,
-                        "light" => shilpo_ui::ThemeMode::Light,
-                        _ => shilpo_ui::ThemeMode::System,
-                    };
-                    shilpo_ui::Theme::change(target_mode, None, cx);
+                    shilpo_ui::Theme::global_mut(cx).apply_state(&state);
                     cx.refresh_windows();
                 });
             }
@@ -678,26 +670,20 @@ impl ShellRuntime {
                     crate::bar::view::open_notification_toast(cx, notification);
                 }
                 shilpo_ext::HostEffect::SetThemeSource { color } => {
-                    if let Some(argb) = crate::bar::view::parse_hex_color(&color) {
-                        shilpo_ui::Theme::global_mut(cx).set_source_argb(argb);
-                    } else {
-                        tracing::warn!(
-                            extension = %extension_id,
-                            %color,
-                            "extension returned an invalid theme source"
-                        );
-                    }
+                    let argb = crate::bar::view::parse_hex_color(&color).unwrap_or(0xFF006C4C);
+                    shilpo_theme::ThemeClient::spawn_task(async move {
+                        let client = shilpo_theme::ThemeClient::new().await;
+                        let _ = client.set_custom_seed(argb).await;
+                        let _ = client
+                            .set_color_source(shilpo_theme::ColorSource::Custom)
+                            .await;
+                    });
                 }
                 shilpo_ext::HostEffect::SetWallpaper { path, .. } => {
-                    if let Err(error) =
-                        shilpo_services::WallpaperService::default().set_wallpaper(&path)
-                    {
-                        tracing::warn!(
-                            extension = %extension_id,
-                            error = %error,
-                            "extension wallpaper effect failed"
-                        );
-                    }
+                    shilpo_theme::ThemeClient::spawn_task(async move {
+                        let client = shilpo_theme::ThemeClient::new().await;
+                        let _ = client.set_wallpaper(&path).await;
+                    });
                 }
                 shilpo_ext::HostEffect::ClipboardWrite { text } => {
                     let result = cx
@@ -880,32 +866,7 @@ impl ShellRuntime {
                     crate::bar::service_worker::WorkerUpdate::Config(
                         crate::bar::service_worker::ConfigUpdate::Loaded(config),
                     ) => {
-                        let previous = cx.global::<Self>().active_config.clone();
                         cx.global_mut::<Self>().active_config = (**config).clone();
-                        shilpo_services::WallpaperService::default()
-                            .set_wallpaper_dir(&config.desktop.wallpaper_dir);
-                        if previous.theme.mode != config.theme.mode {
-                            Self::dispatch_extension_event(
-                                cx,
-                                shilpo_ext::ExtensionEvent::ThemeChanged {
-                                    mode: format!("{:?}", config.theme.mode).to_lowercase(),
-                                },
-                            );
-                        }
-                        if previous.theme.accent != config.theme.accent
-                            || previous.theme.color_source != config.theme.color_source
-                        {
-                            Self::dispatch_extension_event(
-                                cx,
-                                shilpo_ext::ExtensionEvent::PaletteGenerated {
-                                    accent: config
-                                        .theme
-                                        .accent
-                                        .clone()
-                                        .unwrap_or_else(|| "#6750A4".into()),
-                                },
-                            );
-                        }
                         Self::sync_displays(cx);
                     }
                     crate::bar::service_worker::WorkerUpdate::Battery(info) => {
@@ -2155,55 +2116,6 @@ impl ShellRuntime {
                 IpcRequest::Quit => {
                     let _ = Self::dispatch_action(cx, ActionId::Quit);
                     return;
-                }
-                IpcRequest::SetTheme {
-                    source_argb,
-                    is_dark,
-                } => {
-                    let mode = if is_dark {
-                        shilpo_ui::ThemeMode::Dark
-                    } else {
-                        shilpo_ui::ThemeMode::Light
-                    };
-                    shilpo_ui::Theme::global_mut(cx).set_source_argb(source_argb);
-                    shilpo_ui::Theme::global_mut(cx).set_mode(mode);
-                    let mode_str = if is_dark { "dark" } else { "light" };
-                    let _ = shilpo_services::WallpaperService::update_theme_mode(mode_str);
-                }
-                IpcRequest::SetThemeMode { mode } => {
-                    let target_mode = match mode.to_lowercase().as_str() {
-                        "dark" => shilpo_ui::ThemeMode::Dark,
-                        "light" => shilpo_ui::ThemeMode::Light,
-                        _ => shilpo_ui::ThemeMode::System,
-                    };
-                    shilpo_ui::Theme::change(target_mode, None, cx);
-                    let _ = shilpo_services::WallpaperService::update_theme_mode(&mode);
-                    cx.refresh_windows();
-                }
-                IpcRequest::ToggleThemeMode => {
-                    let current = shilpo_ui::Theme::global(cx).effective_mode();
-                    let (target_mode, mode_str) = if current.is_dark() {
-                        (shilpo_ui::ThemeMode::Light, "light")
-                    } else {
-                        (shilpo_ui::ThemeMode::Dark, "dark")
-                    };
-                    shilpo_ui::Theme::change(target_mode, None, cx);
-                    let _ = shilpo_services::WallpaperService::update_theme_mode(mode_str);
-                    cx.refresh_windows();
-                }
-                IpcRequest::SetWallpaper { path } => {
-                    if let Err(error) =
-                        shilpo_services::WallpaperService::default().set_wallpaper(&path)
-                    {
-                        tracing::warn!(error = %error, path = %path.display(), "IPC set wallpaper failed");
-                    }
-                }
-                IpcRequest::SetRandomWallpaper => {
-                    if let Err(error) =
-                        shilpo_services::WallpaperService::default().set_random_wallpaper()
-                    {
-                        tracing::warn!(error = %error, "IPC set random wallpaper failed");
-                    }
                 }
                 IpcRequest::FocusWorkspace(id) => {
                     let _ = Self::dispatch_action(cx, ActionInvocation::FocusWorkspace(id));

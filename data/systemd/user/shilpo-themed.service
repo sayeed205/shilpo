@@ -1,0 +1,15 @@
+[Unit]
+Description=Shilpo Theme Synchronization Engine Daemon
+Documentation=man:shilpo-themed(1)
+PartOf=graphical-session.target
+After=graphical-session-pre.target
+
+[Service]
+Type=dbus
+BusName=org.shilpo.Theme
+ExecStart=/usr/bin/shilpo-themed
+Restart=on-failure
+RestartSec=1s
+
+[Install]
+WantedBy=graphical-session.target

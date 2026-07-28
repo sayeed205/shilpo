@@ -199,39 +199,27 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
-#[serde(rename_all = "PascalCase")]
-pub enum ColorSource {
-    #[default]
-    Wallpaper,
-    Custom,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ThemeConfig {
-    pub mode: ThemeMode,
-    #[serde(default)]
-    pub color_source: ColorSource,
-    #[serde(default)]
-    pub accent: Option<String>,
     pub font_family: String,
+    #[serde(default)]
     pub heading_font_family: Option<String>,
+    #[serde(default)]
     pub mono_font_family: Option<String>,
     pub corner_radius_scale: f32,
     #[serde(default)]
     pub high_contrast: bool,
     #[serde(default)]
     pub reduced_motion: bool,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
-#[serde(rename_all = "PascalCase")]
-pub enum ThemeMode {
-    #[default]
-    Dark,
-    Light,
-    Auto,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub gtk_theme_light: Option<String>,
+    #[serde(default)]
+    pub gtk_theme_dark: Option<String>,
+    #[serde(default)]
+    pub custom_adapter_cmd: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -469,15 +457,16 @@ impl Default for ShellConfig {
 impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
-            mode: ThemeMode::Dark,
-            color_source: ColorSource::Wallpaper,
-            accent: None,
             font_family: "sans-serif".into(),
             heading_font_family: None,
             mono_font_family: None,
             corner_radius_scale: 1.0,
             high_contrast: false,
             reduced_motion: false,
+            provider: None,
+            gtk_theme_light: None,
+            gtk_theme_dark: None,
+            custom_adapter_cmd: None,
         }
     }
 }
@@ -681,18 +670,6 @@ impl ShellConfig {
         let mut d = Vec::new();
         if self.version != 1 {
             d.push(ConfigDiagnostic::new("version", "must be 1"));
-        }
-        if let Some(accent_str) = &self.theme.accent {
-            let accent = accent_str.as_bytes();
-            let valid_hex = (accent.len() == 7 || accent.len() == 9)
-                && accent[0] == b'#'
-                && accent[1..].iter().all(u8::is_ascii_hexdigit);
-            if !valid_hex {
-                d.push(ConfigDiagnostic::new(
-                    "theme.accent",
-                    "must be #RRGGBB or #AARRGGBB",
-                ));
-            }
         }
         if self.theme.font_family.trim().is_empty() {
             d.push(ConfigDiagnostic::new(
@@ -1337,7 +1314,6 @@ mod tests {
     #[test]
     fn validation_categories() {
         let mut c = valid();
-        c.theme.accent = Some("bad".into());
         c.theme.font_family = " ".into();
         c.theme.corner_radius_scale = f32::NAN;
         c.bar.height = 1;
@@ -1471,8 +1447,6 @@ mod tests {
         let toml_text = r##"
 version = 1
 [theme]
-mode = "Dark"
-accent = "#6750A4"
 font_family = "sans-serif"
 corner_radius_scale = 1.0
 
@@ -1520,8 +1494,6 @@ enabled = false
         let toml_text = r##"
 version = 1
 [theme]
-mode = "Dark"
-accent = "#6750A4"
 font_family = "sans-serif"
 corner_radius_scale = 1.0
 

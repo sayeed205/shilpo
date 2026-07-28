@@ -110,14 +110,6 @@ impl ControlCenterView {
             true
         });
 
-        // Dynamic theme synchronization with OS appearance
-        shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
-        cx.observe_window_appearance(window, |_, window, cx| {
-            shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
-            window.refresh();
-        })
-        .detach();
-
         // Subscribe to volume changes
         cx.subscribe(&volume_state, move |_, _, event: &SliderEvent, _| {
             if audio_available && let SliderEvent::Change(SliderValue::Single(val)) = event {
@@ -561,9 +553,7 @@ impl Render for ControlCenterView {
                                             .text_color(bt_fg)
                                             .gap_2_5()
                                             .items_center()
-                                            .child(
-                                                Icon::new(IconName::Terminal).size(px(16.)),
-                                            )
+                                            .child(Icon::new(IconName::Terminal).size(px(16.)))
                                             .child(div().text_xs().font_bold().child("Bluetooth")),
                                     )
                                     // Night Light Toggle

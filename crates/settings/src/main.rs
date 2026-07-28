@@ -7,32 +7,29 @@ fn main() {
 
     app.run(move |cx: &mut App| {
         shilpo_ui::init(cx);
-        if let Some(state) = shilpo_services::WallpaperService::read_current() {
-            shilpo_ui::Theme::global_mut(cx).set_source_argb(state.source_argb);
-            let target_mode = match state.mode.as_str() {
-                "dark" => shilpo_ui::ThemeMode::Dark,
-                "light" => shilpo_ui::ThemeMode::Light,
-                _ => shilpo_ui::ThemeMode::System,
-            };
-            shilpo_ui::Theme::change(target_mode, None, cx);
-        }
 
-        let rx = shilpo_services::WallpaperService::subscribe();
+        let theme_client = futures_lite::future::block_on(shilpo_theme::ThemeClient::new());
+        shilpo_ui::Theme::global_mut(cx).apply_state(&theme_client.current_state());
+
+        let mut rx = theme_client.subscribe();
+        let theme_client_for_task = theme_client.clone();
         cx.spawn(async move |cx| {
-            while let Ok(changed) = rx.recv().await {
+            loop {
+                let state = match rx.recv().await {
+                    Ok(state) => state,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        theme_client_for_task.current_state()
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
                 cx.update(|cx| {
-                    shilpo_ui::Theme::global_mut(cx).set_source_argb(changed.source_argb);
-                    let target_mode = match changed.mode.as_str() {
-                        "dark" => shilpo_ui::ThemeMode::Dark,
-                        "light" => shilpo_ui::ThemeMode::Light,
-                        _ => shilpo_ui::ThemeMode::System,
-                    };
-                    shilpo_ui::Theme::change(target_mode, None, cx);
+                    shilpo_ui::Theme::global_mut(cx).apply_state(&state);
                     cx.refresh_windows();
                 });
             }
         })
         .detach();
+
         cx.activate(true);
 
         let display_bounds = cx

@@ -158,8 +158,8 @@ impl SettingsStory {
                                     } else {
                                         ThemeMode::Light
                                     };
-                                    Theme::global_mut(cx).mode = mode;
-                                    Theme::change(mode, None, cx);
+                                    Theme::global_mut(cx).set_mode(mode);
+                                    cx.refresh_windows();
                                 },
                             )
                             .default_value(false),

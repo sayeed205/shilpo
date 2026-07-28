@@ -191,7 +191,8 @@ impl SettingsView {
         let page_registry = SettingsPageRegistry::discover();
         let extension_catalog = shilpo_ext::ExtensionCatalog::open_default();
         let extension_snapshot = extension_snapshot(&extension_catalog);
-        let custom_wallpaper_dir = shilpo_services::WallpaperService::default_wallpaper_dir()
+        let custom_wallpaper_dir = shilpo_theme::ThemeState::default()
+            .wallpaper_dir
             .display()
             .to_string();
         Self {
@@ -220,30 +221,13 @@ impl SettingsView {
     }
 
     pub fn view(window: &mut Window, cx: &mut App) -> Entity<shilpo_ui::Root> {
-        shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
-
         #[cfg(target_os = "linux")]
         {
             register_desktop_entry();
             update_desktop_icon_for_theme(cx);
         }
 
-        let view = cx.new(|cx| {
-            cx.observe_window_appearance(window, |_, window, cx| {
-                shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
-                let mode_str = if cx.theme().is_dark() {
-                    "dark"
-                } else {
-                    "light"
-                };
-                let _ = shilpo_services::WallpaperService::persist_theme_mode(mode_str);
-                #[cfg(target_os = "linux")]
-                update_desktop_icon_for_theme(cx);
-                window.refresh();
-            })
-            .detach();
-            Self::new()
-        });
+        let view = cx.new(|_| Self::new());
         cx.new(|cx| {
             shilpo_ui::Root::new(view, window, cx)
                 .bordered(true)
@@ -614,8 +598,10 @@ impl Render for SettingsView {
                                                     .font_semibold()
                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                         this.active_theme_mode = label_str.clone();
-                                                        shilpo_ui::Theme::change(target_mode, None, cx);
-                                                        let _ = shilpo_services::WallpaperService::update_theme_mode(&label_str);
+                                                        shilpo_theme::ThemeClient::spawn_task(async move {
+                                                            let client = shilpo_theme::ThemeClient::new().await;
+                                                            let _ = client.set_mode(target_mode).await;
+                                                        });
                                                         #[cfg(target_os = "linux")]
                                                         update_desktop_icon_for_theme(cx);
                                                         cx.notify();
@@ -660,15 +646,11 @@ impl Render for SettingsView {
                                                         .font_semibold()
                                                         .on_click(cx.listener(move |this, _, _, cx| {
                                                             this.custom_wallpaper_dir = path_str.clone();
-                                                            let wp_service = shilpo_services::WallpaperService::default();
-                                                            wp_service.set_wallpaper_dir(&path_str);
-                                                            if let Some(source_argb) = wp_service
-                                                                .active_wallpaper()
-                                                                .or_else(|| wp_service.scan_wallpapers().into_iter().next())
-                                                                .and_then(|active_wp| shilpo_services::PaletteExtractor::new().extract_source_argb_from_file(&active_wp).ok())
-                                                            {
-                                                                shilpo_ui::Theme::global_mut(cx).set_source_argb(source_argb);
-                                                            }
+                                                            let p = path_str.clone();
+                                                            shilpo_theme::ThemeClient::spawn_task(async move {
+                                                                let client = shilpo_theme::ThemeClient::new().await;
+                                                                let _ = client.set_wallpaper_directory(&p).await;
+                                                            });
                                                             cx.notify();
                                                         }))
                                                         .child(label)

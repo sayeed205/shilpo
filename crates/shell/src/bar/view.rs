@@ -38,28 +38,10 @@ pub fn parse_hex_color(hex: &str) -> Option<u32> {
     }
 }
 
-pub fn apply_config_theme(config: &ShellConfig, window: Option<&mut Window>, cx: &mut App) {
-    let custom_argb = config.theme.accent.as_deref().and_then(parse_hex_color);
-
-    let argb = match config.theme.color_source {
-        shilpo_config::ColorSource::Custom => custom_argb,
-        shilpo_config::ColorSource::Wallpaper => {
-            let wallpaper_argb =
-                shilpo_services::WallpaperService::read_current().map(|state| state.source_argb);
-            wallpaper_argb.or(custom_argb)
-        }
-    };
-
-    if let Some(argb) = argb {
-        let theme = shilpo_ui::Theme::global_mut(cx);
-        theme.set_source_argb(argb);
+pub fn apply_config_theme(_config: &ShellConfig, _window: Option<&mut Window>, cx: &mut App) {
+    if let Some(state) = shilpo_theme::read_state_snapshot() {
+        shilpo_ui::Theme::global_mut(cx).apply_state(&state);
     }
-    let ui_mode = match config.theme.mode {
-        shilpo_config::ThemeMode::Dark => shilpo_ui::ThemeMode::Dark,
-        shilpo_config::ThemeMode::Light => shilpo_ui::ThemeMode::Light,
-        shilpo_config::ThemeMode::Auto => shilpo_ui::ThemeMode::System,
-    };
-    shilpo_ui::Theme::change(ui_mode, window, cx);
 }
 
 /// Status Bar GPUI View (Multi-Capsule Segmented Bar with IPC integration).
@@ -111,41 +93,6 @@ impl BarView {
 
         // Dynamic theme synchronization with OS appearance and config
         apply_config_theme(&config, Some(window), cx);
-        cx.observe_window_appearance(window, |this, window, cx| {
-            // Re-apply wallpaper color source from config
-            let custom_argb = this
-                .config
-                .theme
-                .accent
-                .as_deref()
-                .and_then(parse_hex_color);
-            let argb = match this.config.theme.color_source {
-                shilpo_config::ColorSource::Custom => custom_argb,
-                shilpo_config::ColorSource::Wallpaper => {
-                    shilpo_services::WallpaperService::read_current()
-                        .map(|state| state.source_argb)
-                        .or(custom_argb)
-                }
-            };
-            if let Some(argb) = argb {
-                shilpo_ui::Theme::global_mut(cx).set_source_argb(argb);
-            }
-            // Follow system appearance (from gsettings / XDG portal / inir)
-            // instead of re-asserting static config mode, which would override
-            // IPC/Settings-initiated mode changes.
-            let appearance_mode: shilpo_ui::ThemeMode = window.appearance().into();
-            shilpo_ui::Theme::change(appearance_mode, Some(window), cx);
-            // Persist to colors.json so all Shilpo components stay in sync
-            // (file-only write — no gsettings call to avoid feedback loop)
-            let mode_str = if appearance_mode.is_dark() {
-                "dark"
-            } else {
-                "light"
-            };
-            let _ = shilpo_services::WallpaperService::persist_theme_mode(mode_str);
-            window.refresh();
-        })
-        .detach();
 
         let fallback_ws = vec![
             NiriWorkspaceInfo {

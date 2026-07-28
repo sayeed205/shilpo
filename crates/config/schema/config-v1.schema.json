@@ -1,17 +1,407 @@
 {
+  "$defs": {
+    "BarConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "exclusive_zone": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "margin": {
+          "$ref": "#/$defs/BarMargin"
+        },
+        "opacity": {
+          "default": 0.9200000166893005,
+          "format": "float",
+          "type": "number"
+        },
+        "padding": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "position": {
+          "$ref": "#/$defs/BarPosition"
+        },
+        "style": {
+          "$ref": "#/$defs/BarStyle"
+        },
+        "widget_spacing": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "widgets": {
+          "$ref": "#/$defs/BarWidgets"
+        }
+      },
+      "required": [
+        "position",
+        "style",
+        "height",
+        "padding",
+        "margin",
+        "widget_spacing",
+        "widgets"
+      ],
+      "type": "object"
+    },
+    "BarMargin": {
+      "additionalProperties": false,
+      "properties": {
+        "horizontal": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "vertical": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "horizontal",
+        "vertical"
+      ],
+      "type": "object"
+    },
+    "BarPosition": {
+      "enum": [
+        "Top",
+        "Bottom",
+        "Left",
+        "Right"
+      ],
+      "type": "string"
+    },
+    "BarStyle": {
+      "enum": [
+        "Hug",
+        "Float",
+        "Rect"
+      ],
+      "type": "string"
+    },
+    "BarWidget": {
+      "pattern": "^(builtin:(launcher|workspaces|active_window|clock|media|sysinfo|network|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$",
+      "type": "string"
+    },
+    "BarWidgets": {
+      "additionalProperties": false,
+      "properties": {
+        "center": {
+          "items": {
+            "$ref": "#/$defs/BarWidget"
+          },
+          "type": "array"
+        },
+        "end": {
+          "items": {
+            "$ref": "#/$defs/BarWidget"
+          },
+          "type": "array"
+        },
+        "start": {
+          "items": {
+            "$ref": "#/$defs/BarWidget"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "start",
+        "center",
+        "end"
+      ],
+      "type": "object"
+    },
+    "DesktopConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "wallpaper_dir": {
+          "default": "~/Pictures/Wallpapers",
+          "type": "string"
+        },
+        "widgets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DesktopWidgetConfig"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "DesktopWidgetConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "contribution": {
+          "$ref": "#/$defs/ExtensionContributionRef"
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "instance": {
+          "type": "string"
+        },
+        "output": {
+          "default": "primary",
+          "type": "string"
+        },
+        "settings": {
+          "default": {}
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "x": {
+          "default": 0,
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "default": 0,
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "instance",
+        "contribution",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "ExtensionContributionRef": {
+      "pattern": "^ext:[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*$",
+      "type": "string"
+    },
+    "ExtensionsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "settings": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "Extension-wide settings keyed by extension ID.\n\nEvery contribution instance receives the same validated JSON object.\nSurface-specific placement and geometry remain owned by their surface.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "OutputConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "exclusive_zone": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "margin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BarMargin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "opacity": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "padding": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BarPosition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scale": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BarStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "widget_spacing": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "widgets": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BarWidgets"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "StartupConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "autostart_apps": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "compositor_wait_timeout_ms": {
+          "default": 3000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ThemeConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "corner_radius_scale": {
+          "format": "float",
+          "type": "number"
+        },
+        "custom_adapter_cmd": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "font_family": {
+          "type": "string"
+        },
+        "gtk_theme_dark": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gtk_theme_light": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "heading_font_family": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "high_contrast": {
+          "default": false,
+          "type": "boolean"
+        },
+        "mono_font_family": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reduced_motion": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "font_family",
+        "corner_radius_scale"
+      ],
+      "type": "object"
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ShellConfig",
-  "type": "object",
+  "additionalProperties": false,
   "properties": {
     "bar": {
       "$ref": "#/$defs/BarConfig"
     },
     "clock_format": {
+      "default": null,
       "type": [
         "string",
         "null"
-      ],
-      "default": null
+      ]
     },
     "desktop": {
       "$ref": "#/$defs/DesktopConfig",
@@ -27,18 +417,18 @@
       }
     },
     "locale": {
+      "default": null,
       "type": [
         "string",
         "null"
-      ],
-      "default": null
+      ]
     },
     "outputs": {
-      "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/OutputConfig"
       },
-      "default": {}
+      "default": {},
+      "type": "object"
     },
     "startup": {
       "$ref": "#/$defs/StartupConfig",
@@ -48,413 +438,26 @@
       }
     },
     "temperature_unit": {
+      "default": null,
       "type": [
         "string",
         "null"
-      ],
-      "default": null
+      ]
     },
     "theme": {
       "$ref": "#/$defs/ThemeConfig"
     },
     "version": {
-      "type": "integer",
       "format": "uint32",
-      "minimum": 0
+      "minimum": 0,
+      "type": "integer"
     }
   },
-  "additionalProperties": false,
   "required": [
     "version",
     "theme",
     "bar"
   ],
-  "$defs": {
-    "BarConfig": {
-      "type": "object",
-      "properties": {
-        "exclusive_zone": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "default": null,
-          "minimum": 0
-        },
-        "height": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "margin": {
-          "$ref": "#/$defs/BarMargin"
-        },
-        "opacity": {
-          "type": "number",
-          "format": "float",
-          "default": 0.9200000166893005
-        },
-        "padding": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "position": {
-          "$ref": "#/$defs/BarPosition"
-        },
-        "style": {
-          "$ref": "#/$defs/BarStyle"
-        },
-        "widget_spacing": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "widgets": {
-          "$ref": "#/$defs/BarWidgets"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "position",
-        "style",
-        "height",
-        "padding",
-        "margin",
-        "widget_spacing",
-        "widgets"
-      ]
-    },
-    "BarMargin": {
-      "type": "object",
-      "properties": {
-        "horizontal": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "vertical": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "horizontal",
-        "vertical"
-      ]
-    },
-    "BarPosition": {
-      "type": "string",
-      "enum": [
-        "Top",
-        "Bottom",
-        "Left",
-        "Right"
-      ]
-    },
-    "BarStyle": {
-      "type": "string",
-      "enum": [
-        "Hug",
-        "Float",
-        "Rect"
-      ]
-    },
-    "BarWidget": {
-      "type": "string",
-      "pattern": "^(builtin:(launcher|workspaces|active_window|clock|media|sysinfo|network|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
-    },
-    "BarWidgets": {
-      "type": "object",
-      "properties": {
-        "center": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/BarWidget"
-          }
-        },
-        "end": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/BarWidget"
-          }
-        },
-        "start": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/BarWidget"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "start",
-        "center",
-        "end"
-      ]
-    },
-    "ColorSource": {
-      "type": "string",
-      "enum": [
-        "Wallpaper",
-        "Custom"
-      ]
-    },
-    "DesktopConfig": {
-      "type": "object",
-      "properties": {
-        "wallpaper_dir": {
-          "type": "string",
-          "default": "~/Pictures/Wallpapers"
-        },
-        "widgets": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/DesktopWidgetConfig"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "DesktopWidgetConfig": {
-      "type": "object",
-      "properties": {
-        "contribution": {
-          "$ref": "#/$defs/ExtensionContributionRef"
-        },
-        "height": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "instance": {
-          "type": "string"
-        },
-        "output": {
-          "type": "string",
-          "default": "primary"
-        },
-        "settings": {
-          "default": {}
-        },
-        "width": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "x": {
-          "type": "integer",
-          "format": "int32",
-          "default": 0
-        },
-        "y": {
-          "type": "integer",
-          "format": "int32",
-          "default": 0
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "instance",
-        "contribution",
-        "width",
-        "height"
-      ]
-    },
-    "ExtensionContributionRef": {
-      "type": "string",
-      "pattern": "^ext:[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*$"
-    },
-    "ExtensionsConfig": {
-      "type": "object",
-      "properties": {
-        "settings": {
-          "description": "Extension-wide settings keyed by extension ID.\n\nEvery contribution instance receives the same validated JSON object.\nSurface-specific placement and geometry remain owned by their surface.",
-          "type": "object",
-          "additionalProperties": true,
-          "default": {}
-        }
-      },
-      "additionalProperties": false
-    },
-    "OutputConfig": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true
-        },
-        "exclusive_zone": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "height": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "margin": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BarMargin"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "opacity": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "float"
-        },
-        "padding": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "position": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BarPosition"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "scale": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "float"
-        },
-        "style": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BarStyle"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "widget_spacing": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "widgets": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BarWidgets"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "StartupConfig": {
-      "type": "object",
-      "properties": {
-        "autostart_apps": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          }
-        },
-        "compositor_wait_timeout_ms": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 3000,
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false
-    },
-    "ThemeConfig": {
-      "type": "object",
-      "properties": {
-        "accent": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "color_source": {
-          "$ref": "#/$defs/ColorSource",
-          "default": "Wallpaper"
-        },
-        "corner_radius_scale": {
-          "type": "number",
-          "format": "float"
-        },
-        "font_family": {
-          "type": "string"
-        },
-        "heading_font_family": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "high_contrast": {
-          "type": "boolean",
-          "default": false
-        },
-        "mode": {
-          "$ref": "#/$defs/ThemeMode"
-        },
-        "mono_font_family": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "reduced_motion": {
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "mode",
-        "font_family",
-        "corner_radius_scale"
-      ]
-    },
-    "ThemeMode": {
-      "type": "string",
-      "enum": [
-        "Dark",
-        "Light",
-        "Auto"
-      ]
-    }
-  }
+  "title": "ShellConfig",
+  "type": "object"
 }

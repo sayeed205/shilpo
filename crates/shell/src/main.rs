@@ -59,28 +59,61 @@ async fn main() {
                     } else {
                         0xff006c4c
                     };
-                    let is_dark = args.get(4).map(|s| s == "dark").unwrap_or(true);
-                    IpcRequest::SetTheme {
-                        source_argb,
-                        is_dark,
-                    }
+                    let client = shilpo_theme::ThemeClient::new().await;
+                    let _ = client.set_custom_seed(source_argb).await;
+                    let _ = client
+                        .set_color_source(shilpo_theme::ColorSource::Custom)
+                        .await;
+                    println!("Theme seed set to #{:06X}", source_argb & 0xFFFFFF);
+                    return;
                 }
                 "set-mode" => {
-                    let mode = args.get(3).cloned().unwrap_or_else(|| "dark".to_string());
-                    IpcRequest::SetThemeMode { mode }
+                    let mode_str = args.get(3).map(|s| s.as_str()).unwrap_or("dark");
+                    let mode = match mode_str.to_lowercase().as_str() {
+                        "light" => shilpo_theme::ThemeMode::Light,
+                        "dark" => shilpo_theme::ThemeMode::Dark,
+                        _ => shilpo_theme::ThemeMode::System,
+                    };
+                    let client = shilpo_theme::ThemeClient::new().await;
+                    if let Err(e) = client.set_mode(mode).await {
+                        eprintln!("Failed to set mode: {}", e);
+                        std::process::exit(1);
+                    }
+                    println!("Theme mode set to {}", mode);
+                    return;
                 }
-                "toggle-mode" => IpcRequest::ToggleThemeMode,
+                "toggle-mode" => {
+                    let client = shilpo_theme::ThemeClient::new().await;
+                    if let Err(e) = client.toggle_mode().await {
+                        eprintln!("Failed to toggle mode: {}", e);
+                        std::process::exit(1);
+                    }
+                    println!("Toggled theme mode");
+                    return;
+                }
                 "set-wallpaper" => {
                     if let Some(path_str) = args.get(3) {
-                        IpcRequest::SetWallpaper {
-                            path: std::path::PathBuf::from(path_str),
+                        let client = shilpo_theme::ThemeClient::new().await;
+                        if let Err(e) = client.set_wallpaper(path_str).await {
+                            eprintln!("Failed to set wallpaper: {}", e);
+                            std::process::exit(1);
                         }
+                        println!("Wallpaper updated to {}", path_str);
+                        return;
                     } else {
                         eprintln!("Missing wallpaper file path");
                         std::process::exit(1);
                     }
                 }
-                "random-wallpaper" => IpcRequest::SetRandomWallpaper,
+                "random-wallpaper" => {
+                    let client = shilpo_theme::ThemeClient::new().await;
+                    if let Err(e) = client.set_random_wallpaper().await {
+                        eprintln!("Failed to set random wallpaper: {}", e);
+                        std::process::exit(1);
+                    }
+                    println!("Random wallpaper selected");
+                    return;
+                }
                 "telemetry" => IpcRequest::GetTelemetry,
                 _ => {
                     eprintln!("Unknown command: {}", cmd);

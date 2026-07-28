@@ -1,5 +1,3 @@
-use shilpo_services::WallpaperService;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticStatus {
     Pass,
@@ -153,10 +151,38 @@ impl DoctorChecker {
 
     /// Checks default wallpaper directory existence and image readiness.
     pub fn check_wallpaper_directory(&self, auto_fix: bool) -> DiagnosticItem {
-        let wallpaper_dir = WallpaperService::default_wallpaper_dir();
+        let wallpaper_dir = shilpo_theme::ThemeState::default().wallpaper_dir;
+        let wallpaper_dir = if let Some(rest) = wallpaper_dir
+            .to_str()
+            .and_then(|path| path.strip_prefix("~/"))
+        {
+            std::env::var("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default()
+                .join(rest)
+        } else {
+            wallpaper_dir
+        };
         if wallpaper_dir.exists() {
-            let service = WallpaperService::new(&wallpaper_dir);
-            let count = service.scan_wallpapers().len();
+            let count = std::fs::read_dir(&wallpaper_dir)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .filter(|entry| {
+                            let path = entry.path();
+                            path.is_file()
+                                && path.extension().and_then(|ext| ext.to_str()).is_some_and(
+                                    |ext| {
+                                        matches!(
+                                            ext.to_ascii_lowercase().as_str(),
+                                            "png" | "jpg" | "jpeg" | "webp"
+                                        )
+                                    },
+                                )
+                        })
+                        .count()
+                })
+                .unwrap_or_default();
             DiagnosticItem {
                 category: "Wallpaper".into(),
                 name: "Wallpapers Directory".into(),
@@ -207,7 +233,7 @@ impl DoctorChecker {
                 category: "Wallpaper".into(),
                 name: "awww Daemon Backend".into(),
                 status: DiagnosticStatus::Warn,
-                message: "awww binary not found on $PATH; wallpaper daemon switching will fallback to internal color extraction".into(),
+                message: "awww binary not found on $PATH; wallpaper switching will fail until the backend is installed".into(),
                 fix_applied: false,
             }
         }

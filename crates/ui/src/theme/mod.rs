@@ -2,9 +2,8 @@ use crate::{
     highlighter::HighlightTheme, list::ListSettings, notification::NotificationSettings,
     scroll::ScrollbarShow, sheet::SheetSettings,
 };
-use gpui::{App, Global, Hsla, Pixels, SharedString, Window, WindowAppearance, px};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use gpui::{App, Global, Hsla, Pixels, SharedString, px};
+pub use shilpo_theme::{ThemeMode, ThemeState};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -114,6 +113,18 @@ impl Theme {
         }
     }
 
+    pub fn apply_state(&mut self, state: &ThemeState) {
+        self.source_argb = state.source_argb;
+        self.mode = state.selected_mode;
+        self.effective_mode = state.resolved_mode;
+        self.colors = material_theme(state.source_argb, state.resolved_mode.is_dark());
+        self.highlight_theme = if state.resolved_mode.is_dark() {
+            HighlightTheme::default_dark()
+        } else {
+            HighlightTheme::default_light()
+        };
+    }
+
     pub fn set_source_argb(&mut self, source_argb: u32) {
         self.source_argb = source_argb;
         self.colors = material_theme(source_argb, self.effective_mode.is_dark());
@@ -139,16 +150,14 @@ impl Theme {
         self.effective_mode
     }
 
-    pub fn set_mode(&mut self, mode: impl Into<ThemeMode>) {
-        self.mode = mode.into();
-        if self.mode != ThemeMode::System {
-            self.set_effective_mode(self.mode);
+    pub fn set_mode(&mut self, mode: ThemeMode) {
+        self.mode = mode;
+        if mode != ThemeMode::System {
+            self.set_effective_mode(mode);
         }
     }
 
-    /// Sets user-selected appearance preference. System resolution requires
-    /// [`Self::change`] so the current window appearance can be supplied.
-    pub fn set_selected_mode(&mut self, mode: impl Into<ThemeMode>) {
+    pub fn set_selected_mode(&mut self, mode: ThemeMode) {
         self.set_mode(mode);
     }
 
@@ -163,37 +172,12 @@ impl Theme {
         };
     }
 
-    pub fn change(mode: impl Into<ThemeMode>, window: Option<&mut Window>, cx: &mut App) {
-        let mode = mode.into();
-        let appearance = window
-            .as_ref()
-            .map(|window| window.appearance())
-            .unwrap_or_else(|| cx.window_appearance());
-        let theme = cx.global_mut::<Theme>();
-        theme.set_selected_mode(mode);
-        if theme.mode == ThemeMode::System {
-            theme.set_effective_mode(appearance.into());
-        }
-        if let Some(window) = window {
-            window.refresh();
-        }
-    }
-
     pub fn sync_scrollbar_appearance(cx: &mut App) {
         Theme::global_mut(cx).scrollbar_show = if cx.should_auto_hide_scrollbars() {
             ScrollbarShow::Scrolling
         } else {
             ScrollbarShow::Hover
         };
-    }
-
-    pub fn sync_system_appearance(window: Option<&mut Window>, cx: &mut App) {
-        let appearance = window
-            .as_ref()
-            .map(|window| window.appearance())
-            .unwrap_or_else(|| cx.window_appearance());
-        let theme = cx.global_mut::<Theme>();
-        theme.set_effective_mode(appearance.into());
     }
 
     pub fn input_background(&self) -> Hsla {
@@ -205,95 +189,6 @@ impl Theme {
             .style
             .editor_background
             .unwrap_or(self.surface)
-    }
-}
-
-/// Observe system accent color changes in real-time and update the active theme.
-///
-/// This queries the initial OS system accent color on startup and sets up a background
-/// subscription listener to reactively update [`Theme`] in real-time whenever the user
-/// changes their OS accent color setting.
-#[cfg(not(target_family = "wasm"))]
-pub fn observe_system_accent_color(cx: &mut App) {
-    let (tx, rx) = smol::channel::unbounded::<u32>();
-
-    if let Some(prefs) = mundy::Preferences::once_blocking(
-        mundy::Interest::All,
-        std::time::Duration::from_millis(500),
-    ) {
-        if let Some(accent) = prefs.accent_color.0 {
-            let r = (accent.red * 255.0) as u32;
-            let g = (accent.green * 255.0) as u32;
-            let b = (accent.blue * 255.0) as u32;
-            let argb = 0xff000000 | (r << 16) | (g << 8) | b;
-            Theme::global_mut(cx).set_source_argb(argb);
-        }
-    }
-
-    std::thread::spawn(move || {
-        let _sub = mundy::Preferences::subscribe(mundy::Interest::All, move |prefs| {
-            if let Some(accent) = prefs.accent_color.0 {
-                let r = (accent.red * 255.0) as u32;
-                let g = (accent.green * 255.0) as u32;
-                let b = (accent.blue * 255.0) as u32;
-                let argb = 0xff000000 | (r << 16) | (g << 8) | b;
-                let _ = tx.send_blocking(argb);
-            }
-        });
-
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(3600));
-        }
-    });
-
-    cx.spawn(async move |cx| {
-        while let Ok(argb) = rx.recv().await {
-            let _ = cx.update(|cx| {
-                Theme::global_mut(cx).set_source_argb(argb);
-                cx.refresh_windows();
-            });
-        }
-    })
-    .detach();
-}
-
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Default,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-pub enum ThemeMode {
-    #[default]
-    Light,
-    Dark,
-    System,
-}
-
-impl ThemeMode {
-    pub fn is_system(&self) -> bool {
-        matches!(self, Self::System)
-    }
-
-    pub fn is_dark(&self) -> bool {
-        matches!(self, Self::Dark)
-    }
-}
-
-impl From<WindowAppearance> for ThemeMode {
-    fn from(appearance: WindowAppearance) -> Self {
-        match appearance {
-            WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::Dark,
-            WindowAppearance::Light | WindowAppearance::VibrantLight => Self::Light,
-        }
     }
 }
 
@@ -350,5 +245,20 @@ mod tests {
     fn test_visible_focus_indicators_and_disabled_keyboard_policy() {
         let focus_contrast = calculate_contrast_ratio((0, 108, 76), (255, 255, 255));
         assert!(focus_contrast > 3.0);
+    }
+
+    #[test]
+    fn test_apply_state() {
+        let mut theme = Theme::default();
+        let mut state = ThemeState::default();
+        state.source_argb = 0xff123456;
+        state.selected_mode = ThemeMode::Dark;
+        state.resolved_mode = ThemeMode::Dark;
+
+        theme.apply_state(&state);
+        assert_eq!(theme.source_argb, 0xff123456);
+        assert_eq!(theme.selected_mode(), ThemeMode::Dark);
+        assert_eq!(theme.effective_mode(), ThemeMode::Dark);
+        assert!(theme.is_dark());
     }
 }

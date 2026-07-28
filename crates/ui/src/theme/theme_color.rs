@@ -126,7 +126,7 @@ impl ThemeColor {
 
     /// Converts all M3 color tokens to a map of `"field_name" → "#RRGGBB"` hex strings.
     ///
-    /// Used by [`WallpaperService`] to write `colors.json` so any external app
+    /// Used by the theme daemon to write `colors.json` so any external app
     /// or script can consume the generated Material 3 palette.
     pub fn to_hex_map(&self) -> std::collections::HashMap<String, String> {
         let mut map = std::collections::HashMap::new();

@@ -7850,6 +7850,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dirs",
+ "futures-lite",
  "gpui",
  "gpui_platform",
  "serde",
@@ -7858,7 +7859,9 @@ dependencies = [
  "shilpo-config",
  "shilpo-ext",
  "shilpo-services",
+ "shilpo-theme",
  "shilpo-ui",
+ "tokio",
  "tracing",
 ]
 
@@ -7868,6 +7871,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "futures-lite",
  "gpui",
  "gpui_platform",
  "log",
@@ -7879,11 +7883,33 @@ dependencies = [
  "shilpo-config",
  "shilpo-ext",
  "shilpo-services",
+ "shilpo-theme",
  "shilpo-ui",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "zed-reqwest",
+]
+
+[[package]]
+name = "shilpo-theme"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ashpd",
+ "chrono",
+ "dirs",
+ "futures-lite",
+ "image",
+ "mcu-material-color",
+ "schemars",
+ "serde",
+ "serde_json",
+ "shilpo-config",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
 ]
 
 [[package]]
@@ -7929,6 +7955,7 @@ dependencies = [
  "serde_repr",
  "shilpo-assets",
  "shilpo-macros",
+ "shilpo-theme",
  "smallvec",
  "smol",
  "tracing",
@@ -8206,6 +8233,7 @@ dependencies = [
  "csv",
  "dirs",
  "fake",
+ "futures-lite",
  "gpui",
  "gpui_platform",
  "gpui_web",
@@ -8219,8 +8247,10 @@ dependencies = [
  "serde",
  "serde_json",
  "shilpo-assets",
+ "shilpo-theme",
  "shilpo-ui",
  "smol",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "tree-sitter-navi",
