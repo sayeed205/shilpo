@@ -38,6 +38,8 @@ pub enum IpcRequest {
     ToggleControlCenter,
     ToggleOverview,
     SetTheme { source_argb: u32, is_dark: bool },
+    SetThemeMode { mode: String },
+    ToggleThemeMode,
     SetWallpaper { path: std::path::PathBuf },
     SetRandomWallpaper,
     GetStatus,

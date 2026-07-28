@@ -65,6 +65,11 @@ async fn main() {
                         is_dark,
                     }
                 }
+                "set-mode" => {
+                    let mode = args.get(3).cloned().unwrap_or_else(|| "dark".to_string());
+                    IpcRequest::SetThemeMode { mode }
+                }
+                "toggle-mode" => IpcRequest::ToggleThemeMode,
                 "set-wallpaper" => {
                     if let Some(path_str) = args.get(3) {
                         IpcRequest::SetWallpaper {

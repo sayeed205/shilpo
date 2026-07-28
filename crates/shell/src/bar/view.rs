@@ -112,7 +112,37 @@ impl BarView {
         // Dynamic theme synchronization with OS appearance and config
         apply_config_theme(&config, Some(window), cx);
         cx.observe_window_appearance(window, |this, window, cx| {
-            apply_config_theme(&this.config, Some(window), cx);
+            // Re-apply wallpaper color source from config
+            let custom_argb = this
+                .config
+                .theme
+                .accent
+                .as_deref()
+                .and_then(parse_hex_color);
+            let argb = match this.config.theme.color_source {
+                shilpo_config::ColorSource::Custom => custom_argb,
+                shilpo_config::ColorSource::Wallpaper => {
+                    shilpo_services::WallpaperService::read_current()
+                        .map(|state| state.source_argb)
+                        .or(custom_argb)
+                }
+            };
+            if let Some(argb) = argb {
+                shilpo_ui::Theme::global_mut(cx).set_source_argb(argb);
+            }
+            // Follow system appearance (from gsettings / XDG portal / inir)
+            // instead of re-asserting static config mode, which would override
+            // IPC/Settings-initiated mode changes.
+            let appearance_mode: shilpo_ui::ThemeMode = window.appearance().into();
+            shilpo_ui::Theme::change(appearance_mode, Some(window), cx);
+            // Persist to colors.json so all Shilpo components stay in sync
+            // (file-only write — no gsettings call to avoid feedback loop)
+            let mode_str = if appearance_mode.is_dark() {
+                "dark"
+            } else {
+                "light"
+            };
+            let _ = shilpo_services::WallpaperService::persist_theme_mode(mode_str);
             window.refresh();
         })
         .detach();

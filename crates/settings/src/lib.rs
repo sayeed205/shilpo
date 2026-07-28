@@ -231,6 +231,12 @@ impl SettingsView {
         let view = cx.new(|cx| {
             cx.observe_window_appearance(window, |_, window, cx| {
                 shilpo_ui::Theme::sync_system_appearance(Some(window), cx);
+                let mode_str = if cx.theme().is_dark() {
+                    "dark"
+                } else {
+                    "light"
+                };
+                let _ = shilpo_services::WallpaperService::persist_theme_mode(mode_str);
                 #[cfg(target_os = "linux")]
                 update_desktop_icon_for_theme(cx);
                 window.refresh();
@@ -575,16 +581,14 @@ impl Render for SettingsView {
                         this.child(
                             v_flex()
                                 .gap_4()
-                                // Theme Mode (Dark / Light / System matching Storybook)
                                 .child(
                                     v_flex()
                                         .gap_2()
-                                        .child(div().text_xs().font_bold().child("System Theme Mode"))
+                                        .child(div().text_xs().font_bold().child("Theme Mode"))
                                         .child(h_flex().gap_2().children(
                                             [
                                                 ("Dark", shilpo_ui::ThemeMode::Dark),
                                                 ("Light", shilpo_ui::ThemeMode::Light),
-                                                ("System", shilpo_ui::ThemeMode::System),
                                             ]
                                                 .into_iter()
                                                 .enumerate()
@@ -611,6 +615,7 @@ impl Render for SettingsView {
                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                         this.active_theme_mode = label_str.clone();
                                                         shilpo_ui::Theme::change(target_mode, None, cx);
+                                                        let _ = shilpo_services::WallpaperService::update_theme_mode(&label_str);
                                                         #[cfg(target_os = "linux")]
                                                         update_desktop_icon_for_theme(cx);
                                                         cx.notify();

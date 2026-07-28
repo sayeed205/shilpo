@@ -24,12 +24,19 @@ pub struct ColorSchemeChanged {
     pub source_argb: u32,
     /// Seed color as `#RRGGBB` hex string.
     pub source_hex: String,
+    /// Active theme mode ("dark", "light", "system").
+    #[serde(default = "default_theme_mode")]
+    pub mode: String,
     /// ISO 8601 timestamp of when the colors were generated.
     pub generated_at: String,
     /// Full M3 light scheme: `"primary" → "#1B6B22"`, etc.
     pub light: HashMap<String, String>,
     /// Full M3 dark scheme: `"primary" → "#87D982"`, etc.
     pub dark: HashMap<String, String>,
+}
+
+fn default_theme_mode() -> String {
+    "dark".to_string()
 }
 
 /// Desktop Wallpaper Service managing directory scanning, active wallpaper selection,
@@ -219,6 +226,153 @@ impl WallpaperService {
         serde_json::from_str(&contents).ok()
     }
 
+    /// Syncs the OS system-wide theme mode across desktop environments.
+    ///
+    /// Supports:
+    /// - **GNOME / GTK** via `gsettings` (`color-scheme`, `gtk-theme`)
+    /// - **KDE Plasma** via `kwriteconfig6` / `kwriteconfig5` (`kdeglobals`)
+    /// - **dconf** direct write as fallback for compositors like niri
+    ///
+    /// The XDG Desktop Portal (`xdg-desktop-portal-gnome`/`gtk`) reads the
+    /// `gsettings` value and broadcasts `color-scheme` changes to sandboxed and
+    /// portal-aware applications (Flatpak, Chromium, GTK4, Qt with `gtk3`
+    /// platform theme).
+    pub fn sync_system_desktop_theme_mode(mode: &str) {
+        let is_dark = match mode.to_lowercase().as_str() {
+            "dark" => true,
+            "light" => false,
+            _ => return,
+        };
+
+        // 1. GNOME / GTK (gsettings → portal → all GTK/portal-aware apps)
+        let color_scheme = if is_dark {
+            "prefer-dark"
+        } else {
+            "prefer-light"
+        };
+        let gtk_theme = if is_dark {
+            if Self::path_exists("/usr/share/themes/adw-gtk3-dark") {
+                "adw-gtk3-dark"
+            } else {
+                "Adwaita-dark"
+            }
+        } else {
+            if Self::path_exists("/usr/share/themes/adw-gtk3") {
+                "adw-gtk3"
+            } else {
+                "Adwaita"
+            }
+        };
+
+        let gsettings_ok = std::process::Command::new("gsettings")
+            .args([
+                "set",
+                "org.gnome.desktop.interface",
+                "color-scheme",
+                color_scheme,
+            ])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if gsettings_ok {
+            let _ = std::process::Command::new("gsettings")
+                .args(["set", "org.gnome.desktop.interface", "gtk-theme", gtk_theme])
+                .status();
+        } else {
+            // Fallback: dconf direct write (for compositors like niri where
+            // gsettings schema may not be installed but dconf backend works)
+            let _ = std::process::Command::new("dconf")
+                .args([
+                    "write",
+                    "/org/gnome/desktop/interface/color-scheme",
+                    &format!("'{}'", color_scheme),
+                ])
+                .status();
+        }
+
+        // 2. KDE Plasma (kwriteconfig6, fallback kwriteconfig5)
+        let kde_tool = if Self::command_exists("kwriteconfig6") {
+            Some("kwriteconfig6")
+        } else if Self::command_exists("kwriteconfig5") {
+            Some("kwriteconfig5")
+        } else {
+            None
+        };
+
+        if let Some(tool) = kde_tool {
+            let kde_scheme = if is_dark { "BreezeDark" } else { "BreezeLight" };
+            let _ = std::process::Command::new(tool)
+                .args([
+                    "--file",
+                    "kdeglobals",
+                    "--group",
+                    "General",
+                    "--key",
+                    "ColorScheme",
+                    kde_scheme,
+                ])
+                .status();
+        }
+
+        tracing::info!(
+            mode,
+            color_scheme,
+            gtk_theme,
+            kde = kde_tool.is_some(),
+            "synced OS desktop theme mode"
+        );
+    }
+
+    /// Checks whether a file or directory path exists.
+    fn path_exists(path: impl AsRef<Path>) -> bool {
+        path.as_ref().exists()
+    }
+
+    /// Checks whether a command-line tool is available on `$PATH`.
+    fn command_exists(name: &str) -> bool {
+        std::process::Command::new("which")
+            .arg(name)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// Persists the given theme mode to `colors.json` without triggering system
+    /// desktop sync. Use when the system already has the correct mode (e.g.,
+    /// from an external `gsettings` / XDG portal change) and we just need to
+    /// persist the mode to our state file for other Shilpo components.
+    pub fn persist_theme_mode(mode: impl Into<String>) -> Result<()> {
+        let mode = mode.into();
+        if let Some(mut state) = Self::read_current() {
+            state.mode = mode;
+            state.generated_at = chrono::Utc::now().to_rfc3339();
+            let state_path = Self::state_file_path();
+            let tmp_path = state_path.with_extension("json.tmp");
+            let json = serde_json::to_string_pretty(&state)?;
+            std::fs::write(&tmp_path, json)?;
+            std::fs::rename(&tmp_path, &state_path)?;
+        }
+        Ok(())
+    }
+
+    /// Updates the active theme mode in `colors.json` and syncs the OS desktop
+    /// theme mode across all supported desktop environments.
+    ///
+    /// Writes to `colors.json` **first** so that inotify subscribers apply the
+    /// new mode before the system appearance change (from `gsettings`) triggers
+    /// window appearance observers.
+    pub fn update_theme_mode(mode: impl Into<String>) -> Result<()> {
+        let mode = mode.into();
+        // Persist to colors.json first — inotify subscribers pick it up
+        // before the gsettings-triggered appearance observer can race.
+        Self::persist_theme_mode(&mode)?;
+        Self::sync_system_desktop_theme_mode(&mode);
+        Ok(())
+    }
+
     /// Subscribes to wallpaper/color change events.
     ///
     /// Returns a channel receiver that emits [`ColorSchemeChanged`] whenever
@@ -319,6 +473,10 @@ impl WallpaperService {
         let light = Self::scheme_to_hex_map(&light_scheme);
         let dark = Self::scheme_to_hex_map(&dark_scheme);
 
+        let current_mode = Self::read_current()
+            .map(|s| s.mode)
+            .unwrap_or_else(|| "dark".to_string());
+
         let state = ColorSchemeChanged {
             wallpaper: wallpaper_path.to_path_buf(),
             source_argb,
@@ -328,6 +486,7 @@ impl WallpaperService {
                 (source_argb >> 8) & 0xff,
                 source_argb & 0xff
             ),
+            mode: current_mode,
             generated_at: chrono::Utc::now().to_rfc3339(),
             light,
             dark,
@@ -489,6 +648,7 @@ mod tests {
             wallpaper: PathBuf::from("/tmp/test.png"),
             source_argb: 0xff5e_9963,
             source_hex: "#5E9963".to_string(),
+            mode: "dark".to_string(),
             generated_at: "2026-07-27T20:45:00Z".to_string(),
             light: HashMap::from([("primary".to_string(), "#1B6B22".to_string())]),
             dark: HashMap::from([("primary".to_string(), "#87D982".to_string())]),

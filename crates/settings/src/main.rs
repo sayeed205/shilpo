@@ -9,6 +9,12 @@ fn main() {
         shilpo_ui::init(cx);
         if let Some(state) = shilpo_services::WallpaperService::read_current() {
             shilpo_ui::Theme::global_mut(cx).set_source_argb(state.source_argb);
+            let target_mode = match state.mode.as_str() {
+                "dark" => shilpo_ui::ThemeMode::Dark,
+                "light" => shilpo_ui::ThemeMode::Light,
+                _ => shilpo_ui::ThemeMode::System,
+            };
+            shilpo_ui::Theme::change(target_mode, None, cx);
         }
 
         let rx = shilpo_services::WallpaperService::subscribe();
@@ -16,6 +22,12 @@ fn main() {
             while let Ok(changed) = rx.recv().await {
                 cx.update(|cx| {
                     shilpo_ui::Theme::global_mut(cx).set_source_argb(changed.source_argb);
+                    let target_mode = match changed.mode.as_str() {
+                        "dark" => shilpo_ui::ThemeMode::Dark,
+                        "light" => shilpo_ui::ThemeMode::Light,
+                        _ => shilpo_ui::ThemeMode::System,
+                    };
+                    shilpo_ui::Theme::change(target_mode, None, cx);
                     cx.refresh_windows();
                 });
             }

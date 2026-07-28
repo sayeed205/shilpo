@@ -217,6 +217,13 @@ impl ShellRuntime {
             while let Ok(changed) = rx.recv().await {
                 cx.update(|cx| {
                     shilpo_ui::Theme::global_mut(cx).set_source_argb(changed.source_argb);
+                    // Apply theme mode from colors.json (written by Settings app / IPC)
+                    let target_mode = match changed.mode.as_str() {
+                        "dark" => shilpo_ui::ThemeMode::Dark,
+                        "light" => shilpo_ui::ThemeMode::Light,
+                        _ => shilpo_ui::ThemeMode::System,
+                    };
+                    shilpo_ui::Theme::change(target_mode, None, cx);
                     cx.refresh_windows();
                 });
             }
@@ -2160,6 +2167,29 @@ impl ShellRuntime {
                     };
                     shilpo_ui::Theme::global_mut(cx).set_source_argb(source_argb);
                     shilpo_ui::Theme::global_mut(cx).set_mode(mode);
+                    let mode_str = if is_dark { "dark" } else { "light" };
+                    let _ = shilpo_services::WallpaperService::update_theme_mode(mode_str);
+                }
+                IpcRequest::SetThemeMode { mode } => {
+                    let target_mode = match mode.to_lowercase().as_str() {
+                        "dark" => shilpo_ui::ThemeMode::Dark,
+                        "light" => shilpo_ui::ThemeMode::Light,
+                        _ => shilpo_ui::ThemeMode::System,
+                    };
+                    shilpo_ui::Theme::change(target_mode, None, cx);
+                    let _ = shilpo_services::WallpaperService::update_theme_mode(&mode);
+                    cx.refresh_windows();
+                }
+                IpcRequest::ToggleThemeMode => {
+                    let current = shilpo_ui::Theme::global(cx).effective_mode();
+                    let (target_mode, mode_str) = if current.is_dark() {
+                        (shilpo_ui::ThemeMode::Light, "light")
+                    } else {
+                        (shilpo_ui::ThemeMode::Dark, "dark")
+                    };
+                    shilpo_ui::Theme::change(target_mode, None, cx);
+                    let _ = shilpo_services::WallpaperService::update_theme_mode(mode_str);
+                    cx.refresh_windows();
                 }
                 IpcRequest::SetWallpaper { path } => {
                     if let Err(error) =

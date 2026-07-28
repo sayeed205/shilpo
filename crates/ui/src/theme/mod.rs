@@ -188,9 +188,6 @@ impl Theme {
     }
 
     pub fn sync_system_appearance(window: Option<&mut Window>, cx: &mut App) {
-        if Theme::global(cx).selected_mode() != ThemeMode::System {
-            return;
-        }
         let appearance = window
             .as_ref()
             .map(|window| window.appearance())
