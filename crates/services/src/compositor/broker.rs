@@ -91,7 +91,7 @@ pub struct CommandCancellation {
 }
 
 impl CommandCancellation {
-    fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             cancelled: AtomicBool::new(false),
             reason: Mutex::new(None),
@@ -244,6 +244,25 @@ impl Drop for CommandTicket {
     }
 }
 
+/// Telemetry metrics snapshot for `CompositorCommandBroker`.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct CompositorBrokerTelemetry {
+    pub accepted: u64,
+    pub succeeded: u64,
+    pub backend_failed: u64,
+    pub transport_failed: u64,
+    pub timed_out: u64,
+    pub cancelled: u64,
+    pub rejected_unavailable: u64,
+    pub rejected_busy: u64,
+    pub rejected_unsupported: u64,
+    pub reconnect_transitions: u64,
+    pub current_queue_depth: usize,
+    pub in_flight: bool,
+    pub last_latency_ms: Option<f64>,
+    pub avg_latency_ms: Option<f64>,
+}
+
 pub type CommandExecutorFn = Box<
     dyn Fn(
             &CompositorCommand,
@@ -259,6 +278,7 @@ struct PendingCommand {
     _id: u64,
     epoch: u64,
     command: CompositorCommand,
+    submitted_at: Instant,
     deadline: Instant,
     tx: oneshot::Sender<Result<(), CompositorCommandError>>,
     cancellation: Arc<CommandCancellation>,
@@ -270,6 +290,13 @@ struct BrokerState {
     queue: VecDeque<PendingCommand>,
 }
 
+#[derive(Default)]
+struct LatencyStats {
+    total_ms_sum: f64,
+    count: u64,
+    last_ms: Option<f64>,
+}
+
 struct BrokerInner {
     options: BrokerOptions,
     epoch: AtomicU64,
@@ -277,6 +304,59 @@ struct BrokerInner {
     active: Mutex<Option<Arc<CommandCancellation>>>,
     shutdown: AtomicBool,
     cv: std::sync::Condvar,
+    accepted: AtomicU64,
+    succeeded: AtomicU64,
+    backend_failed: AtomicU64,
+    transport_failed: AtomicU64,
+    timed_out: AtomicU64,
+    cancelled: AtomicU64,
+    rejected_unavailable: AtomicU64,
+    rejected_busy: AtomicU64,
+    rejected_unsupported: AtomicU64,
+    reconnect_transitions: AtomicU64,
+    latency_stats: Mutex<LatencyStats>,
+}
+
+impl BrokerInner {
+    fn record_terminal_outcome(
+        &self,
+        submitted_at: Instant,
+        result: &Result<(), CompositorCommandError>,
+    ) {
+        let latency_ms = submitted_at.elapsed().as_secs_f64() * 1000.0;
+        {
+            let mut stats = self.latency_stats.lock().unwrap();
+            stats.total_ms_sum += latency_ms;
+            stats.count += 1;
+            stats.last_ms = Some(latency_ms);
+        }
+        match result {
+            Ok(()) => {
+                self.succeeded.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(CompositorCommandError::BackendRejected { .. }) => {
+                self.backend_failed.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(CompositorCommandError::Transport { .. }) => {
+                self.transport_failed.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(CompositorCommandError::Timeout { .. }) => {
+                self.timed_out.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(CompositorCommandError::Cancelled { .. }) => {
+                self.cancelled.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(CompositorCommandError::Unavailable { .. }) => {
+                self.rejected_unavailable.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(CompositorCommandError::Busy { .. }) => {
+                self.rejected_busy.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(CompositorCommandError::Unsupported) => {
+                self.rejected_unsupported.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
 }
 
 /// Central serial FIFO command broker for compositor commands.
@@ -299,6 +379,17 @@ impl CompositorCommandBroker {
             active: Mutex::new(None),
             shutdown: AtomicBool::new(false),
             cv: std::sync::Condvar::new(),
+            accepted: AtomicU64::new(0),
+            succeeded: AtomicU64::new(0),
+            backend_failed: AtomicU64::new(0),
+            transport_failed: AtomicU64::new(0),
+            timed_out: AtomicU64::new(0),
+            cancelled: AtomicU64::new(0),
+            rejected_unavailable: AtomicU64::new(0),
+            rejected_busy: AtomicU64::new(0),
+            rejected_unsupported: AtomicU64::new(0),
+            reconnect_transitions: AtomicU64::new(0),
+            latency_stats: Mutex::new(LatencyStats::default()),
         });
 
         let broker = Arc::new(Self {
@@ -319,6 +410,33 @@ impl CompositorCommandBroker {
         broker
     }
 
+    pub fn telemetry(&self) -> CompositorBrokerTelemetry {
+        let state = self.inner.state.lock().unwrap();
+        let in_flight = self.inner.active.lock().unwrap().is_some();
+        let stats = self.inner.latency_stats.lock().unwrap();
+        let avg_latency_ms = if stats.count > 0 {
+            Some(stats.total_ms_sum / stats.count as f64)
+        } else {
+            None
+        };
+        CompositorBrokerTelemetry {
+            accepted: self.inner.accepted.load(Ordering::Relaxed),
+            succeeded: self.inner.succeeded.load(Ordering::Relaxed),
+            backend_failed: self.inner.backend_failed.load(Ordering::Relaxed),
+            transport_failed: self.inner.transport_failed.load(Ordering::Relaxed),
+            timed_out: self.inner.timed_out.load(Ordering::Relaxed),
+            cancelled: self.inner.cancelled.load(Ordering::Relaxed),
+            rejected_unavailable: self.inner.rejected_unavailable.load(Ordering::Relaxed),
+            rejected_busy: self.inner.rejected_busy.load(Ordering::Relaxed),
+            rejected_unsupported: self.inner.rejected_unsupported.load(Ordering::Relaxed),
+            reconnect_transitions: self.inner.reconnect_transitions.load(Ordering::Relaxed),
+            current_queue_depth: state.queue.len(),
+            in_flight,
+            last_latency_ms: stats.last_ms,
+            avg_latency_ms,
+        }
+    }
+
     /// Notifies the broker of a connection state and capabilities update.
     pub fn update_connection(
         &self,
@@ -331,6 +449,12 @@ impl CompositorCommandBroker {
         let prev_ready = state.connection.is_ready();
         state.connection = connection;
         state.capabilities = capabilities;
+
+        if prev_ready && !is_ready {
+            self.inner
+                .reconnect_transitions
+                .fetch_add(1, Ordering::Relaxed);
+        }
 
         if !is_ready || !prev_ready {
             // Reconnect or disconnect: increment epoch & cancel all queued commands
@@ -346,9 +470,12 @@ impl CompositorCommandBroker {
             drop(state);
 
             for item in drained {
-                let _ = item.tx.send(Err(CompositorCommandError::Cancelled {
+                let err = CompositorCommandError::Cancelled {
                     reason: CancellationReason::Reconnect,
-                }));
+                };
+                self.inner
+                    .record_terminal_outcome(item.submitted_at, &Err(err.clone()));
+                let _ = item.tx.send(Err(err));
             }
         } else {
             self.inner.cv.notify_one();
@@ -364,14 +491,18 @@ impl CompositorCommandBroker {
         let current_epoch = self.inner.epoch.load(Ordering::Acquire);
 
         if !state.connection.is_ready() {
-            return Err(CompositorCommandError::Unavailable {
+            let err = CompositorCommandError::Unavailable {
                 state: state.connection.clone(),
-            });
+            };
+            self.inner
+                .rejected_unavailable
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(err);
         }
 
         // Validate capability
         let cap_ok = match &command {
-            CompositorCommand::CreateWorkspace { .. } => state.capabilities.can_create_workspace,
+            CompositorCommand::CreateWorkspace => state.capabilities.can_create_workspace,
             CompositorCommand::MoveWindowToWorkspace { .. } => state.capabilities.can_move_window,
             CompositorCommand::FocusWindow(_) => state.capabilities.can_focus_window,
             CompositorCommand::FocusPreviousWindow => state.capabilities.can_focus_window,
@@ -379,14 +510,22 @@ impl CompositorCommandBroker {
         };
 
         if !cap_ok {
-            return Err(CompositorCommandError::Unsupported);
+            let err = CompositorCommandError::Unsupported;
+            self.inner
+                .rejected_unsupported
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(err);
         }
 
         if state.queue.len() >= self.inner.options.max_queue_len {
-            return Err(CompositorCommandError::Busy {
+            let err = CompositorCommandError::Busy {
                 queue_len: state.queue.len(),
-            });
+            };
+            self.inner.rejected_busy.fetch_add(1, Ordering::Relaxed);
+            return Err(err);
         }
+
+        self.inner.accepted.fetch_add(1, Ordering::Relaxed);
 
         let cmd_id = self.next_cmd_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
@@ -396,6 +535,7 @@ impl CompositorCommandBroker {
             _id: cmd_id,
             epoch: current_epoch,
             command,
+            submitted_at: Instant::now(),
             deadline: Instant::now() + self.inner.options.timeout,
             tx,
             cancellation: cancellation.clone(),
@@ -444,29 +584,35 @@ impl CompositorCommandBroker {
             let current_epoch = broker.epoch.load(Ordering::Acquire);
             if item.epoch != current_epoch {
                 drop(state);
-                let _ = item.tx.send(Err(CompositorCommandError::Cancelled {
+                let err = CompositorCommandError::Cancelled {
                     reason: CancellationReason::Reconnect,
-                }));
+                };
+                broker.record_terminal_outcome(item.submitted_at, &Err(err.clone()));
+                let _ = item.tx.send(Err(err));
                 continue;
             }
 
             if item.cancellation.is_cancelled() {
                 drop(state);
-                let _ = item.tx.send(Err(CompositorCommandError::Cancelled {
+                let err = CompositorCommandError::Cancelled {
                     reason: item
                         .cancellation
                         .reason()
                         .unwrap_or(CancellationReason::User),
-                }));
+                };
+                broker.record_terminal_outcome(item.submitted_at, &Err(err.clone()));
+                let _ = item.tx.send(Err(err));
                 continue;
             }
 
             let now = Instant::now();
             if now >= item.deadline {
                 drop(state);
-                let _ = item.tx.send(Err(CompositorCommandError::Timeout {
+                let err = CompositorCommandError::Timeout {
                     duration: broker.options.timeout,
-                }));
+                };
+                broker.record_terminal_outcome(item.submitted_at, &Err(err.clone()));
+                let _ = item.tx.send(Err(err));
                 continue;
             }
 
@@ -489,18 +635,23 @@ impl CompositorCommandBroker {
             item.cancellation.clear_handle();
             *broker.active.lock().unwrap() = None;
 
-            if item.cancellation.is_cancelled()
-                && matches!(result, Err(CompositorCommandError::Cancelled { .. }))
-            {
-                let _ = item.tx.send(Err(CompositorCommandError::Cancelled {
+            // Cancellation is authoritative once it has been observed.  The
+            // transport may race with shutdown and still return a successful
+            // reply; exposing that reply would make reconnect/user-cancel
+            // semantics nondeterministic.
+            let final_res = if item.cancellation.is_cancelled() {
+                Err(CompositorCommandError::Cancelled {
                     reason: item
                         .cancellation
                         .reason()
                         .unwrap_or(CancellationReason::User),
-                }));
+                })
             } else {
-                let _ = item.tx.send(result);
-            }
+                result
+            };
+
+            broker.record_terminal_outcome(item.submitted_at, &final_res);
+            let _ = item.tx.send(final_res);
         }
     }
 }
@@ -512,9 +663,12 @@ impl Drop for CompositorCommandBroker {
 
         if let Ok(mut state) = self.inner.state.lock() {
             for item in state.queue.drain(..) {
-                let _ = item.tx.send(Err(CompositorCommandError::Cancelled {
+                let err = CompositorCommandError::Cancelled {
                     reason: CancellationReason::Shutdown,
-                }));
+                };
+                self.inner
+                    .record_terminal_outcome(item.submitted_at, &Err(err.clone()));
+                let _ = item.tx.send(Err(err));
             }
         }
 
@@ -537,8 +691,13 @@ pub fn create_stream_cancel_handle(stream: UnixStream) -> Arc<dyn StreamCancelHa
 mod tests {
     use super::*;
 
+    fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::test_support::serial_guard()
+    }
+
     #[test]
     fn test_broker_options_and_submission() {
+        let _guard = serial_guard();
         let executor: CommandExecutorFn = Box::new(|_cmd, _timeout, _cancel, _register| Ok(()));
         let options = BrokerOptions {
             timeout: Duration::from_millis(500),
@@ -556,6 +715,7 @@ mod tests {
 
     #[test]
     fn test_submission_when_not_ready() {
+        let _guard = serial_guard();
         let executor: CommandExecutorFn = Box::new(|_cmd, _timeout, _cancel, _register| Ok(()));
         let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
 
@@ -567,6 +727,7 @@ mod tests {
 
     #[test]
     fn test_reconnect_cancels_pending() {
+        let _guard = serial_guard();
         let executor: CommandExecutorFn = Box::new(|_cmd, _timeout, _cancel, _register| {
             thread::sleep(Duration::from_millis(100));
             Ok(())
@@ -597,6 +758,7 @@ mod tests {
 
     #[test]
     fn test_reconnect_interrupts_active_command() {
+        let _guard = serial_guard();
         struct TestHandle(Arc<AtomicBool>);
         impl StreamCancelHandle for TestHandle {
             fn interrupt(&self) {
@@ -642,6 +804,7 @@ mod tests {
 
     #[test]
     fn test_queue_overflow_returns_busy() {
+        let _guard = serial_guard();
         let started = Arc::new(std::sync::Barrier::new(2));
         let started_executor = started.clone();
         let executor: CommandExecutorFn = Box::new(move |cmd, _timeout, _cancel, _register| {
@@ -673,6 +836,7 @@ mod tests {
 
     #[test]
     fn test_unsupported_capability_returns_unsupported() {
+        let _guard = serial_guard();
         let executor: CommandExecutorFn = Box::new(|_cmd, _timeout, _cancel, _register| Ok(()));
         let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
 
@@ -685,13 +849,14 @@ mod tests {
         broker.update_connection(CompositorConnection::Ready, caps);
 
         let err = broker
-            .submit(CompositorCommand::CreateWorkspace { name: None })
+            .submit(CompositorCommand::CreateWorkspace)
             .unwrap_err();
         assert_eq!(err, CompositorCommandError::Unsupported);
     }
 
     #[test]
     fn test_explicit_cancellation_and_drop() {
+        let _guard = serial_guard();
         let executor: CommandExecutorFn = Box::new(|_cmd, _timeout, _cancel, _register| {
             thread::sleep(Duration::from_millis(50));
             Ok(())
@@ -718,6 +883,7 @@ mod tests {
 
     #[test]
     fn test_fifo_execution_order() {
+        let _guard = serial_guard();
         let executed = Arc::new(Mutex::new(Vec::new()));
         let exec_clone = executed.clone();
 
@@ -749,5 +915,129 @@ mod tests {
         assert!(t3.wait_timeout(Duration::from_secs(1)).is_ok());
 
         assert_eq!(*executed.lock().unwrap(), vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn test_telemetry_counters_and_metrics() {
+        let _guard = serial_guard();
+        let executor: CommandExecutorFn = Box::new(|cmd, _timeout, _cancel, _register| {
+            if let CompositorCommand::FocusWorkspace(999) = cmd {
+                Err(CompositorCommandError::BackendRejected {
+                    message: "rejected test".into(),
+                })
+            } else {
+                thread::sleep(Duration::from_millis(10));
+                Ok(())
+            }
+        });
+        let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
+
+        // Test rejected_unavailable counter
+        let err = broker
+            .submit(CompositorCommand::FocusWorkspace(1))
+            .unwrap_err();
+        assert!(matches!(err, CompositorCommandError::Unavailable { .. }));
+        let telem = broker.telemetry();
+        assert_eq!(telem.rejected_unavailable, 1);
+        assert_eq!(telem.accepted, 0);
+
+        // Transition to Ready and exercise unsupported admission.
+        broker.update_connection(
+            CompositorConnection::Ready,
+            CompositorCapabilities {
+                can_create_workspace: false,
+                ..CompositorCapabilities::default()
+            },
+        );
+        assert!(matches!(
+            broker.submit(CompositorCommand::CreateWorkspace),
+            Err(CompositorCommandError::Unsupported)
+        ));
+
+        // Enable the normal command capabilities.
+        broker.update_connection(
+            CompositorConnection::Ready,
+            CompositorCapabilities::default(),
+        );
+
+        // Submit successful command
+        let t1 = broker.submit(CompositorCommand::FocusWorkspace(1)).unwrap();
+        assert!(t1.wait_timeout(Duration::from_secs(1)).is_ok());
+
+        // Submit failing command
+        let t2 = broker
+            .submit(CompositorCommand::FocusWorkspace(999))
+            .unwrap();
+        assert!(t2.wait_timeout(Duration::from_secs(1)).is_err());
+
+        let telem2 = broker.telemetry();
+        assert_eq!(telem2.accepted, 2);
+        assert_eq!(telem2.succeeded, 1);
+        assert_eq!(telem2.backend_failed, 1);
+        assert_eq!(telem2.rejected_unsupported, 1);
+        assert!(telem2.last_latency_ms.is_some());
+        assert!(telem2.avg_latency_ms.is_some());
+
+        // Test reconnect transition counter
+        broker.update_connection(
+            CompositorConnection::Reconnecting {
+                attempt: 1,
+                last_error: Some("test error".into()),
+            },
+            CompositorCapabilities::default(),
+        );
+        let telem3 = broker.telemetry();
+        assert_eq!(telem3.reconnect_transitions, 1);
+    }
+
+    #[test]
+    fn test_telemetry_tracks_queue_busy_and_cancellation() {
+        let _guard = serial_guard();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let executor: CommandExecutorFn = Box::new(move |cmd, _timeout, _cancel, _register| {
+            if matches!(cmd, CompositorCommand::FocusWorkspace(1)) {
+                started_tx.send(()).unwrap();
+                thread::sleep(Duration::from_millis(100));
+            }
+            Ok(())
+        });
+        let broker = CompositorCommandBroker::new(
+            BrokerOptions {
+                timeout: Duration::from_secs(1),
+                max_queue_len: 1,
+            },
+            executor,
+        );
+        broker.update_connection(
+            CompositorConnection::Ready,
+            CompositorCapabilities::default(),
+        );
+
+        let t1 = broker.submit(CompositorCommand::FocusWorkspace(1)).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let mut t2 = broker.submit(CompositorCommand::FocusWorkspace(2)).unwrap();
+        assert!(matches!(
+            broker.submit(CompositorCommand::FocusWorkspace(3)),
+            Err(CompositorCommandError::Busy { .. })
+        ));
+
+        let during = broker.telemetry();
+        assert_eq!(during.current_queue_depth, 1);
+        assert!(during.in_flight);
+        assert_eq!(during.rejected_busy, 1);
+
+        t2.cancel();
+        assert!(t1.wait_timeout(Duration::from_secs(1)).is_ok());
+        assert!(matches!(
+            t2.wait_timeout(Duration::from_secs(1)),
+            Err(CompositorCommandError::Cancelled {
+                reason: CancellationReason::User
+            })
+        ));
+
+        let after = broker.telemetry();
+        assert_eq!(after.current_queue_depth, 0);
+        assert!(!after.in_flight);
+        assert_eq!(after.cancelled, 1);
     }
 }

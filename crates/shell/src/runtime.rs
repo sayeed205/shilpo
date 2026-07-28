@@ -1168,6 +1168,10 @@ impl ShellRuntime {
             compositor_revision: snapshot.revision,
             compositor_reconnect_attempt: attempt,
             compositor_last_error: last_err,
+            compositor_telemetry: self
+                .service_hub
+                .as_ref()
+                .map(|h| h.compositor.command_broker().telemetry()),
             battery_service_available: shilpo_services::BatteryService::new().is_ok(),
             audio_service_available: shilpo_services::AudioService::new().is_ok(),
             network_service_available: shilpo_services::NetworkService::new().is_ok(),
@@ -2189,12 +2193,12 @@ impl ShellRuntime {
                     .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
                 Ok(crate::actions::ActionResult::Compositor(ticket))
             }
-            ActionInvocation::CreateWorkspace(name) => {
+            ActionInvocation::CreateWorkspace => {
                 let comp = Self::compositor(cx)
                     .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
                 let ticket = comp
                     .command_broker()
-                    .submit(CompositorCommand::CreateWorkspace { name })
+                    .submit(CompositorCommand::CreateWorkspace)
                     .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
                 Ok(crate::actions::ActionResult::Compositor(ticket))
             }
@@ -2341,8 +2345,8 @@ impl ShellRuntime {
                         CompositorCommand::FocusWorkspace(id) => {
                             Self::dispatch_action(cx, ActionInvocation::FocusWorkspace(id))
                         }
-                        CompositorCommand::CreateWorkspace { name } => {
-                            Self::dispatch_action(cx, ActionInvocation::CreateWorkspace(name))
+                        CompositorCommand::CreateWorkspace => {
+                            Self::dispatch_action(cx, ActionInvocation::CreateWorkspace)
                         }
                         CompositorCommand::MoveWindowToWorkspace {
                             window_id,

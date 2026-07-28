@@ -45,6 +45,20 @@ pub use screen_capture::{RecordMode, ScreenCaptureInfo, ScreenCaptureService, Sc
 pub use tray::{TrayItem, TrayMenuItem, TrayService};
 pub use upower::{BatteryInfo, BatteryService};
 
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    static SERIAL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    pub(crate) fn serial_guard() -> MutexGuard<'static, ()> {
+        SERIAL_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
 /// Returns whether Niri Wayland compositor IPC is supported on this target platform.
 pub fn is_niri_supported() -> bool {
     cfg!(target_os = "linux")

@@ -68,7 +68,7 @@ pub enum ReadinessState {
     Failed,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ServiceHealth {
     pub compositor_connected: bool,
     #[serde(default)]
@@ -79,6 +79,8 @@ pub struct ServiceHealth {
     pub compositor_reconnect_attempt: u32,
     #[serde(default)]
     pub compositor_last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compositor_telemetry: Option<crate::compositor::CompositorBrokerTelemetry>,
     pub battery_service_available: bool,
     pub audio_service_available: bool,
     pub network_service_available: bool,
@@ -87,7 +89,7 @@ pub struct ServiceHealth {
     pub uptime_seconds: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct IpcStatus {
     pub running: bool,
     pub readiness: ReadinessState,
@@ -98,7 +100,7 @@ pub struct IpcStatus {
     pub health: ServiceHealth,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "value")]
 pub enum IpcResult {
     Accepted,
@@ -691,7 +693,11 @@ fn handle_client(
     let result = if is_status {
         Some(IpcResult::Status(status.lock().unwrap().clone()))
     } else if is_telemetry {
-        Some(IpcResult::Telemetry(status.lock().unwrap().health.clone()))
+        let mut health = status.lock().unwrap().health.clone();
+        if let Some(b) = broker.lock().unwrap().as_ref() {
+            health.compositor_telemetry = Some(b.telemetry());
+        }
+        Some(IpcResult::Telemetry(health))
     } else if is_compositor {
         if let IpcRequest::Compositor(ref cmd) = env.request {
             let b = broker.lock().unwrap().clone();
@@ -742,6 +748,10 @@ fn handle_client(
 mod tests {
     use super::*;
 
+    fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::test_support::serial_guard()
+    }
+
     fn fixture() -> (PathBuf, PathBuf) {
         let dir = env::temp_dir().join(format!("shilpo-ipc-test-{}", rand_id()));
         fs::create_dir_all(&dir).unwrap();
@@ -760,6 +770,7 @@ mod tests {
 
     #[test]
     fn get_status_returns_current_snapshot() {
+        let _guard = serial_guard();
         let (root, path) = fixture();
         let server = ShellIpcServer::new_at(&root, &path).unwrap();
 
@@ -769,6 +780,7 @@ mod tests {
             compositor_revision: 1,
             compositor_reconnect_attempt: 0,
             compositor_last_error: None,
+            compositor_telemetry: None,
             battery_service_available: true,
             audio_service_available: true,
             network_service_available: true,
@@ -808,6 +820,7 @@ mod tests {
 
     #[test]
     fn get_telemetry_returns_health() {
+        let _guard = serial_guard();
         let (root, path) = fixture();
         let server = ShellIpcServer::new_at(&root, &path).unwrap();
 
@@ -817,6 +830,7 @@ mod tests {
             compositor_revision: 1,
             compositor_reconnect_attempt: 0,
             compositor_last_error: None,
+            compositor_telemetry: None,
             battery_service_available: true,
             audio_service_available: true,
             network_service_available: true,
@@ -841,6 +855,7 @@ mod tests {
 
     #[test]
     fn compositor_command_is_rejected_while_disconnected() {
+        let _guard = serial_guard();
         let (root, path) = fixture();
         let server = ShellIpcServer::new_at(&root, &path).unwrap();
 
@@ -862,6 +877,7 @@ mod tests {
 
     #[test]
     fn compositor_command_succeeds_with_attached_broker() {
+        let _guard = serial_guard();
         let (root, path) = fixture();
         let server = ShellIpcServer::new_at(&root, &path).unwrap();
 
@@ -884,12 +900,24 @@ mod tests {
 
         assert!(response.ok);
         assert_eq!(response.result, Some(IpcResult::CommandCompleted));
+
+        let telemetry = ShellIpcServer::send_command_at(&path, IpcRequest::GetTelemetry).unwrap();
+        let Some(IpcResult::Telemetry(health)) = telemetry.result else {
+            panic!("expected telemetry response");
+        };
+        let broker_telemetry = health
+            .compositor_telemetry
+            .expect("attached broker telemetry");
+        assert_eq!(broker_telemetry.accepted, 1);
+        assert_eq!(broker_telemetry.succeeded, 1);
+
         drop(server);
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn frame_limits_are_bounded() {
+        let _guard = serial_guard();
         let mut bytes = Vec::new();
         write_frame(&mut bytes, &[1]).unwrap();
         assert_eq!(read_frame(&mut bytes.as_slice()).unwrap(), vec![1]);
@@ -900,6 +928,7 @@ mod tests {
 
     #[test]
     fn status_wire_fields_are_stable() {
+        let _guard = serial_guard();
         let status = IpcStatus {
             running: true,
             readiness: ReadinessState::Degraded,
@@ -912,6 +941,7 @@ mod tests {
                 compositor_revision: 1,
                 compositor_reconnect_attempt: 0,
                 compositor_last_error: None,
+                compositor_telemetry: None,
                 battery_service_available: false,
                 audio_service_available: true,
                 network_service_available: true,
@@ -932,6 +962,7 @@ mod tests {
 
     #[test]
     fn live_instance_and_non_socket_are_not_removed() {
+        let _guard = serial_guard();
         let (root, path) = fixture();
         let server = ShellIpcServer::new_at(&root, &path).unwrap();
         assert!(matches!(
@@ -948,6 +979,7 @@ mod tests {
 
     #[test]
     fn test_ipc_server_high_concurrency_bench() {
+        let _guard = serial_guard();
         let (root, path) = fixture();
         let server = ShellIpcServer::new_at(&root, &path).unwrap();
 

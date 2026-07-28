@@ -3,8 +3,8 @@ pub mod niri;
 pub mod test_adapter;
 
 pub use broker::{
-    BrokerOptions, CancellationReason, CommandCancellation, CommandTicket, CompositorCommandBroker,
-    CompositorCommandError,
+    BrokerOptions, CancellationReason, CommandCancellation, CommandTicket,
+    CompositorBrokerTelemetry, CompositorCommandBroker, CompositorCommandError,
 };
 pub use niri::NiriCompositorService;
 pub use test_adapter::TestCompositorAdapter;
@@ -135,14 +135,8 @@ pub enum CompositorCommand {
     FocusWorkspace(u64),
     FocusWindow(u64),
     FocusPreviousWindow,
-    CreateWorkspace {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
-    },
-    MoveWindowToWorkspace {
-        window_id: u64,
-        workspace_id: u64,
-    },
+    CreateWorkspace,
+    MoveWindowToWorkspace { window_id: u64, workspace_id: u64 },
 }
 
 /// Compositor-agnostic interface for window managers and shell integrations.

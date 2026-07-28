@@ -65,8 +65,11 @@ async fn main() {
                     IpcRequest::Compositor(CompositorCommand::FocusPreviousWindow)
                 }
                 "create-workspace" => {
-                    let name = args.get(3).cloned();
-                    IpcRequest::Compositor(CompositorCommand::CreateWorkspace { name })
+                    if args.len() > 3 {
+                        eprintln!("Usage: shilpo msg create-workspace");
+                        std::process::exit(1);
+                    }
+                    IpcRequest::Compositor(CompositorCommand::CreateWorkspace)
                 }
                 "move-window-to-workspace" => {
                     let win_id = args.get(3).and_then(|s| s.parse::<u64>().ok());
@@ -159,6 +162,8 @@ async fn main() {
                 }
             };
 
+            let is_json = args.iter().any(|a| a == "--json");
+
             match ShellIpcServer::send_command(req) {
                 Ok(resp) => {
                     if !resp.ok {
@@ -180,16 +185,50 @@ async fn main() {
                             status.control_center_visible,
                             status.health
                         ),
-                        Some(IpcResult::Telemetry(health)) => println!(
-                            "compositor_connected={} battery={} audio={} network={} notification={} heed={} uptime={}s",
-                            health.compositor_connected,
-                            health.battery_service_available,
-                            health.audio_service_available,
-                            health.network_service_available,
-                            health.notification_service_available,
-                            health.heed_store_available,
-                            health.uptime_seconds
-                        ),
+                        Some(IpcResult::Telemetry(health)) => {
+                            if is_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&health).unwrap_or_default()
+                                );
+                            } else {
+                                println!("Service Health & Broker Telemetry:");
+                                println!("  Compositor Connected: {}", health.compositor_connected);
+                                println!("  Compositor State: {}", health.compositor_state);
+                                println!("  Compositor Revision: {}", health.compositor_revision);
+                                println!("  Uptime: {}s", health.uptime_seconds);
+                                if let Some(telem) = health.compositor_telemetry {
+                                    println!("  Broker Telemetry:");
+                                    println!("    Accepted: {}", telem.accepted);
+                                    println!("    Succeeded: {}", telem.succeeded);
+                                    println!("    Backend Failed: {}", telem.backend_failed);
+                                    println!("    Transport Failed: {}", telem.transport_failed);
+                                    println!("    Timed Out: {}", telem.timed_out);
+                                    println!("    Cancelled: {}", telem.cancelled);
+                                    println!(
+                                        "    Rejected (Unavailable): {}",
+                                        telem.rejected_unavailable
+                                    );
+                                    println!("    Rejected (Busy): {}", telem.rejected_busy);
+                                    println!(
+                                        "    Rejected (Unsupported): {}",
+                                        telem.rejected_unsupported
+                                    );
+                                    println!(
+                                        "    Reconnect Transitions: {}",
+                                        telem.reconnect_transitions
+                                    );
+                                    println!("    Queue Depth: {}", telem.current_queue_depth);
+                                    println!("    In Flight: {}", telem.in_flight);
+                                    if let Some(last) = telem.last_latency_ms {
+                                        println!("    Last Latency: {:.2}ms", last);
+                                    }
+                                    if let Some(avg) = telem.avg_latency_ms {
+                                        println!("    Average Latency: {:.2}ms", avg);
+                                    }
+                                }
+                            }
+                        }
                         None => println!("Accepted"),
                     }
                 }

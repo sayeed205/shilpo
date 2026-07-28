@@ -173,7 +173,7 @@ pub enum ActionInvocation {
     ToggleBar,
     ToggleOverview,
     FocusWorkspace(u64),
-    CreateWorkspace(Option<String>),
+    CreateWorkspace,
     MoveWindowToWorkspace {
         window_id: u64,
         workspace_id: u64,
@@ -201,7 +201,7 @@ impl ActionInvocation {
             Self::ToggleBar => ActionId::ToggleBar,
             Self::ToggleOverview => ActionId::ToggleOverview,
             Self::FocusWorkspace(_) => ActionId::FocusWorkspace,
-            Self::CreateWorkspace(_) => ActionId::CreateWorkspace,
+            Self::CreateWorkspace => ActionId::CreateWorkspace,
             Self::MoveWindowToWorkspace { .. } => ActionId::MoveWindowToWorkspace,
             Self::ReloadConfig => ActionId::ReloadConfig,
             Self::Quit => ActionId::Quit,
@@ -241,7 +241,7 @@ impl From<ActionId> for ActionInvocation {
         } else if id == ActionId::FocusWorkspace {
             Self::FocusWorkspace(1)
         } else if id == ActionId::CreateWorkspace {
-            Self::CreateWorkspace(None)
+            Self::CreateWorkspace
         } else if id == ActionId::MoveWindowToWorkspace {
             Self::MoveWindowToWorkspace {
                 window_id: 0,

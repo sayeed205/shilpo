@@ -144,8 +144,28 @@ fn execute_niri_command(
             });
         }
     };
+    execute_niri_command_on_socket(&socket_path, command, timeout, cancel, register_cancel)
+}
 
-    let stream = match UnixStream::connect(&socket_path) {
+fn execute_niri_command_on_socket(
+    socket_path: &std::path::Path,
+    command: &CompositorCommand,
+    timeout: Duration,
+    cancel: Arc<CommandCancellation>,
+    register_cancel: &dyn Fn(Arc<dyn StreamCancelHandle>),
+) -> Result<(), CompositorCommandError> {
+    let start_time = std::time::Instant::now();
+    let deadline = start_time + timeout;
+
+    let remaining_timeout = || -> Result<Duration, CompositorCommandError> {
+        deadline
+            .checked_duration_since(std::time::Instant::now())
+            .ok_or(CompositorCommandError::Timeout { duration: timeout })
+    };
+
+    let remaining = remaining_timeout()?;
+
+    let stream = match UnixStream::connect(socket_path) {
         Ok(s) => s,
         Err(err) => {
             return Err(CompositorCommandError::Transport {
@@ -157,8 +177,8 @@ fn execute_niri_command(
         }
     };
 
-    let _ = stream.set_read_timeout(Some(timeout));
-    let _ = stream.set_write_timeout(Some(timeout));
+    let _ = stream.set_read_timeout(Some(remaining));
+    let _ = stream.set_write_timeout(Some(remaining));
 
     let cancel_stream = match stream.try_clone() {
         Ok(s) => s,
@@ -171,96 +191,221 @@ fn execute_niri_command(
 
     register_cancel(create_stream_cancel_handle(cancel_stream));
 
-    let req = match command {
+    let send_request =
+        |stream: &mut UnixStream, req: &Request| -> Result<Reply, CompositorCommandError> {
+            let current_rem = remaining_timeout()?;
+            let _ = stream.set_read_timeout(Some(current_rem));
+            let _ = stream.set_write_timeout(Some(current_rem));
+
+            let mut json = match serde_json::to_string(req) {
+                Ok(j) => j,
+                Err(err) => {
+                    return Err(CompositorCommandError::Transport {
+                        message: err.to_string(),
+                    });
+                }
+            };
+            json.push('\n');
+
+            if let Err(err) = stream.write_all(json.as_bytes()) {
+                if cancel.is_cancelled() {
+                    return Err(CompositorCommandError::Cancelled {
+                        reason: cancel.reason().unwrap_or(CancellationReason::User),
+                    });
+                }
+                if err.kind() == std::io::ErrorKind::TimedOut
+                    || err.kind() == std::io::ErrorKind::WouldBlock
+                {
+                    return Err(CompositorCommandError::Timeout { duration: timeout });
+                }
+                return Err(CompositorCommandError::Transport {
+                    message: err.to_string(),
+                });
+            }
+
+            let mut reader = BufReader::new(&*stream);
+            let mut line = String::new();
+            if let Err(err) = reader.read_line(&mut line) {
+                if cancel.is_cancelled() {
+                    return Err(CompositorCommandError::Cancelled {
+                        reason: cancel.reason().unwrap_or(CancellationReason::User),
+                    });
+                }
+                if err.kind() == std::io::ErrorKind::TimedOut
+                    || err.kind() == std::io::ErrorKind::WouldBlock
+                {
+                    return Err(CompositorCommandError::Timeout { duration: timeout });
+                }
+                return Err(CompositorCommandError::Transport {
+                    message: err.to_string(),
+                });
+            }
+
+            if line.is_empty() {
+                return Err(CompositorCommandError::Transport {
+                    message: "niri socket closed unexpectedly (EOF)".into(),
+                });
+            }
+
+            let reply: Reply = match serde_json::from_str(&line) {
+                Ok(r) => r,
+                Err(err) => {
+                    return Err(CompositorCommandError::Transport {
+                        message: format!("malformed reply from niri: {err}"),
+                    });
+                }
+            };
+
+            Ok(reply)
+        };
+
+    let mut stream_writer = stream;
+
+    match command {
         CompositorCommand::FocusWorkspace(id) => {
-            Request::Action(niri_ipc::Action::FocusWorkspace {
+            let req = Request::Action(niri_ipc::Action::FocusWorkspace {
                 reference: niri_ipc::WorkspaceReferenceArg::Id(*id),
-            })
+            });
+            let reply = send_request(&mut stream_writer, &req)?;
+            match reply {
+                Ok(Response::Handled) => Ok(()),
+                Ok(resp) => Err(CompositorCommandError::BackendRejected {
+                    message: format!("unexpected niri response: {resp:?}"),
+                }),
+                Err(err) => Err(CompositorCommandError::BackendRejected {
+                    message: err.to_string(),
+                }),
+            }
         }
         CompositorCommand::FocusWindow(id) => {
-            Request::Action(niri_ipc::Action::FocusWindow { id: *id })
+            let req = Request::Action(niri_ipc::Action::FocusWindow { id: *id });
+            let reply = send_request(&mut stream_writer, &req)?;
+            match reply {
+                Ok(Response::Handled) => Ok(()),
+                Ok(resp) => Err(CompositorCommandError::BackendRejected {
+                    message: format!("unexpected niri response: {resp:?}"),
+                }),
+                Err(err) => Err(CompositorCommandError::BackendRejected {
+                    message: err.to_string(),
+                }),
+            }
         }
         CompositorCommand::FocusPreviousWindow => {
-            Request::Action(niri_ipc::Action::FocusWindowPrevious {})
-        }
-        CompositorCommand::CreateWorkspace { name: None } => {
-            Request::Action(niri_ipc::Action::FocusWorkspaceDown {})
-        }
-        CompositorCommand::CreateWorkspace { name: Some(_) } => {
-            return Err(CompositorCommandError::Unsupported);
+            let req = Request::Action(niri_ipc::Action::FocusWindowPrevious {});
+            let reply = send_request(&mut stream_writer, &req)?;
+            match reply {
+                Ok(Response::Handled) => Ok(()),
+                Ok(resp) => Err(CompositorCommandError::BackendRejected {
+                    message: format!("unexpected niri response: {resp:?}"),
+                }),
+                Err(err) => Err(CompositorCommandError::BackendRejected {
+                    message: err.to_string(),
+                }),
+            }
         }
         CompositorCommand::MoveWindowToWorkspace {
             window_id,
             workspace_id,
-        } => Request::Action(niri_ipc::Action::MoveWindowToWorkspace {
-            window_id: Some(*window_id),
-            reference: niri_ipc::WorkspaceReferenceArg::Id(*workspace_id),
-            focus: true,
-        }),
-    };
-
-    let mut json = match serde_json::to_string(&req) {
-        Ok(j) => j,
-        Err(err) => {
-            return Err(CompositorCommandError::Transport {
-                message: err.to_string(),
+        } => {
+            let req = Request::Action(niri_ipc::Action::MoveWindowToWorkspace {
+                window_id: Some(*window_id),
+                reference: niri_ipc::WorkspaceReferenceArg::Id(*workspace_id),
+                focus: true,
             });
+            let reply = send_request(&mut stream_writer, &req)?;
+            match reply {
+                Ok(Response::Handled) => Ok(()),
+                Ok(resp) => Err(CompositorCommandError::BackendRejected {
+                    message: format!("unexpected niri response: {resp:?}"),
+                }),
+                Err(err) => Err(CompositorCommandError::BackendRejected {
+                    message: err.to_string(),
+                }),
+            }
         }
-    };
-    json.push('\n');
+        CompositorCommand::CreateWorkspace => {
+            let ws_reply = send_request(&mut stream_writer, &Request::Workspaces)?;
+            let workspaces = match ws_reply {
+                Ok(Response::Workspaces(ws)) => ws,
+                Ok(resp) => {
+                    return Err(CompositorCommandError::BackendRejected {
+                        message: format!("unexpected response to Workspaces query: {resp:?}"),
+                    });
+                }
+                Err(err) => {
+                    return Err(CompositorCommandError::BackendRejected {
+                        message: format!("failed to query workspaces: {err}"),
+                    });
+                }
+            };
 
-    let mut stream_writer = stream;
-    if let Err(err) = stream_writer.write_all(json.as_bytes()) {
-        if cancel.is_cancelled() {
-            return Err(CompositorCommandError::Cancelled {
-                reason: cancel.reason().unwrap_or(CancellationReason::User),
-            });
-        }
-        if err.kind() == std::io::ErrorKind::TimedOut
-            || err.kind() == std::io::ErrorKind::WouldBlock
-        {
-            return Err(CompositorCommandError::Timeout { duration: timeout });
-        }
-        return Err(CompositorCommandError::Transport {
-            message: err.to_string(),
-        });
-    }
+            let win_reply = send_request(&mut stream_writer, &Request::Windows)?;
+            let windows = match win_reply {
+                Ok(Response::Windows(win)) => win,
+                Ok(resp) => {
+                    return Err(CompositorCommandError::BackendRejected {
+                        message: format!("unexpected response to Windows query: {resp:?}"),
+                    });
+                }
+                Err(err) => {
+                    return Err(CompositorCommandError::BackendRejected {
+                        message: format!("failed to query windows: {err}"),
+                    });
+                }
+            };
 
-    let mut reader = BufReader::new(&stream_writer);
-    let mut line = String::new();
-    if let Err(err) = reader.read_line(&mut line) {
-        if cancel.is_cancelled() {
-            return Err(CompositorCommandError::Cancelled {
-                reason: cancel.reason().unwrap_or(CancellationReason::User),
-            });
-        }
-        if err.kind() == std::io::ErrorKind::TimedOut
-            || err.kind() == std::io::ErrorKind::WouldBlock
-        {
-            return Err(CompositorCommandError::Timeout { duration: timeout });
-        }
-        return Err(CompositorCommandError::Transport {
-            message: err.to_string(),
-        });
-    }
+            let focused_ws = workspaces.iter().find(|w| w.is_focused);
+            let focused_output = match focused_ws.and_then(|w| w.output.as_ref()) {
+                Some(o) => o,
+                None => {
+                    return Err(CompositorCommandError::BackendRejected {
+                        message: "no focused workspace/output found".into(),
+                    });
+                }
+            };
 
-    let reply: Reply = match serde_json::from_str(&line) {
-        Ok(r) => r,
-        Err(err) => {
-            return Err(CompositorCommandError::Transport {
-                message: format!("malformed reply from niri: {err}"),
-            });
-        }
-    };
+            let output_workspaces: Vec<_> = workspaces
+                .iter()
+                .filter(|w| w.output.as_ref() == Some(focused_output))
+                .collect();
 
-    match reply {
-        Ok(Response::Handled) => Ok(()),
-        Ok(resp) => Err(CompositorCommandError::BackendRejected {
-            message: format!("unexpected niri response: {resp:?}"),
-        }),
-        Err(err) => Err(CompositorCommandError::BackendRejected {
-            message: err.to_string(),
-        }),
+            let empty_workspaces: Vec<_> = output_workspaces
+                .into_iter()
+                .filter(|w| {
+                    w.name.is_none() && !windows.iter().any(|win| win.workspace_id == Some(w.id))
+                })
+                .collect();
+
+            let target_ws = empty_workspaces.into_iter().max_by_key(|w| w.idx);
+
+            match target_ws {
+                Some(ws) => {
+                    if ws.is_focused {
+                        Ok(())
+                    } else {
+                        let focus_req = Request::Action(niri_ipc::Action::FocusWorkspace {
+                            reference: niri_ipc::WorkspaceReferenceArg::Id(ws.id),
+                        });
+                        let reply = send_request(&mut stream_writer, &focus_req)?;
+                        match reply {
+                            Ok(Response::Handled) => Ok(()),
+                            Ok(resp) => Err(CompositorCommandError::BackendRejected {
+                                message: format!(
+                                    "unexpected response focusing empty workspace: {resp:?}"
+                                ),
+                            }),
+                            Err(err) => Err(CompositorCommandError::BackendRejected {
+                                message: err.to_string(),
+                            }),
+                        }
+                    }
+                }
+                None => Err(CompositorCommandError::BackendRejected {
+                    message: "No eligible trailing empty workspace available on focused output"
+                        .into(),
+                }),
+            }
+        }
     }
 }
 
@@ -624,5 +769,490 @@ fn publish_snapshot_from_state(
             new_snapshot.capabilities.clone(),
         );
         let _ = tx.send(Arc::new(new_snapshot));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+
+    struct TempSocketDir {
+        path: PathBuf,
+    }
+
+    impl TempSocketDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "fake-niri-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let _ = std::fs::create_dir_all(&path);
+            Self { path }
+        }
+    }
+
+    impl Drop for TempSocketDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    struct FakeNiriServer {
+        _dir: TempSocketDir,
+        socket_path: PathBuf,
+        stop_flag: Arc<AtomicBool>,
+        thread: Option<thread::JoinHandle<()>>,
+        requests: Arc<Mutex<Vec<Request>>>,
+    }
+
+    impl FakeNiriServer {
+        fn start<F>(handler: F) -> Self
+        where
+            F: Fn(Request, usize) -> Option<String> + Send + Sync + 'static,
+        {
+            let dir = TempSocketDir::new();
+            let socket_path = dir.path.join("niri.sock");
+            let listener = UnixListener::bind(&socket_path).unwrap();
+            listener.set_nonblocking(true).unwrap();
+
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            let stop_clone = stop_flag.clone();
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let requests_clone = requests.clone();
+
+            let thread = thread::spawn(move || {
+                let mut req_counter = 0usize;
+                while !stop_clone.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+                            let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
+                            let mut writer = stream.try_clone().unwrap();
+                            let mut reader = BufReader::new(stream);
+                            loop {
+                                let mut line = String::new();
+                                match reader.read_line(&mut line) {
+                                    Ok(0) => break,
+                                    Ok(_) if line.trim().is_empty() => continue,
+                                    Ok(_) => {
+                                        req_counter += 1;
+                                        if let Ok(req) = serde_json::from_str::<Request>(&line) {
+                                            requests_clone.lock().unwrap().push(req.clone());
+                                            if let Some(reply_str) = handler(req, req_counter) {
+                                                let mut resp_str = reply_str;
+                                                resp_str.push('\n');
+                                                if writer.write_all(resp_str.as_bytes()).is_err() {
+                                                    break;
+                                                }
+                                            } else {
+                                                break;
+                                            }
+                                        } else {
+                                            let _ = writer.write_all(b"NOT_VALID_JSON\n");
+                                            break;
+                                        }
+                                    }
+                                    Err(e)
+                                        if e.kind() == std::io::ErrorKind::WouldBlock
+                                            || e.kind() == std::io::ErrorKind::TimedOut =>
+                                    {
+                                        continue;
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+
+            Self {
+                _dir: dir,
+                socket_path,
+                stop_flag,
+                thread: Some(thread),
+                requests,
+            }
+        }
+
+        fn requests(&self) -> Vec<Request> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl Drop for FakeNiriServer {
+        fn drop(&mut self) {
+            self.stop_flag.store(true, Ordering::Relaxed);
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
+        }
+    }
+
+    type StreamCancelRegisterFn = Box<dyn Fn(Arc<dyn StreamCancelHandle>)>;
+
+    fn dummy_cancel() -> (Arc<CommandCancellation>, StreamCancelRegisterFn) {
+        let cancel = CommandCancellation::new();
+        let dummy_reg = Box::new(|_: Arc<dyn StreamCancelHandle>| {});
+        (cancel, dummy_reg)
+    }
+
+    fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::test_support::serial_guard()
+    }
+
+    fn req_json(req: &Request) -> String {
+        serde_json::to_string(req).unwrap()
+    }
+
+    #[test]
+    fn test_fake_niri_focus_workspace_mapping() {
+        let _guard = serial_guard();
+        let server = FakeNiriServer::start(|_req, _| {
+            Some(serde_json::to_string(&Reply::Ok(Response::Handled)).unwrap())
+        });
+        let (cancel, reg) = dummy_cancel();
+
+        let res = execute_niri_command_on_socket(
+            &server.socket_path,
+            &CompositorCommand::FocusWorkspace(42),
+            Duration::from_secs(1),
+            cancel,
+            &reg,
+        );
+        assert!(res.is_ok());
+
+        let reqs = server.requests();
+        assert_eq!(reqs.len(), 1);
+        let expected = Request::Action(niri_ipc::Action::FocusWorkspace {
+            reference: niri_ipc::WorkspaceReferenceArg::Id(42),
+        });
+        assert_eq!(req_json(&reqs[0]), req_json(&expected));
+    }
+
+    #[test]
+    fn test_fake_niri_focus_window_and_previous_mapping() {
+        let _guard = serial_guard();
+        let server = FakeNiriServer::start(|_req, _| {
+            Some(serde_json::to_string(&Reply::Ok(Response::Handled)).unwrap())
+        });
+        let (cancel1, reg1) = dummy_cancel();
+        let (cancel2, reg2) = dummy_cancel();
+
+        let res1 = execute_niri_command_on_socket(
+            &server.socket_path,
+            &CompositorCommand::FocusWindow(101),
+            Duration::from_secs(1),
+            cancel1,
+            &reg1,
+        );
+        assert!(res1.is_ok());
+
+        let res2 = execute_niri_command_on_socket(
+            &server.socket_path,
+            &CompositorCommand::FocusPreviousWindow,
+            Duration::from_secs(1),
+            cancel2,
+            &reg2,
+        );
+        assert!(res2.is_ok());
+
+        let reqs = server.requests();
+        assert_eq!(reqs.len(), 2);
+        let expected1 = Request::Action(niri_ipc::Action::FocusWindow { id: 101 });
+        let expected2 = Request::Action(niri_ipc::Action::FocusWindowPrevious {});
+        assert_eq!(req_json(&reqs[0]), req_json(&expected1));
+        assert_eq!(req_json(&reqs[1]), req_json(&expected2));
+    }
+
+    #[test]
+    fn test_fake_niri_move_window_mapping() {
+        let _guard = serial_guard();
+        let server = FakeNiriServer::start(|_req, _| {
+            Some(serde_json::to_string(&Reply::Ok(Response::Handled)).unwrap())
+        });
+        let (cancel, reg) = dummy_cancel();
+
+        let res = execute_niri_command_on_socket(
+            &server.socket_path,
+            &CompositorCommand::MoveWindowToWorkspace {
+                window_id: 10,
+                workspace_id: 20,
+            },
+            Duration::from_secs(1),
+            cancel,
+            &reg,
+        );
+        assert!(res.is_ok());
+
+        let reqs = server.requests();
+        assert_eq!(reqs.len(), 1);
+        let expected = Request::Action(niri_ipc::Action::MoveWindowToWorkspace {
+            window_id: Some(10),
+            reference: niri_ipc::WorkspaceReferenceArg::Id(20),
+            focus: true,
+        });
+        assert_eq!(req_json(&reqs[0]), req_json(&expected));
+    }
+
+    #[test]
+    fn test_fake_niri_create_workspace_activation() {
+        let _guard = serial_guard();
+        let server = FakeNiriServer::start(|req, _| match req {
+            Request::Workspaces => {
+                let ws = vec![
+                    niri_ipc::Workspace {
+                        id: 1,
+                        name: None,
+                        output: Some("DP-1".into()),
+                        is_active: true,
+                        is_focused: true,
+                        is_urgent: false,
+                        idx: 1,
+                        active_window_id: Some(100),
+                    },
+                    niri_ipc::Workspace {
+                        id: 2,
+                        name: Some("Notes".into()),
+                        output: Some("DP-1".into()),
+                        is_active: false,
+                        is_focused: false,
+                        is_urgent: false,
+                        idx: 2,
+                        active_window_id: None,
+                    },
+                    niri_ipc::Workspace {
+                        id: 3,
+                        name: None,
+                        output: Some("DP-1".into()),
+                        is_active: false,
+                        is_focused: false,
+                        is_urgent: false,
+                        idx: 3,
+                        active_window_id: None,
+                    },
+                ];
+                Some(serde_json::to_string(&Reply::Ok(Response::Workspaces(ws))).unwrap())
+            }
+            Request::Windows => {
+                let win_json = r#"[{"id":100,"title":"Terminal","app_id":"alacritty","workspace_id":1,"is_focused":true,"is_floating":false,"is_urgent":false,"focus_timestamp":null,"pid":null,"layout":{"tile_size":[1.0,1.0],"window_size":[800,600],"window_offset_in_tile":[0,0]}}]"#;
+                let win: Vec<niri_ipc::Window> = serde_json::from_str(win_json).unwrap();
+                Some(serde_json::to_string(&Reply::Ok(Response::Windows(win))).unwrap())
+            }
+            Request::Action(niri_ipc::Action::FocusWorkspace { .. }) => {
+                Some(serde_json::to_string(&Reply::Ok(Response::Handled)).unwrap())
+            }
+            _ => None,
+        });
+
+        let (cancel, reg) = dummy_cancel();
+        let res = execute_niri_command_on_socket(
+            &server.socket_path,
+            &CompositorCommand::CreateWorkspace,
+            Duration::from_secs(1),
+            cancel,
+            &reg,
+        );
+        assert!(res.is_ok());
+
+        let reqs = server.requests();
+        assert_eq!(reqs.len(), 3);
+        assert_eq!(req_json(&reqs[0]), req_json(&Request::Workspaces));
+        assert_eq!(req_json(&reqs[1]), req_json(&Request::Windows));
+        let expected_action = Request::Action(niri_ipc::Action::FocusWorkspace {
+            reference: niri_ipc::WorkspaceReferenceArg::Id(3),
+        });
+        assert_eq!(req_json(&reqs[2]), req_json(&expected_action));
+    }
+
+    #[test]
+    fn test_fake_niri_backend_rejection() {
+        let _guard = serial_guard();
+        let server = FakeNiriServer::start(|_req, _| {
+            Some(serde_json::to_string(&Reply::Err("niri rejected action".into())).unwrap())
+        });
+        let (cancel, reg) = dummy_cancel();
+
+        let res = execute_niri_command_on_socket(
+            &server.socket_path,
+            &CompositorCommand::FocusWorkspace(1),
+            Duration::from_secs(1),
+            cancel,
+            &reg,
+        );
+        assert!(matches!(
+            res,
+            Err(CompositorCommandError::BackendRejected { .. })
+        ));
+    }
+
+    #[test]
+    fn test_fake_niri_malformed_reply() {
+        let _guard = serial_guard();
+        let server = FakeNiriServer::start(|_req, _| Some("NOT_VALID_JSON".into()));
+        let (cancel, reg) = dummy_cancel();
+
+        let res = execute_niri_command_on_socket(
+            &server.socket_path,
+            &CompositorCommand::FocusWorkspace(1),
+            Duration::from_secs(1),
+            cancel,
+            &reg,
+        );
+        assert!(matches!(res, Err(CompositorCommandError::Transport { .. })));
+    }
+
+    #[test]
+    fn test_fake_niri_disconnect_reply() {
+        let _guard = serial_guard();
+        let server = FakeNiriServer::start(|_req, _| None);
+        let (cancel, reg) = dummy_cancel();
+
+        let res = execute_niri_command_on_socket(
+            &server.socket_path,
+            &CompositorCommand::FocusWorkspace(1),
+            Duration::from_secs(1),
+            cancel,
+            &reg,
+        );
+        assert!(matches!(res, Err(CompositorCommandError::Transport { .. })));
+    }
+
+    #[test]
+    fn test_fake_niri_timeout_uses_command_deadline() {
+        let _guard = serial_guard();
+        let server = FakeNiriServer::start(|_req, _| {
+            thread::sleep(Duration::from_millis(300));
+            Some(serde_json::to_string(&Reply::Ok(Response::Handled)).unwrap())
+        });
+        let (cancel, reg) = dummy_cancel();
+
+        let res = execute_niri_command_on_socket(
+            &server.socket_path,
+            &CompositorCommand::FocusWorkspace(1),
+            Duration::from_millis(50),
+            cancel,
+            &reg,
+        );
+        assert!(matches!(res, Err(CompositorCommandError::Timeout { .. })));
+    }
+
+    #[test]
+    fn test_fake_niri_recovers_after_backend_failure() {
+        let _guard = serial_guard();
+        let call_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = call_count.clone();
+        let server = FakeNiriServer::start(move |_req, _| {
+            if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                Some(serde_json::to_string(&Reply::Err("first failure".into())).unwrap())
+            } else {
+                Some(serde_json::to_string(&Reply::Ok(Response::Handled)).unwrap())
+            }
+        });
+
+        let (cancel1, reg1) = dummy_cancel();
+        let first = execute_niri_command_on_socket(
+            &server.socket_path,
+            &CompositorCommand::FocusWorkspace(1),
+            Duration::from_secs(1),
+            cancel1,
+            &reg1,
+        );
+        assert!(matches!(
+            first,
+            Err(CompositorCommandError::BackendRejected { .. })
+        ));
+
+        let (cancel2, reg2) = dummy_cancel();
+        let second = execute_niri_command_on_socket(
+            &server.socket_path,
+            &CompositorCommand::FocusWorkspace(1),
+            Duration::from_secs(1),
+            cancel2,
+            &reg2,
+        );
+        assert!(second.is_ok());
+    }
+
+    #[test]
+    fn test_broker_cancels_active_niri_command() {
+        let _guard = serial_guard();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let server = FakeNiriServer::start(move |_req, _| {
+            started_tx.send(()).unwrap();
+            thread::sleep(Duration::from_millis(500));
+            Some(serde_json::to_string(&Reply::Ok(Response::Handled)).unwrap())
+        });
+        let socket_path = server.socket_path.clone();
+        let executor: crate::compositor::broker::CommandExecutorFn =
+            Box::new(move |cmd, timeout, cancel, register| {
+                execute_niri_command_on_socket(&socket_path, cmd, timeout, cancel, register)
+            });
+        let broker = CompositorCommandBroker::new(
+            BrokerOptions {
+                timeout: Duration::from_secs(1),
+                max_queue_len: 4,
+            },
+            executor,
+        );
+        broker.update_connection(
+            CompositorConnection::Ready,
+            CompositorCapabilities::default(),
+        );
+
+        let mut ticket = broker.submit(CompositorCommand::FocusWorkspace(1)).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        ticket.cancel();
+        assert!(matches!(
+            ticket.wait_timeout(Duration::from_secs(1)),
+            Err(CompositorCommandError::Cancelled {
+                reason: CancellationReason::User
+            })
+        ));
+    }
+
+    #[test]
+    fn test_broker_reconnect_interrupts_active_niri_command() {
+        let _guard = serial_guard();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let server = FakeNiriServer::start(move |_req, _| {
+            started_tx.send(()).unwrap();
+            thread::sleep(Duration::from_millis(500));
+            Some(serde_json::to_string(&Reply::Ok(Response::Handled)).unwrap())
+        });
+        let socket_path = server.socket_path.clone();
+        let executor: crate::compositor::broker::CommandExecutorFn =
+            Box::new(move |cmd, timeout, cancel, register| {
+                execute_niri_command_on_socket(&socket_path, cmd, timeout, cancel, register)
+            });
+        let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
+        broker.update_connection(
+            CompositorConnection::Ready,
+            CompositorCapabilities::default(),
+        );
+
+        let ticket = broker.submit(CompositorCommand::FocusWorkspace(1)).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        broker.update_connection(
+            CompositorConnection::Reconnecting {
+                attempt: 1,
+                last_error: Some("test".into()),
+            },
+            CompositorCapabilities::default(),
+        );
+        assert!(matches!(
+            ticket.wait_timeout(Duration::from_secs(1)),
+            Err(CompositorCommandError::Cancelled {
+                reason: CancellationReason::Reconnect
+            })
+        ));
     }
 }
