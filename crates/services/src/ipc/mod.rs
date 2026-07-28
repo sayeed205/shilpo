@@ -65,6 +65,14 @@ pub enum ReadinessState {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServiceHealth {
     pub compositor_connected: bool,
+    #[serde(default)]
+    pub compositor_state: String,
+    #[serde(default)]
+    pub compositor_revision: u64,
+    #[serde(default)]
+    pub compositor_reconnect_attempt: u32,
+    #[serde(default)]
+    pub compositor_last_error: Option<String>,
     pub battery_service_available: bool,
     pub audio_service_available: bool,
     pub network_service_available: bool,
@@ -564,19 +572,26 @@ fn handle_client(
     }
     let is_status = matches!(&env.request, IpcRequest::GetStatus);
     let is_telemetry = matches!(&env.request, IpcRequest::GetTelemetry);
+    let compositor_unavailable = matches!(&env.request, IpcRequest::FocusWorkspace(_))
+        && !status.lock().unwrap().health.compositor_connected;
     let queue_full = !is_status && !is_telemetry && pending.lock().unwrap().len() >= MAX_QUEUE;
     let result = if is_status {
         Some(IpcResult::Status(status.lock().unwrap().clone()))
     } else if is_telemetry {
         Some(IpcResult::Telemetry(status.lock().unwrap().health.clone()))
-    } else if queue_full {
+    } else if compositor_unavailable || queue_full {
         None
     } else {
         let mut q = pending.lock().unwrap();
         q.push_back(env.request);
         Some(IpcResult::Accepted)
     };
-    let err = if queue_full {
+    let err = if compositor_unavailable {
+        Some(IpcErrorBody {
+            code: "compositor_unavailable".into(),
+            message: "compositor is not connected; command was not queued".into(),
+        })
+    } else if queue_full {
         Some(IpcErrorBody {
             code: "busy".into(),
             message: "request queue full".into(),
@@ -674,6 +689,24 @@ mod tests {
     }
 
     #[test]
+    fn compositor_command_is_rejected_while_disconnected() {
+        let (root, path) = fixture();
+        let server = ShellIpcServer::new_at(&root, &path).unwrap();
+
+        let response =
+            ShellIpcServer::send_command_at(&path, IpcRequest::FocusWorkspace(1)).unwrap();
+
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_ref().map(|error| error.code.as_str()),
+            Some("compositor_unavailable")
+        );
+        assert!(server.pop_pending_requests().is_empty());
+        drop(server);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn frame_limits_are_bounded() {
         let mut bytes = Vec::new();
         write_frame(&mut bytes, &[1]).unwrap();
@@ -693,6 +726,10 @@ mod tests {
             control_center_visible: true,
             health: ServiceHealth {
                 compositor_connected: true,
+                compositor_state: "ready".into(),
+                compositor_revision: 1,
+                compositor_reconnect_attempt: 0,
+                compositor_last_error: None,
                 battery_service_available: false,
                 audio_service_available: true,
                 network_service_available: true,

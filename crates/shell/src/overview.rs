@@ -3,8 +3,9 @@ use gpui::{
     App, AppContext, Context, ElementId, Entity, InteractiveElement, IntoElement, ParentElement,
     Render, SharedString, Styled, Window, div, px,
 };
-use shilpo_services::{WindowInfo, WorkspaceInfo};
+use shilpo_services::{CompositorSnapshot, WindowInfo, WorkspaceInfo};
 use shilpo_ui::{ActiveTheme, StyledExt};
+use std::sync::Arc;
 
 /// Interactive Niri horizontal workspace column overview surface.
 pub struct WorkspaceOverview {
@@ -33,6 +34,14 @@ impl WorkspaceOverview {
         }
     }
 
+    pub fn new_from_snapshot(snapshot: Arc<CompositorSnapshot>) -> Self {
+        Self::new(
+            snapshot.workspaces.clone(),
+            snapshot.windows.clone(),
+            snapshot.focused_workspace_id,
+        )
+    }
+
     /// Creates an offline/empty WorkspaceOverview for testing.
     pub fn new_offline() -> Self {
         Self::new(
@@ -44,6 +53,8 @@ impl WorkspaceOverview {
                     is_active: true,
                     is_focused: true,
                     is_urgent: false,
+                    output_name: Some("HDMI-1".into()),
+                    active_window_id: Some(101),
                 },
                 WorkspaceInfo {
                     id: 2,
@@ -52,6 +63,8 @@ impl WorkspaceOverview {
                     is_active: false,
                     is_focused: false,
                     is_urgent: false,
+                    output_name: Some("HDMI-1".into()),
+                    active_window_id: None,
                 },
             ],
             vec![WindowInfo {
@@ -60,9 +73,25 @@ impl WorkspaceOverview {
                 app_id: Some("foot".into()),
                 workspace_id: Some(1),
                 is_focused: true,
+                is_floating: false,
+                is_urgent: false,
             }],
             Some(1),
         )
+    }
+
+    pub fn update_snapshot(&mut self, snapshot: Arc<CompositorSnapshot>, cx: &mut Context<Self>) {
+        self.workspaces = snapshot.workspaces.clone();
+        self.windows = snapshot.windows.clone();
+        self.active_workspace_id = snapshot.focused_workspace_id;
+        if !self
+            .windows
+            .iter()
+            .any(|w| Some(w.id) == self.selected_window_id)
+        {
+            self.selected_window_id = snapshot.focused_window_id;
+        }
+        cx.notify();
     }
 
     pub fn selected_window_id(&self) -> Option<u64> {
@@ -70,22 +99,15 @@ impl WorkspaceOverview {
     }
 
     pub fn view(window: &mut Window, cx: &mut App) -> Entity<shilpo_ui::Root> {
-        let (workspaces, windows, active_ws) = if let Some(niri) = ShellRuntime::niri(cx) {
-            use shilpo_services::CompositorAdapter;
-            let ws = CompositorAdapter::workspaces(&niri);
-            let win = CompositorAdapter::windows(&niri);
-            let active = ws.iter().find(|w| w.is_active).map(|w| w.id);
-            (ws, win, active)
-        } else {
-            (Vec::new(), Vec::new(), None)
-        };
+        let snapshot = ShellRuntime::compositor_snapshot(cx);
 
         window.on_window_should_close(cx, |_, cx| {
             ShellRuntime::forget_overview(cx);
             true
         });
 
-        let overview = cx.new(|_| Self::new(workspaces, windows, active_ws));
+        let overview = cx.new(|_| Self::new_from_snapshot(snapshot));
+        ShellRuntime::register_overview_entity(cx, overview.clone());
         cx.new(|cx| shilpo_ui::Root::new(overview, window, cx))
     }
 

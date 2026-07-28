@@ -764,25 +764,30 @@ impl ShellConfig {
         Ok(config)
     }
 
-    fn write_default(path: &Path) -> Result<Self, ConfigError> {
+    /// Persist this configuration atomically at `path`.
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<(), ConfigError> {
+        let path = path.as_ref().to_path_buf();
+        self.validate()?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|source| ConfigError::Io {
                 path: parent.into(),
                 source,
             })?;
         }
-        let config = Self::default();
         let text =
-            toml::to_string_pretty(&config).map_err(|source| ConfigError::Serialize { source })?;
+            toml::to_string_pretty(self).map_err(|source| ConfigError::Serialize { source })?;
         let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
         fs::write(&tmp, text).map_err(|source| ConfigError::Io {
             path: tmp.clone(),
             source,
         })?;
-        fs::rename(&tmp, path).map_err(|source| ConfigError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        fs::rename(&tmp, &path).map_err(|source| ConfigError::Io { path, source })?;
+        Ok(())
+    }
+
+    fn write_default(path: &Path) -> Result<Self, ConfigError> {
+        let config = Self::default();
+        config.save(path)?;
         Ok(config)
     }
 

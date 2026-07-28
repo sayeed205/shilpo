@@ -1,3 +1,4 @@
+use crate::actions::ActionInvocation;
 use crate::bar::service_worker::{self, ConfigUpdate, WorkerCommand, WorkerUpdate};
 use crate::runtime::ShellRuntime;
 use gpui::{
@@ -5,7 +6,7 @@ use gpui::{
     Render, Styled, Window, div, prelude::*, px,
 };
 use shilpo_config::{BarPosition, BarWidget, ShellConfig};
-use shilpo_services::{AudioInfo, BatteryInfo, NetworkInfo, NiriWorkspaceInfo, Notification};
+use shilpo_services::{AudioInfo, BatteryInfo, NetworkInfo, Notification};
 use shilpo_ui::{ActiveTheme, h_flex, v_flex};
 use std::time::Duration;
 
@@ -48,11 +49,12 @@ pub fn apply_config_theme(_config: &ShellConfig, _window: Option<&mut Window>, c
 pub struct BarView {
     pub config: ShellConfig,
     service_commands: service_worker::CommandSender,
-    workspaces: Vec<NiriWorkspaceInfo>,
     battery: BatteryInfo,
     audio: AudioInfo,
     network: NetworkInfo,
+    #[allow(dead_code)]
     app_id: String,
+    #[allow(dead_code)]
     active_title: String,
     #[allow(dead_code)]
     media_track: String,
@@ -67,14 +69,23 @@ impl BarView {
         self.last_service_update.elapsed() > std::time::Duration::from_secs(30)
     }
 
-    pub fn enqueue_request(&self, request: shilpo_services::IpcRequest) -> Result<(), String> {
-        let command = match request {
-            shilpo_services::IpcRequest::FocusWorkspace(id) => WorkerCommand::FocusWorkspace(id),
-            shilpo_services::IpcRequest::ReloadConfig => WorkerCommand::ReloadConfig,
-            _ => return Err("Unsupported bar command".into()),
-        };
-        service_worker::try_send_command(&self.service_commands, command)
-            .map_err(|e| format!("Failed to send worker command: {}", e))
+    pub fn enqueue_request(
+        &self,
+        request: shilpo_services::IpcRequest,
+        cx: &mut App,
+    ) -> Result<(), String> {
+        match request {
+            shilpo_services::IpcRequest::FocusWorkspace(id) => {
+                ShellRuntime::dispatch_action(cx, ActionInvocation::FocusWorkspace(id))
+                    .map_err(|error| error.to_string())
+            }
+            shilpo_services::IpcRequest::ReloadConfig => service_worker::try_send_command(
+                &self.service_commands,
+                WorkerCommand::ReloadConfig,
+            )
+            .map_err(|e| format!("Failed to send worker command: {}", e)),
+            _ => Err("Unsupported bar command".into()),
+        }
     }
 
     pub fn new_with_config(
@@ -94,30 +105,6 @@ impl BarView {
         // Dynamic theme synchronization with OS appearance and config
         apply_config_theme(&config, Some(window), cx);
 
-        let fallback_ws = vec![
-            NiriWorkspaceInfo {
-                id: 1,
-                name: Some("1".into()),
-                idx: 1,
-                is_active: true,
-                is_focused: true,
-            },
-            NiriWorkspaceInfo {
-                id: 2,
-                name: Some("2".into()),
-                idx: 2,
-                is_active: false,
-                is_focused: false,
-            },
-            NiriWorkspaceInfo {
-                id: 3,
-                name: Some("3".into()),
-                idx: 3,
-                is_active: false,
-                is_focused: false,
-            },
-        ];
-
         let service_commands = ShellRuntime::service_commands(cx).unwrap_or_else(|| {
             let (_, _, tx, _) = service_worker::channels();
             tx
@@ -126,7 +113,6 @@ impl BarView {
         Self {
             config,
             service_commands,
-            workspaces: fallback_ws,
             battery,
             audio,
             network,
@@ -173,18 +159,6 @@ impl BarView {
         self.last_service_update = std::time::Instant::now();
         let mut changed = false;
         match update {
-            WorkerUpdate::Workspaces(value) if &self.workspaces != value => {
-                self.workspaces = value.clone();
-                changed = true;
-            }
-            WorkerUpdate::ActiveTitle(value) if &self.active_title != value => {
-                self.active_title = value.clone();
-                changed = true;
-            }
-            WorkerUpdate::AppId(value) if &self.app_id != value => {
-                self.app_id = value.clone();
-                changed = true;
-            }
             WorkerUpdate::Battery(value) if &self.battery != value => {
                 self.battery = value.clone();
                 changed = true;
@@ -248,23 +222,38 @@ impl BarView {
         window: &mut Window,
         cx: &mut App,
     ) -> gpui::AnyElement {
+        use shilpo_config::{BarWidget, BuiltinBarWidget};
         let mut elements: Vec<gpui::AnyElement> = Vec::new();
 
         for (index, name) in widget_names.iter().enumerate() {
-            if let BarWidget::Extension(ext_ref) = name
-                && let Some(tree) = ShellRuntime::extension_view(cx, ext_ref)
-            {
-                let instance_id = self
-                    .extension_instance_prefix
-                    .as_ref()
-                    .map(|prefix| format!("{prefix}:{section_name}:{index}"));
-                elements.push(super::ext_view_adapter::render_ext_view_tree(
-                    ext_ref,
-                    instance_id.as_deref(),
-                    &tree,
-                    window,
-                    cx,
-                ));
+            match name {
+                BarWidget::Builtin(BuiltinBarWidget::Workspaces) => {
+                    let snapshot = ShellRuntime::compositor_snapshot(cx);
+                    elements.push(
+                        super::widgets::WorkspacesWidget::new(
+                            "workspaces",
+                            snapshot.workspaces.clone(),
+                            snapshot.connection.clone(),
+                        )
+                        .into_any_element(),
+                    );
+                }
+                BarWidget::Extension(ext_ref) => {
+                    if let Some(tree) = ShellRuntime::extension_view(cx, ext_ref) {
+                        let instance_id = self
+                            .extension_instance_prefix
+                            .as_ref()
+                            .map(|prefix| format!("{prefix}:{section_name}:{index}"));
+                        elements.push(super::ext_view_adapter::render_ext_view_tree(
+                            ext_ref,
+                            instance_id.as_deref(),
+                            &tree,
+                            window,
+                            cx,
+                        ));
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -314,8 +303,6 @@ impl BarView {
                     BarPosition::Top => {
                         let y0 = bounds.origin.y.as_f32() + bar_height.as_f32();
 
-                        // Left inverse corner (below bar at x=0, y=bar_height)
-                        // Filled shape: (0, y0) -> (0, y0 + r) -> arc centered at (r, y0 + r) to (r, y0) -> (0, y0)
                         let x0 = bounds.origin.x.as_f32();
                         if let Some(path) = build_hug_corner(
                             point(px(x0), px(y0)),
@@ -327,8 +314,6 @@ impl BarView {
                             window.paint_path(path, bg_color);
                         }
 
-                        // Right inverse corner (below bar at x=width, y=bar_height)
-                        // Filled shape: (width, y0) -> (width, y0 + r) -> arc centered at (width - r, y0 + r) to (width - r, y0) -> (width, y0)
                         let x1 = bounds.origin.x.as_f32() + bounds.size.width.as_f32();
                         if let Some(path) = build_hug_corner(
                             point(px(x1), px(y0)),
@@ -344,7 +329,6 @@ impl BarView {
                         let y0 = bounds.origin.y.as_f32() + bounds.size.height.as_f32()
                             - bar_height.as_f32();
 
-                        // Left inverse corner (above bar at x=0, y=y0)
                         let x0 = bounds.origin.x.as_f32();
                         if let Some(path) = build_hug_corner(
                             point(px(x0), px(y0)),
@@ -356,7 +340,6 @@ impl BarView {
                             window.paint_path(path, bg_color);
                         }
 
-                        // Right inverse corner (above bar at x=width, y=y0)
                         let x1 = bounds.origin.x.as_f32() + bounds.size.width.as_f32();
                         if let Some(path) = build_hug_corner(
                             point(px(x1), px(y0)),
@@ -373,7 +356,6 @@ impl BarView {
                         let y0 = bounds.origin.y.as_f32();
                         let y1 = bounds.origin.y.as_f32() + bounds.size.height.as_f32();
 
-                        // Top-right inverse corner (right of bar at x0, y0)
                         if let Some(path) = build_hug_corner(
                             point(px(x0), px(y0)),
                             point(px(x0 + r), px(y0)),
@@ -384,7 +366,6 @@ impl BarView {
                             window.paint_path(path, bg_color);
                         }
 
-                        // Bottom-right inverse corner (right of bar at x0, y1)
                         if let Some(path) = build_hug_corner(
                             point(px(x0), px(y1)),
                             point(px(x0 + r), px(y1)),
@@ -401,7 +382,6 @@ impl BarView {
                         let y0 = bounds.origin.y.as_f32();
                         let y1 = bounds.origin.y.as_f32() + bounds.size.height.as_f32();
 
-                        // Top-left inverse corner (left of bar at x0, y0)
                         if let Some(path) = build_hug_corner(
                             point(px(x0), px(y0)),
                             point(px(x0 - r), px(y0)),
@@ -412,7 +392,6 @@ impl BarView {
                             window.paint_path(path, bg_color);
                         }
 
-                        // Bottom-left inverse corner (left of bar at x0, y1)
                         if let Some(path) = build_hug_corner(
                             point(px(x0), px(y1)),
                             point(px(x0 - r), px(y1)),
@@ -442,7 +421,15 @@ impl Render for BarView {
             BarPosition::Left | BarPosition::Right
         );
         let opacity = self.config.bar.opacity.clamp(0.0, 1.0);
-        let bg_color = cx.theme().surface_container_high.opacity(opacity);
+        let compositor_stale = !ShellRuntime::compositor_snapshot(cx).connection.is_ready();
+        let bg_color = cx
+            .theme()
+            .surface_container_high
+            .opacity(if compositor_stale {
+                opacity * 0.65
+            } else {
+                opacity
+            });
         let widgets = self.config.bar.widgets.clone();
         let is_floating = style == BarStyle::Float;
         let start = self.build_section("start", &widgets.start, side, is_floating, window, cx);

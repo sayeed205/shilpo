@@ -1151,7 +1151,8 @@ impl Render for ControlCenterView {
                                                 .role(Role::Button)
                                                 .cursor_pointer()
                                                 .on_click(cx.listener(move |_, _, _, cx| {
-                                                    ShellRuntime::focus_workspace(cx, ws_id);
+                                                    let _ =
+                                                        ShellRuntime::focus_workspace(cx, ws_id);
                                                 }))
                                                 .px_3()
                                                 .py_1p5()

@@ -27,6 +27,7 @@ pub struct WallpaperTaskResult {
 pub struct ThemeDaemon {
     state: ThemeState,
     adapter: Arc<dyn DesktopAdapter>,
+    config_path: PathBuf,
     wallpaper_dir: PathBuf,
     actor_rx: mpsc::UnboundedReceiver<ActorMessage>,
     portal_rx: mpsc::UnboundedReceiver<Option<ThemeMode>>,
@@ -53,15 +54,9 @@ impl ThemeDaemon {
                     cfg.theme.gtk_theme_light,
                     cfg.theme.gtk_theme_dark,
                     cfg.theme.custom_adapter_cmd,
-                    cfg.desktop.wallpaper_dir,
+                    Some(cfg.desktop.wallpaper_dir),
                 ),
-                Err(_) => (
-                    None,
-                    None,
-                    None,
-                    None,
-                    PathBuf::from("~/Pictures/Wallpapers"),
-                ),
+                Err(_) => (None, None, None, None, None),
             };
 
         let adapter: Arc<dyn DesktopAdapter> = Arc::from(select_desktop_adapter(
@@ -71,11 +66,7 @@ impl ThemeDaemon {
             custom_argv,
         ));
 
-        let persisted_state = read_state_snapshot();
-        let mut initial_state = persisted_state.clone().unwrap_or_default();
-        if persisted_state.is_none() {
-            initial_state.wallpaper_dir = expand_tilde(&configured_wp_dir);
-        }
+        let initial_state = initial_state(read_state_snapshot(), configured_wp_dir.as_deref());
 
         let service = ThemeDbusService::new(actor_tx);
         let conn = Builder::session()?
@@ -92,6 +83,7 @@ impl ThemeDaemon {
         let daemon = Self {
             state: initial_state,
             adapter,
+            config_path,
             wallpaper_dir,
             actor_rx,
             portal_rx,
@@ -183,8 +175,18 @@ impl ThemeDaemon {
             ActorMessage::SetWallpaperDirectory(dir_str, reply) => {
                 let dir = expand_tilde(Path::new(&dir_str));
                 let result = if dir.is_dir() {
-                    self.process_command(ThemeCommand::SetWallpaperDirectory(dir))
-                        .await
+                    let result = self
+                        .process_command(ThemeCommand::SetWallpaperDirectory(dir.clone()))
+                        .await;
+                    match result {
+                        Ok(state) => {
+                            self.wallpaper_dir = state.wallpaper_dir.clone();
+                            self.persist_wallpaper_directory_config(&dir)
+                                .map(|_| Ok(state))
+                                .unwrap_or_else(Err)
+                        }
+                        Err(error) => Err(error),
+                    }
                 } else {
                     Err(format!(
                         "Wallpaper directory does not exist: {}",
@@ -196,17 +198,22 @@ impl ThemeDaemon {
                 }
                 let _ = reply.send(result);
             }
-            ActorMessage::SetRandomWallpaper(reply) => {
-                if let Some(path) = self.pick_random_wallpaper() {
-                    self.spawn_wallpaper_task(path, reply);
-                } else {
-                    let _ = reply.send(Err(format!(
-                        "No wallpapers found in {}",
-                        self.wallpaper_dir.display()
-                    )));
+            ActorMessage::SetRandomWallpaper(reply) => match self.pick_random_wallpaper() {
+                Ok(path) => self.spawn_wallpaper_task(path, reply),
+                Err(error) => {
+                    let _ = reply.send(Err(error));
                 }
-            }
+            },
         }
+    }
+
+    fn persist_wallpaper_directory_config(&self, dir: &Path) -> Result<(), String> {
+        let mut config = ShellConfig::load_or_create(&self.config_path)
+            .map_err(|error| format!("Failed to load shell config: {error}"))?;
+        config.desktop.wallpaper_dir = dir.to_path_buf();
+        config
+            .save(&self.config_path)
+            .map_err(|error| format!("Failed to persist wallpaper directory: {error}"))
     }
 
     fn spawn_wallpaper_task(
@@ -249,23 +256,29 @@ impl ThemeDaemon {
                 }
             };
 
-            let awww_ok = tokio::task::spawn_blocking({
+            let awww_result = tokio::task::spawn_blocking({
                 let path = path.clone();
                 move || {
                     std::process::Command::new("awww")
                         .arg("img")
                         .arg(&path)
                         .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false)
                 }
             })
-            .await
-            .unwrap_or(false);
+            .await;
 
-            debug!(op_id, awww_ok, "Wallpaper awww invocation completed");
+            let error = match awww_result {
+                Ok(Ok(status)) if status.success() => None,
+                Ok(Ok(status)) => Some(format!("awww exited with status {status}")),
+                Ok(Err(error)) => Some(format!("Failed to execute awww: {error}")),
+                Err(error) => Some(format!("Wallpaper backend task failed: {error}")),
+            };
 
-            let error = (!awww_ok).then(|| "Wallpaper backend failed".to_string());
+            debug!(
+                op_id,
+                success = error.is_none(),
+                "Wallpaper awww invocation completed"
+            );
             let _ = tx.send(WallpaperTaskResult {
                 op_id,
                 path,
@@ -350,27 +363,34 @@ impl ThemeDaemon {
         Ok(self.state.clone())
     }
 
-    fn pick_random_wallpaper(&self) -> Option<PathBuf> {
+    fn pick_random_wallpaper(&self) -> Result<PathBuf, String> {
         let mut wallpapers = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&self.wallpaper_dir) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.is_file()
-                    && p.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
-                        matches!(ext.to_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp")
-                    })
-                {
-                    wallpapers.push(p);
-                }
+        let entries = std::fs::read_dir(&self.wallpaper_dir).map_err(|error| {
+            format!(
+                "Cannot read wallpaper directory {}: {error}",
+                self.wallpaper_dir.display()
+            )
+        })?;
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file()
+                && p.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
+                    matches!(ext.to_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp")
+                })
+            {
+                wallpapers.push(p);
             }
         }
         if wallpapers.is_empty() {
-            return None;
+            return Err(format!(
+                "No supported wallpapers found in {} (expected png, jpg, jpeg, or webp)",
+                self.wallpaper_dir.display()
+            ));
         }
 
         let idx = (chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default() as usize)
             % wallpapers.len();
-        Some(wallpapers[idx].clone())
+        Ok(wallpapers[idx].clone())
     }
 }
 
@@ -383,6 +403,16 @@ fn expand_tilde(path: &Path) -> PathBuf {
     } else {
         path.to_path_buf()
     }
+}
+
+fn initial_state(persisted: Option<ThemeState>, configured_wp_dir: Option<&Path>) -> ThemeState {
+    let mut state = persisted.unwrap_or_default();
+    if let Some(configured_wp_dir) = configured_wp_dir {
+        state.wallpaper_dir = expand_tilde(configured_wp_dir);
+    } else {
+        state.wallpaper_dir = expand_tilde(&state.wallpaper_dir);
+    }
+    state
 }
 
 fn extract_seed_from_file(path: &Path) -> anyhow::Result<u32> {
@@ -410,4 +440,23 @@ fn extract_seed_from_file(path: &Path) -> anyhow::Result<u32> {
         .first()
         .copied()
         .ok_or_else(|| anyhow::anyhow!("Wallpaper contains no colorful pixels"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::initial_state;
+    use crate::state::ThemeState;
+    use std::path::Path;
+
+    #[test]
+    fn configured_wallpaper_directory_overrides_persisted_snapshot() {
+        let persisted = ThemeState {
+            wallpaper_dir: "/old/wallpapers".into(),
+            ..ThemeState::default()
+        };
+
+        let state = initial_state(Some(persisted), Some(Path::new("/configured/wallpapers")));
+
+        assert_eq!(state.wallpaper_dir, Path::new("/configured/wallpapers"));
+    }
 }

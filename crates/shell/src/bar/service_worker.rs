@@ -2,7 +2,6 @@ use gpui::BackgroundExecutor;
 use shilpo_config::ShellConfig;
 use shilpo_services::{
     AudioInfo, AudioService, BatteryInfo, BatteryService, NetworkInfo, NetworkService,
-    NiriCompositorService, NiriWorkspaceInfo,
 };
 use std::{
     path::PathBuf,
@@ -17,7 +16,6 @@ pub type CommandReceiver = mpsc::Receiver<WorkerCommand>;
 
 #[derive(Debug)]
 pub enum WorkerCommand {
-    FocusWorkspace(u64),
     ReloadConfig,
 }
 
@@ -29,9 +27,6 @@ pub enum ConfigUpdate {
 
 #[derive(Debug, Clone)]
 pub enum WorkerUpdate {
-    Workspaces(Vec<NiriWorkspaceInfo>),
-    ActiveTitle(String),
-    AppId(String),
     Battery(BatteryInfo),
     Audio(AudioInfo),
     Network(NetworkInfo),
@@ -51,13 +46,11 @@ pub fn try_send_command(
     sender.try_send(command)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     executor: BackgroundExecutor,
     updates: UpdateSender,
     commands: CommandReceiver,
     config_path: PathBuf,
-    niri: Option<NiriCompositorService>,
     battery: Option<BatteryService>,
     audio: Option<AudioService>,
     network: Option<NetworkService>,
@@ -69,7 +62,6 @@ pub fn spawn(
             updates,
             commands,
             config_path,
-            niri,
             battery,
             audio,
             network,
@@ -78,20 +70,15 @@ pub fn spawn(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run(
     executor: BackgroundExecutor,
     updates: UpdateSender,
     commands: CommandReceiver,
     config_path: PathBuf,
-    niri: Option<NiriCompositorService>,
     battery: Option<BatteryService>,
     audio: Option<AudioService>,
     network: Option<NetworkService>,
 ) {
-    let mut workspaces = None;
-    let mut title = None;
-    let mut app_id = None;
     let mut battery_last = None;
     let mut audio_last = None;
     let mut network_last = None;
@@ -106,13 +93,6 @@ async fn run(
     loop {
         while let Ok(command) = commands.try_recv() {
             match command {
-                WorkerCommand::FocusWorkspace(id) => {
-                    if let Some(service) = &niri
-                        && let Err(error) = service.focus_workspace(id)
-                    {
-                        tracing::warn!(error = %error, workspace_id = id, "failed to focus Niri workspace");
-                    }
-                }
                 WorkerCommand::ReloadConfig => {
                     pending_reload = Some(Instant::now());
                 }
@@ -125,52 +105,7 @@ async fn run(
                 return;
             }
         }
-        if let Some(service) = &niri {
-            if !send_changed(
-                &updates,
-                &mut workspaces,
-                service.workspaces(),
-                WorkerUpdate::Workspaces,
-            ) {
-                return;
-            }
-            if !send_changed(
-                &updates,
-                &mut title,
-                service.active_window_title().unwrap_or_default(),
-                WorkerUpdate::ActiveTitle,
-            ) {
-                return;
-            }
-            if !send_changed(
-                &updates,
-                &mut app_id,
-                service.app_id().unwrap_or_default(),
-                WorkerUpdate::AppId,
-            ) {
-                return;
-            }
-        } else if workspaces.is_none() {
-            if !send_changed(
-                &updates,
-                &mut workspaces,
-                Vec::new(),
-                WorkerUpdate::Workspaces,
-            ) {
-                return;
-            }
-            if !send_changed(
-                &updates,
-                &mut title,
-                String::new(),
-                WorkerUpdate::ActiveTitle,
-            ) {
-                return;
-            }
-            if !send_changed(&updates, &mut app_id, String::new(), WorkerUpdate::AppId) {
-                return;
-            }
-        }
+
         if !sample_device(
             &updates,
             &mut audio_last,
@@ -246,6 +181,7 @@ fn sample_device<T: Clone + PartialEq + Default>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn device_cadence_is_initial_and_three_seconds() {
         assert_eq!(
@@ -253,6 +189,7 @@ mod tests {
             vec![0, 30]
         );
     }
+
     #[test]
     fn changed_update_includes_unavailable_transition() {
         let (tx, rx) = mpsc::sync_channel(4);

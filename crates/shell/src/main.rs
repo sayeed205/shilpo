@@ -217,7 +217,6 @@ async fn main() {
         let displays = cx.displays();
         if !displays.is_empty() {
             ShellRuntime::sync_displays(cx);
-            ShellRuntime::mark_ready(cx);
         } else {
             schedule_bar_retry(cx, config);
         }
@@ -237,7 +236,6 @@ fn schedule_bar_retry(cx: &App, config: ShellConfig) {
                     return false;
                 }
                 ShellRuntime::sync_displays(cx);
-                ShellRuntime::mark_ready(cx);
                 true
             });
             if opened {
@@ -253,7 +251,6 @@ fn schedule_bar_retry(cx: &App, config: ShellConfig) {
                 &config.bar,
             );
             ShellRuntime::open_bar(cx, &geometry, false);
-            ShellRuntime::mark_degraded(cx);
         });
     })
     .detach();

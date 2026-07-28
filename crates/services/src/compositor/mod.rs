@@ -1,14 +1,68 @@
 pub mod niri;
+pub mod test_adapter;
 
-pub use niri::{NiriCompositorService, NiriWorkspaceInfo};
+pub use niri::NiriCompositorService;
+pub use test_adapter::TestCompositorAdapter;
+
+use std::sync::Arc;
+use tokio::sync::watch;
+
+/// Connection status of the compositor adapter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompositorConnection {
+    Connecting,
+    Ready,
+    Reconnecting {
+        attempt: u32,
+        last_error: Option<String>,
+    },
+    Stopped,
+}
+
+impl CompositorConnection {
+    pub fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready)
+    }
+
+    pub fn state_name(&self) -> &'static str {
+        match self {
+            Self::Connecting => "connecting",
+            Self::Ready => "ready",
+            Self::Reconnecting { .. } => "reconnecting",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+/// Compositor-neutral output metadata.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompositorOutput {
+    pub name: String,
+    pub make: Option<String>,
+    pub model: Option<String>,
+    pub logical_position: (i32, i32),
+    pub logical_size: (u32, u32),
+    pub scale: f64,
+}
 
 /// Compositor capabilities descriptor.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompositorCapabilities {
     pub can_create_workspace: bool,
     pub can_move_window: bool,
     pub can_focus_window: bool,
     pub can_focus_workspace: bool,
+}
+
+impl Default for CompositorCapabilities {
+    fn default() -> Self {
+        Self {
+            can_create_workspace: true,
+            can_move_window: true,
+            can_focus_window: true,
+            can_focus_workspace: true,
+        }
+    }
 }
 
 /// Generic workspace information.
@@ -20,6 +74,8 @@ pub struct WorkspaceInfo {
     pub is_active: bool,
     pub is_focused: bool,
     pub is_urgent: bool,
+    pub output_name: Option<String>,
+    pub active_window_id: Option<u64>,
 }
 
 /// Generic window information.
@@ -30,160 +86,89 @@ pub struct WindowInfo {
     pub app_id: Option<String>,
     pub workspace_id: Option<u64>,
     pub is_focused: bool,
+    pub is_floating: bool,
+    pub is_urgent: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CompositorCapability {
-    CreateWorkspace,
-    MoveWindow,
-    FocusWindow,
-    FocusWorkspace,
+/// Revisioned atomic snapshot of the compositor state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompositorSnapshot {
+    pub revision: u64,
+    pub connection: CompositorConnection,
+    pub capabilities: CompositorCapabilities,
+    pub outputs: Vec<CompositorOutput>,
+    pub workspaces: Vec<WorkspaceInfo>,
+    pub windows: Vec<WindowInfo>,
+    pub focused_output: Option<String>,
+    pub focused_workspace_id: Option<u64>,
+    pub focused_window_id: Option<u64>,
+    pub active_keyboard_layout: Option<String>,
+}
+
+impl Default for CompositorSnapshot {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            connection: CompositorConnection::Connecting,
+            capabilities: CompositorCapabilities::default(),
+            outputs: Vec::new(),
+            workspaces: Vec::new(),
+            windows: Vec::new(),
+            focused_output: None,
+            focused_workspace_id: None,
+            focused_window_id: None,
+            active_keyboard_layout: None,
+        }
+    }
+}
+
+/// Operations sent to the active compositor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompositorCommand {
+    FocusWorkspace(u64),
+    FocusWindow(u64),
+    FocusPreviousWindow,
+    CreateWorkspace { name: Option<String> },
+    MoveWindowToWorkspace { window_id: u64, workspace_id: u64 },
 }
 
 /// Compositor-agnostic interface for window managers and shell integrations.
 pub trait CompositorAdapter: Send + Sync {
-    fn capabilities(&self) -> CompositorCapabilities;
-    fn disabled_reason(&self, capability: CompositorCapability) -> Option<&'static str> {
-        let caps = self.capabilities();
-        match capability {
-            CompositorCapability::CreateWorkspace if !caps.can_create_workspace => {
-                Some("Workspace creation is not supported by the active compositor")
-            }
-            CompositorCapability::MoveWindow if !caps.can_move_window => {
-                Some("Moving windows is not supported by the active compositor")
-            }
-            CompositorCapability::FocusWindow if !caps.can_focus_window => {
-                Some("Focusing windows is not supported by the active compositor")
-            }
-            CompositorCapability::FocusWorkspace if !caps.can_focus_workspace => {
-                Some("Focusing workspaces is not supported by the active compositor")
-            }
-            _ => None,
-        }
-    }
-
-    fn workspaces(&self) -> Vec<WorkspaceInfo>;
-    fn windows(&self) -> Vec<WindowInfo>;
-    fn active_window_id(&self) -> Option<u64>;
-    fn active_window_title(&self) -> Option<String>;
-    fn app_id(&self) -> Option<String>;
-    fn keyboard_layout(&self) -> String;
-
-    fn focus_workspace(&self, id: u64) -> anyhow::Result<()>;
-    fn focus_window(&self, id: u64) -> anyhow::Result<()>;
-    fn create_workspace(&self, name: Option<String>) -> anyhow::Result<()>;
-    fn rename_workspace(&self, old_name: &str, new_name: &str) -> anyhow::Result<()>;
-    fn delete_workspace(&self, name: &str) -> anyhow::Result<()>;
-    fn move_window_to_workspace(&self, window_id: u64, workspace_id: u64) -> anyhow::Result<()>;
-    fn reorder_workspace(&self, id: u64, new_index: u8) -> anyhow::Result<()>;
-    fn move_workspace_to_output(&self, id: u64, output_name: &str) -> anyhow::Result<()>;
-    fn restore_compositor_session(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-    fn focus_previous_window(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
+    fn current(&self) -> Arc<CompositorSnapshot>;
+    fn subscribe(&self) -> watch::Receiver<Arc<CompositorSnapshot>>;
+    fn execute(&self, command: CompositorCommand) -> anyhow::Result<()>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    struct TestCompositor;
-    impl CompositorAdapter for TestCompositor {
-        fn capabilities(&self) -> CompositorCapabilities {
-            CompositorCapabilities {
-                can_create_workspace: false,
-                can_move_window: true,
-                can_focus_window: true,
-                can_focus_workspace: true,
-            }
-        }
-        fn workspaces(&self) -> Vec<WorkspaceInfo> {
-            Vec::new()
-        }
-        fn windows(&self) -> Vec<WindowInfo> {
-            Vec::new()
-        }
-        fn active_window_id(&self) -> Option<u64> {
-            None
-        }
-        fn active_window_title(&self) -> Option<String> {
-            None
-        }
-        fn app_id(&self) -> Option<String> {
-            None
-        }
-        fn keyboard_layout(&self) -> String {
-            "us".to_string()
-        }
-        fn focus_workspace(&self, _id: u64) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn focus_window(&self, _id: u64) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn create_workspace(&self, _name: Option<String>) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn rename_workspace(&self, _old: &str, _new: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn delete_workspace(&self, _name: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn move_window_to_workspace(&self, _w: u64, _ws: u64) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn reorder_workspace(&self, _id: u64, _new_index: u8) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn move_workspace_to_output(&self, _id: u64, _output_name: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
     #[test]
-    fn test_compositor_disabled_reason_feedback() {
-        let compositor = TestCompositor;
-        assert!(
-            compositor
-                .disabled_reason(CompositorCapability::CreateWorkspace)
-                .is_some()
+    fn test_test_compositor_adapter() {
+        let adapter = TestCompositorAdapter::new_default();
+        assert_eq!(
+            adapter.current().connection,
+            CompositorConnection::Connecting
         );
-        assert!(
-            compositor
-                .disabled_reason(CompositorCapability::MoveWindow)
-                .is_none()
-        );
-        assert!(compositor.restore_compositor_session().is_ok());
-    }
 
-    #[test]
-    fn test_compositor_state_mapping_and_unavailable_capability_behavior() {
-        let compositor = TestCompositor;
-        assert!(
-            compositor
-                .disabled_reason(CompositorCapability::FocusWindow)
-                .is_none()
-        );
-        assert!(
-            compositor
-                .disabled_reason(CompositorCapability::FocusWorkspace)
-                .is_none()
-        );
-        assert!(
-            compositor
-                .disabled_reason(CompositorCapability::CreateWorkspace)
-                .is_some()
-        );
-    }
+        let snapshot = CompositorSnapshot {
+            connection: CompositorConnection::Ready,
+            revision: 1,
+            ..Default::default()
+        };
+        adapter.update(snapshot);
 
-    #[test]
-    fn test_mockable_compositor_and_service_interfaces() {
-        let compositor = TestCompositor;
-        assert_eq!(compositor.workspaces().len(), 0);
-        assert_eq!(compositor.windows().len(), 0);
-        assert!(compositor.focus_previous_window().is_ok());
+        assert_eq!(adapter.current().connection, CompositorConnection::Ready);
+        assert_eq!(adapter.current().revision, 1);
+
+        assert!(
+            adapter
+                .execute(CompositorCommand::FocusWorkspace(1))
+                .is_ok()
+        );
+        assert_eq!(
+            adapter.executed_commands(),
+            vec![CompositorCommand::FocusWorkspace(1)]
+        );
     }
 }

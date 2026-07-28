@@ -42,38 +42,37 @@ impl DoctorChecker {
 
     /// Checks if Niri Wayland compositor IPC socket is accessible.
     pub fn check_niri_compositor(&self) -> DiagnosticItem {
-        let niri_socket = std::env::var("NIRI_SOCKET");
-        match niri_socket {
-            Ok(path) => {
-                if std::path::Path::new(&path).exists() {
-                    DiagnosticItem {
-                        category: "Compositor".into(),
-                        name: "Niri IPC Socket".into(),
-                        status: DiagnosticStatus::Pass,
-                        message: format!("Active socket found at {}", path),
-                        fix_applied: false,
-                    }
-                } else {
-                    DiagnosticItem {
-                        category: "Compositor".into(),
-                        name: "Niri IPC Socket".into(),
-                        status: DiagnosticStatus::Warn,
-                        message: format!(
-                            "$NIRI_SOCKET is set to {} but socket file does not exist",
-                            path
-                        ),
-                        fix_applied: false,
-                    }
+        if let Some(path) = shilpo_services::compositor::niri::resolve_niri_socket_path() {
+            if path.exists() {
+                DiagnosticItem {
+                    category: "Compositor".into(),
+                    name: "Niri IPC Socket".into(),
+                    status: DiagnosticStatus::Pass,
+                    message: format!("Active socket found at {}", path.display()),
+                    fix_applied: false,
+                }
+            } else {
+                DiagnosticItem {
+                    category: "Compositor".into(),
+                    name: "Niri IPC Socket".into(),
+                    status: DiagnosticStatus::Warn,
+                    message: format!(
+                        "Socket path set to {} but socket file does not exist",
+                        path.display()
+                    ),
+                    fix_applied: false,
                 }
             }
-            Err(_) => DiagnosticItem {
+        } else {
+            DiagnosticItem {
                 category: "Compositor".into(),
                 name: "Niri IPC Socket".into(),
                 status: DiagnosticStatus::Warn,
-                message: "$NIRI_SOCKET is not set (running in offline/headless fallback mode)"
+                message:
+                "Neither $NIRI_SOCKET nor $NIRI_SOCKET_PATH is set (running in offline/headless fallback mode)"
                     .into(),
                 fix_applied: false,
-            },
+            }
         }
     }
 

@@ -304,6 +304,10 @@ impl ActionRegistry {
         self.descriptors.get(id)
     }
 
+    pub fn descriptor_mut(&mut self, id: &ActionId) -> Option<&mut ActionDescriptor> {
+        self.descriptors.get_mut(id)
+    }
+
     pub fn register_extension(
         &mut self,
         id: CanonicalId,

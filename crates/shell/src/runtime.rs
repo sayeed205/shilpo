@@ -19,10 +19,13 @@ use std::collections::HashMap;
 
 use crate::bar::service_worker::{self, CommandSender, UpdateReceiver, WorkerCommand};
 use shilpo_services::{
-    AudioService, BatteryService, NetworkService, NiriCompositorService, NotificationService,
+    AudioService, BatteryService, CompositorAdapter, CompositorCommand, CompositorConnection,
+    CompositorOutput, CompositorSnapshot, NetworkService, NiriCompositorService,
+    NotificationService,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
+use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq)]
 struct ExtensionSurfaceSpec {
@@ -32,7 +35,7 @@ struct ExtensionSurfaceSpec {
 }
 
 pub struct ServiceHub {
-    pub niri: Option<NiriCompositorService>,
+    pub compositor: Arc<dyn CompositorAdapter>,
     pub notification: Option<NotificationService>,
     pub clipboard: shilpo_services::ClipboardService,
     pub app_scanner: shilpo_services::AppScanner,
@@ -46,7 +49,7 @@ pub struct ServiceHub {
 
 impl ServiceHub {
     pub fn new(executor: gpui::BackgroundExecutor, config_path: PathBuf) -> Self {
-        let niri = NiriCompositorService::new().ok();
+        let compositor: Arc<dyn CompositorAdapter> = NiriCompositorService::new();
         let battery = BatteryService::new().ok();
         let audio = AudioService::new().ok();
         let network = NetworkService::new().ok();
@@ -73,7 +76,6 @@ impl ServiceHub {
             updates_tx,
             commands_rx,
             config_path.clone(),
-            niri.clone(),
             battery,
             audio,
             network,
@@ -121,7 +123,7 @@ impl ServiceHub {
         };
 
         Self {
-            niri,
+            compositor,
             notification,
             clipboard,
             app_scanner,
@@ -151,6 +153,8 @@ pub struct ShellRuntime {
     launcher: Option<WindowHandle<shilpo_ui::Root>>,
     control_center: Option<WindowHandle<shilpo_ui::Root>>,
     overview: Option<WindowHandle<shilpo_ui::Root>>,
+    overview_entity: Option<Entity<crate::overview::WorkspaceOverview>>,
+    latest_snapshot: Arc<CompositorSnapshot>,
     notification: Option<(
         u64,
         u32,
@@ -184,6 +188,20 @@ pub struct ShellRuntime {
 impl Global for ShellRuntime {}
 
 impl ShellRuntime {
+    fn output_name_for_display(
+        display: &dyn gpui::PlatformDisplay,
+        compositor_outputs: &[CompositorOutput],
+    ) -> Option<String> {
+        let display_uuid = display.uuid().ok()?;
+        compositor_outputs
+            .iter()
+            .find(|output| {
+                Uuid::new_v5(&Uuid::NAMESPACE_DNS, output.name.as_bytes()) == display_uuid
+            })
+            .map(|output| output.name.clone())
+            .or_else(|| Some(display_uuid.to_string()))
+    }
+
     pub fn service_commands(cx: &App) -> Option<CommandSender> {
         if cx.has_global::<Self>() {
             cx.global::<Self>()
@@ -238,6 +256,10 @@ impl ShellRuntime {
             }
         };
 
+        let compositor = hub.compositor.clone();
+        let latest_snapshot = compositor.current();
+        let mut rx = compositor.subscribe();
+
         cx.set_global(Self {
             ipc_server,
             active_config,
@@ -248,6 +270,8 @@ impl ShellRuntime {
             launcher: None,
             control_center: None,
             overview: None,
+            overview_entity: None,
+            latest_snapshot: latest_snapshot.clone(),
             notification: None,
             notification_generation: 0,
             prior_window_id: None,
@@ -269,6 +293,17 @@ impl ShellRuntime {
             _window_closed: None,
             _ipc_task: cx.spawn(async |_| {}),
         });
+        Self::on_compositor_snapshot_changed(cx, latest_snapshot);
+
+        cx.spawn(async move |cx| {
+            while rx.changed().await.is_ok() {
+                let snapshot = rx.borrow().clone();
+                cx.update(|cx| {
+                    Self::on_compositor_snapshot_changed(cx, snapshot);
+                });
+            }
+        })
+        .detach();
 
         let subscription = cx.on_window_closed(|cx, window_id| {
             let runtime = cx.global_mut::<Self>();
@@ -918,6 +953,7 @@ impl ShellRuntime {
         };
 
         let primary_id = cx.primary_display().map(|d| d.id());
+        let compositor_outputs = Self::compositor_snapshot(cx).outputs.clone();
         let current_outputs: Vec<OutputDescriptor> = cx
             .displays()
             .into_iter()
@@ -925,7 +961,7 @@ impl ShellRuntime {
                 display_id: d.id(),
                 bounds: d.bounds(),
                 is_primary: primary_id == Some(d.id()),
-                name: d.uuid().ok().map(|id| id.to_string()),
+                name: Self::output_name_for_display(d.as_ref(), &compositor_outputs),
                 scale: None,
             })
             .collect();
@@ -1116,12 +1152,21 @@ impl ShellRuntime {
     }
 
     fn publish_status(&self) {
+        let snapshot = &self.latest_snapshot;
+        let (attempt, last_err) = match &snapshot.connection {
+            CompositorConnection::Reconnecting {
+                attempt,
+                last_error,
+            } => (*attempt, last_error.clone()),
+            _ => (0, None),
+        };
+
         let health = shilpo_services::ServiceHealth {
-            compositor_connected: self
-                .service_hub
-                .as_ref()
-                .and_then(|h| h.niri.as_ref())
-                .is_some(),
+            compositor_connected: snapshot.connection.is_ready(),
+            compositor_state: snapshot.connection.state_name().to_string(),
+            compositor_revision: snapshot.revision,
+            compositor_reconnect_attempt: attempt,
+            compositor_last_error: last_err,
             battery_service_available: shilpo_services::BatteryService::new().is_ok(),
             audio_service_available: shilpo_services::AudioService::new().is_ok(),
             network_service_available: shilpo_services::NetworkService::new().is_ok(),
@@ -1144,16 +1189,67 @@ impl ShellRuntime {
         });
     }
 
-    pub fn mark_ready(cx: &mut App) {
-        let runtime = cx.global_mut::<Self>();
-        runtime.readiness = shilpo_services::ipc::ReadinessState::Ready;
-        runtime.publish_status();
-    }
+    pub fn on_compositor_snapshot_changed(cx: &mut App, snapshot: Arc<CompositorSnapshot>) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let (outputs_changed, overview_entity) = {
+            let runtime = cx.global_mut::<Self>();
+            let outputs_changed = runtime.latest_snapshot.outputs != snapshot.outputs;
+            runtime.latest_snapshot = snapshot.clone();
 
-    pub fn mark_degraded(cx: &mut App) {
-        let runtime = cx.global_mut::<Self>();
-        runtime.readiness = shilpo_services::ipc::ReadinessState::Degraded;
-        runtime.publish_status();
+            let is_ready = snapshot.connection.is_ready();
+            if let Some(desc) = runtime.actions.descriptor_mut(&ActionId::FocusWorkspace) {
+                desc.enabled = is_ready && snapshot.capabilities.can_focus_workspace;
+            }
+            if let Some(desc) = runtime.actions.descriptor_mut(&ActionId::CreateWorkspace) {
+                desc.enabled = is_ready && snapshot.capabilities.can_create_workspace;
+            }
+            if let Some(desc) = runtime
+                .actions
+                .descriptor_mut(&ActionId::MoveWindowToWorkspace)
+            {
+                desc.enabled = is_ready && snapshot.capabilities.can_move_window;
+            }
+
+            let bar_ok = matches!(runtime.bar_state, BarState::Visible | BarState::Hidden);
+            runtime.readiness = match &snapshot.connection {
+                CompositorConnection::Connecting => shilpo_services::ipc::ReadinessState::Starting,
+                CompositorConnection::Ready => {
+                    if bar_ok {
+                        shilpo_services::ipc::ReadinessState::Ready
+                    } else {
+                        shilpo_services::ipc::ReadinessState::Degraded
+                    }
+                }
+                CompositorConnection::Reconnecting { .. } => {
+                    shilpo_services::ipc::ReadinessState::Degraded
+                }
+                CompositorConnection::Stopped => shilpo_services::ipc::ReadinessState::Failed,
+            };
+
+            runtime.publish_status();
+            (outputs_changed, runtime.overview_entity.clone())
+        };
+
+        let bar_handles: Vec<_> = cx
+            .global::<Self>()
+            .bars
+            .values()
+            .map(|(handle, _)| *handle)
+            .collect();
+
+        if let Some(overview) = overview_entity {
+            overview.update(cx, |view, cx| view.update_snapshot(snapshot, cx));
+        }
+
+        for handle in bar_handles {
+            let _ = handle.update(cx, |_, _window, cx| cx.notify());
+        }
+
+        if outputs_changed {
+            Self::reconcile_bars(cx);
+        }
     }
 
     pub fn open_bar_with_spec(cx: &mut App, spec: crate::bar::BarSpec) -> bool {
@@ -1206,13 +1302,14 @@ impl ShellRuntime {
     pub fn reconcile_bars(cx: &mut App) {
         let displays = cx.displays();
         let primary_id = cx.primary_display().map(|d| d.id());
+        let compositor_outputs = Self::compositor_snapshot(cx).outputs.clone();
         let outputs: Vec<_> = displays
             .into_iter()
             .map(|d| crate::bar::OutputDescriptor {
                 display_id: d.id(),
                 bounds: d.bounds(),
                 is_primary: Some(d.id()) == primary_id,
-                name: d.uuid().ok().map(|id| id.to_string()),
+                name: Self::output_name_for_display(d.as_ref(), &compositor_outputs),
                 scale: None,
             })
             .collect();
@@ -1283,21 +1380,21 @@ impl ShellRuntime {
     }
 
     fn capture_prior_focus(cx: &mut App) {
-        if cx.global::<Self>().prior_window_id.is_none()
-            && let Some(service) = Self::niri(cx)
-            && let Some(win_id) = service.active_window_id()
-        {
-            cx.global_mut::<Self>().prior_window_id = Some(win_id);
+        if cx.global::<Self>().prior_window_id.is_none() {
+            let snapshot = Self::compositor_snapshot(cx);
+            if let Some(win_id) = snapshot.focused_window_id {
+                cx.global_mut::<Self>().prior_window_id = Some(win_id);
+            }
         }
     }
 
     fn restore_prior_focus(cx: &mut App) {
         let prior_id = cx.global_mut::<Self>().prior_window_id.take();
         if let Some(win_id) = prior_id
-            && let Some(service) = Self::niri(cx)
-            && let Err(error) = service.focus_window(win_id)
+            && let Some(comp) = Self::compositor(cx)
+            && let Err(error) = comp.execute(CompositorCommand::FocusWindow(win_id))
         {
-            tracing::warn!(error = %error, window_id = win_id, "failed to restore prior Niri window focus");
+            tracing::warn!(error = %error, window_id = win_id, "failed to restore prior window focus");
         }
     }
 
@@ -1646,13 +1743,30 @@ impl ShellRuntime {
         }
     }
 
-    pub fn niri(cx: &App) -> Option<shilpo_services::NiriCompositorService> {
+    pub fn compositor(cx: &App) -> Option<Arc<dyn CompositorAdapter>> {
         if cx.has_global::<Self>()
             && let Some(ref hub) = cx.global::<Self>().service_hub
         {
-            hub.niri.clone()
+            Some(hub.compositor.clone())
         } else {
             None
+        }
+    }
+
+    pub fn compositor_snapshot(cx: &App) -> Arc<CompositorSnapshot> {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>().latest_snapshot.clone()
+        } else {
+            Arc::new(CompositorSnapshot::default())
+        }
+    }
+
+    pub fn register_overview_entity(
+        cx: &mut App,
+        entity: Entity<crate::overview::WorkspaceOverview>,
+    ) {
+        if cx.has_global::<Self>() {
+            cx.global_mut::<Self>().overview_entity = Some(entity);
         }
     }
 
@@ -1675,25 +1789,14 @@ impl ShellRuntime {
     }
 
     pub fn workspace_overview(cx: &App) -> Vec<shilpo_services::WorkspaceInfo> {
-        if cx.has_global::<Self>()
-            && let Some(ref hub) = cx.global::<Self>().service_hub
-            && let Some(ref niri) = hub.niri
-        {
-            use shilpo_services::CompositorAdapter;
-            CompositorAdapter::workspaces(niri)
-        } else {
-            Vec::new()
-        }
+        Self::compositor_snapshot(cx).workspaces.clone()
     }
 
-    pub fn focus_workspace(cx: &mut App, ws_id: u64) {
-        if cx.has_global::<Self>()
-            && let Some(ref hub) = cx.global::<Self>().service_hub
-            && let Some(ref niri) = hub.niri
-        {
-            use shilpo_services::CompositorAdapter;
-            let _ = CompositorAdapter::focus_workspace(niri, ws_id);
-        }
+    pub fn focus_workspace(cx: &mut App, ws_id: u64) -> Result<(), ShellError> {
+        let comp = Self::compositor(cx)
+            .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
+        comp.execute(CompositorCommand::FocusWorkspace(ws_id))
+            .map_err(|error| ShellError::ActionFailed(error.to_string()))
     }
 
     pub fn save_audio_preference(cx: &App, device: Option<String>, port: Option<String>) {
@@ -1890,26 +1993,28 @@ impl ShellRuntime {
         runtime.publish_status();
     }
 
-    fn enqueue_worker(cx: &mut App, request: IpcRequest) {
-        let handle = cx
-            .global::<Self>()
-            .service_hub
-            .as_ref()
-            .map(|h| h.service_commands.clone());
-        if let Some(handle) = handle {
-            if let Err(error) = service_worker::try_send_command(
-                &handle,
-                match request {
-                    IpcRequest::FocusWorkspace(id) => WorkerCommand::FocusWorkspace(id),
-                    IpcRequest::ReloadConfig => WorkerCommand::ReloadConfig,
-                    _ => return,
-                },
-            ) {
-                tracing::warn!(error = %error, "IPC worker request dropped: send failed");
+    fn enqueue_worker(cx: &mut App, request: IpcRequest) -> Result<(), ShellError> {
+        match request {
+            IpcRequest::FocusWorkspace(id) => {
+                let comp = Self::compositor(cx)
+                    .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
+                comp.execute(CompositorCommand::FocusWorkspace(id))
+                    .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
             }
-        } else {
-            tracing::warn!("IPC worker request dropped: bar handle unavailable");
+            IpcRequest::ReloadConfig => {
+                let handle = cx
+                    .global::<Self>()
+                    .service_hub
+                    .as_ref()
+                    .map(|h| h.service_commands.clone());
+                let handle = handle
+                    .ok_or_else(|| ShellError::ActionFailed("service worker unavailable".into()))?;
+                service_worker::try_send_command(&handle, WorkerCommand::ReloadConfig)
+                    .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
+            }
+            _ => {}
         }
+        Ok(())
     }
 
     pub fn record_recent_app(cx: &mut App, app_id: &str) {
@@ -1983,23 +2088,31 @@ impl ShellRuntime {
             ActionInvocation::ToggleControlCenter => Self::toggle_control_center(cx),
             ActionInvocation::ToggleBar => Self::toggle_bar(cx),
             ActionInvocation::ToggleOverview => Self::toggle_overview(cx),
-            ActionInvocation::ReloadConfig => Self::enqueue_worker(cx, IpcRequest::ReloadConfig),
+            ActionInvocation::ReloadConfig => Self::enqueue_worker(cx, IpcRequest::ReloadConfig)?,
             ActionInvocation::Quit => Self::shutdown(cx),
             ActionInvocation::FocusWorkspace(id) => {
-                Self::enqueue_worker(cx, IpcRequest::FocusWorkspace(id));
+                let comp = Self::compositor(cx)
+                    .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
+                comp.execute(CompositorCommand::FocusWorkspace(id))
+                    .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
             }
             ActionInvocation::CreateWorkspace(name) => {
-                if let Some(service) = Self::niri(cx) {
-                    let _ = service.create_workspace(name);
-                }
+                let comp = Self::compositor(cx)
+                    .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
+                comp.execute(CompositorCommand::CreateWorkspace { name })
+                    .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
             }
             ActionInvocation::MoveWindowToWorkspace {
                 window_id,
                 workspace_id,
             } => {
-                if let Some(service) = Self::niri(cx) {
-                    let _ = service.move_window_to_workspace(window_id, workspace_id);
-                }
+                let comp = Self::compositor(cx)
+                    .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
+                comp.execute(CompositorCommand::MoveWindowToWorkspace {
+                    window_id,
+                    workspace_id,
+                })
+                .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
             }
             ActionInvocation::VolumeUp => {
                 let _ = std::process::Command::new("wpctl")
@@ -2410,8 +2523,9 @@ mod tests {
 
     #[test]
     fn test_controlled_wayland_compositor_smoke_suite() {
-        let adaptor = shilpo_services::compositor::niri::NiriCompositorService::new_offline();
-        assert!(shilpo_services::compositor::CompositorAdapter::workspaces(&adaptor).is_empty());
+        use shilpo_services::TestCompositorAdapter;
+        let adapter = TestCompositorAdapter::new_default();
+        assert!(adapter.current().workspaces.is_empty());
     }
 
     #[test]

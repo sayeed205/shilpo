@@ -25,8 +25,9 @@ pub use bluetooth::{BluetoothInfo, BluetoothService};
 pub use brightness::{BrightnessInfo, BrightnessService};
 pub use clipboard::ClipboardService;
 pub use compositor::{
-    CompositorAdapter, CompositorCapabilities, CompositorCapability, NiriCompositorService,
-    NiriWorkspaceInfo, WindowInfo, WorkspaceInfo,
+    CompositorAdapter, CompositorCapabilities, CompositorCommand, CompositorConnection,
+    CompositorOutput, CompositorSnapshot, NiriCompositorService, TestCompositorAdapter, WindowInfo,
+    WorkspaceInfo,
 };
 pub use error::ServiceError;
 pub use ipc::{

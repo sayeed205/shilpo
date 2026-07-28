@@ -1,7 +1,7 @@
 use crate::dbus::ThemeDbusProxy;
 use crate::persistence::read_state_snapshot;
 use crate::state::{ColorSource, ThemeMode, ThemeState};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use futures_lite::stream::StreamExt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -167,7 +167,12 @@ impl ThemeClient {
 
     pub async fn set_mode(&self, mode: ThemeMode) -> Result<()> {
         let proxy = self.proxy().await?;
-        self.apply_response(proxy.set_mode(mode).await.context("D-Bus SetMode failed")?)
+        self.apply_response(
+            proxy
+                .set_mode(mode)
+                .await
+                .map_err(|error| anyhow!("D-Bus SetMode failed: {error}"))?,
+        )
     }
 
     pub async fn toggle_mode(&self) -> Result<()> {
@@ -176,7 +181,7 @@ impl ThemeClient {
             proxy
                 .toggle_mode()
                 .await
-                .context("D-Bus ToggleMode failed")?,
+                .map_err(|error| anyhow!("D-Bus ToggleMode failed: {error}"))?,
         )
     }
 
@@ -186,7 +191,7 @@ impl ThemeClient {
             proxy
                 .set_color_source(source)
                 .await
-                .context("D-Bus SetColorSource failed")?,
+                .map_err(|error| anyhow!("D-Bus SetColorSource failed: {error}"))?,
         )
     }
 
@@ -196,7 +201,7 @@ impl ThemeClient {
             proxy
                 .set_custom_seed(argb)
                 .await
-                .context("D-Bus SetCustomSeed failed")?,
+                .map_err(|error| anyhow!("D-Bus SetCustomSeed failed: {error}"))?,
         )
     }
 
@@ -206,7 +211,7 @@ impl ThemeClient {
             proxy
                 .set_wallpaper(path)
                 .await
-                .context("D-Bus SetWallpaper failed")?,
+                .map_err(|error| anyhow!("D-Bus SetWallpaper failed: {error}"))?,
         )
     }
 
@@ -216,7 +221,7 @@ impl ThemeClient {
             proxy
                 .set_wallpaper_directory(dir)
                 .await
-                .context("D-Bus SetWallpaperDirectory failed")?,
+                .map_err(|error| anyhow!("D-Bus SetWallpaperDirectory failed: {error}"))?,
         )
     }
 
@@ -226,7 +231,7 @@ impl ThemeClient {
             proxy
                 .set_random_wallpaper()
                 .await
-                .context("D-Bus SetRandomWallpaper failed")?,
+                .map_err(|error| anyhow!("D-Bus SetRandomWallpaper failed: {error}"))?,
         )
     }
 }

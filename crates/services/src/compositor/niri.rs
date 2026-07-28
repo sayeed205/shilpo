@@ -1,5 +1,8 @@
-use super::{CompositorAdapter, CompositorCapabilities, WindowInfo, WorkspaceInfo};
-use anyhow::{Context, Result, anyhow};
+use super::{
+    CompositorAdapter, CompositorCapabilities, CompositorCommand, CompositorConnection,
+    CompositorOutput, CompositorSnapshot, WindowInfo, WorkspaceInfo,
+};
+use anyhow::{Context, Result};
 use niri_ipc::{
     Event, Reply, Request, Response,
     socket::Socket,
@@ -9,469 +12,563 @@ use std::{
     env,
     io::{BufRead, BufReader, Write as _},
     os::unix::net::UnixStream,
-    sync::{Arc, Mutex},
+    path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
+    time::Duration,
 };
+use tokio::sync::watch;
 
-/// Active workspace representation from Niri IPC.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NiriWorkspaceInfo {
-    pub id: u64,
-    pub name: Option<String>,
-    pub idx: u8,
-    pub is_active: bool,
-    pub is_focused: bool,
+/// Resolves `NIRI_SOCKET`, then `NIRI_SOCKET_PATH`.
+pub fn resolve_niri_socket_path() -> Option<PathBuf> {
+    env::var_os("NIRI_SOCKET")
+        .or_else(|| env::var_os("NIRI_SOCKET_PATH"))
+        .map(PathBuf::from)
 }
 
-/// Niri Compositor IPC service for tracking workspaces and window focus in real time.
-#[derive(Clone)]
+/// Niri Compositor IPC service for publishing revisioned, deterministic snapshots and managing reconnection.
 pub struct NiriCompositorService {
-    workspaces: Arc<Mutex<Vec<NiriWorkspaceInfo>>>,
-    windows: Arc<Mutex<Vec<WindowInfo>>>,
-    active_window_id: Arc<Mutex<Option<u64>>>,
-    app_id: Arc<Mutex<Option<String>>>,
-    active_window_title: Arc<Mutex<Option<String>>>,
-    keyboard_layout: Arc<Mutex<String>>,
+    tx: watch::Sender<Arc<CompositorSnapshot>>,
+    rx: watch::Receiver<Arc<CompositorSnapshot>>,
+    stop_flag: Arc<AtomicBool>,
+    handle: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl NiriCompositorService {
-    /// Connects to Niri IPC socket, queries initial state, and spawns a background event listener thread.
-    /// Creates an offline NiriCompositorService instance for testing and fallback mode.
-    pub fn new_offline() -> Self {
-        Self {
-            workspaces: Arc::new(Mutex::new(Vec::new())),
-            windows: Arc::new(Mutex::new(Vec::new())),
-            active_window_id: Arc::new(Mutex::new(None)),
-            app_id: Arc::new(Mutex::new(None)),
-            active_window_title: Arc::new(Mutex::new(None)),
-            keyboard_layout: Arc::new(Mutex::new("us".into())),
-        }
-    }
-
-    pub fn new() -> Result<Self> {
-        let workspaces = Arc::new(Mutex::new(Vec::new()));
-        let windows = Arc::new(Mutex::new(Vec::new()));
-        let active_window_id = Arc::new(Mutex::new(None));
-        let app_id = Arc::new(Mutex::new(None));
-        let active_window_title = Arc::new(Mutex::new(None));
-        let keyboard_layout = Arc::new(Mutex::new("us".into()));
-
-        let service = Self {
-            workspaces,
-            windows,
-            active_window_id,
-            app_id,
-            active_window_title,
-            keyboard_layout,
+    /// Non-failing constructor. Publishes `Connecting` immediately and starts background listener thread.
+    pub fn new() -> Arc<Self> {
+        let initial = CompositorSnapshot {
+            revision: 0,
+            connection: CompositorConnection::Connecting,
+            capabilities: CompositorCapabilities::default(),
+            outputs: Vec::new(),
+            workspaces: Vec::new(),
+            windows: Vec::new(),
+            focused_output: None,
+            focused_workspace_id: None,
+            focused_window_id: None,
+            active_keyboard_layout: None,
         };
+        let (tx, rx) = watch::channel(Arc::new(initial));
+        let stop_flag = Arc::new(AtomicBool::new(false));
 
-        // Query initial workspace list
-        if let Ok(mut socket) = Socket::connect()
-            && let Ok(Ok(Response::Workspaces(ws_list))) = socket.send(Request::Workspaces)
-        {
-            let mut ws_guard = service.workspaces.lock().unwrap();
-            *ws_guard = ws_list
-                .into_iter()
-                .map(|w| NiriWorkspaceInfo {
-                    id: w.id,
-                    name: w.name,
-                    idx: w.idx,
-                    is_active: w.is_active,
-                    is_focused: w.is_focused,
-                })
-                .collect();
-        }
+        let tx_clone = tx.clone();
+        let stop_clone = stop_flag.clone();
 
-        // Spawn background thread to stream Niri events
-        let ws_clone = service.workspaces.clone();
-        let win_list_clone = service.windows.clone();
-        let win_id_clone = service.active_window_id.clone();
-        let app_id_clone = service.app_id.clone();
-        let title_clone = service.active_window_title.clone();
-        let kb_clone = service.keyboard_layout.clone();
-
-        thread::spawn(move || {
-            let mut backoff = std::time::Duration::from_millis(100);
-            let max_backoff = std::time::Duration::from_secs(5);
-            let max_attempts = 10;
-            let mut attempts = 0;
-
-            loop {
-                match run_niri_listener(
-                    ws_clone.clone(),
-                    win_list_clone.clone(),
-                    win_id_clone.clone(),
-                    app_id_clone.clone(),
-                    title_clone.clone(),
-                    kb_clone.clone(),
-                ) {
-                    Ok(()) => {
-                        attempts = 0;
-                        backoff = std::time::Duration::from_millis(100);
-                    }
-                    Err(e) => {
-                        attempts += 1;
-                        tracing::warn!(
-                            error = %e,
-                            attempt = attempts,
-                            max = max_attempts,
-                            "Niri listener disconnected or failed; retrying with backoff"
-                        );
-                        if attempts >= max_attempts {
-                            tracing::error!(
-                                "Niri listener failed permanently after {max_attempts} attempts"
-                            );
-                            break;
-                        }
-                        thread::sleep(backoff);
-                        backoff = (backoff * 2).min(max_backoff);
-                    }
-                }
-            }
+        let handle = thread::spawn(move || {
+            run_niri_listener(tx_clone, stop_clone);
         });
 
-        Ok(service)
+        Arc::new(Self {
+            tx,
+            rx,
+            stop_flag,
+            handle: Mutex::new(Some(handle)),
+        })
     }
 
-    /// Returns the current list of Niri workspaces.
-    pub fn workspaces(&self) -> Vec<NiriWorkspaceInfo> {
-        self.workspaces.lock().unwrap().clone()
+    /// Construct offline instance for testing with specified initial snapshot.
+    pub fn new_offline(snapshot: CompositorSnapshot) -> Arc<Self> {
+        let (tx, rx) = watch::channel(Arc::new(snapshot));
+        let stop_flag = Arc::new(AtomicBool::new(true));
+        Arc::new(Self {
+            tx,
+            rx,
+            stop_flag,
+            handle: Mutex::new(None),
+        })
     }
 
-    /// Returns active window ID.
-    pub fn active_window_id(&self) -> Option<u64> {
-        *self.active_window_id.lock().unwrap()
-    }
-
-    /// Returns active window app ID.
-    pub fn app_id(&self) -> Option<String> {
-        self.app_id.lock().unwrap().clone()
-    }
-
-    /// Returns active window title.
-    pub fn active_window_title(&self) -> Option<String> {
-        self.active_window_title.lock().unwrap().clone()
-    }
-
-    /// Returns current keyboard layout.
-    pub fn keyboard_layout(&self) -> String {
-        self.keyboard_layout.lock().unwrap().clone()
-    }
-
-    /// Switches focus to the workspace with the specified ID.
-    pub fn focus_workspace(&self, id: u64) -> Result<()> {
-        let mut socket = Socket::connect().context("Failed to connect to Niri IPC socket")?;
-        let req = Request::Action(niri_ipc::Action::FocusWorkspace {
-            reference: niri_ipc::WorkspaceReferenceArg::Id(id),
-        });
-        match socket.send(req) {
-            Ok(Ok(Response::Handled)) => Ok(()),
-            Ok(Ok(resp)) => {
-                anyhow::bail!("Niri action FocusWorkspace returned unexpected response: {resp:?}");
-            }
-            Ok(Err(err)) => {
-                anyhow::bail!("Niri action FocusWorkspace for workspace {id} failed: {err}");
-            }
-            Err(err) => Err(err).with_context(|| {
-                format!("Failed to send FocusWorkspace action for workspace {id}")
-            }),
-        }
-    }
-
-    /// Switches focus to the window with the specified ID.
-    pub fn focus_window(&self, id: u64) -> Result<()> {
-        let mut socket = Socket::connect().context("Failed to connect to Niri IPC socket")?;
-        let req = Request::Action(niri_ipc::Action::FocusWindow { id });
-        match socket.send(req) {
-            Ok(Ok(Response::Handled)) => Ok(()),
-            Ok(Ok(resp)) => {
-                anyhow::bail!("Niri action FocusWindow returned unexpected response: {resp:?}");
-            }
-            Ok(Err(err)) => {
-                anyhow::bail!("Niri action FocusWindow for window {id} failed: {err}");
-            }
-            Err(err) => Err(err)
-                .with_context(|| format!("Failed to send FocusWindow action for window {id}")),
-        }
-    }
-
-    /// Moves a window to the target workspace.
-    pub fn move_window_to_workspace(&self, window_id: u64, workspace_id: u64) -> Result<()> {
-        let mut socket = Socket::connect().context("Failed to connect to Niri IPC socket")?;
-        let req = Request::Action(niri_ipc::Action::MoveWindowToWorkspace {
-            window_id: Some(window_id),
-            reference: niri_ipc::WorkspaceReferenceArg::Id(workspace_id),
-            focus: true,
-        });
-        match socket.send(req) {
-            Ok(Ok(Response::Handled)) => Ok(()),
-            Ok(Ok(resp)) => {
-                anyhow::bail!("Niri action MoveWindowToWorkspace returned unexpected response: {resp:?}");
-            }
-            Ok(Err(err)) => {
-                anyhow::bail!("Niri action MoveWindowToWorkspace failed: {err}");
-            }
-            Err(err) => Err(err).with_context(|| {
-                format!("Failed to send MoveWindowToWorkspace action for window {window_id} -> workspace {workspace_id}")
-            }),
-        }
-    }
-
-    /// Creates a new workspace.
-    pub fn create_workspace(&self, _name: Option<String>) -> Result<()> {
-        let mut socket = Socket::connect().context("Failed to connect to Niri IPC socket")?;
-        let req = Request::Action(niri_ipc::Action::FocusWorkspaceDown {});
-        match socket.send(req) {
-            Ok(Ok(Response::Handled)) => Ok(()),
-            Ok(Ok(resp)) => {
-                anyhow::bail!(
-                    "Niri action FocusWorkspaceDown returned unexpected response: {resp:?}"
-                );
-            }
-            Ok(Err(err)) => {
-                anyhow::bail!("Niri action FocusWorkspaceDown failed: {err}");
-            }
-            Err(err) => Err(err).with_context(|| "Failed to send FocusWorkspaceDown action"),
-        }
-    }
-
-    /// Renames a workspace in local workspace list cache.
-    pub fn rename_workspace(&self, old_name: &str, new_name: &str) -> Result<()> {
-        let mut ws_guard = self.workspaces.lock().unwrap();
-        if let Some(ws) = ws_guard
-            .iter_mut()
-            .find(|w| w.name.as_deref() == Some(old_name))
-        {
-            ws.name = Some(new_name.to_string());
-        }
-        Ok(())
-    }
-
-    /// Deletes a workspace from local workspace list cache.
-    pub fn delete_workspace(&self, name: &str) -> Result<()> {
-        let mut ws_guard = self.workspaces.lock().unwrap();
-        ws_guard.retain(|w| w.name.as_deref() != Some(name));
-        Ok(())
-    }
-
-    /// Reorders the workspace to a target index position.
-    pub fn reorder_workspace(&self, id: u64, new_index: u8) -> Result<()> {
-        let mut ws_guard = self.workspaces.lock().unwrap();
-        if let Some(pos) = ws_guard.iter().position(|w| w.id == id) {
-            let mut ws = ws_guard.remove(pos);
-            ws.idx = new_index;
-            let insert_pos = (new_index as usize).min(ws_guard.len());
-            ws_guard.insert(insert_pos, ws);
-        }
-        Ok(())
-    }
-
-    /// Moves the workspace to a target output monitor.
-    pub fn move_workspace_to_output(&self, id: u64, _output_name: &str) -> Result<()> {
-        let _ = self.focus_workspace(id);
-        Ok(())
-    }
-
-    /// Focuses the previously active window in recent window navigation stack.
-    pub fn focus_previous_window(&self) -> Result<()> {
-        let windows = self.windows.lock().unwrap();
-        if let Some(win) = windows.first() {
-            let _ = self.focus_window(win.id);
-        }
-        Ok(())
+    pub fn update_snapshot(&self, snapshot: CompositorSnapshot) {
+        let _ = self.tx.send(Arc::new(snapshot));
     }
 }
 
 impl CompositorAdapter for NiriCompositorService {
-    fn capabilities(&self) -> CompositorCapabilities {
-        CompositorCapabilities {
-            can_create_workspace: true,
-            can_move_window: true,
-            can_focus_window: true,
-            can_focus_workspace: true,
-        }
+    fn current(&self) -> Arc<CompositorSnapshot> {
+        self.rx.borrow().clone()
     }
 
-    fn workspaces(&self) -> Vec<WorkspaceInfo> {
-        self.workspaces
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|w| WorkspaceInfo {
-                id: w.id,
-                name: w.name.clone(),
-                idx: w.idx,
-                is_active: w.is_active,
-                is_focused: w.is_focused,
-                is_urgent: false,
-            })
-            .collect()
+    fn subscribe(&self) -> watch::Receiver<Arc<CompositorSnapshot>> {
+        self.rx.clone()
     }
 
-    fn windows(&self) -> Vec<WindowInfo> {
-        self.windows.lock().unwrap().clone()
-    }
-
-    fn active_window_id(&self) -> Option<u64> {
-        self.active_window_id()
-    }
-
-    fn active_window_title(&self) -> Option<String> {
-        self.active_window_title()
-    }
-
-    fn app_id(&self) -> Option<String> {
-        self.app_id()
-    }
-
-    fn keyboard_layout(&self) -> String {
-        self.keyboard_layout()
-    }
-
-    fn focus_workspace(&self, id: u64) -> Result<()> {
-        self.focus_workspace(id)
-    }
-
-    fn focus_window(&self, id: u64) -> Result<()> {
-        self.focus_window(id)
-    }
-
-    fn create_workspace(&self, name: Option<String>) -> Result<()> {
-        self.create_workspace(name)
-    }
-
-    fn rename_workspace(&self, old_name: &str, new_name: &str) -> Result<()> {
-        self.rename_workspace(old_name, new_name)
-    }
-
-    fn delete_workspace(&self, name: &str) -> Result<()> {
-        self.delete_workspace(name)
-    }
-
-    fn move_window_to_workspace(&self, window_id: u64, workspace_id: u64) -> Result<()> {
-        self.move_window_to_workspace(window_id, workspace_id)
-    }
-
-    fn reorder_workspace(&self, id: u64, new_index: u8) -> Result<()> {
-        self.reorder_workspace(id, new_index)
-    }
-
-    fn move_workspace_to_output(&self, id: u64, output_name: &str) -> Result<()> {
-        self.move_workspace_to_output(id, output_name)
-    }
-
-    fn focus_previous_window(&self) -> Result<()> {
-        self.focus_previous_window()
-    }
-}
-
-fn connect_socket() -> Result<UnixStream> {
-    let socket_path = env::var_os("NIRI_SOCKET")
-        .or_else(|| env::var_os("NIRI_SOCKET_PATH"))
-        .ok_or_else(|| anyhow!("NIRI_SOCKET not set"))?;
-    UnixStream::connect(socket_path).context("Failed to connect to Niri socket")
-}
-
-fn run_niri_listener(
-    workspaces: Arc<Mutex<Vec<NiriWorkspaceInfo>>>,
-    win_list: Arc<Mutex<Vec<WindowInfo>>>,
-    active_window_id: Arc<Mutex<Option<u64>>>,
-    app_id: Arc<Mutex<Option<String>>>,
-    title: Arc<Mutex<Option<String>>>,
-    kb_layout: Arc<Mutex<String>>,
-) -> Result<()> {
-    let mut stream = connect_socket()?;
-    let request_json = serde_json::to_string(&Request::EventStream)? + "\n";
-    stream.write_all(request_json.as_bytes())?;
-    stream.flush()?;
-
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-
-    let reply: Reply = serde_json::from_str(&line).context("Failed to parse handshake")?;
-    if let Err(e) = reply {
-        anyhow::bail!("Niri refused EventStream: {}", e);
-    }
-
-    reader.get_ref().shutdown(std::net::Shutdown::Write).ok();
-    let mut state = EventStreamState::default();
-
-    loop {
-        line.clear();
-        let bytes_read = reader.read_line(&mut line)?;
-        if bytes_read == 0 {
-            break;
+    fn execute(&self, command: CompositorCommand) -> Result<()> {
+        let current = self.current();
+        if !current.connection.is_ready() {
+            anyhow::bail!(
+                "Compositor is unavailable: status is {:?}",
+                current.connection
+            );
         }
 
-        let event: Event = match serde_json::from_str(&line) {
-            Ok(ev) => ev,
-            Err(_) => continue,
+        let socket_path = resolve_niri_socket_path()
+            .ok_or_else(|| anyhow::anyhow!("Niri socket path not set"))?;
+
+        let mut socket =
+            Socket::connect_to(&socket_path).context("Failed to connect to Niri IPC socket")?;
+
+        let req = match command {
+            CompositorCommand::FocusWorkspace(id) => {
+                Request::Action(niri_ipc::Action::FocusWorkspace {
+                    reference: niri_ipc::WorkspaceReferenceArg::Id(id),
+                })
+            }
+            CompositorCommand::FocusWindow(id) => {
+                Request::Action(niri_ipc::Action::FocusWindow { id })
+            }
+            CompositorCommand::FocusPreviousWindow => {
+                Request::Action(niri_ipc::Action::FocusWindowPrevious {})
+            }
+            CompositorCommand::CreateWorkspace { name: None } => {
+                Request::Action(niri_ipc::Action::FocusWorkspaceDown {})
+            }
+            CompositorCommand::CreateWorkspace { name: Some(name) } => {
+                anyhow::bail!("Niri does not support naming workspaces through IPC: {name}");
+            }
+            CompositorCommand::MoveWindowToWorkspace {
+                window_id,
+                workspace_id,
+            } => Request::Action(niri_ipc::Action::MoveWindowToWorkspace {
+                window_id: Some(window_id),
+                reference: niri_ipc::WorkspaceReferenceArg::Id(workspace_id),
+                focus: true,
+            }),
         };
 
-        state.apply(event);
-
-        // Update workspace list
-        let mut list: Vec<NiriWorkspaceInfo> = state
-            .workspaces
-            .workspaces
-            .values()
-            .map(|w| NiriWorkspaceInfo {
-                id: w.id,
-                name: w.name.clone(),
-                idx: w.idx,
-                is_active: w.is_active,
-                is_focused: w.is_focused,
-            })
-            .collect();
-        list.sort_by_key(|w| w.idx);
-
-        let mut ws_guard = workspaces.lock().unwrap();
-        *ws_guard = list;
-
-        // Update window list
-        let windows: Vec<WindowInfo> = state
-            .windows
-            .windows
-            .values()
-            .map(|w| WindowInfo {
-                id: w.id,
-                title: w.title.clone(),
-                app_id: w.app_id.clone(),
-                workspace_id: w.workspace_id,
-                is_focused: w.is_focused,
-            })
-            .collect();
-
-        let mut win_list_guard = win_list.lock().unwrap();
-        *win_list_guard = windows;
-
-        // Update active window title, app ID & window ID
-        let focused_win = state.windows.windows.values().find(|w| w.is_focused);
-        let mut win_id_guard = active_window_id.lock().unwrap();
-        let mut app_id_guard = app_id.lock().unwrap();
-        let mut title_guard = title.lock().unwrap();
-
-        if let Some(win) = focused_win {
-            *win_id_guard = Some(win.id);
-            *app_id_guard = win.app_id.clone();
-            *title_guard = win.title.clone();
-        } else {
-            *win_id_guard = None;
-            *app_id_guard = None;
-            *title_guard = None;
-        }
-
-        // Update keyboard layout
-        if let Some(kb) = &state.keyboard_layouts.keyboard_layouts
-            && let Some(name) = kb.names.get(kb.current_idx as usize)
-        {
-            let mut kb_guard = kb_layout.lock().unwrap();
-            *kb_guard = name.clone();
+        match socket.send(req) {
+            Ok(Ok(Response::Handled)) => Ok(()),
+            Ok(Ok(resp)) => {
+                anyhow::bail!("Niri action returned unexpected response: {resp:?}");
+            }
+            Ok(Err(err)) => {
+                anyhow::bail!("Niri action failed: {err}");
+            }
+            Err(err) => Err(err).context("Failed to send Niri action"),
         }
     }
+}
 
-    Ok(())
+impl Drop for NiriCompositorService {
+    fn drop(&mut self) {
+        self.stop_flag.store(true, Ordering::Relaxed);
+        if let Ok(mut guard) = self.handle.lock()
+            && let Some(handle) = guard.take()
+        {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn sleep_with_stop_flag(duration: Duration, stop_flag: &AtomicBool) {
+    let start = std::time::Instant::now();
+    while start.elapsed() < duration {
+        if stop_flag.load(Ordering::Relaxed) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn query_outputs_from_socket_path(socket_path: &PathBuf) -> Result<Vec<CompositorOutput>> {
+    let mut socket = Socket::connect_to(socket_path)?;
+    let resp = socket.send(Request::Outputs)?;
+    match resp {
+        Ok(Response::Outputs(outputs)) => {
+            let mut list: Vec<CompositorOutput> = outputs
+                .into_iter()
+                .map(|(name, o)| CompositorOutput {
+                    name,
+                    make: Some(o.make),
+                    model: Some(o.model),
+                    logical_position: o.logical.as_ref().map(|l| (l.x, l.y)).unwrap_or((0, 0)),
+                    logical_size: o
+                        .logical
+                        .as_ref()
+                        .map(|l| (l.width, l.height))
+                        .unwrap_or((0, 0)),
+                    scale: o.logical.as_ref().map(|l| l.scale).unwrap_or(1.0),
+                })
+                .collect();
+            list.sort_by(|a, b| a.name.cmp(&b.name));
+            Ok(list)
+        }
+        Ok(other) => anyhow::bail!("Niri returned an unexpected Outputs response: {other:?}"),
+        Err(error) => anyhow::bail!("Niri failed to query outputs: {error}"),
+    }
+}
+
+fn publish_reconnecting(
+    tx: &watch::Sender<Arc<CompositorSnapshot>>,
+    revision: &mut u64,
+    attempt: u32,
+    last_error: Option<String>,
+) {
+    let previous = tx.borrow().clone();
+    let mut current = (*previous).clone();
+    current.revision = previous.revision;
+    current.connection = CompositorConnection::Reconnecting {
+        attempt,
+        last_error,
+    };
+    if *previous != current {
+        current.revision = previous.revision.saturating_add(1);
+        *revision = current.revision;
+        let _ = tx.send(Arc::new(current));
+    }
+}
+
+fn run_niri_listener(tx: watch::Sender<Arc<CompositorSnapshot>>, stop_flag: Arc<AtomicBool>) {
+    let mut backoff = Duration::from_millis(250);
+    let max_backoff = Duration::from_secs(5);
+    let mut attempt = 0u32;
+    let mut revision = 0u64;
+
+    while !stop_flag.load(Ordering::Relaxed) {
+        attempt += 1;
+
+        let socket_path = match resolve_niri_socket_path() {
+            Some(path) => path,
+            None => {
+                publish_reconnecting(
+                    &tx,
+                    &mut revision,
+                    attempt,
+                    Some("Neither NIRI_SOCKET nor NIRI_SOCKET_PATH is set".to_string()),
+                );
+                sleep_with_stop_flag(backoff, &stop_flag);
+                backoff = (backoff * 2).min(max_backoff);
+                continue;
+            }
+        };
+
+        let stream = match UnixStream::connect(&socket_path) {
+            Ok(s) => s,
+            Err(err) => {
+                publish_reconnecting(
+                    &tx,
+                    &mut revision,
+                    attempt,
+                    Some(format!(
+                        "Failed to connect to Niri socket at {}: {}",
+                        socket_path.display(),
+                        err
+                    )),
+                );
+                sleep_with_stop_flag(backoff, &stop_flag);
+                backoff = (backoff * 2).min(max_backoff);
+                continue;
+            }
+        };
+
+        let outputs = match query_outputs_from_socket_path(&socket_path) {
+            Ok(outputs) => outputs,
+            Err(err) => {
+                publish_reconnecting(
+                    &tx,
+                    &mut revision,
+                    attempt,
+                    Some(format!("Failed to query Niri outputs: {err}")),
+                );
+                sleep_with_stop_flag(backoff, &stop_flag);
+                backoff = (backoff * 2).min(max_backoff);
+                continue;
+            }
+        };
+
+        if let Err(err) = stream.set_read_timeout(Some(Duration::from_millis(200))) {
+            tracing::warn!(error = %err, "failed to set read timeout on Niri stream");
+        }
+
+        let mut reader = BufReader::new(stream);
+        let request_json = match serde_json::to_string(&Request::EventStream) {
+            Ok(json) => json + "\n",
+            Err(err) => {
+                publish_reconnecting(&tx, &mut revision, attempt, Some(err.to_string()));
+                sleep_with_stop_flag(backoff, &stop_flag);
+                backoff = (backoff * 2).min(max_backoff);
+                continue;
+            }
+        };
+
+        if let Err(err) = reader
+            .get_mut()
+            .write_all(request_json.as_bytes())
+            .and_then(|_| reader.get_mut().flush())
+        {
+            publish_reconnecting(
+                &tx,
+                &mut revision,
+                attempt,
+                Some(format!("Handshake write error: {}", err)),
+            );
+            sleep_with_stop_flag(backoff, &stop_flag);
+            backoff = (backoff * 2).min(max_backoff);
+            continue;
+        }
+
+        let mut line = String::new();
+        let mut handshake_ok = false;
+        let mut timeout_count = 0;
+
+        while !stop_flag.load(Ordering::Relaxed) {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let reply: Result<Reply, _> = serde_json::from_str(&line);
+                    match reply {
+                        Ok(Ok(_)) => {
+                            handshake_ok = true;
+                            break;
+                        }
+                        Ok(Err(e)) => {
+                            publish_reconnecting(
+                                &tx,
+                                &mut revision,
+                                attempt,
+                                Some(format!("Niri refused EventStream: {}", e)),
+                            );
+                            break;
+                        }
+                        Err(e) => {
+                            publish_reconnecting(
+                                &tx,
+                                &mut revision,
+                                attempt,
+                                Some(format!("Failed to parse handshake reply: {}", e)),
+                            );
+                            break;
+                        }
+                    }
+                }
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    timeout_count += 1;
+                    if timeout_count > 15 {
+                        publish_reconnecting(
+                            &tx,
+                            &mut revision,
+                            attempt,
+                            Some("Handshake read timeout".into()),
+                        );
+                        break;
+                    }
+                    continue;
+                }
+                Err(e) => {
+                    publish_reconnecting(
+                        &tx,
+                        &mut revision,
+                        attempt,
+                        Some(format!("Handshake read error: {}", e)),
+                    );
+                    break;
+                }
+            }
+        }
+
+        if !handshake_ok {
+            sleep_with_stop_flag(backoff, &stop_flag);
+            backoff = (backoff * 2).min(max_backoff);
+            continue;
+        }
+
+        reader.get_ref().shutdown(std::net::Shutdown::Write).ok();
+
+        let mut state = EventStreamState::default();
+        let mut current_outputs = outputs;
+        let mut initial_sync = true;
+        let initial_sync_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut rate_limit_timer = std::time::Instant::now();
+        let mut warning_count = 0u32;
+
+        while !stop_flag.load(Ordering::Relaxed) {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let event: Event = match serde_json::from_str(&line) {
+                        Ok(ev) => ev,
+                        Err(err) => {
+                            warning_count += 1;
+                            if rate_limit_timer.elapsed() >= Duration::from_secs(5) {
+                                tracing::warn!(
+                                    count = warning_count,
+                                    last_error = %err,
+                                    "ignored malformed Niri event line(s)"
+                                );
+                                warning_count = 0;
+                                rate_limit_timer = std::time::Instant::now();
+                            }
+                            continue;
+                        }
+                    };
+
+                    let initial_sync_boundary = matches!(event, Event::ConfigLoaded { .. });
+                    let refresh_outputs_needed = matches!(
+                        event,
+                        Event::WorkspacesChanged { .. } | Event::ConfigLoaded { .. }
+                    );
+
+                    state.apply(event);
+
+                    if refresh_outputs_needed {
+                        match query_outputs_from_socket_path(&socket_path) {
+                            Ok(new_outputs) => current_outputs = new_outputs,
+                            Err(err) => {
+                                publish_reconnecting(
+                                    &tx,
+                                    &mut revision,
+                                    attempt,
+                                    Some(format!("Failed to refresh Niri outputs: {err}")),
+                                );
+                                break;
+                            }
+                        }
+                    }
+
+                    if !initial_sync || initial_sync_boundary {
+                        if initial_sync {
+                            initial_sync = false;
+                            attempt = 0;
+                            backoff = Duration::from_millis(250);
+                        }
+
+                        publish_snapshot_from_state(
+                            &tx,
+                            &mut revision,
+                            CompositorConnection::Ready,
+                            &current_outputs,
+                            &state,
+                        );
+                    }
+                }
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    if initial_sync && std::time::Instant::now() >= initial_sync_deadline {
+                        publish_reconnecting(
+                            &tx,
+                            &mut revision,
+                            attempt,
+                            Some("Timed out waiting for Niri initial state".into()),
+                        );
+                        break;
+                    }
+                    continue;
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "Niri event stream read error");
+                    break;
+                }
+            }
+        }
+
+        if !stop_flag.load(Ordering::Relaxed) {
+            publish_reconnecting(
+                &tx,
+                &mut revision,
+                attempt,
+                Some("Event stream disconnected".into()),
+            );
+            sleep_with_stop_flag(backoff, &stop_flag);
+            backoff = (backoff * 2).min(max_backoff);
+        }
+    }
+}
+
+pub fn publish_snapshot_from_state(
+    tx: &watch::Sender<Arc<CompositorSnapshot>>,
+    revision: &mut u64,
+    connection: CompositorConnection,
+    outputs: &[CompositorOutput],
+    state: &EventStreamState,
+) {
+    let mut workspaces: Vec<WorkspaceInfo> = state
+        .workspaces
+        .workspaces
+        .values()
+        .map(|w| WorkspaceInfo {
+            id: w.id,
+            name: w.name.clone(),
+            idx: w.idx,
+            is_active: w.is_active,
+            is_focused: w.is_focused,
+            is_urgent: w.is_urgent,
+            output_name: w.output.clone(),
+            active_window_id: w.active_window_id,
+        })
+        .collect();
+
+    workspaces.sort_by(|a, b| {
+        a.output_name
+            .as_deref()
+            .unwrap_or("")
+            .cmp(b.output_name.as_deref().unwrap_or(""))
+            .then_with(|| a.idx.cmp(&b.idx))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    let mut windows: Vec<WindowInfo> = state
+        .windows
+        .windows
+        .values()
+        .map(|w| WindowInfo {
+            id: w.id,
+            title: w.title.clone(),
+            app_id: w.app_id.clone(),
+            workspace_id: w.workspace_id,
+            is_focused: w.is_focused,
+            is_floating: w.is_floating,
+            is_urgent: w.is_urgent,
+        })
+        .collect();
+
+    windows.sort_by_key(|w| w.id);
+
+    let focused_workspace_id = workspaces.iter().find(|w| w.is_focused).map(|w| w.id);
+    let focused_window_id = windows.iter().find(|w| w.is_focused).map(|w| w.id);
+    let focused_output = workspaces
+        .iter()
+        .find(|w| w.is_focused)
+        .and_then(|w| w.output_name.clone());
+
+    let active_keyboard_layout = state
+        .keyboard_layouts
+        .keyboard_layouts
+        .as_ref()
+        .and_then(|kb| kb.names.get(kb.current_idx as usize).cloned());
+
+    let mut sorted_outputs = outputs.to_vec();
+    sorted_outputs.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let prev = tx.borrow().clone();
+    let new_snapshot = CompositorSnapshot {
+        revision: prev.revision,
+        connection,
+        capabilities: CompositorCapabilities::default(),
+        outputs: sorted_outputs,
+        workspaces,
+        windows,
+        focused_output,
+        focused_workspace_id,
+        focused_window_id,
+        active_keyboard_layout,
+    };
+
+    if *prev != new_snapshot {
+        let mut new_snapshot = new_snapshot;
+        new_snapshot.revision = prev.revision.saturating_add(1);
+        *revision = new_snapshot.revision;
+        let _ = tx.send(Arc::new(new_snapshot));
+    }
 }
 
 #[cfg(test)]
@@ -479,192 +576,72 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_focus_workspace_fails_without_niri() {
-        let orig_niri = env::var_os("NIRI_SOCKET");
-        let orig_wayland = env::var_os("WAYLAND_DISPLAY");
-        unsafe {
-            env::set_var("NIRI_SOCKET", "/tmp/non_existent_niri_socket.sock");
-            env::set_var("WAYLAND_DISPLAY", "non_existent_wayland_display");
-        }
-
-        let service = NiriCompositorService {
-            workspaces: Arc::new(Mutex::new(Vec::new())),
-            windows: Arc::new(Mutex::new(Vec::new())),
-            active_window_id: Arc::new(Mutex::new(None)),
-            app_id: Arc::new(Mutex::new(None)),
-            active_window_title: Arc::new(Mutex::new(None)),
-            keyboard_layout: Arc::new(Mutex::new("us".into())),
-        };
-
-        let res = service.focus_workspace(99999);
-        if let Err(err) = res {
-            let msg = format!("{err:#}");
-            assert!(
-                msg.contains("Niri")
-                    || msg.contains("Failed to connect")
-                    || msg.contains("No such file")
-                    || msg.contains("unexpected response"),
-                "expected socket or niri error context, got: {msg}"
-            );
-        }
-
-        unsafe {
-            if let Some(val) = orig_niri {
-                env::set_var("NIRI_SOCKET", val);
-            } else {
-                env::remove_var("NIRI_SOCKET");
-            }
-            if let Some(val) = orig_wayland {
-                env::set_var("WAYLAND_DISPLAY", val);
-            } else {
-                env::remove_var("WAYLAND_DISPLAY");
-            }
-        }
-    }
-
-    #[test]
-    fn test_focus_window_fails_without_niri() {
-        let orig_niri = env::var_os("NIRI_SOCKET");
-        let orig_wayland = env::var_os("WAYLAND_DISPLAY");
-        unsafe {
-            env::set_var("NIRI_SOCKET", "/tmp/non_existent_niri_socket.sock");
-            env::set_var("WAYLAND_DISPLAY", "non_existent_wayland_display");
-        }
-
-        let service = NiriCompositorService {
-            workspaces: Arc::new(Mutex::new(Vec::new())),
-            windows: Arc::new(Mutex::new(Vec::new())),
-            active_window_id: Arc::new(Mutex::new(None)),
-            app_id: Arc::new(Mutex::new(None)),
-            active_window_title: Arc::new(Mutex::new(None)),
-            keyboard_layout: Arc::new(Mutex::new("us".into())),
-        };
-
-        let err = service.focus_window(10).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("Niri IPC socket")
-                || msg.contains("Failed to connect")
-                || msg.contains("No such file"),
-            "expected socket connection error context, got: {msg}"
+    fn test_niri_service_non_failing_construction() {
+        let service = NiriCompositorService::new();
+        assert_eq!(
+            service.current().connection,
+            CompositorConnection::Connecting
         );
-
-        unsafe {
-            if let Some(val) = orig_niri {
-                env::set_var("NIRI_SOCKET", val);
-            } else {
-                env::remove_var("NIRI_SOCKET");
-            }
-            if let Some(val) = orig_wayland {
-                env::set_var("WAYLAND_DISPLAY", val);
-            } else {
-                env::remove_var("WAYLAND_DISPLAY");
-            }
-        }
     }
 
     #[test]
-    fn test_compositor_workspace_rename_and_deletion() {
-        let service = NiriCompositorService {
-            workspaces: Arc::new(Mutex::new(vec![
-                NiriWorkspaceInfo {
-                    id: 1,
-                    name: Some("Work".to_string()),
-                    idx: 1,
-                    is_active: true,
-                    is_focused: true,
-                },
-                NiriWorkspaceInfo {
-                    id: 2,
-                    name: Some("Media".to_string()),
-                    idx: 2,
-                    is_active: false,
-                    is_focused: false,
-                },
-            ])),
-            windows: Arc::new(Mutex::new(Vec::new())),
-            active_window_id: Arc::new(Mutex::new(None)),
-            app_id: Arc::new(Mutex::new(None)),
-            active_window_title: Arc::new(Mutex::new(None)),
-            keyboard_layout: Arc::new(Mutex::new("us".into())),
-        };
-
-        assert!(service.rename_workspace("Work", "Main").is_ok());
-        assert_eq!(service.workspaces()[0].name.as_deref(), Some("Main"));
-
-        assert!(service.delete_workspace("Media").is_ok());
-        assert_eq!(service.workspaces().len(), 1);
-    }
-
-    #[test]
-    fn test_compositor_workspace_reorder_and_output_movement() {
-        let service = NiriCompositorService {
-            workspaces: Arc::new(Mutex::new(vec![
-                NiriWorkspaceInfo {
-                    id: 1,
-                    name: Some("WS1".to_string()),
-                    idx: 1,
-                    is_active: true,
-                    is_focused: true,
-                },
-                NiriWorkspaceInfo {
-                    id: 2,
-                    name: Some("WS2".to_string()),
-                    idx: 2,
-                    is_active: false,
-                    is_focused: false,
-                },
-            ])),
-            windows: Arc::new(Mutex::new(Vec::new())),
-            active_window_id: Arc::new(Mutex::new(None)),
-            app_id: Arc::new(Mutex::new(None)),
-            active_window_title: Arc::new(Mutex::new(None)),
-            keyboard_layout: Arc::new(Mutex::new("us".into())),
-        };
-
-        assert!(service.reorder_workspace(1, 2).is_ok());
-        assert!(service.move_workspace_to_output(1, "HDMI-A-1").is_ok());
-    }
-
-    #[test]
-    fn test_compositor_recent_window_navigation() {
-        let service = NiriCompositorService {
-            workspaces: Arc::new(Mutex::new(Vec::new())),
-            windows: Arc::new(Mutex::new(vec![WindowInfo {
-                id: 101,
-                title: Some("Browser".to_string()),
-                app_id: Some("firefox".to_string()),
-                workspace_id: Some(1),
-                is_focused: false,
-            }])),
-            active_window_id: Arc::new(Mutex::new(Some(101))),
-            app_id: Arc::new(Mutex::new(Some("firefox".to_string()))),
-            active_window_title: Arc::new(Mutex::new(Some("Browser".to_string()))),
-            keyboard_layout: Arc::new(Mutex::new("us".into())),
-        };
-
-        assert!(service.focus_previous_window().is_ok());
-    }
-
-    #[test]
-    fn test_compositor_workspace_urgent_state() {
-        let service = NiriCompositorService {
-            workspaces: Arc::new(Mutex::new(vec![NiriWorkspaceInfo {
+    fn test_niri_service_offline_construction() {
+        let snapshot = CompositorSnapshot {
+            revision: 1,
+            connection: CompositorConnection::Ready,
+            capabilities: CompositorCapabilities::default(),
+            outputs: vec![CompositorOutput {
+                name: "DP-1".into(),
+                make: Some("Dell".into()),
+                model: Some("UltraSharp".into()),
+                logical_position: (0, 0),
+                logical_size: (1920, 1080),
+                scale: 1.0,
+            }],
+            workspaces: vec![WorkspaceInfo {
                 id: 1,
-                name: Some("UrgentWS".to_string()),
+                name: Some("1".into()),
                 idx: 1,
-                is_active: false,
-                is_focused: false,
-            }])),
-            windows: Arc::new(Mutex::new(Vec::new())),
-            active_window_id: Arc::new(Mutex::new(None)),
-            app_id: Arc::new(Mutex::new(None)),
-            active_window_title: Arc::new(Mutex::new(None)),
-            keyboard_layout: Arc::new(Mutex::new("us".into())),
+                is_active: true,
+                is_focused: true,
+                is_urgent: false,
+                output_name: Some("DP-1".into()),
+                active_window_id: None,
+            }],
+            windows: Vec::new(),
+            focused_output: Some("DP-1".into()),
+            focused_workspace_id: Some(1),
+            focused_window_id: None,
+            active_keyboard_layout: Some("us".into()),
         };
+        let service = NiriCompositorService::new_offline(snapshot);
+        assert_eq!(service.current().connection, CompositorConnection::Ready);
+        assert_eq!(service.current().workspaces.len(), 1);
+    }
 
-        let ws = CompositorAdapter::workspaces(&service);
-        assert_eq!(ws.len(), 1);
-        assert!(!ws[0].is_urgent);
+    #[test]
+    fn test_execute_fails_when_not_ready() {
+        let service = NiriCompositorService::new();
+        assert!(
+            service
+                .execute(CompositorCommand::FocusWorkspace(1))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn identical_snapshot_payload_does_not_advance_revision() {
+        let (tx, rx) = watch::channel(Arc::new(CompositorSnapshot::default()));
+        let state = EventStreamState::default();
+        let mut revision = 0;
+
+        publish_snapshot_from_state(&tx, &mut revision, CompositorConnection::Ready, &[], &state);
+        let first = rx.borrow().clone();
+
+        publish_snapshot_from_state(&tx, &mut revision, CompositorConnection::Ready, &[], &state);
+        let second = rx.borrow().clone();
+
+        assert_eq!(first.revision, second.revision);
+        assert_eq!(*first, *second);
     }
 }
