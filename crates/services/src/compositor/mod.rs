@@ -1,6 +1,11 @@
+pub mod broker;
 pub mod niri;
 pub mod test_adapter;
 
+pub use broker::{
+    BrokerOptions, CancellationReason, CommandCancellation, CommandTicket, CompositorCommandBroker,
+    CompositorCommandError,
+};
 pub use niri::NiriCompositorService;
 pub use test_adapter::TestCompositorAdapter;
 
@@ -8,7 +13,8 @@ use std::sync::Arc;
 use tokio::sync::watch;
 
 /// Connection status of the compositor adapter.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CompositorConnection {
     Connecting,
     Ready,
@@ -46,7 +52,7 @@ pub struct CompositorOutput {
 }
 
 /// Compositor capabilities descriptor.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CompositorCapabilities {
     pub can_create_workspace: bool,
     pub can_move_window: bool,
@@ -66,7 +72,7 @@ impl Default for CompositorCapabilities {
 }
 
 /// Generic workspace information.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkspaceInfo {
     pub id: u64,
     pub name: Option<String>,
@@ -79,7 +85,7 @@ pub struct WorkspaceInfo {
 }
 
 /// Generic window information.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WindowInfo {
     pub id: u64,
     pub title: Option<String>,
@@ -123,20 +129,27 @@ impl Default for CompositorSnapshot {
 }
 
 /// Operations sent to the active compositor.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", tag = "action", content = "payload")]
 pub enum CompositorCommand {
     FocusWorkspace(u64),
     FocusWindow(u64),
     FocusPreviousWindow,
-    CreateWorkspace { name: Option<String> },
-    MoveWindowToWorkspace { window_id: u64, workspace_id: u64 },
+    CreateWorkspace {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    MoveWindowToWorkspace {
+        window_id: u64,
+        workspace_id: u64,
+    },
 }
 
 /// Compositor-agnostic interface for window managers and shell integrations.
 pub trait CompositorAdapter: Send + Sync {
     fn current(&self) -> Arc<CompositorSnapshot>;
     fn subscribe(&self) -> watch::Receiver<Arc<CompositorSnapshot>>;
-    fn execute(&self, command: CompositorCommand) -> anyhow::Result<()>;
+    fn command_broker(&self) -> Arc<CompositorCommandBroker>;
 }
 
 #[cfg(test)]
@@ -161,14 +174,14 @@ mod tests {
         assert_eq!(adapter.current().connection, CompositorConnection::Ready);
         assert_eq!(adapter.current().revision, 1);
 
+        let ticket = adapter
+            .command_broker()
+            .submit(CompositorCommand::FocusWorkspace(1))
+            .unwrap();
         assert!(
-            adapter
-                .execute(CompositorCommand::FocusWorkspace(1))
+            ticket
+                .wait_timeout(std::time::Duration::from_secs(1))
                 .is_ok()
-        );
-        assert_eq!(
-            adapter.executed_commands(),
-            vec![CompositorCommand::FocusWorkspace(1)]
         );
     }
 }

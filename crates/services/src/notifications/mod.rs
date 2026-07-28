@@ -183,6 +183,25 @@ impl NotificationService {
         self.notifications.lock().unwrap().len()
     }
 
+    /// Pushes a local notification into the active notifications queue and triggers new notification listeners.
+    pub fn push_notification(&self, notif: Notification) {
+        if self.is_dnd_enabled() {
+            let mut hist = self.history.lock().unwrap();
+            hist.push(notif);
+            if hist.len() > 100 {
+                hist.remove(0);
+            }
+            return;
+        }
+        if let Ok(tx_guard) = self.new_notif_sender.lock()
+            && let Some(ref tx) = *tx_guard
+        {
+            let _ = tx.send(notif.clone());
+        }
+        let mut lock = self.notifications.lock().unwrap();
+        lock.push(notif);
+    }
+
     /// Dispatches an inline text reply to the notification sender and dismisses the notification.
     pub fn send_inline_reply(&self, id: u32, reply_text: &str) -> Result<()> {
         tracing::info!(id = id, text = %reply_text, "Sending inline reply to notification");

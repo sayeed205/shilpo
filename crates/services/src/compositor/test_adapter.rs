@@ -1,4 +1,7 @@
-use super::{CompositorAdapter, CompositorCommand, CompositorSnapshot};
+use super::{
+    BrokerOptions, CompositorAdapter, CompositorCommand, CompositorCommandBroker,
+    CompositorSnapshot,
+};
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
@@ -7,15 +10,29 @@ pub struct TestCompositorAdapter {
     tx: watch::Sender<Arc<CompositorSnapshot>>,
     rx: watch::Receiver<Arc<CompositorSnapshot>>,
     executed_commands: Arc<Mutex<Vec<CompositorCommand>>>,
+    broker: Arc<CompositorCommandBroker>,
 }
 
 impl TestCompositorAdapter {
     pub fn new(initial: CompositorSnapshot) -> Self {
-        let (tx, rx) = watch::channel(Arc::new(initial));
+        let (tx, rx) = watch::channel(Arc::new(initial.clone()));
+        let executed_commands = Arc::new(Mutex::new(Vec::new()));
+
+        let exec_cmds = executed_commands.clone();
+        let executor: super::broker::CommandExecutorFn =
+            Box::new(move |cmd, _timeout, _cancel, _register| {
+                exec_cmds.lock().unwrap().push(cmd.clone());
+                Ok(())
+            });
+
+        let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
+        broker.update_connection(initial.connection, initial.capabilities);
+
         Self {
             tx,
             rx,
-            executed_commands: Arc::new(Mutex::new(Vec::new())),
+            executed_commands,
+            broker,
         }
     }
 
@@ -24,6 +41,8 @@ impl TestCompositorAdapter {
     }
 
     pub fn update(&self, snapshot: CompositorSnapshot) {
+        self.broker
+            .update_connection(snapshot.connection.clone(), snapshot.capabilities.clone());
         let _ = self.tx.send(Arc::new(snapshot));
     }
 
@@ -41,15 +60,7 @@ impl CompositorAdapter for TestCompositorAdapter {
         self.rx.clone()
     }
 
-    fn execute(&self, command: CompositorCommand) -> anyhow::Result<()> {
-        let snapshot = self.current();
-        if !snapshot.connection.is_ready() {
-            anyhow::bail!(
-                "Compositor is unavailable: state is {:?}",
-                snapshot.connection
-            );
-        }
-        self.executed_commands.lock().unwrap().push(command);
-        Ok(())
+    fn command_broker(&self) -> Arc<CompositorCommandBroker> {
+        self.broker.clone()
     }
 }

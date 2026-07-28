@@ -1,7 +1,7 @@
 use gpui::{App, Bounds, DisplayId, point, px, size};
 use shilpo_assets::Assets;
 use shilpo_config::ShellConfig;
-use shilpo_services::{IpcRequest, IpcResult, ShellIpcServer};
+use shilpo_services::{CompositorCommand, IpcRequest, IpcResult, ShellIpcServer};
 use shilpo_shell::{ShellRuntime, bar::geometry::BarGeometry};
 
 #[tokio::main]
@@ -38,7 +38,7 @@ async fn main() {
                 "focus-workspace" => {
                     if let Some(id_str) = args.get(3) {
                         if let Ok(id) = id_str.parse::<u64>() {
-                            IpcRequest::FocusWorkspace(id)
+                            IpcRequest::Compositor(CompositorCommand::FocusWorkspace(id))
                         } else {
                             eprintln!("Invalid workspace ID");
                             std::process::exit(1);
@@ -46,6 +46,44 @@ async fn main() {
                     } else {
                         eprintln!("Missing workspace ID");
                         std::process::exit(1);
+                    }
+                }
+                "focus-window" => {
+                    if let Some(id_str) = args.get(3) {
+                        if let Ok(id) = id_str.parse::<u64>() {
+                            IpcRequest::Compositor(CompositorCommand::FocusWindow(id))
+                        } else {
+                            eprintln!("Invalid window ID");
+                            std::process::exit(1);
+                        }
+                    } else {
+                        eprintln!("Missing window ID");
+                        std::process::exit(1);
+                    }
+                }
+                "focus-previous-window" => {
+                    IpcRequest::Compositor(CompositorCommand::FocusPreviousWindow)
+                }
+                "create-workspace" => {
+                    let name = args.get(3).cloned();
+                    IpcRequest::Compositor(CompositorCommand::CreateWorkspace { name })
+                }
+                "move-window-to-workspace" => {
+                    let win_id = args.get(3).and_then(|s| s.parse::<u64>().ok());
+                    let ws_id = args.get(4).and_then(|s| s.parse::<u64>().ok());
+                    match (win_id, ws_id) {
+                        (Some(window_id), Some(workspace_id)) => {
+                            IpcRequest::Compositor(CompositorCommand::MoveWindowToWorkspace {
+                                window_id,
+                                workspace_id,
+                            })
+                        }
+                        _ => {
+                            eprintln!(
+                                "Usage: shilpo msg move-window-to-workspace <window_id> <workspace_id>"
+                            );
+                            std::process::exit(1);
+                        }
                     }
                 }
                 "set-theme" => {
@@ -133,6 +171,7 @@ async fn main() {
                     }
                     match resp.result {
                         Some(IpcResult::Accepted) => println!("Accepted"),
+                        Some(IpcResult::CommandCompleted) => println!("Command completed"),
                         Some(IpcResult::Status(status)) => println!(
                             "running={} bar={:?} launcher_visible={} control_center_visible={} health={:?}",
                             status.running,

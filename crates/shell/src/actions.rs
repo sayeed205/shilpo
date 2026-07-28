@@ -222,6 +222,12 @@ impl ActionInvocation {
     }
 }
 
+/// Result outcome of executing an action invocation.
+pub enum ActionResult {
+    Immediate,
+    Compositor(shilpo_services::CommandTicket),
+}
+
 impl From<ActionId> for ActionInvocation {
     fn from(id: ActionId) -> Self {
         if id == ActionId::ToggleLauncher {

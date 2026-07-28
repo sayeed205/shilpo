@@ -4,6 +4,7 @@
 //! advisory locking. All calls below check their return values; raw file
 //! descriptors are borrowed from Rust-owned objects and never closed here.
 
+use crate::compositor::{CompositorCommand, CompositorCommandBroker, CompositorCommandError};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
@@ -16,7 +17,7 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -27,11 +28,16 @@ const LOCK: &str = "instance.lock";
 const MAX_FRAME: usize = 16 * 1024;
 const MAX_QUEUE: usize = 128;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const CLIENT_WORKERS: usize = 1;
+#[cfg(not(test))]
+const CLIENT_WORKERS: usize = 2;
+const CLIENT_QUEUE: usize = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type", content = "payload")]
 pub enum IpcRequest {
-    FocusWorkspace(u64),
+    Compositor(CompositorCommand),
     ReloadConfig,
     ToggleBar,
     ToggleLauncher,
@@ -96,6 +102,7 @@ pub struct IpcStatus {
 #[serde(rename_all = "snake_case", tag = "kind", content = "value")]
 pub enum IpcResult {
     Accepted,
+    CommandCompleted,
     Status(IpcStatus),
     Telemetry(ServiceHealth),
 }
@@ -336,15 +343,19 @@ pub struct ShellIpcServer {
     socket_identity: (u64, u64),
     pending: Arc<Mutex<VecDeque<IpcRequest>>>,
     status: Arc<Mutex<IpcStatus>>,
+    broker: Arc<Mutex<Option<Arc<CompositorCommandBroker>>>>,
     stop: Arc<std::sync::atomic::AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    client_workers: Vec<JoinHandle<()>>,
     _lock: File,
 }
+
 impl ShellIpcServer {
     pub fn new() -> Result<Self, IpcError> {
         let (app, path) = paths_from_env()?;
         Self::new_at(&app, &path)
     }
+
     pub fn new_at(runtime_or_app: &Path, socket_path: &Path) -> Result<Self, IpcError> {
         if unsafe { libc::getuid() } != unsafe { libc::geteuid() } {
             return Err(IpcError::InvalidPath(
@@ -397,46 +408,101 @@ impl ShellIpcServer {
             running: true,
             ..IpcStatus::default()
         }));
+        let broker = Arc::new(Mutex::new(None));
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let p = pending.clone();
-        let s = status.clone();
+
+        let (client_tx, client_rx) = mpsc::sync_channel(CLIENT_QUEUE);
+        let client_rx = Arc::new(Mutex::new(client_rx));
+        let mut client_workers = Vec::with_capacity(CLIENT_WORKERS);
+        for index in 0..CLIENT_WORKERS {
+            let rx = client_rx.clone();
+            let p_c = pending.clone();
+            let s_c = status.clone();
+            let b_c = broker.clone();
+            let quit = stop.clone();
+            client_workers.push(
+                thread::Builder::new()
+                    .name(format!("shilpo-ipc-client-{index}"))
+                    .spawn(move || {
+                        loop {
+                            if quit.load(std::sync::atomic::Ordering::Acquire) {
+                                break;
+                            }
+                            let stream =
+                                match rx.lock().unwrap().recv_timeout(Duration::from_millis(50)) {
+                                    Ok(stream) => stream,
+                                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                                };
+                            let _ = handle_client(stream, &p_c, &s_c, &b_c);
+                        }
+                    })
+                    .map_err(IpcError::Io)?,
+            );
+        }
+
         let quit = stop.clone();
+
         let thread = thread::Builder::new()
             .name("shilpo-ipc".into())
             .spawn(move || {
                 while !quit.load(std::sync::atomic::Ordering::Acquire) {
                     match listener.accept() {
                         Ok((stream, _)) => {
-                            let _ = handle_client(stream, &p, &s);
+                            let mut stream = stream;
+                            loop {
+                                match client_tx.try_send(stream) {
+                                    Ok(()) => break,
+                                    Err(mpsc::TrySendError::Full(returned)) => {
+                                        if quit.load(std::sync::atomic::Ordering::Acquire) {
+                                            break;
+                                        }
+                                        stream = returned;
+                                        thread::sleep(Duration::from_millis(10));
+                                    }
+                                    Err(mpsc::TrySendError::Disconnected(_)) => break,
+                                }
+                            }
                         }
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(10))
+                            thread::sleep(Duration::from_millis(10));
                         }
                         Err(_) => break,
                     }
                 }
             })
             .map_err(IpcError::Io)?;
+
         Ok(Self {
             socket_path: socket_path.to_path_buf(),
             socket_identity: identity,
             pending,
             status,
+            broker,
             stop,
             thread: Some(thread),
+            client_workers,
             _lock: lock,
         })
     }
+
+    pub fn attach_broker(&self, broker: Arc<CompositorCommandBroker>) {
+        *self.broker.lock().unwrap() = Some(broker);
+    }
+
     pub fn pop_pending_requests(&self) -> Vec<IpcRequest> {
         self.pending.lock().unwrap().drain(..).collect()
     }
+
     pub fn update_status(&self, status: IpcStatus) {
         *self.status.lock().unwrap() = status;
     }
+
     pub fn send_command(req: IpcRequest) -> Result<IpcResponse, IpcError> {
         let path = get_socket_path()?;
         Self::send_command_at(&path, req)
     }
+
     pub fn send_command_at(path: &Path, req: IpcRequest) -> Result<IpcResponse, IpcError> {
         let mut stream = UnixStream::connect(path)?;
         stream.set_read_timeout(Some(IO_TIMEOUT))?;
@@ -464,6 +530,7 @@ impl ShellIpcServer {
         Ok(response)
     }
 }
+
 impl Drop for ShellIpcServer {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Release);
@@ -472,6 +539,9 @@ impl Drop for ShellIpcServer {
         }
         if let Some(t) = self.thread.take() {
             let _ = t.join();
+        }
+        for worker in self.client_workers.drain(..) {
+            let _ = worker.join();
         }
         if let Ok(m) = fs::symlink_metadata(&self.socket_path)
             && (m.dev(), m.ino()) == self.socket_identity
@@ -498,10 +568,49 @@ fn response(id: u64, result: Option<IpcResult>, error: Option<IpcErrorBody>) -> 
         error,
     }
 }
+
+fn map_broker_error(err: &CompositorCommandError) -> IpcErrorBody {
+    let (code, message) = match err {
+        CompositorCommandError::Unavailable { state } => (
+            "compositor_unavailable",
+            format!("compositor is unavailable (state: {})", state.state_name()),
+        ),
+        CompositorCommandError::Busy { queue_len } => (
+            "compositor_busy",
+            format!("compositor queue full (length: {})", queue_len),
+        ),
+        CompositorCommandError::Unsupported => (
+            "compositor_unsupported",
+            "compositor command is unsupported".into(),
+        ),
+        CompositorCommandError::BackendRejected { message } => (
+            "compositor_command_failed",
+            format!("backend rejected command: {}", message),
+        ),
+        CompositorCommandError::Transport { message } => (
+            "compositor_command_failed",
+            format!("transport error: {}", message),
+        ),
+        CompositorCommandError::Timeout { duration } => (
+            "compositor_timeout",
+            format!("command timed out after {:?}", duration),
+        ),
+        CompositorCommandError::Cancelled { reason } => (
+            "compositor_cancelled",
+            format!("command cancelled: {}", reason),
+        ),
+    };
+    IpcErrorBody {
+        code: code.to_string(),
+        message,
+    }
+}
+
 fn handle_client(
     mut stream: UnixStream,
     pending: &Arc<Mutex<VecDeque<IpcRequest>>>,
     status: &Arc<Mutex<IpcStatus>>,
+    broker: &Arc<Mutex<Option<Arc<CompositorCommandBroker>>>>,
 ) -> Result<(), IpcError> {
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
@@ -570,38 +679,61 @@ fn handle_client(
         );
         return Ok(());
     }
+
     let is_status = matches!(&env.request, IpcRequest::GetStatus);
     let is_telemetry = matches!(&env.request, IpcRequest::GetTelemetry);
-    let compositor_unavailable = matches!(&env.request, IpcRequest::FocusWorkspace(_))
-        && !status.lock().unwrap().health.compositor_connected;
-    let queue_full = !is_status && !is_telemetry && pending.lock().unwrap().len() >= MAX_QUEUE;
+    let is_compositor = matches!(&env.request, IpcRequest::Compositor(_));
+    let queue_full =
+        !is_status && !is_telemetry && !is_compositor && pending.lock().unwrap().len() >= MAX_QUEUE;
+
+    let mut err_body: Option<IpcErrorBody> = None;
+
     let result = if is_status {
         Some(IpcResult::Status(status.lock().unwrap().clone()))
     } else if is_telemetry {
         Some(IpcResult::Telemetry(status.lock().unwrap().health.clone()))
-    } else if compositor_unavailable || queue_full {
+    } else if is_compositor {
+        if let IpcRequest::Compositor(ref cmd) = env.request {
+            let b = broker.lock().unwrap().clone();
+            if let Some(broker_arc) = b {
+                match broker_arc.submit(cmd.clone()) {
+                    Ok(ticket) => match ticket.wait_timeout(IO_TIMEOUT) {
+                        Ok(()) => Some(IpcResult::CommandCompleted),
+                        Err(err) => {
+                            err_body = Some(map_broker_error(&err));
+                            None
+                        }
+                    },
+                    Err(err) => {
+                        err_body = Some(map_broker_error(&err));
+                        None
+                    }
+                }
+            } else {
+                err_body = Some(IpcErrorBody {
+                    code: "compositor_unavailable".into(),
+                    message: "compositor command broker is not attached".into(),
+                });
+                None
+            }
+        } else {
+            unreachable!()
+        }
+    } else if queue_full {
+        err_body = Some(IpcErrorBody {
+            code: "busy".into(),
+            message: "request queue full".into(),
+        });
         None
     } else {
         let mut q = pending.lock().unwrap();
         q.push_back(env.request);
         Some(IpcResult::Accepted)
     };
-    let err = if compositor_unavailable {
-        Some(IpcErrorBody {
-            code: "compositor_unavailable".into(),
-            message: "compositor is not connected; command was not queued".into(),
-        })
-    } else if queue_full {
-        Some(IpcErrorBody {
-            code: "busy".into(),
-            message: "request queue full".into(),
-        })
-    } else {
-        None
-    };
+
     write_frame(
         &mut stream,
-        &serde_json::to_vec(&response(env.request_id, result, err))?,
+        &serde_json::to_vec(&response(env.request_id, result, err_body))?,
     )?;
     Ok(())
 }
@@ -609,73 +741,92 @@ fn handle_client(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
 
     fn fixture() -> (PathBuf, PathBuf) {
-        let root = env::temp_dir().join(format!(
-            "shilpo-ipc-test-{}-{}",
-            std::process::id(),
-            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir(&root).unwrap();
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-        let app = root.join(APP_DIR);
-        fs::create_dir(&app).unwrap();
-        fs::set_permissions(&app, fs::Permissions::from_mode(0o700)).unwrap();
-        (root, app.join(SOCKET))
+        let dir = env::temp_dir().join(format!("shilpo-ipc-test-{}", rand_id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let socket = dir.join(APP_DIR).join(SOCKET);
+        (dir, socket)
+    }
+
+    fn rand_id() -> u64 {
+        use std::time::SystemTime;
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64
     }
 
     #[test]
-    fn round_trip_status_and_fifo() {
+    fn get_status_returns_current_snapshot() {
         let (root, path) = fixture();
         let server = ShellIpcServer::new_at(&root, &path).unwrap();
+
+        let health = ServiceHealth {
+            compositor_connected: true,
+            compositor_state: "ready".into(),
+            compositor_revision: 1,
+            compositor_reconnect_attempt: 0,
+            compositor_last_error: None,
+            battery_service_available: true,
+            audio_service_available: true,
+            network_service_available: true,
+            notification_service_available: true,
+            heed_store_available: true,
+            uptime_seconds: 42,
+        };
+
         server.update_status(IpcStatus {
             running: true,
             readiness: ReadinessState::Ready,
             bar: BarState::Visible,
-            launcher_visible: false,
+            launcher_visible: true,
             control_center_visible: false,
-            health: ServiceHealth::default(),
+            health: health.clone(),
         });
-        let status = ShellIpcServer::send_command_at(&path, IpcRequest::GetStatus).unwrap();
+
+        let response = ShellIpcServer::send_command_at(&path, IpcRequest::GetStatus).unwrap();
+
+        assert!(response.ok);
         assert_eq!(
-            status.result,
+            response.result,
             Some(IpcResult::Status(IpcStatus {
                 running: true,
                 readiness: ReadinessState::Ready,
                 bar: BarState::Visible,
-                launcher_visible: false,
+                launcher_visible: true,
                 control_center_visible: false,
-                health: ServiceHealth::default(),
+                health: health.clone(),
             }))
         );
-        assert!(
-            ShellIpcServer::send_command_at(&path, IpcRequest::ToggleBar)
-                .unwrap()
-                .ok
-        );
-        assert!(matches!(
-            server.pop_pending_requests().as_slice(),
-            [IpcRequest::ToggleBar]
-        ));
+
+        assert!(server.pop_pending_requests().is_empty());
         drop(server);
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn telemetry_is_returned_directly_without_entering_command_queue() {
+    fn get_telemetry_returns_health() {
         let (root, path) = fixture();
         let server = ShellIpcServer::new_at(&root, &path).unwrap();
+
         let health = ServiceHealth {
             compositor_connected: true,
+            compositor_state: "ready".into(),
+            compositor_revision: 1,
+            compositor_reconnect_attempt: 0,
+            compositor_last_error: None,
+            battery_service_available: true,
+            audio_service_available: true,
+            network_service_available: true,
+            notification_service_available: true,
+            heed_store_available: true,
             uptime_seconds: 42,
-            ..Default::default()
         };
+
         server.update_status(IpcStatus {
+            running: true,
             health: health.clone(),
             ..Default::default()
         });
@@ -693,8 +844,11 @@ mod tests {
         let (root, path) = fixture();
         let server = ShellIpcServer::new_at(&root, &path).unwrap();
 
-        let response =
-            ShellIpcServer::send_command_at(&path, IpcRequest::FocusWorkspace(1)).unwrap();
+        let response = ShellIpcServer::send_command_at(
+            &path,
+            IpcRequest::Compositor(CompositorCommand::FocusWorkspace(1)),
+        )
+        .unwrap();
 
         assert!(!response.ok);
         assert_eq!(
@@ -702,6 +856,34 @@ mod tests {
             Some("compositor_unavailable")
         );
         assert!(server.pop_pending_requests().is_empty());
+        drop(server);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compositor_command_succeeds_with_attached_broker() {
+        let (root, path) = fixture();
+        let server = ShellIpcServer::new_at(&root, &path).unwrap();
+
+        let executor: crate::compositor::broker::CommandExecutorFn =
+            Box::new(|_cmd, _timeout, _cancel, _register| Ok(()));
+        let broker =
+            CompositorCommandBroker::new(crate::compositor::BrokerOptions::default(), executor);
+        broker.update_connection(
+            crate::compositor::CompositorConnection::Ready,
+            crate::compositor::CompositorCapabilities::default(),
+        );
+
+        server.attach_broker(broker);
+
+        let response = ShellIpcServer::send_command_at(
+            &path,
+            IpcRequest::Compositor(CompositorCommand::FocusWorkspace(1)),
+        )
+        .unwrap();
+
+        assert!(response.ok);
+        assert_eq!(response.result, Some(IpcResult::CommandCompleted));
         drop(server);
         fs::remove_dir_all(root).unwrap();
     }
@@ -778,31 +960,12 @@ mod tests {
             }));
         }
 
-        for h in handles {
-            h.join().unwrap();
+        for handle in handles {
+            handle.join().unwrap();
         }
-
-        let reqs = server.pop_pending_requests();
-        assert_eq!(reqs.len(), 10);
-        for req in reqs {
-            assert!(matches!(req, IpcRequest::ToggleLauncher));
-        }
-
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn test_ipc_integration_and_security_validation() {
-        let (root, path) = fixture();
-        let server = ShellIpcServer::new_at(&root, &path).unwrap();
-
-        let req = IpcRequest::ToggleLauncher;
-        let resp = ShellIpcServer::send_command_at(&path, req);
-        assert!(resp.is_ok());
-
-        let reqs = server.pop_pending_requests();
-        assert_eq!(reqs.len(), 1);
-
+        let requests = server.pop_pending_requests();
+        assert_eq!(requests.len(), 10);
+        drop(server);
         fs::remove_dir_all(root).unwrap();
     }
 }

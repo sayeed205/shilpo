@@ -257,6 +257,7 @@ impl ShellRuntime {
         };
 
         let compositor = hub.compositor.clone();
+        ipc_server.attach_broker(compositor.command_broker());
         let latest_snapshot = compositor.current();
         let mut rx = compositor.subscribe();
 
@@ -683,7 +684,7 @@ impl ShellRuntime {
                                 Some(id) => ActionInvocation::Extension { id, payload },
                                 None => id.into(),
                             };
-                            if let Err(error) = Self::dispatch_invocation(cx, invocation) {
+                            if let Err(error) = Self::dispatch_action(cx, invocation) {
                                 tracing::warn!(
                                     extension = %extension_id,
                                     error = %error,
@@ -1392,9 +1393,31 @@ impl ShellRuntime {
         let prior_id = cx.global_mut::<Self>().prior_window_id.take();
         if let Some(win_id) = prior_id
             && let Some(comp) = Self::compositor(cx)
-            && let Err(error) = comp.execute(CompositorCommand::FocusWindow(win_id))
         {
-            tracing::warn!(error = %error, window_id = win_id, "failed to restore prior window focus");
+            match comp
+                .command_broker()
+                .submit(CompositorCommand::FocusWindow(win_id))
+            {
+                Ok(ticket) => {
+                    cx.spawn(async move |_cx| {
+                        if let Err(error) = ticket.await {
+                            tracing::warn!(
+                                error = %error,
+                                window_id = win_id,
+                                "failed to restore prior window focus"
+                            );
+                        }
+                    })
+                    .detach();
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        window_id = win_id,
+                        "failed to restore prior window focus"
+                    );
+                }
+            }
         }
     }
 
@@ -1793,10 +1816,7 @@ impl ShellRuntime {
     }
 
     pub fn focus_workspace(cx: &mut App, ws_id: u64) -> Result<(), ShellError> {
-        let comp = Self::compositor(cx)
-            .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
-        comp.execute(CompositorCommand::FocusWorkspace(ws_id))
-            .map_err(|error| ShellError::ActionFailed(error.to_string()))
+        Self::dispatch_action(cx, ActionInvocation::FocusWorkspace(ws_id))
     }
 
     pub fn save_audio_preference(cx: &App, device: Option<String>, port: Option<String>) {
@@ -1995,11 +2015,22 @@ impl ShellRuntime {
 
     fn enqueue_worker(cx: &mut App, request: IpcRequest) -> Result<(), ShellError> {
         match request {
-            IpcRequest::FocusWorkspace(id) => {
+            IpcRequest::Compositor(cmd) => {
                 let comp = Self::compositor(cx)
                     .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
-                comp.execute(CompositorCommand::FocusWorkspace(id))
+                let ticket = comp
+                    .command_broker()
+                    .submit(cmd)
                     .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
+                cx.spawn(async move |cx| {
+                    if let Err(err) = ticket.await {
+                        cx.update(|cx| {
+                            tracing::warn!(error = %err, "compositor command failed");
+                            Self::show_compositor_error_toast(cx, &err);
+                        });
+                    }
+                })
+                .detach();
             }
             IpcRequest::ReloadConfig => {
                 let handle = cx
@@ -2057,13 +2088,54 @@ impl ShellRuntime {
         cx: &mut App,
         action: impl Into<ActionInvocation>,
     ) -> Result<(), ShellError> {
-        Self::dispatch_invocation(cx, action.into())
+        match Self::dispatch_invocation(cx, action.into()) {
+            Ok(crate::actions::ActionResult::Immediate) => Ok(()),
+            Ok(crate::actions::ActionResult::Compositor(ticket)) => {
+                cx.spawn(async move |cx| match ticket.await {
+                    Ok(()) => {}
+                    Err(err) => {
+                        cx.update(|cx| {
+                            tracing::warn!(error = %err, "compositor action failed");
+                            Self::show_compositor_error_toast(cx, &err);
+                        });
+                    }
+                })
+                .detach();
+                Ok(())
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "action invocation failed");
+                Self::show_compositor_error_message_toast(cx, &err.to_string());
+                Err(err)
+            }
+        }
+    }
+
+    fn show_compositor_error_toast(cx: &mut App, error: &shilpo_services::CompositorCommandError) {
+        let concise = format!("{error}");
+        Self::show_compositor_error_message_toast(cx, &concise);
+    }
+
+    fn show_compositor_error_message_toast(cx: &mut App, concise: &str) {
+        if cx.has_global::<Self>() {
+            let notif = cx
+                .global::<Self>()
+                .service_hub
+                .as_ref()
+                .and_then(|h| h.notification.as_ref());
+            if let Some(service) = notif {
+                service.push_notification(shilpo_services::Notification::new(
+                    "Compositor command failed",
+                    concise,
+                ));
+            }
+        }
     }
 
     pub fn dispatch_invocation(
         cx: &mut App,
         invocation: ActionInvocation,
-    ) -> Result<(), ShellError> {
+    ) -> Result<crate::actions::ActionResult, ShellError> {
         let action_id = invocation.id();
         let descriptor = cx
             .global::<Self>()
@@ -2084,23 +2156,47 @@ impl ShellRuntime {
         }
 
         match invocation {
-            ActionInvocation::ToggleLauncher => Self::toggle_launcher(cx),
-            ActionInvocation::ToggleControlCenter => Self::toggle_control_center(cx),
-            ActionInvocation::ToggleBar => Self::toggle_bar(cx),
-            ActionInvocation::ToggleOverview => Self::toggle_overview(cx),
-            ActionInvocation::ReloadConfig => Self::enqueue_worker(cx, IpcRequest::ReloadConfig)?,
-            ActionInvocation::Quit => Self::shutdown(cx),
+            ActionInvocation::ToggleLauncher => {
+                Self::toggle_launcher(cx);
+                Ok(crate::actions::ActionResult::Immediate)
+            }
+            ActionInvocation::ToggleControlCenter => {
+                Self::toggle_control_center(cx);
+                Ok(crate::actions::ActionResult::Immediate)
+            }
+            ActionInvocation::ToggleBar => {
+                Self::toggle_bar(cx);
+                Ok(crate::actions::ActionResult::Immediate)
+            }
+            ActionInvocation::ToggleOverview => {
+                Self::toggle_overview(cx);
+                Ok(crate::actions::ActionResult::Immediate)
+            }
+            ActionInvocation::ReloadConfig => {
+                Self::enqueue_worker(cx, IpcRequest::ReloadConfig)?;
+                Ok(crate::actions::ActionResult::Immediate)
+            }
+            ActionInvocation::Quit => {
+                Self::shutdown(cx);
+                Ok(crate::actions::ActionResult::Immediate)
+            }
             ActionInvocation::FocusWorkspace(id) => {
                 let comp = Self::compositor(cx)
                     .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
-                comp.execute(CompositorCommand::FocusWorkspace(id))
+                let ticket = comp
+                    .command_broker()
+                    .submit(CompositorCommand::FocusWorkspace(id))
                     .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
+                Ok(crate::actions::ActionResult::Compositor(ticket))
             }
             ActionInvocation::CreateWorkspace(name) => {
                 let comp = Self::compositor(cx)
                     .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
-                comp.execute(CompositorCommand::CreateWorkspace { name })
+                let ticket = comp
+                    .command_broker()
+                    .submit(CompositorCommand::CreateWorkspace { name })
                     .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
+                Ok(crate::actions::ActionResult::Compositor(ticket))
             }
             ActionInvocation::MoveWindowToWorkspace {
                 window_id,
@@ -2108,11 +2204,14 @@ impl ShellRuntime {
             } => {
                 let comp = Self::compositor(cx)
                     .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
-                comp.execute(CompositorCommand::MoveWindowToWorkspace {
-                    window_id,
-                    workspace_id,
-                })
-                .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
+                let ticket = comp
+                    .command_broker()
+                    .submit(CompositorCommand::MoveWindowToWorkspace {
+                        window_id,
+                        workspace_id,
+                    })
+                    .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
+                Ok(crate::actions::ActionResult::Compositor(ticket))
             }
             ActionInvocation::VolumeUp => {
                 let _ = std::process::Command::new("wpctl")
@@ -2128,6 +2227,7 @@ impl ShellRuntime {
                         },
                     );
                 }
+                Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::VolumeDown => {
                 let _ = std::process::Command::new("wpctl")
@@ -2143,6 +2243,7 @@ impl ShellRuntime {
                         },
                     );
                 }
+                Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::VolumeMute => {
                 let _ = std::process::Command::new("wpctl")
@@ -2158,6 +2259,7 @@ impl ShellRuntime {
                         },
                     );
                 }
+                Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::BrightnessUp => {
                 if let Ok(brightness) = shilpo_services::BrightnessService::new() {
@@ -2171,6 +2273,7 @@ impl ShellRuntime {
                         },
                     );
                 }
+                Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::BrightnessDown => {
                 if let Ok(brightness) = shilpo_services::BrightnessService::new() {
@@ -2184,16 +2287,19 @@ impl ShellRuntime {
                         },
                     );
                 }
+                Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::TakeScreenshot => {
                 if let Ok(capture) = shilpo_services::ScreenCaptureService::new() {
                     capture.take_screenshot(shilpo_services::ScreenshotMode::Region, None);
                 }
+                Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::RecordScreen => {
                 if let Ok(capture) = shilpo_services::ScreenCaptureService::new() {
                     capture.toggle_recording(true, shilpo_services::RecordMode::Region);
                 }
+                Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::Extension { id, payload } => {
                 if cx.global::<Self>().extensions.is_none() {
@@ -2202,9 +2308,9 @@ impl ShellRuntime {
                     )));
                 }
                 Self::dispatch_extension_input(cx, &id, None, "invoke", payload);
+                Ok(crate::actions::ActionResult::Immediate)
             }
         }
-        Ok(())
     }
 
     fn drain_ipc(cx: &mut App) {
@@ -2230,8 +2336,26 @@ impl ShellRuntime {
                     let _ = Self::dispatch_action(cx, ActionId::Quit);
                     return;
                 }
-                IpcRequest::FocusWorkspace(id) => {
-                    let _ = Self::dispatch_action(cx, ActionInvocation::FocusWorkspace(id));
+                IpcRequest::Compositor(cmd) => {
+                    let _ = match cmd {
+                        CompositorCommand::FocusWorkspace(id) => {
+                            Self::dispatch_action(cx, ActionInvocation::FocusWorkspace(id))
+                        }
+                        CompositorCommand::CreateWorkspace { name } => {
+                            Self::dispatch_action(cx, ActionInvocation::CreateWorkspace(name))
+                        }
+                        CompositorCommand::MoveWindowToWorkspace {
+                            window_id,
+                            workspace_id,
+                        } => Self::dispatch_action(
+                            cx,
+                            ActionInvocation::MoveWindowToWorkspace {
+                                window_id,
+                                workspace_id,
+                            },
+                        ),
+                        _ => Ok(()),
+                    };
                 }
                 IpcRequest::GetStatus => {}
                 IpcRequest::GetTelemetry => {}

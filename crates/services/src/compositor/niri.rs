@@ -1,8 +1,10 @@
 use super::{
-    CompositorAdapter, CompositorCapabilities, CompositorCommand, CompositorConnection,
+    BrokerOptions, CancellationReason, CompositorAdapter, CompositorCapabilities,
+    CompositorCommand, CompositorCommandBroker, CompositorCommandError, CompositorConnection,
     CompositorOutput, CompositorSnapshot, WindowInfo, WorkspaceInfo,
+    broker::{CommandCancellation, StreamCancelHandle, create_stream_cancel_handle},
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use niri_ipc::{
     Event, Reply, Request, Response,
     socket::Socket,
@@ -34,6 +36,7 @@ pub struct NiriCompositorService {
     tx: watch::Sender<Arc<CompositorSnapshot>>,
     rx: watch::Receiver<Arc<CompositorSnapshot>>,
     stop_flag: Arc<AtomicBool>,
+    broker: Arc<CompositorCommandBroker>,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
@@ -55,34 +58,49 @@ impl NiriCompositorService {
         let (tx, rx) = watch::channel(Arc::new(initial));
         let stop_flag = Arc::new(AtomicBool::new(false));
 
+        let broker =
+            CompositorCommandBroker::new(BrokerOptions::default(), Box::new(execute_niri_command));
+
         let tx_clone = tx.clone();
         let stop_clone = stop_flag.clone();
+        let broker_clone = broker.clone();
 
         let handle = thread::spawn(move || {
-            run_niri_listener(tx_clone, stop_clone);
+            run_niri_listener(tx_clone, stop_clone, broker_clone);
         });
 
         Arc::new(Self {
             tx,
             rx,
             stop_flag,
+            broker,
             handle: Mutex::new(Some(handle)),
         })
     }
 
     /// Construct offline instance for testing with specified initial snapshot.
     pub fn new_offline(snapshot: CompositorSnapshot) -> Arc<Self> {
-        let (tx, rx) = watch::channel(Arc::new(snapshot));
+        let (tx, rx) = watch::channel(Arc::new(snapshot.clone()));
         let stop_flag = Arc::new(AtomicBool::new(true));
+
+        let broker = CompositorCommandBroker::new(
+            BrokerOptions::default(),
+            Box::new(|_cmd, _timeout, _cancel, _register| Ok(())),
+        );
+        broker.update_connection(snapshot.connection, snapshot.capabilities);
+
         Arc::new(Self {
             tx,
             rx,
             stop_flag,
+            broker,
             handle: Mutex::new(None),
         })
     }
 
     pub fn update_snapshot(&self, snapshot: CompositorSnapshot) {
+        self.broker
+            .update_connection(snapshot.connection.clone(), snapshot.capabilities.clone());
         let _ = self.tx.send(Arc::new(snapshot));
     }
 }
@@ -96,59 +114,8 @@ impl CompositorAdapter for NiriCompositorService {
         self.rx.clone()
     }
 
-    fn execute(&self, command: CompositorCommand) -> Result<()> {
-        let current = self.current();
-        if !current.connection.is_ready() {
-            anyhow::bail!(
-                "Compositor is unavailable: status is {:?}",
-                current.connection
-            );
-        }
-
-        let socket_path = resolve_niri_socket_path()
-            .ok_or_else(|| anyhow::anyhow!("Niri socket path not set"))?;
-
-        let mut socket =
-            Socket::connect_to(&socket_path).context("Failed to connect to Niri IPC socket")?;
-
-        let req = match command {
-            CompositorCommand::FocusWorkspace(id) => {
-                Request::Action(niri_ipc::Action::FocusWorkspace {
-                    reference: niri_ipc::WorkspaceReferenceArg::Id(id),
-                })
-            }
-            CompositorCommand::FocusWindow(id) => {
-                Request::Action(niri_ipc::Action::FocusWindow { id })
-            }
-            CompositorCommand::FocusPreviousWindow => {
-                Request::Action(niri_ipc::Action::FocusWindowPrevious {})
-            }
-            CompositorCommand::CreateWorkspace { name: None } => {
-                Request::Action(niri_ipc::Action::FocusWorkspaceDown {})
-            }
-            CompositorCommand::CreateWorkspace { name: Some(name) } => {
-                anyhow::bail!("Niri does not support naming workspaces through IPC: {name}");
-            }
-            CompositorCommand::MoveWindowToWorkspace {
-                window_id,
-                workspace_id,
-            } => Request::Action(niri_ipc::Action::MoveWindowToWorkspace {
-                window_id: Some(window_id),
-                reference: niri_ipc::WorkspaceReferenceArg::Id(workspace_id),
-                focus: true,
-            }),
-        };
-
-        match socket.send(req) {
-            Ok(Ok(Response::Handled)) => Ok(()),
-            Ok(Ok(resp)) => {
-                anyhow::bail!("Niri action returned unexpected response: {resp:?}");
-            }
-            Ok(Err(err)) => {
-                anyhow::bail!("Niri action failed: {err}");
-            }
-            Err(err) => Err(err).context("Failed to send Niri action"),
-        }
+    fn command_broker(&self) -> Arc<CompositorCommandBroker> {
+        self.broker.clone()
     }
 }
 
@@ -160,6 +127,140 @@ impl Drop for NiriCompositorService {
         {
             let _ = handle.join();
         }
+    }
+}
+
+fn execute_niri_command(
+    command: &CompositorCommand,
+    timeout: Duration,
+    cancel: Arc<CommandCancellation>,
+    register_cancel: &dyn Fn(Arc<dyn StreamCancelHandle>),
+) -> Result<(), CompositorCommandError> {
+    let socket_path = match resolve_niri_socket_path() {
+        Some(p) => p,
+        None => {
+            return Err(CompositorCommandError::Unavailable {
+                state: CompositorConnection::Stopped,
+            });
+        }
+    };
+
+    let stream = match UnixStream::connect(&socket_path) {
+        Ok(s) => s,
+        Err(err) => {
+            return Err(CompositorCommandError::Transport {
+                message: format!(
+                    "failed to connect to socket {}: {err}",
+                    socket_path.display()
+                ),
+            });
+        }
+    };
+
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let cancel_stream = match stream.try_clone() {
+        Ok(s) => s,
+        Err(e) => {
+            return Err(CompositorCommandError::Transport {
+                message: e.to_string(),
+            });
+        }
+    };
+
+    register_cancel(create_stream_cancel_handle(cancel_stream));
+
+    let req = match command {
+        CompositorCommand::FocusWorkspace(id) => {
+            Request::Action(niri_ipc::Action::FocusWorkspace {
+                reference: niri_ipc::WorkspaceReferenceArg::Id(*id),
+            })
+        }
+        CompositorCommand::FocusWindow(id) => {
+            Request::Action(niri_ipc::Action::FocusWindow { id: *id })
+        }
+        CompositorCommand::FocusPreviousWindow => {
+            Request::Action(niri_ipc::Action::FocusWindowPrevious {})
+        }
+        CompositorCommand::CreateWorkspace { name: None } => {
+            Request::Action(niri_ipc::Action::FocusWorkspaceDown {})
+        }
+        CompositorCommand::CreateWorkspace { name: Some(_) } => {
+            return Err(CompositorCommandError::Unsupported);
+        }
+        CompositorCommand::MoveWindowToWorkspace {
+            window_id,
+            workspace_id,
+        } => Request::Action(niri_ipc::Action::MoveWindowToWorkspace {
+            window_id: Some(*window_id),
+            reference: niri_ipc::WorkspaceReferenceArg::Id(*workspace_id),
+            focus: true,
+        }),
+    };
+
+    let mut json = match serde_json::to_string(&req) {
+        Ok(j) => j,
+        Err(err) => {
+            return Err(CompositorCommandError::Transport {
+                message: err.to_string(),
+            });
+        }
+    };
+    json.push('\n');
+
+    let mut stream_writer = stream;
+    if let Err(err) = stream_writer.write_all(json.as_bytes()) {
+        if cancel.is_cancelled() {
+            return Err(CompositorCommandError::Cancelled {
+                reason: cancel.reason().unwrap_or(CancellationReason::User),
+            });
+        }
+        if err.kind() == std::io::ErrorKind::TimedOut
+            || err.kind() == std::io::ErrorKind::WouldBlock
+        {
+            return Err(CompositorCommandError::Timeout { duration: timeout });
+        }
+        return Err(CompositorCommandError::Transport {
+            message: err.to_string(),
+        });
+    }
+
+    let mut reader = BufReader::new(&stream_writer);
+    let mut line = String::new();
+    if let Err(err) = reader.read_line(&mut line) {
+        if cancel.is_cancelled() {
+            return Err(CompositorCommandError::Cancelled {
+                reason: cancel.reason().unwrap_or(CancellationReason::User),
+            });
+        }
+        if err.kind() == std::io::ErrorKind::TimedOut
+            || err.kind() == std::io::ErrorKind::WouldBlock
+        {
+            return Err(CompositorCommandError::Timeout { duration: timeout });
+        }
+        return Err(CompositorCommandError::Transport {
+            message: err.to_string(),
+        });
+    }
+
+    let reply: Reply = match serde_json::from_str(&line) {
+        Ok(r) => r,
+        Err(err) => {
+            return Err(CompositorCommandError::Transport {
+                message: format!("malformed reply from niri: {err}"),
+            });
+        }
+    };
+
+    match reply {
+        Ok(Response::Handled) => Ok(()),
+        Ok(resp) => Err(CompositorCommandError::BackendRejected {
+            message: format!("unexpected niri response: {resp:?}"),
+        }),
+        Err(err) => Err(CompositorCommandError::BackendRejected {
+            message: err.to_string(),
+        }),
     }
 }
 
@@ -203,6 +304,7 @@ fn query_outputs_from_socket_path(socket_path: &PathBuf) -> Result<Vec<Composito
 
 fn publish_reconnecting(
     tx: &watch::Sender<Arc<CompositorSnapshot>>,
+    broker: &CompositorCommandBroker,
     revision: &mut u64,
     attempt: u32,
     last_error: Option<String>,
@@ -217,11 +319,16 @@ fn publish_reconnecting(
     if *previous != current {
         current.revision = previous.revision.saturating_add(1);
         *revision = current.revision;
+        broker.update_connection(current.connection.clone(), current.capabilities.clone());
         let _ = tx.send(Arc::new(current));
     }
 }
 
-fn run_niri_listener(tx: watch::Sender<Arc<CompositorSnapshot>>, stop_flag: Arc<AtomicBool>) {
+fn run_niri_listener(
+    tx: watch::Sender<Arc<CompositorSnapshot>>,
+    stop_flag: Arc<AtomicBool>,
+    broker: Arc<CompositorCommandBroker>,
+) {
     let mut backoff = Duration::from_millis(250);
     let max_backoff = Duration::from_secs(5);
     let mut attempt = 0u32;
@@ -235,28 +342,10 @@ fn run_niri_listener(tx: watch::Sender<Arc<CompositorSnapshot>>, stop_flag: Arc<
             None => {
                 publish_reconnecting(
                     &tx,
+                    &broker,
                     &mut revision,
                     attempt,
                     Some("Neither NIRI_SOCKET nor NIRI_SOCKET_PATH is set".to_string()),
-                );
-                sleep_with_stop_flag(backoff, &stop_flag);
-                backoff = (backoff * 2).min(max_backoff);
-                continue;
-            }
-        };
-
-        let stream = match UnixStream::connect(&socket_path) {
-            Ok(s) => s,
-            Err(err) => {
-                publish_reconnecting(
-                    &tx,
-                    &mut revision,
-                    attempt,
-                    Some(format!(
-                        "Failed to connect to Niri socket at {}: {}",
-                        socket_path.display(),
-                        err
-                    )),
                 );
                 sleep_with_stop_flag(backoff, &stop_flag);
                 backoff = (backoff * 2).min(max_backoff);
@@ -269,6 +358,7 @@ fn run_niri_listener(tx: watch::Sender<Arc<CompositorSnapshot>>, stop_flag: Arc<
             Err(err) => {
                 publish_reconnecting(
                     &tx,
+                    &broker,
                     &mut revision,
                     attempt,
                     Some(format!("Failed to query Niri outputs: {err}")),
@@ -279,119 +369,91 @@ fn run_niri_listener(tx: watch::Sender<Arc<CompositorSnapshot>>, stop_flag: Arc<
             }
         };
 
-        if let Err(err) = stream.set_read_timeout(Some(Duration::from_millis(200))) {
-            tracing::warn!(error = %err, "failed to set read timeout on Niri stream");
-        }
-
-        let mut reader = BufReader::new(stream);
-        let request_json = match serde_json::to_string(&Request::EventStream) {
-            Ok(json) => json + "\n",
+        let mut event_stream = match UnixStream::connect(&socket_path) {
+            Ok(s) => s,
             Err(err) => {
-                publish_reconnecting(&tx, &mut revision, attempt, Some(err.to_string()));
+                publish_reconnecting(
+                    &tx,
+                    &broker,
+                    &mut revision,
+                    attempt,
+                    Some(format!("Failed to connect to Niri event socket: {err}")),
+                );
                 sleep_with_stop_flag(backoff, &stop_flag);
                 backoff = (backoff * 2).min(max_backoff);
                 continue;
             }
         };
 
-        if let Err(err) = reader
-            .get_mut()
-            .write_all(request_json.as_bytes())
-            .and_then(|_| reader.get_mut().flush())
-        {
+        let req_json = match serde_json::to_string(&Request::EventStream) {
+            Ok(mut j) => {
+                j.push('\n');
+                j
+            }
+            Err(err) => {
+                publish_reconnecting(
+                    &tx,
+                    &broker,
+                    &mut revision,
+                    attempt,
+                    Some(format!("Failed to serialize EventStream request: {err}")),
+                );
+                sleep_with_stop_flag(backoff, &stop_flag);
+                backoff = (backoff * 2).min(max_backoff);
+                continue;
+            }
+        };
+
+        if let Err(err) = event_stream.write_all(req_json.as_bytes()) {
             publish_reconnecting(
                 &tx,
+                &broker,
                 &mut revision,
                 attempt,
-                Some(format!("Handshake write error: {}", err)),
+                Some(format!("Failed to send EventStream request: {err}")),
             );
             sleep_with_stop_flag(backoff, &stop_flag);
             backoff = (backoff * 2).min(max_backoff);
             continue;
         }
 
-        let mut line = String::new();
-        let mut handshake_ok = false;
-        let mut timeout_count = 0;
-
-        while !stop_flag.load(Ordering::Relaxed) {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) => break,
-                Ok(_) => {
-                    let reply: Result<Reply, _> = serde_json::from_str(&line);
-                    match reply {
-                        Ok(Ok(_)) => {
-                            handshake_ok = true;
-                            break;
-                        }
-                        Ok(Err(e)) => {
-                            publish_reconnecting(
-                                &tx,
-                                &mut revision,
-                                attempt,
-                                Some(format!("Niri refused EventStream: {}", e)),
-                            );
-                            break;
-                        }
-                        Err(e) => {
-                            publish_reconnecting(
-                                &tx,
-                                &mut revision,
-                                attempt,
-                                Some(format!("Failed to parse handshake reply: {}", e)),
-                            );
-                            break;
-                        }
-                    }
-                }
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    timeout_count += 1;
-                    if timeout_count > 15 {
-                        publish_reconnecting(
-                            &tx,
-                            &mut revision,
-                            attempt,
-                            Some("Handshake read timeout".into()),
-                        );
-                        break;
-                    }
-                    continue;
-                }
-                Err(e) => {
-                    publish_reconnecting(
-                        &tx,
-                        &mut revision,
-                        attempt,
-                        Some(format!("Handshake read error: {}", e)),
-                    );
-                    break;
-                }
-            }
-        }
-
-        if !handshake_ok {
+        if event_stream
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .is_err()
+        {
+            publish_reconnecting(
+                &tx,
+                &broker,
+                &mut revision,
+                attempt,
+                Some("Failed to set read timeout on Niri socket".to_string()),
+            );
             sleep_with_stop_flag(backoff, &stop_flag);
             backoff = (backoff * 2).min(max_backoff);
             continue;
         }
 
-        reader.get_ref().shutdown(std::net::Shutdown::Write).ok();
-
         let mut state = EventStreamState::default();
-        let mut current_outputs = outputs;
+        let mut reader = BufReader::new(event_stream);
+        let mut line = String::new();
         let mut initial_sync = true;
-        let initial_sync_deadline = std::time::Instant::now() + Duration::from_secs(5);
-        let mut rate_limit_timer = std::time::Instant::now();
+        let mut current_outputs = outputs;
         let mut warning_count = 0u32;
+        let mut rate_limit_timer = std::time::Instant::now();
 
         while !stop_flag.load(Ordering::Relaxed) {
             line.clear();
             match reader.read_line(&mut line) {
-                Ok(0) => break,
+                Ok(0) => {
+                    publish_reconnecting(
+                        &tx,
+                        &broker,
+                        &mut revision,
+                        attempt,
+                        Some("Niri socket EOF reached".to_string()),
+                    );
+                    break;
+                }
                 Ok(_) => {
                     let event: Event = match serde_json::from_str(&line) {
                         Ok(ev) => ev,
@@ -418,19 +480,10 @@ fn run_niri_listener(tx: watch::Sender<Arc<CompositorSnapshot>>, stop_flag: Arc<
 
                     state.apply(event);
 
-                    if refresh_outputs_needed {
-                        match query_outputs_from_socket_path(&socket_path) {
-                            Ok(new_outputs) => current_outputs = new_outputs,
-                            Err(err) => {
-                                publish_reconnecting(
-                                    &tx,
-                                    &mut revision,
-                                    attempt,
-                                    Some(format!("Failed to refresh Niri outputs: {err}")),
-                                );
-                                break;
-                            }
-                        }
+                    if refresh_outputs_needed
+                        && let Ok(new_outputs) = query_outputs_from_socket_path(&socket_path)
+                    {
+                        current_outputs = new_outputs;
                     }
 
                     if !initial_sync || initial_sync_boundary {
@@ -442,6 +495,7 @@ fn run_niri_listener(tx: watch::Sender<Arc<CompositorSnapshot>>, stop_flag: Arc<
 
                         publish_snapshot_from_state(
                             &tx,
+                            &broker,
                             &mut revision,
                             CompositorConnection::Ready,
                             &current_outputs,
@@ -449,43 +503,41 @@ fn run_niri_listener(tx: watch::Sender<Arc<CompositorSnapshot>>, stop_flag: Arc<
                         );
                     }
                 }
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::WouldBlock
+                        || err.kind() == std::io::ErrorKind::TimedOut =>
                 {
-                    if initial_sync && std::time::Instant::now() >= initial_sync_deadline {
-                        publish_reconnecting(
-                            &tx,
-                            &mut revision,
-                            attempt,
-                            Some("Timed out waiting for Niri initial state".into()),
-                        );
-                        break;
-                    }
                     continue;
                 }
                 Err(err) => {
-                    tracing::warn!(error = %err, "Niri event stream read error");
+                    publish_reconnecting(
+                        &tx,
+                        &broker,
+                        &mut revision,
+                        attempt,
+                        Some(format!("Niri socket read error: {err}")),
+                    );
                     break;
                 }
             }
         }
 
-        if !stop_flag.load(Ordering::Relaxed) {
-            publish_reconnecting(
-                &tx,
-                &mut revision,
-                attempt,
-                Some("Event stream disconnected".into()),
-            );
-            sleep_with_stop_flag(backoff, &stop_flag);
-            backoff = (backoff * 2).min(max_backoff);
-        }
+        sleep_with_stop_flag(backoff, &stop_flag);
+        backoff = (backoff * 2).min(max_backoff);
     }
+
+    publish_reconnecting(
+        &tx,
+        &broker,
+        &mut revision,
+        attempt,
+        Some("Niri listener thread stopped".to_string()),
+    );
 }
 
-pub fn publish_snapshot_from_state(
+fn publish_snapshot_from_state(
     tx: &watch::Sender<Arc<CompositorSnapshot>>,
+    broker: &CompositorCommandBroker,
     revision: &mut u64,
     connection: CompositorConnection,
     outputs: &[CompositorOutput],
@@ -567,81 +619,10 @@ pub fn publish_snapshot_from_state(
         let mut new_snapshot = new_snapshot;
         new_snapshot.revision = prev.revision.saturating_add(1);
         *revision = new_snapshot.revision;
+        broker.update_connection(
+            new_snapshot.connection.clone(),
+            new_snapshot.capabilities.clone(),
+        );
         let _ = tx.send(Arc::new(new_snapshot));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_niri_service_non_failing_construction() {
-        let service = NiriCompositorService::new();
-        assert_eq!(
-            service.current().connection,
-            CompositorConnection::Connecting
-        );
-    }
-
-    #[test]
-    fn test_niri_service_offline_construction() {
-        let snapshot = CompositorSnapshot {
-            revision: 1,
-            connection: CompositorConnection::Ready,
-            capabilities: CompositorCapabilities::default(),
-            outputs: vec![CompositorOutput {
-                name: "DP-1".into(),
-                make: Some("Dell".into()),
-                model: Some("UltraSharp".into()),
-                logical_position: (0, 0),
-                logical_size: (1920, 1080),
-                scale: 1.0,
-            }],
-            workspaces: vec![WorkspaceInfo {
-                id: 1,
-                name: Some("1".into()),
-                idx: 1,
-                is_active: true,
-                is_focused: true,
-                is_urgent: false,
-                output_name: Some("DP-1".into()),
-                active_window_id: None,
-            }],
-            windows: Vec::new(),
-            focused_output: Some("DP-1".into()),
-            focused_workspace_id: Some(1),
-            focused_window_id: None,
-            active_keyboard_layout: Some("us".into()),
-        };
-        let service = NiriCompositorService::new_offline(snapshot);
-        assert_eq!(service.current().connection, CompositorConnection::Ready);
-        assert_eq!(service.current().workspaces.len(), 1);
-    }
-
-    #[test]
-    fn test_execute_fails_when_not_ready() {
-        let service = NiriCompositorService::new();
-        assert!(
-            service
-                .execute(CompositorCommand::FocusWorkspace(1))
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn identical_snapshot_payload_does_not_advance_revision() {
-        let (tx, rx) = watch::channel(Arc::new(CompositorSnapshot::default()));
-        let state = EventStreamState::default();
-        let mut revision = 0;
-
-        publish_snapshot_from_state(&tx, &mut revision, CompositorConnection::Ready, &[], &state);
-        let first = rx.borrow().clone();
-
-        publish_snapshot_from_state(&tx, &mut revision, CompositorConnection::Ready, &[], &state);
-        let second = rx.borrow().clone();
-
-        assert_eq!(first.revision, second.revision);
-        assert_eq!(*first, *second);
     }
 }

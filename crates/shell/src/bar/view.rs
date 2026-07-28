@@ -75,10 +75,10 @@ impl BarView {
         cx: &mut App,
     ) -> Result<(), String> {
         match request {
-            shilpo_services::IpcRequest::FocusWorkspace(id) => {
-                ShellRuntime::dispatch_action(cx, ActionInvocation::FocusWorkspace(id))
-                    .map_err(|error| error.to_string())
-            }
+            shilpo_services::IpcRequest::Compositor(
+                shilpo_services::CompositorCommand::FocusWorkspace(id),
+            ) => ShellRuntime::dispatch_action(cx, ActionInvocation::FocusWorkspace(id))
+                .map_err(|error| error.to_string()),
             shilpo_services::IpcRequest::ReloadConfig => service_worker::try_send_command(
                 &self.service_commands,
                 WorkerCommand::ReloadConfig,
