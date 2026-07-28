@@ -201,6 +201,27 @@ impl ShellRuntime {
             .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));
         let active_config = shilpo_config::ShellConfig::load_or_create(&config_path)
             .unwrap_or_else(|_| shilpo_config::ShellConfig::default());
+        let wp_service = shilpo_services::WallpaperService::default();
+        wp_service.set_wallpaper_dir(&active_config.desktop.wallpaper_dir);
+        if let Some(state) = shilpo_services::WallpaperService::read_current() {
+            shilpo_ui::Theme::global_mut(cx).set_source_argb(state.source_argb);
+        } else if let Some(active_wp) = wp_service
+            .active_wallpaper()
+            .or_else(|| wp_service.scan_wallpapers().into_iter().next())
+        {
+            let _ = wp_service.set_wallpaper(&active_wp);
+        }
+
+        let rx = shilpo_services::WallpaperService::subscribe();
+        cx.spawn(async move |cx| {
+            while let Ok(changed) = rx.recv().await {
+                cx.update(|cx| {
+                    shilpo_ui::Theme::global_mut(cx).set_source_argb(changed.source_argb);
+                    cx.refresh_windows();
+                });
+            }
+        })
+        .detach();
         let session_path = shilpo_config::ShellSessionState::default_session_path();
         let (session_state, _restored_fallback) =
             shilpo_config::ShellSessionState::restore_with_fallback(&session_path);
@@ -854,6 +875,8 @@ impl ShellRuntime {
                     ) => {
                         let previous = cx.global::<Self>().active_config.clone();
                         cx.global_mut::<Self>().active_config = (**config).clone();
+                        shilpo_services::WallpaperService::default()
+                            .set_wallpaper_dir(&config.desktop.wallpaper_dir);
                         if previous.theme.mode != config.theme.mode {
                             Self::dispatch_extension_event(
                                 cx,
@@ -862,11 +885,17 @@ impl ShellRuntime {
                                 },
                             );
                         }
-                        if previous.theme.accent != config.theme.accent {
+                        if previous.theme.accent != config.theme.accent
+                            || previous.theme.color_source != config.theme.color_source
+                        {
                             Self::dispatch_extension_event(
                                 cx,
                                 shilpo_ext::ExtensionEvent::PaletteGenerated {
-                                    accent: config.theme.accent.clone(),
+                                    accent: config
+                                        .theme
+                                        .accent
+                                        .clone()
+                                        .unwrap_or_else(|| "#6750A4".into()),
                                 },
                             );
                         }
@@ -2131,6 +2160,20 @@ impl ShellRuntime {
                     };
                     shilpo_ui::Theme::global_mut(cx).set_source_argb(source_argb);
                     shilpo_ui::Theme::global_mut(cx).set_mode(mode);
+                }
+                IpcRequest::SetWallpaper { path } => {
+                    if let Err(error) =
+                        shilpo_services::WallpaperService::default().set_wallpaper(&path)
+                    {
+                        tracing::warn!(error = %error, path = %path.display(), "IPC set wallpaper failed");
+                    }
+                }
+                IpcRequest::SetRandomWallpaper => {
+                    if let Err(error) =
+                        shilpo_services::WallpaperService::default().set_random_wallpaper()
+                    {
+                        tracing::warn!(error = %error, "IPC set random wallpaper failed");
+                    }
                 }
                 IpcRequest::FocusWorkspace(id) => {
                     let _ = Self::dispatch_action(cx, ActionInvocation::FocusWorkspace(id));

@@ -65,6 +65,17 @@ async fn main() {
                         is_dark,
                     }
                 }
+                "set-wallpaper" => {
+                    if let Some(path_str) = args.get(3) {
+                        IpcRequest::SetWallpaper {
+                            path: std::path::PathBuf::from(path_str),
+                        }
+                    } else {
+                        eprintln!("Missing wallpaper file path");
+                        std::process::exit(1);
+                    }
+                }
+                "random-wallpaper" => IpcRequest::SetRandomWallpaper,
                 "telemetry" => IpcRequest::GetTelemetry,
                 _ => {
                     eprintln!("Unknown command: {}", cmd);

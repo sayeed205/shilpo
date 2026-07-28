@@ -38,6 +38,7 @@ impl DoctorChecker {
             self.check_shell_ipc(),
             self.check_config_file(auto_fix),
             self.check_wallpaper_directory(auto_fix),
+            self.check_awww_backend(),
         ]
     }
 
@@ -182,6 +183,31 @@ impl DoctorChecker {
                 name: "Wallpapers Directory".into(),
                 status: DiagnosticStatus::Warn,
                 message: format!("Directory does not exist at {}", wallpaper_dir.display()),
+                fix_applied: false,
+            }
+        }
+    }
+
+    /// Checks if `awww` wallpaper daemon backend CLI client is available on $PATH.
+    pub fn check_awww_backend(&self) -> DiagnosticItem {
+        let is_installed = std::process::Command::new("awww")
+            .arg("--version")
+            .output()
+            .is_ok();
+        if is_installed {
+            DiagnosticItem {
+                category: "Wallpaper".into(),
+                name: "awww Daemon Backend".into(),
+                status: DiagnosticStatus::Pass,
+                message: "awww wallpaper daemon CLI client detected on $PATH".into(),
+                fix_applied: false,
+            }
+        } else {
+            DiagnosticItem {
+                category: "Wallpaper".into(),
+                name: "awww Daemon Backend".into(),
+                status: DiagnosticStatus::Warn,
+                message: "awww binary not found on $PATH; wallpaper daemon switching will fallback to internal color extraction".into(),
                 fix_applied: false,
             }
         }

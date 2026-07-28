@@ -178,6 +178,7 @@ pub struct SettingsView {
     pub clock_format: String,
     pub temperature_unit: String,
     pub active_locale: String,
+    pub custom_wallpaper_dir: String,
     pub extensions_section: ExtensionsSection,
     pub extension_snapshot: shilpo_ext::ExtensionCatalogSnapshot,
     pub extension_action_error: Option<String>,
@@ -190,6 +191,9 @@ impl SettingsView {
         let page_registry = SettingsPageRegistry::discover();
         let extension_catalog = shilpo_ext::ExtensionCatalog::open_default();
         let extension_snapshot = extension_snapshot(&extension_catalog);
+        let custom_wallpaper_dir = shilpo_services::WallpaperService::default_wallpaper_dir()
+            .display()
+            .to_string();
         Self {
             active_page: SettingsPageId::Builtin(SettingsCategory::default()),
             page_registry,
@@ -202,6 +206,7 @@ impl SettingsView {
             clock_format: "%H:%M".to_string(),
             temperature_unit: "Celsius".to_string(),
             active_locale: "en-US".to_string(),
+            custom_wallpaper_dir,
             extensions_section: ExtensionsSection::default(),
             extension_snapshot,
             extension_action_error: None,
@@ -613,6 +618,58 @@ impl Render for SettingsView {
                                                     .child(label)
                                             }),
                                         )),
+                                )
+                                // Wallpaper Directory Preset Selection
+                                .child(
+                                    v_flex()
+                                        .gap_2()
+                                        .child(div().text_xs().font_bold().child("Wallpaper Directory Location"))
+                                        .child({
+                                            let current_dir = self.custom_wallpaper_dir.clone();
+                                            let home_str = std::env::var("HOME").unwrap_or_default();
+                                            let home = std::path::PathBuf::from(&home_str);
+                                            let presets = [
+                                                ("Pictures/Wallpapers", home.join("Pictures").join("Wallpapers")),
+                                                (".config/shilpo/wallpapers", home.join(".config").join("shilpo").join("wallpapers")),
+                                                ("Pictures", home.join("Pictures")),
+                                            ];
+                                            h_flex().gap_2().children(
+                                                presets.into_iter().enumerate().map(|(i, (label, path))| {
+                                                    let path_str = path.display().to_string();
+                                                    let is_active = current_dir == path_str;
+                                                    let (bg, fg) = if is_active {
+                                                        (cx.theme().primary, cx.theme().on_primary)
+                                                    } else {
+                                                        (cx.theme().surface_container, cx.theme().on_surface)
+                                                    };
+                                                    div()
+                                                        .id(("wallpaper-dir-pill", i))
+                                                        .role(Role::Button)
+                                                        .cursor_pointer()
+                                                        .px_3()
+                                                        .py_1p5()
+                                                        .rounded_xl()
+                                                        .bg(bg)
+                                                        .text_color(fg)
+                                                        .text_xs()
+                                                        .font_semibold()
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            this.custom_wallpaper_dir = path_str.clone();
+                                                            let wp_service = shilpo_services::WallpaperService::default();
+                                                            wp_service.set_wallpaper_dir(&path_str);
+                                                            if let Some(source_argb) = wp_service
+                                                                .active_wallpaper()
+                                                                .or_else(|| wp_service.scan_wallpapers().into_iter().next())
+                                                                .and_then(|active_wp| shilpo_services::PaletteExtractor::new().extract_source_argb_from_file(&active_wp).ok())
+                                                            {
+                                                                shilpo_ui::Theme::global_mut(cx).set_source_argb(source_argb);
+                                                            }
+                                                            cx.notify();
+                                                        }))
+                                                        .child(label)
+                                                })
+                                            )
+                                        })
                                 )
                                 // Corner Radius Scaling
                                 .child(

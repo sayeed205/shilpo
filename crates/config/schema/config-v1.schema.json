@@ -16,6 +16,7 @@
     "desktop": {
       "$ref": "#/$defs/DesktopConfig",
       "default": {
+        "wallpaper_dir": "~/Pictures/Wallpapers",
         "widgets": []
       }
     },
@@ -195,9 +196,20 @@
         "end"
       ]
     },
+    "ColorSource": {
+      "type": "string",
+      "enum": [
+        "Wallpaper",
+        "Custom"
+      ]
+    },
     "DesktopConfig": {
       "type": "object",
       "properties": {
+        "wallpaper_dir": {
+          "type": "string",
+          "default": "~/Pictures/Wallpapers"
+        },
         "widgets": {
           "type": "array",
           "default": [],
@@ -388,7 +400,15 @@
       "type": "object",
       "properties": {
         "accent": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "color_source": {
+          "$ref": "#/$defs/ColorSource",
+          "default": "Wallpaper"
         },
         "corner_radius_scale": {
           "type": "number",
@@ -424,7 +444,6 @@
       "additionalProperties": false,
       "required": [
         "mode",
-        "accent",
         "font_family",
         "corner_radius_scale"
       ]

@@ -7,6 +7,20 @@ fn main() {
 
     app.run(move |cx: &mut App| {
         shilpo_ui::init(cx);
+        if let Some(state) = shilpo_services::WallpaperService::read_current() {
+            shilpo_ui::Theme::global_mut(cx).set_source_argb(state.source_argb);
+        }
+
+        let rx = shilpo_services::WallpaperService::subscribe();
+        cx.spawn(async move |cx| {
+            while let Ok(changed) = rx.recv().await {
+                cx.update(|cx| {
+                    shilpo_ui::Theme::global_mut(cx).set_source_argb(changed.source_argb);
+                    cx.refresh_windows();
+                });
+            }
+        })
+        .detach();
         cx.activate(true);
 
         let display_bounds = cx

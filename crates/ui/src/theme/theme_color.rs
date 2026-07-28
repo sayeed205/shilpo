@@ -123,6 +123,69 @@ impl ThemeColor {
     pub fn from_source(source_argb: u32, dark: bool) -> Self {
         material_theme(source_argb, dark)
     }
+
+    /// Converts all M3 color tokens to a map of `"field_name" → "#RRGGBB"` hex strings.
+    ///
+    /// Used by [`WallpaperService`] to write `colors.json` so any external app
+    /// or script can consume the generated Material 3 palette.
+    pub fn to_hex_map(&self) -> std::collections::HashMap<String, String> {
+        let mut map = std::collections::HashMap::new();
+        macro_rules! insert {
+            ($($field:ident),+ $(,)?) => {
+                $( map.insert(stringify!($field).to_string(), hsla_to_hex(self.$field)); )+
+            };
+        }
+        insert!(
+            surface,
+            on_surface,
+            surface_dim,
+            surface_bright,
+            surface_container_lowest,
+            surface_container_low,
+            surface_container,
+            surface_container_high,
+            surface_container_highest,
+            surface_variant,
+            on_surface_variant,
+            inverse_surface,
+            inverse_on_surface,
+            outline,
+            outline_variant,
+            shadow,
+            scrim,
+            surface_tint,
+            primary,
+            on_primary,
+            primary_container,
+            on_primary_container,
+            inverse_primary,
+            primary_fixed,
+            primary_fixed_dim,
+            on_primary_fixed,
+            on_primary_fixed_variant,
+            secondary,
+            on_secondary,
+            secondary_container,
+            on_secondary_container,
+            secondary_fixed,
+            secondary_fixed_dim,
+            on_secondary_fixed,
+            on_secondary_fixed_variant,
+            tertiary,
+            on_tertiary,
+            tertiary_container,
+            on_tertiary_container,
+            tertiary_fixed,
+            tertiary_fixed_dim,
+            on_tertiary_fixed,
+            on_tertiary_fixed_variant,
+            error,
+            on_error,
+            error_container,
+            on_error_container,
+        );
+        map
+    }
 }
 
 #[inline]
@@ -134,6 +197,16 @@ pub fn argb_to_hsla(argb: u32) -> Hsla {
         a: ((argb >> 24) & 0xff) as f32 / 255.0,
     }
     .into()
+}
+
+/// Converts an Hsla color to a `#RRGGBB` hex string.
+#[inline]
+pub fn hsla_to_hex(hsla: Hsla) -> String {
+    let rgba = hsla.to_rgb();
+    let r = (rgba.r * 255.0).round() as u8;
+    let g = (rgba.g * 255.0).round() as u8;
+    let b = (rgba.b * 255.0).round() as u8;
+    format!("#{:02X}{:02X}{:02X}", r, g, b)
 }
 
 pub fn material_theme(source_argb: u32, dark: bool) -> ThemeColor {

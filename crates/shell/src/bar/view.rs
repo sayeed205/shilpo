@@ -39,7 +39,18 @@ pub fn parse_hex_color(hex: &str) -> Option<u32> {
 }
 
 pub fn apply_config_theme(config: &ShellConfig, window: Option<&mut Window>, cx: &mut App) {
-    if let Some(argb) = parse_hex_color(&config.theme.accent) {
+    let custom_argb = config.theme.accent.as_deref().and_then(parse_hex_color);
+
+    let argb = match config.theme.color_source {
+        shilpo_config::ColorSource::Custom => custom_argb,
+        shilpo_config::ColorSource::Wallpaper => {
+            let wallpaper_argb =
+                shilpo_services::WallpaperService::read_current().map(|state| state.source_argb);
+            wallpaper_argb.or(custom_argb)
+        }
+    };
+
+    if let Some(argb) = argb {
         let theme = shilpo_ui::Theme::global_mut(cx);
         theme.set_source_argb(argb);
     }

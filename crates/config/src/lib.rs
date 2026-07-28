@@ -43,11 +43,26 @@ pub struct ExtensionsConfig {
     pub settings: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DesktopConfig {
     #[serde(default)]
     pub widgets: Vec<DesktopWidgetConfig>,
+    #[serde(default = "default_wallpaper_dir")]
+    pub wallpaper_dir: PathBuf,
+}
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            widgets: Vec::new(),
+            wallpaper_dir: default_wallpaper_dir(),
+        }
+    }
+}
+
+fn default_wallpaper_dir() -> PathBuf {
+    PathBuf::from("~/Pictures/Wallpapers")
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -184,11 +199,22 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "PascalCase")]
+pub enum ColorSource {
+    #[default]
+    Wallpaper,
+    Custom,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ThemeConfig {
     pub mode: ThemeMode,
-    pub accent: String,
+    #[serde(default)]
+    pub color_source: ColorSource,
+    #[serde(default)]
+    pub accent: Option<String>,
     pub font_family: String,
     pub heading_font_family: Option<String>,
     pub mono_font_family: Option<String>,
@@ -444,7 +470,8 @@ impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
             mode: ThemeMode::Dark,
-            accent: "#6750A4".into(),
+            color_source: ColorSource::Wallpaper,
+            accent: None,
             font_family: "sans-serif".into(),
             heading_font_family: None,
             mono_font_family: None,
@@ -655,15 +682,17 @@ impl ShellConfig {
         if self.version != 1 {
             d.push(ConfigDiagnostic::new("version", "must be 1"));
         }
-        let accent = self.theme.accent.as_bytes();
-        let valid_hex = (accent.len() == 7 || accent.len() == 9)
-            && accent[0] == b'#'
-            && accent[1..].iter().all(u8::is_ascii_hexdigit);
-        if !valid_hex {
-            d.push(ConfigDiagnostic::new(
-                "theme.accent",
-                "must be #RRGGBB or #AARRGGBB",
-            ));
+        if let Some(accent_str) = &self.theme.accent {
+            let accent = accent_str.as_bytes();
+            let valid_hex = (accent.len() == 7 || accent.len() == 9)
+                && accent[0] == b'#'
+                && accent[1..].iter().all(u8::is_ascii_hexdigit);
+            if !valid_hex {
+                d.push(ConfigDiagnostic::new(
+                    "theme.accent",
+                    "must be #RRGGBB or #AARRGGBB",
+                ));
+            }
         }
         if self.theme.font_family.trim().is_empty() {
             d.push(ConfigDiagnostic::new(
@@ -1308,7 +1337,7 @@ mod tests {
     #[test]
     fn validation_categories() {
         let mut c = valid();
-        c.theme.accent = "bad".into();
+        c.theme.accent = Some("bad".into());
         c.theme.font_family = " ".into();
         c.theme.corner_radius_scale = f32::NAN;
         c.bar.height = 1;
