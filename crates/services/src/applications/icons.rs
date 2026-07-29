@@ -58,12 +58,13 @@ pub fn lookup_icon(name: &str) -> Option<PathBuf> {
 }
 
 fn resolve_icon_uncached(name: &str) -> Option<PathBuf> {
+    if Path::new(name).components().count() != 1 {
+        return None;
+    }
+
     for base in icon_theme_base_dirs() {
-        for theme in THEMES {
-            let theme_dir = base.join(theme);
-            if let Some(found) = search_theme_dir(&theme_dir, name) {
-                return Some(found);
-            }
+        if let Some(found) = search_icon_base(&base, name) {
+            return Some(found);
         }
     }
 
@@ -78,13 +79,47 @@ fn resolve_icon_uncached(name: &str) -> Option<PathBuf> {
     None
 }
 
+fn search_icon_base(base: &Path, name: &str) -> Option<PathBuf> {
+    for ext in EXTENSIONS {
+        let candidate = base.join(format!("{name}.{ext}"));
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    for theme in THEMES {
+        let theme_dir = base.join(theme);
+        if let Some(found) = search_theme_dir(&theme_dir, name) {
+            return Some(found);
+        }
+    }
+
+    if let Ok(theme_dirs) = std::fs::read_dir(base) {
+        for theme_dir in theme_dirs.flatten() {
+            let theme_dir = theme_dir.path();
+            if theme_dir.is_dir()
+                && let Some(found) = search_theme_dir(&theme_dir, name)
+            {
+                return Some(found);
+            }
+        }
+    }
+
+    None
+}
+
 fn search_theme_dir(theme_dir: &Path, name: &str) -> Option<PathBuf> {
     for size in SIZE_DIRS {
-        let apps_dir = theme_dir.join(size).join("apps");
-        for ext in EXTENSIONS {
-            let candidate = apps_dir.join(format!("{}.{}", name, ext));
-            if candidate.exists() {
-                return Some(candidate);
+        let app_dirs = [
+            theme_dir.join(size).join("apps"),
+            theme_dir.join("apps").join(size),
+        ];
+        for apps_dir in app_dirs {
+            for ext in EXTENSIONS {
+                let candidate = apps_dir.join(format!("{name}.{ext}"));
+                if candidate.exists() {
+                    return Some(candidate);
+                }
             }
         }
     }
@@ -117,6 +152,15 @@ fn icon_theme_base_dirs() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_icon_root() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("shilpo-icon-test-{}-{nonce}", std::process::id()))
+    }
 
     #[test]
     fn test_lookup_icon_caching_and_clearing() {
@@ -129,5 +173,30 @@ mod tests {
         clear_icon_cache();
         let empty_res = lookup_icon("");
         assert!(empty_res.is_none());
+    }
+
+    #[test]
+    fn searches_direct_icon_roots_and_alternate_theme_layouts() {
+        let root = temporary_icon_root();
+        std::fs::create_dir_all(&root).unwrap();
+
+        let direct_icon = root.join("direct-app.svg");
+        std::fs::write(&direct_icon, "<svg/>").unwrap();
+        assert_eq!(
+            search_icon_base(&root, "direct-app"),
+            Some(direct_icon.clone())
+        );
+        std::fs::remove_file(direct_icon).unwrap();
+
+        let themed_icon = root
+            .join("CustomTheme")
+            .join("apps")
+            .join("scalable")
+            .join("themed-app.svg");
+        std::fs::create_dir_all(themed_icon.parent().unwrap()).unwrap();
+        std::fs::write(&themed_icon, "<svg/>").unwrap();
+        assert_eq!(search_icon_base(&root, "themed-app"), Some(themed_icon));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

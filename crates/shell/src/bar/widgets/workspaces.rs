@@ -27,6 +27,7 @@ const WORKSPACE_SLOT_SIZE: f32 = 26.;
 const WORKSPACE_ACTIVE_MARGIN: f32 = 2.;
 const WORKSPACE_INDICATOR_SIZE: f32 = WORKSPACE_SLOT_SIZE - (WORKSPACE_ACTIVE_MARGIN * 2.);
 const WORKSPACE_DOT_SIZE: f32 = WORKSPACE_SLOT_SIZE * 0.18;
+const WORKSPACE_OVERVIEW_SPLIT_GAP: f32 = 2.;
 const WORKSPACE_MOTION_DURATION: Duration = Duration::from_millis(300);
 const WORKSPACE_LEADING_EDGE_DURATION: Duration = Duration::from_millis(100);
 
@@ -40,6 +41,50 @@ fn indicator_target(index: usize) -> WorkspaceIndicatorGeometry {
     WorkspaceIndicatorGeometry {
         x: px(index as f32 * WORKSPACE_SLOT_SIZE + WORKSPACE_ACTIVE_MARGIN),
         width: px(WORKSPACE_INDICATOR_SIZE),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct OccupiedBackgroundGeometry {
+    x: f32,
+    width: f32,
+    left_radius: f32,
+    right_radius: f32,
+}
+
+fn occupied_background_geometry(
+    index: usize,
+    occupied: &[bool],
+    overview_open: bool,
+    active_workspace_index: Option<usize>,
+) -> OccupiedBackgroundGeometry {
+    let occupied_left = index > 0 && occupied[index - 1];
+    let occupied_right = occupied.get(index + 1).copied().unwrap_or(false);
+    let is_active = active_workspace_index == Some(index);
+    let split_left = overview_open
+        && occupied_left
+        && (is_active || active_workspace_index == index.checked_sub(1));
+    let split_right =
+        overview_open && occupied_right && (is_active || active_workspace_index == Some(index + 1));
+    let left_inset = if overview_open && (is_active || split_left) {
+        WORKSPACE_OVERVIEW_SPLIT_GAP / 2.
+    } else {
+        0.
+    };
+    let right_inset = if overview_open && (is_active || split_right) {
+        WORKSPACE_OVERVIEW_SPLIT_GAP / 2.
+    } else {
+        0.
+    };
+    let width = WORKSPACE_SLOT_SIZE - left_inset - right_inset;
+    let joined_left = occupied_left && !split_left;
+    let joined_right = occupied_right && !split_right;
+
+    OccupiedBackgroundGeometry {
+        x: index as f32 * WORKSPACE_SLOT_SIZE + left_inset,
+        width,
+        left_radius: if joined_left { 0. } else { width / 2. },
+        right_radius: if joined_right { 0. } else { width / 2. },
     }
 }
 
@@ -165,7 +210,12 @@ impl Styled for WorkspacesWidget {
     }
 }
 
-fn render_workspace_dot(ws: &WorkspaceInfo, is_ready: bool, cx: &mut App) -> gpui::AnyElement {
+fn render_workspace_dot(
+    ws: &WorkspaceInfo,
+    is_ready: bool,
+    display_id: Option<gpui::DisplayId>,
+    cx: &mut App,
+) -> gpui::AnyElement {
     let is_active = ws.is_active || ws.is_focused;
     let is_occupied = ws.active_window_id.is_some();
     let label = ws.name.clone().unwrap_or_else(|| ws.idx.to_string());
@@ -205,7 +255,7 @@ fn render_workspace_dot(ws: &WorkspaceInfo, is_ready: bool, cx: &mut App) -> gpu
             })
             .on_mouse_down(MouseButton::Right, move |_, _, cx| {
                 cx.stop_propagation();
-                ShellRuntime::open_or_focus_overview(cx);
+                ShellRuntime::open_or_focus_overview_on_display(cx, display_id);
             })
             .into_any_element()
     } else {
@@ -218,6 +268,8 @@ impl RenderOnce for WorkspacesWidget {
         let is_ready = workspace_actions_enabled(&self.connection);
         let is_connecting = matches!(self.connection, CompositorConnection::Connecting);
         let is_stopped = workspace_status_label(&self.connection) == Some("Compositor Unavailable");
+        let display_id = window.display(cx).map(|display| display.id());
+        let overview_open = ShellRuntime::is_overview_open(cx);
 
         let mut items: Vec<gpui::AnyElement> = Vec::new();
         let mut occupied_backgrounds: Vec<gpui::AnyElement> = Vec::new();
@@ -303,30 +355,24 @@ impl RenderOnce for WorkspacesWidget {
                     continue;
                 }
 
-                let joined_left = index > 0 && occupied[index - 1];
-                let joined_right = occupied.get(index + 1).copied().unwrap_or(false);
-                let left_radius = if joined_left {
-                    px(0.)
-                } else {
-                    px(WORKSPACE_SLOT_SIZE / 2.)
-                };
-                let right_radius = if joined_right {
-                    px(0.)
-                } else {
-                    px(WORKSPACE_SLOT_SIZE / 2.)
-                };
+                let geometry = occupied_background_geometry(
+                    index,
+                    &occupied,
+                    overview_open,
+                    active_workspace_index,
+                );
 
                 occupied_backgrounds.push(
                     div()
                         .absolute()
                         .top(px(0.))
-                        .left(px(index as f32 * WORKSPACE_SLOT_SIZE))
-                        .w(px(WORKSPACE_SLOT_SIZE))
+                        .left(px(geometry.x))
+                        .w(px(geometry.width))
                         .h(px(WORKSPACE_SLOT_SIZE))
-                        .rounded_tl(left_radius)
-                        .rounded_bl(left_radius)
-                        .rounded_tr(right_radius)
-                        .rounded_br(right_radius)
+                        .rounded_tl(px(geometry.left_radius))
+                        .rounded_bl(px(geometry.left_radius))
+                        .rounded_tr(px(geometry.right_radius))
+                        .rounded_br(px(geometry.right_radius))
                         .bg(cx.theme().secondary_container.opacity(0.6))
                         .into_any_element(),
                 );
@@ -335,7 +381,7 @@ impl RenderOnce for WorkspacesWidget {
             items.extend(
                 self.workspaces
                     .iter()
-                    .map(|ws| render_workspace_dot(ws, is_ready, cx)),
+                    .map(|ws| render_workspace_dot(ws, is_ready, display_id, cx)),
             );
         }
 
@@ -511,5 +557,48 @@ mod tests {
             Some("Compositor Unavailable")
         );
         assert_eq!(workspace_status_label(&CompositorConnection::Ready), None);
+    }
+
+    #[test]
+    fn overview_only_splits_the_active_workspace_from_occupied_groups() {
+        let occupied = [true, true, true, true, false];
+        let joined_middle = occupied_background_geometry(1, &occupied, false, Some(1));
+        assert_eq!(joined_middle.x, WORKSPACE_SLOT_SIZE);
+        assert_eq!(joined_middle.width, WORKSPACE_SLOT_SIZE);
+        assert_eq!(joined_middle.left_radius, 0.);
+        assert_eq!(joined_middle.right_radius, 0.);
+
+        let split_middle = occupied_background_geometry(1, &occupied, true, Some(1));
+        assert_eq!(
+            split_middle.x,
+            WORKSPACE_SLOT_SIZE + WORKSPACE_OVERVIEW_SPLIT_GAP / 2.
+        );
+        assert_eq!(
+            split_middle.width,
+            WORKSPACE_SLOT_SIZE - WORKSPACE_OVERVIEW_SPLIT_GAP
+        );
+        assert_eq!(split_middle.left_radius, split_middle.width / 2.);
+        assert_eq!(split_middle.right_radius, split_middle.width / 2.);
+
+        let grouped_after_active = occupied_background_geometry(2, &occupied, true, Some(1));
+        assert_eq!(
+            grouped_after_active.x,
+            2. * WORKSPACE_SLOT_SIZE + WORKSPACE_OVERVIEW_SPLIT_GAP / 2.
+        );
+        assert_eq!(
+            grouped_after_active.width,
+            WORKSPACE_SLOT_SIZE - WORKSPACE_OVERVIEW_SPLIT_GAP / 2.
+        );
+        assert_eq!(
+            grouped_after_active.left_radius,
+            grouped_after_active.width / 2.
+        );
+        assert_eq!(grouped_after_active.right_radius, 0.);
+
+        let grouped_tail = occupied_background_geometry(3, &occupied, true, Some(1));
+        assert_eq!(grouped_tail.x, 3. * WORKSPACE_SLOT_SIZE);
+        assert_eq!(grouped_tail.width, WORKSPACE_SLOT_SIZE);
+        assert_eq!(grouped_tail.left_radius, 0.);
+        assert_eq!(grouped_tail.right_radius, WORKSPACE_SLOT_SIZE / 2.);
     }
 }

@@ -7874,6 +7874,7 @@ dependencies = [
  "futures-lite",
  "gpui",
  "gpui_platform",
+ "image",
  "log",
  "notify",
  "semver",

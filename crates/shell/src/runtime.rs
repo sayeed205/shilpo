@@ -23,7 +23,7 @@ use shilpo_services::{
     CompositorOutput, CompositorSnapshot, NetworkService, NiriCompositorService,
     NotificationService,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 use uuid::Uuid;
 
@@ -143,6 +143,33 @@ fn apply_notification_dnd(notification: Option<&NotificationService>, enabled: b
     }
 }
 
+fn parse_awww_wallpaper_path(output: &str) -> Option<PathBuf> {
+    const MARKER: &str = "currently displaying: image: ";
+    output.lines().find_map(|line| {
+        let path = line.split_once(MARKER)?.1.trim();
+        (!path.is_empty()).then(|| PathBuf::from(path))
+    })
+}
+
+fn query_awww_wallpaper_path() -> Option<PathBuf> {
+    let output = std::process::Command::new("awww")
+        .arg("query")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = parse_awww_wallpaper_path(&String::from_utf8_lossy(&output.stdout))?;
+    path.is_file().then_some(path)
+}
+
+fn discovered_wallpaper_needs_theme_sync(
+    theme_wallpaper_path: Option<&Path>,
+    discovered_wallpaper_path: &Path,
+) -> bool {
+    theme_wallpaper_path != Some(discovered_wallpaper_path)
+}
+
 pub struct ShellRuntime {
     ipc_server: ShellIpcServer,
     active_config: shilpo_config::ShellConfig,
@@ -154,6 +181,9 @@ pub struct ShellRuntime {
     control_center: Option<WindowHandle<shilpo_ui::Root>>,
     overview: Option<WindowHandle<shilpo_ui::Root>>,
     overview_entity: Option<Entity<crate::overview::WorkspaceOverview>>,
+    overview_instance: u64,
+    next_overview_instance: u64,
+    current_wallpaper_path: Option<PathBuf>,
     latest_snapshot: Arc<CompositorSnapshot>,
     notification: Option<(
         u64,
@@ -220,7 +250,12 @@ impl ShellRuntime {
         let active_config = shilpo_config::ShellConfig::load_or_create(&config_path)
             .unwrap_or_else(|_| shilpo_config::ShellConfig::default());
         let theme_client = futures_lite::future::block_on(shilpo_theme::ThemeClient::new());
-        shilpo_ui::Theme::global_mut(cx).apply_state(&theme_client.current_state());
+        let initial_theme_state = theme_client.current_state();
+        let initial_wallpaper_path = initial_theme_state
+            .wallpaper_path
+            .clone()
+            .filter(|path| path.is_file());
+        shilpo_ui::Theme::global_mut(cx).apply_state(&initial_theme_state);
         let mut rx = theme_client.subscribe();
         let theme_client_for_task = theme_client.clone();
         cx.spawn(async move |cx| {
@@ -234,6 +269,23 @@ impl ShellRuntime {
                 };
                 cx.update(|cx| {
                     shilpo_ui::Theme::global_mut(cx).apply_state(&state);
+                    let overview = if cx.has_global::<Self>() {
+                        let runtime = cx.global_mut::<Self>();
+                        if let Some(path) =
+                            state.wallpaper_path.clone().filter(|path| path.is_file())
+                        {
+                            runtime.current_wallpaper_path = Some(path);
+                        }
+                        runtime.overview_entity.clone()
+                    } else {
+                        None
+                    };
+                    if let Some(overview) = overview {
+                        let wallpaper_path = cx.global::<Self>().current_wallpaper_path.clone();
+                        overview.update(cx, |view, cx| {
+                            view.update_wallpaper_path(wallpaper_path, cx);
+                        });
+                    }
                     cx.refresh_windows();
                 });
             }
@@ -272,6 +324,9 @@ impl ShellRuntime {
             control_center: None,
             overview: None,
             overview_entity: None,
+            overview_instance: 0,
+            next_overview_instance: 0,
+            current_wallpaper_path: initial_wallpaper_path.clone(),
             latest_snapshot: latest_snapshot.clone(),
             notification: None,
             notification_generation: 0,
@@ -294,6 +349,51 @@ impl ShellRuntime {
             _window_closed: None,
             _ipc_task: cx.spawn(async |_| {}),
         });
+        let wallpaper_probe = cx.background_spawn(async { query_awww_wallpaper_path() });
+        let theme_wallpaper_path = initial_wallpaper_path;
+        let theme_client_for_wallpaper_sync = theme_client.clone();
+        cx.spawn(async move |cx| {
+            let Some(wallpaper_path) = wallpaper_probe.await else {
+                return;
+            };
+            cx.update(|cx| {
+                if !cx.has_global::<Self>() {
+                    return;
+                }
+                let overview = {
+                    let runtime = cx.global_mut::<Self>();
+                    runtime.current_wallpaper_path = Some(wallpaper_path.clone());
+                    runtime.overview_entity.clone()
+                };
+                if let Some(overview) = overview {
+                    overview.update(cx, |view, cx| {
+                        view.update_wallpaper_path(Some(wallpaper_path.clone()), cx);
+                    });
+                }
+            });
+
+            if discovered_wallpaper_needs_theme_sync(
+                theme_wallpaper_path.as_deref(),
+                &wallpaper_path,
+            ) {
+                let wallpaper = wallpaper_path.to_string_lossy();
+                match theme_client_for_wallpaper_sync
+                    .set_wallpaper(&wallpaper)
+                    .await
+                {
+                    Ok(()) => tracing::info!(
+                        path = %wallpaper_path.display(),
+                        "synchronized compositor wallpaper with theme palette"
+                    ),
+                    Err(error) => tracing::warn!(
+                        path = %wallpaper_path.display(),
+                        error = %error,
+                        "failed to synchronize compositor wallpaper with theme palette"
+                    ),
+                }
+            }
+        })
+        .detach();
         Self::on_compositor_snapshot_changed(cx, latest_snapshot);
 
         cx.spawn(async move |cx| {
@@ -1487,21 +1587,33 @@ impl ShellRuntime {
     }
 
     pub fn close_launcher(cx: &mut App) {
-        let handle = cx.global_mut::<Self>().launcher.take();
-        let Some(handle) = handle else { return };
-        Self::dispatch_surface_lifecycle(cx, ContributionSurface::Launcher, false, 640., 480.);
-        // Registry entry is invalidated above. A close racing with this call can
-        // leave handle stale; update_window failure is expected in that case.
-        let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        if !Self::remove_launcher_surface(cx) {
+            return;
+        }
         Self::restore_prior_focus(cx);
         cx.global::<Self>().publish_status();
     }
 
+    fn close_launcher_for_replacement(cx: &mut App) {
+        let _ = Self::remove_launcher_surface(cx);
+    }
+
+    fn remove_launcher_surface(cx: &mut App) -> bool {
+        let handle = cx.global_mut::<Self>().launcher.take();
+        let Some(handle) = handle else { return false };
+        Self::dispatch_surface_lifecycle(cx, ContributionSurface::Launcher, false, 640., 480.);
+        // Registry entry is invalidated above. A close racing with this call can
+        // leave handle stale; update_window failure is expected in that case.
+        let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        true
+    }
+
     pub fn forget_launcher(cx: &mut App) {
-        if cx.global_mut::<Self>().launcher.take().is_some() {
+        let had_handle = cx.global_mut::<Self>().launcher.take().is_some();
+        if had_handle {
             Self::dispatch_surface_lifecycle(cx, ContributionSurface::Launcher, false, 640., 480.);
+            Self::restore_prior_focus(cx);
         }
-        Self::restore_prior_focus(cx);
         cx.global::<Self>().publish_status();
     }
 
@@ -1514,23 +1626,182 @@ impl ShellRuntime {
     }
 
     pub fn close_overview(cx: &mut App) {
+        // Begin animated close via the overview entity.
+        let entity = cx.global::<Self>().overview_entity.clone();
+        if let Some(entity) = entity {
+            entity.update(cx, |view, cx| {
+                view.begin_close(crate::overview::OverviewCloseReason::Cancel, cx);
+            });
+        } else {
+            // No entity — remove window immediately.
+            let instance_id = cx.global::<Self>().overview_instance;
+            Self::finish_overview_close(
+                cx,
+                crate::overview::OverviewCloseReason::Cancel,
+                instance_id,
+            );
+        }
+    }
+
+    /// Called by the overview entity after the exit animation completes.
+    pub fn finish_overview_close(
+        cx: &mut App,
+        reason: crate::overview::OverviewCloseReason,
+        instance_id: u64,
+    ) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        if cx.global::<Self>().overview_instance != instance_id {
+            return;
+        }
+        cx.global_mut::<Self>().overview_instance = 0;
         let handle = cx.global_mut::<Self>().overview.take();
-        let Some(handle) = handle else { return };
-        let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
-        Self::restore_prior_focus(cx);
+        cx.global_mut::<Self>().overview_entity = None;
+        if reason == crate::overview::OverviewCloseReason::Selection {
+            // Clear this before removing the surface so a concurrent close
+            // callback cannot restore the old window focus.
+            cx.global_mut::<Self>().prior_window_id = None;
+        }
+        if let Some(handle) = handle {
+            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        }
+        if reason == crate::overview::OverviewCloseReason::Cancel {
+            Self::restore_prior_focus(cx);
+        }
+        Self::refresh_bars(cx);
         cx.global::<Self>().publish_status();
     }
 
-    pub fn forget_overview(cx: &mut App) {
-        cx.global_mut::<Self>().overview = None;
-        Self::restore_prior_focus(cx);
+    pub fn forget_overview(cx: &mut App, instance_id: u64) {
+        if !cx.has_global::<Self>() || cx.global::<Self>().overview_instance != instance_id {
+            return;
+        }
+        let entity = cx.global::<Self>().overview_entity.clone();
+        let reason = entity
+            .as_ref()
+            .and_then(|entity| entity.read(cx).close_reason())
+            .unwrap_or(crate::overview::OverviewCloseReason::Cancel);
+        let (had_handle, reason) = {
+            let runtime = cx.global_mut::<Self>();
+            runtime.overview_instance = 0;
+            let had_handle = runtime.overview.take().is_some();
+            runtime.overview_entity = None;
+            (had_handle, reason)
+        };
+        if !had_handle {
+            return;
+        }
+        if reason == crate::overview::OverviewCloseReason::Cancel {
+            Self::restore_prior_focus(cx);
+        } else {
+            cx.global_mut::<Self>().prior_window_id = None;
+        }
+        Self::refresh_bars(cx);
         cx.global::<Self>().publish_status();
+    }
+
+    /// Focus a workspace from an overview card click and close the overview.
+    pub fn overview_focus_workspace(cx: &mut App, ws_id: u64) -> Result<(), ShellError> {
+        Self::dispatch_action(cx, ActionInvocation::FocusWorkspace(ws_id))
+    }
+
+    /// Move a dragged overview window to a workspace without dismissing the overview.
+    pub fn overview_move_window(
+        cx: &mut App,
+        window_id: u64,
+        workspace_id: u64,
+    ) -> Result<(), ShellError> {
+        Self::dispatch_action(
+            cx,
+            ActionInvocation::MoveWindowToWorkspace {
+                window_id,
+                workspace_id,
+            },
+        )
+    }
+
+    /// Focus a window from an overview tile click and close the overview.
+    pub fn overview_focus_window(cx: &mut App, window_id: u64) -> Result<(), ShellError> {
+        let comp = match Self::compositor(cx) {
+            Some(comp) => comp,
+            None => {
+                let error = ShellError::ActionFailed("compositor unavailable".into());
+                Self::show_compositor_error_message_toast(cx, &error.to_string());
+                return Err(error);
+            }
+        };
+        let ticket = comp
+            .command_broker()
+            .submit(CompositorCommand::FocusWindow(window_id))
+            .map_err(|error| {
+                let error = ShellError::ActionFailed(error.to_string());
+                Self::show_compositor_error_message_toast(cx, &error.to_string());
+                error
+            })?;
+        cx.spawn(async move |cx| match ticket.await {
+            Ok(shilpo_services::CommandOutcome::Applied { revision }) => {
+                tracing::trace!(revision, window_id, "overview window focus applied");
+            }
+            Err(error) => {
+                cx.update(|cx| Self::show_compositor_error_toast(cx, &error));
+            }
+        })
+        .detach();
+        Ok(())
+    }
+
+    pub fn overview_reduced_motion(cx: &App) -> bool {
+        cx.global::<Self>().active_config.theme.reduced_motion
+    }
+
+    pub fn is_overview_open(cx: &App) -> bool {
+        cx.has_global::<Self>() && cx.global::<Self>().overview.is_some()
+    }
+
+    fn refresh_bars(cx: &mut App) {
+        let bar_handles = cx
+            .global::<Self>()
+            .bars
+            .values()
+            .map(|(handle, _)| *handle)
+            .collect::<Vec<_>>();
+        for handle in bar_handles {
+            let _ = handle.update(cx, |_, _, cx| cx.notify());
+        }
+    }
+
+    pub fn overview_wallpaper_path(cx: &App) -> Option<PathBuf> {
+        cx.global::<Self>().current_wallpaper_path.clone()
+    }
+
+    pub fn overview_applications(cx: &App) -> Vec<shilpo_services::Application> {
+        cx.global::<Self>()
+            .service_hub
+            .as_ref()
+            .map(|hub| hub.app_scanner.applications())
+            .unwrap_or_default()
+    }
+
+    pub fn begin_overview_instance(cx: &mut App) -> u64 {
+        let runtime = cx.global_mut::<Self>();
+        runtime.next_overview_instance = runtime.next_overview_instance.wrapping_add(1);
+        runtime.overview_instance = runtime.next_overview_instance;
+        runtime.overview_instance
     }
 
     pub fn open_or_focus_overview(cx: &mut App) {
+        let display_id = cx.primary_display().map(|display| display.id());
+        Self::open_or_focus_overview_on_display(cx, display_id);
+    }
+
+    pub fn open_or_focus_overview_on_display(
+        cx: &mut App,
+        requested_display_id: Option<DisplayId>,
+    ) {
         Self::capture_prior_focus(cx);
-        Self::close_launcher(cx);
-        Self::close_control_center(cx);
+        Self::close_launcher_for_replacement(cx);
+        Self::close_control_center_for_replacement(cx);
         let handle = cx.global_mut::<Self>().overview.take();
         if let Some(handle) = handle
             && handle
@@ -1540,32 +1811,26 @@ impl ShellRuntime {
                 .is_ok()
         {
             cx.global_mut::<Self>().overview = Some(handle);
+            Self::refresh_bars(cx);
             cx.global::<Self>().publish_status();
             return;
         }
 
-        let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
-            (display.bounds(), Some(display.id()))
-        } else {
-            (
-                Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
-                None,
-            )
-        };
-        let overview_size = size(px(900.), px(540.));
-        let origin = point(
-            display_bounds.origin.x + (display_bounds.size.width - overview_size.width) / 2.0,
-            display_bounds.origin.y + (display_bounds.size.height - overview_size.height) / 2.0,
-        );
+        let display_id =
+            requested_display_id.or_else(|| cx.primary_display().map(|display| display.id()));
+        // Use zero size + four-edge anchors so the layer shell fills the output.
         let options = overlay_options(
             "shilpo-overview",
             "overview",
-            overview_size,
-            origin,
+            size(px(0.), px(0.)),
+            point(px(0.), px(0.)),
             display_id,
         );
         match cx.open_window(options, crate::overview::WorkspaceOverview::view) {
-            Ok(handle) => cx.global_mut::<Self>().overview = Some(handle),
+            Ok(handle) => {
+                cx.global_mut::<Self>().overview = Some(handle);
+                Self::refresh_bars(cx);
+            }
             Err(error) => {
                 tracing::warn!(error = %error, "cannot open workspace overview window");
                 Self::restore_prior_focus(cx);
@@ -1636,18 +1901,30 @@ impl ShellRuntime {
     }
 
     pub fn close_control_center(cx: &mut App) {
-        let handle = cx.global_mut::<Self>().control_center.take();
-        let Some(handle) = handle else { return };
-        Self::dispatch_surface_lifecycle(cx, ContributionSurface::ControlCenter, false, 340., 540.);
-        // Registry entry is invalidated above. A close racing with this call can
-        // leave handle stale; update_window failure is expected in that case.
-        let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        if !Self::remove_control_center_surface(cx) {
+            return;
+        }
         Self::restore_prior_focus(cx);
         cx.global::<Self>().publish_status();
     }
 
+    fn close_control_center_for_replacement(cx: &mut App) {
+        let _ = Self::remove_control_center_surface(cx);
+    }
+
+    fn remove_control_center_surface(cx: &mut App) -> bool {
+        let handle = cx.global_mut::<Self>().control_center.take();
+        let Some(handle) = handle else { return false };
+        Self::dispatch_surface_lifecycle(cx, ContributionSurface::ControlCenter, false, 340., 540.);
+        // Registry entry is invalidated above. A close racing with this call can
+        // leave handle stale; update_window failure is expected in that case.
+        let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        true
+    }
+
     pub fn forget_control_center(cx: &mut App) {
-        if cx.global_mut::<Self>().control_center.take().is_some() {
+        let had_handle = cx.global_mut::<Self>().control_center.take().is_some();
+        if had_handle {
             Self::dispatch_surface_lifecycle(
                 cx,
                 ContributionSurface::ControlCenter,
@@ -1655,8 +1932,8 @@ impl ShellRuntime {
                 340.,
                 540.,
             );
+            Self::restore_prior_focus(cx);
         }
-        Self::restore_prior_focus(cx);
         cx.global::<Self>().publish_status();
     }
 
@@ -2505,6 +2782,32 @@ fn overlay_options(
 mod tests {
     use super::*;
     use shilpo_services::ipc::ReadinessState;
+
+    #[test]
+    fn parses_awww_wallpaper_query() {
+        let output =
+            ": eDP-1: 1920x1080, scale: 1, currently displaying: image: /pictures/wallpaper.png\n";
+        assert_eq!(
+            parse_awww_wallpaper_path(output),
+            Some(PathBuf::from("/pictures/wallpaper.png"))
+        );
+        assert_eq!(parse_awww_wallpaper_path("no image"), None);
+    }
+
+    #[test]
+    fn discovered_wallpaper_syncs_when_theme_path_is_missing_or_stale() {
+        let discovered = Path::new("/pictures/red-wallpaper.png");
+
+        assert!(discovered_wallpaper_needs_theme_sync(None, discovered));
+        assert!(discovered_wallpaper_needs_theme_sync(
+            Some(Path::new("/pictures/old-wallpaper.png")),
+            discovered
+        ));
+        assert!(!discovered_wallpaper_needs_theme_sync(
+            Some(discovered),
+            discovered
+        ));
+    }
 
     #[test]
     fn runtime_readiness_and_status_tracking() {
