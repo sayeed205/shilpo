@@ -4,7 +4,9 @@
 //! advisory locking. All calls below check their return values; raw file
 //! descriptors are borrowed from Rust-owned objects and never closed here.
 
-use crate::compositor::{CompositorCommand, CompositorCommandBroker, CompositorCommandError};
+use crate::compositor::{
+    CommandOutcome, CompositorCommand, CompositorCommandBroker, CompositorCommandError,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
@@ -104,7 +106,7 @@ pub struct IpcStatus {
 #[serde(rename_all = "snake_case", tag = "kind", content = "value")]
 pub enum IpcResult {
     Accepted,
-    CommandCompleted,
+    CommandApplied(CommandOutcome),
     Status(IpcStatus),
     Telemetry(ServiceHealth),
 }
@@ -601,6 +603,23 @@ fn map_broker_error(err: &CompositorCommandError) -> IpcErrorBody {
             "compositor_cancelled",
             format!("command cancelled: {}", reason),
         ),
+        CompositorCommandError::InvalidTarget(target) => {
+            ("invalid_target", format!("invalid target: {}", target))
+        }
+        CompositorCommandError::TargetDisappeared(target) => (
+            "target_disappeared",
+            format!("target disappeared before application: {}", target),
+        ),
+        CompositorCommandError::ApplyTimeout {
+            duration,
+            last_revision,
+        } => (
+            "apply_timeout",
+            format!(
+                "command application timed out after {:?} (last revision: {})",
+                duration, last_revision
+            ),
+        ),
     };
     IpcErrorBody {
         code: code.to_string(),
@@ -704,7 +723,7 @@ fn handle_client(
             if let Some(broker_arc) = b {
                 match broker_arc.submit(cmd.clone()) {
                     Ok(ticket) => match ticket.wait_timeout(IO_TIMEOUT) {
-                        Ok(()) => Some(IpcResult::CommandCompleted),
+                        Ok(outcome) => Some(IpcResult::CommandApplied(outcome)),
                         Err(err) => {
                             err_body = Some(map_broker_error(&err));
                             None
@@ -882,13 +901,27 @@ mod tests {
         let server = ShellIpcServer::new_at(&root, &path).unwrap();
 
         let executor: crate::compositor::broker::CommandExecutorFn =
-            Box::new(|_cmd, _timeout, _cancel, _register| Ok(()));
+            Box::new(|_cmd, _timeout, _cancel, _register| {
+                Ok(crate::compositor::ExecutorAck::Success)
+            });
         let broker =
             CompositorCommandBroker::new(crate::compositor::BrokerOptions::default(), executor);
-        broker.update_connection(
-            crate::compositor::CompositorConnection::Ready,
-            crate::compositor::CompositorCapabilities::default(),
-        );
+        let snapshot = crate::compositor::CompositorSnapshot {
+            connection: crate::compositor::CompositorConnection::Ready,
+            workspaces: vec![crate::compositor::WorkspaceInfo {
+                id: 1,
+                name: None,
+                idx: 1,
+                is_active: true,
+                is_focused: true,
+                is_urgent: false,
+                output_name: None,
+                active_window_id: None,
+            }],
+            focused_workspace_id: Some(1),
+            ..Default::default()
+        };
+        broker.observe_snapshot(Arc::new(snapshot));
 
         server.attach_broker(broker);
 
@@ -899,7 +932,13 @@ mod tests {
         .unwrap();
 
         assert!(response.ok);
-        assert_eq!(response.result, Some(IpcResult::CommandCompleted));
+        assert_eq!(response.version, 1);
+        assert_eq!(
+            response.result,
+            Some(IpcResult::CommandApplied(CommandOutcome::Applied {
+                revision: 0
+            }))
+        );
 
         let telemetry = ShellIpcServer::send_command_at(&path, IpcRequest::GetTelemetry).unwrap();
         let Some(IpcResult::Telemetry(health)) = telemetry.result else {

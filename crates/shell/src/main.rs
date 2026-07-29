@@ -1,7 +1,7 @@
 use gpui::{App, Bounds, DisplayId, point, px, size};
 use shilpo_assets::Assets;
 use shilpo_config::ShellConfig;
-use shilpo_services::{CompositorCommand, IpcRequest, IpcResult, ShellIpcServer};
+use shilpo_services::{CommandOutcome, CompositorCommand, IpcRequest, IpcResult, ShellIpcServer};
 use shilpo_shell::{ShellRuntime, bar::geometry::BarGeometry};
 
 #[tokio::main]
@@ -176,7 +176,9 @@ async fn main() {
                     }
                     match resp.result {
                         Some(IpcResult::Accepted) => println!("Accepted"),
-                        Some(IpcResult::CommandCompleted) => println!("Command completed"),
+                        Some(IpcResult::CommandApplied(CommandOutcome::Applied { revision })) => {
+                            println!("Applied (revision {})", revision)
+                        }
                         Some(IpcResult::Status(status)) => println!(
                             "running={} bar={:?} launcher_visible={} control_center_visible={} health={:?}",
                             status.running,

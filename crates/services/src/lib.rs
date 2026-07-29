@@ -25,10 +25,10 @@ pub use bluetooth::{BluetoothInfo, BluetoothService};
 pub use brightness::{BrightnessInfo, BrightnessService};
 pub use clipboard::ClipboardService;
 pub use compositor::{
-    BrokerOptions, CancellationReason, CommandCancellation, CommandTicket, CompositorAdapter,
-    CompositorCapabilities, CompositorCommand, CompositorCommandBroker, CompositorCommandError,
-    CompositorConnection, CompositorOutput, CompositorSnapshot, NiriCompositorService,
-    TestCompositorAdapter, WindowInfo, WorkspaceInfo,
+    BrokerOptions, CancellationReason, CommandCancellation, CommandOutcome, CommandTicket,
+    CompositorAdapter, CompositorCapabilities, CompositorCommand, CompositorCommandBroker,
+    CompositorCommandError, CompositorConnection, CompositorOutput, CompositorSnapshot,
+    CompositorTarget, NiriCompositorService, TestCompositorAdapter, WindowInfo, WorkspaceInfo,
 };
 pub use error::ServiceError;
 pub use ipc::{

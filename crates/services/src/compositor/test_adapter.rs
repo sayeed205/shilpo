@@ -1,6 +1,6 @@
 use super::{
     BrokerOptions, CompositorAdapter, CompositorCommand, CompositorCommandBroker,
-    CompositorSnapshot,
+    CompositorSnapshot, ExecutorAck,
 };
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
@@ -15,18 +15,19 @@ pub struct TestCompositorAdapter {
 
 impl TestCompositorAdapter {
     pub fn new(initial: CompositorSnapshot) -> Self {
-        let (tx, rx) = watch::channel(Arc::new(initial.clone()));
+        let snapshot_arc = Arc::new(initial);
+        let (tx, rx) = watch::channel(snapshot_arc.clone());
         let executed_commands = Arc::new(Mutex::new(Vec::new()));
 
         let exec_cmds = executed_commands.clone();
         let executor: super::broker::CommandExecutorFn =
             Box::new(move |cmd, _timeout, _cancel, _register| {
                 exec_cmds.lock().unwrap().push(cmd.clone());
-                Ok(())
+                Ok(ExecutorAck::Success)
             });
 
         let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
-        broker.update_connection(initial.connection, initial.capabilities);
+        broker.observe_snapshot(snapshot_arc);
 
         Self {
             tx,
@@ -41,9 +42,9 @@ impl TestCompositorAdapter {
     }
 
     pub fn update(&self, snapshot: CompositorSnapshot) {
-        self.broker
-            .update_connection(snapshot.connection.clone(), snapshot.capabilities.clone());
-        let _ = self.tx.send(Arc::new(snapshot));
+        let snap_arc = Arc::new(snapshot);
+        self.broker.observe_snapshot(snap_arc.clone());
+        let _ = self.tx.send(snap_arc);
     }
 
     pub fn executed_commands(&self) -> Vec<CompositorCommand> {

@@ -2026,8 +2026,11 @@ impl ShellRuntime {
                     .command_broker()
                     .submit(cmd)
                     .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
-                cx.spawn(async move |cx| {
-                    if let Err(err) = ticket.await {
+                cx.spawn(async move |cx| match ticket.await {
+                    Ok(shilpo_services::CommandOutcome::Applied { revision }) => {
+                        tracing::trace!(revision, "compositor command applied");
+                    }
+                    Err(err) => {
                         cx.update(|cx| {
                             tracing::warn!(error = %err, "compositor command failed");
                             Self::show_compositor_error_toast(cx, &err);
@@ -2096,7 +2099,9 @@ impl ShellRuntime {
             Ok(crate::actions::ActionResult::Immediate) => Ok(()),
             Ok(crate::actions::ActionResult::Compositor(ticket)) => {
                 cx.spawn(async move |cx| match ticket.await {
-                    Ok(()) => {}
+                    Ok(shilpo_services::CommandOutcome::Applied { revision }) => {
+                        tracing::trace!(revision, "compositor action applied");
+                    }
                     Err(err) => {
                         cx.update(|cx| {
                             tracing::warn!(error = %err, "compositor action failed");

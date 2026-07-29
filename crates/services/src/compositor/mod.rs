@@ -2,9 +2,10 @@ pub mod broker;
 pub mod niri;
 pub mod test_adapter;
 
+pub(crate) use broker::ExecutorAck;
 pub use broker::{
-    BrokerOptions, CancellationReason, CommandCancellation, CommandTicket,
-    CompositorBrokerTelemetry, CompositorCommandBroker, CompositorCommandError,
+    BrokerOptions, CancellationReason, CommandCancellation, CommandOutcome, CommandTicket,
+    CompositorBrokerTelemetry, CompositorCommandBroker, CompositorCommandError, CompositorTarget,
 };
 pub use niri::NiriCompositorService;
 pub use test_adapter::TestCompositorAdapter;
@@ -161,6 +162,17 @@ mod tests {
         let snapshot = CompositorSnapshot {
             connection: CompositorConnection::Ready,
             revision: 1,
+            workspaces: vec![WorkspaceInfo {
+                id: 1,
+                name: None,
+                idx: 1,
+                is_active: true,
+                is_focused: true,
+                is_urgent: false,
+                output_name: None,
+                active_window_id: None,
+            }],
+            focused_workspace_id: Some(1),
             ..Default::default()
         };
         adapter.update(snapshot);

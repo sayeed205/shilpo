@@ -1,7 +1,7 @@
 use super::{
     BrokerOptions, CancellationReason, CompositorAdapter, CompositorCapabilities,
     CompositorCommand, CompositorCommandBroker, CompositorCommandError, CompositorConnection,
-    CompositorOutput, CompositorSnapshot, WindowInfo, WorkspaceInfo,
+    CompositorOutput, CompositorSnapshot, ExecutorAck, WindowInfo, WorkspaceInfo,
     broker::{CommandCancellation, StreamCancelHandle, create_stream_cancel_handle},
 };
 use anyhow::Result;
@@ -80,14 +80,15 @@ impl NiriCompositorService {
 
     /// Construct offline instance for testing with specified initial snapshot.
     pub fn new_offline(snapshot: CompositorSnapshot) -> Arc<Self> {
-        let (tx, rx) = watch::channel(Arc::new(snapshot.clone()));
+        let snap_arc = Arc::new(snapshot);
+        let (tx, rx) = watch::channel(snap_arc.clone());
         let stop_flag = Arc::new(AtomicBool::new(true));
 
         let broker = CompositorCommandBroker::new(
             BrokerOptions::default(),
-            Box::new(|_cmd, _timeout, _cancel, _register| Ok(())),
+            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success)),
         );
-        broker.update_connection(snapshot.connection, snapshot.capabilities);
+        broker.observe_snapshot(snap_arc);
 
         Arc::new(Self {
             tx,
@@ -99,9 +100,9 @@ impl NiriCompositorService {
     }
 
     pub fn update_snapshot(&self, snapshot: CompositorSnapshot) {
-        self.broker
-            .update_connection(snapshot.connection.clone(), snapshot.capabilities.clone());
-        let _ = self.tx.send(Arc::new(snapshot));
+        let snap_arc = Arc::new(snapshot);
+        self.broker.observe_snapshot(snap_arc.clone());
+        let _ = self.tx.send(snap_arc);
     }
 }
 
@@ -135,7 +136,7 @@ fn execute_niri_command(
     timeout: Duration,
     cancel: Arc<CommandCancellation>,
     register_cancel: &dyn Fn(Arc<dyn StreamCancelHandle>),
-) -> Result<(), CompositorCommandError> {
+) -> Result<ExecutorAck, CompositorCommandError> {
     let socket_path = match resolve_niri_socket_path() {
         Some(p) => p,
         None => {
@@ -153,9 +154,15 @@ fn execute_niri_command_on_socket(
     timeout: Duration,
     cancel: Arc<CommandCancellation>,
     register_cancel: &dyn Fn(Arc<dyn StreamCancelHandle>),
-) -> Result<(), CompositorCommandError> {
+) -> Result<ExecutorAck, CompositorCommandError> {
     let start_time = std::time::Instant::now();
     let deadline = start_time + timeout;
+
+    if cancel.is_cancelled() {
+        return Err(CompositorCommandError::Cancelled {
+            reason: cancel.reason().unwrap_or(CancellationReason::User),
+        });
+    }
 
     let remaining_timeout = || -> Result<Duration, CompositorCommandError> {
         deadline
@@ -268,7 +275,7 @@ fn execute_niri_command_on_socket(
             });
             let reply = send_request(&mut stream_writer, &req)?;
             match reply {
-                Ok(Response::Handled) => Ok(()),
+                Ok(Response::Handled) => Ok(ExecutorAck::Success),
                 Ok(resp) => Err(CompositorCommandError::BackendRejected {
                     message: format!("unexpected niri response: {resp:?}"),
                 }),
@@ -281,7 +288,7 @@ fn execute_niri_command_on_socket(
             let req = Request::Action(niri_ipc::Action::FocusWindow { id: *id });
             let reply = send_request(&mut stream_writer, &req)?;
             match reply {
-                Ok(Response::Handled) => Ok(()),
+                Ok(Response::Handled) => Ok(ExecutorAck::Success),
                 Ok(resp) => Err(CompositorCommandError::BackendRejected {
                     message: format!("unexpected niri response: {resp:?}"),
                 }),
@@ -294,7 +301,7 @@ fn execute_niri_command_on_socket(
             let req = Request::Action(niri_ipc::Action::FocusWindowPrevious {});
             let reply = send_request(&mut stream_writer, &req)?;
             match reply {
-                Ok(Response::Handled) => Ok(()),
+                Ok(Response::Handled) => Ok(ExecutorAck::Success),
                 Ok(resp) => Err(CompositorCommandError::BackendRejected {
                     message: format!("unexpected niri response: {resp:?}"),
                 }),
@@ -314,7 +321,7 @@ fn execute_niri_command_on_socket(
             });
             let reply = send_request(&mut stream_writer, &req)?;
             match reply {
-                Ok(Response::Handled) => Ok(()),
+                Ok(Response::Handled) => Ok(ExecutorAck::Success),
                 Ok(resp) => Err(CompositorCommandError::BackendRejected {
                     message: format!("unexpected niri response: {resp:?}"),
                 }),
@@ -381,14 +388,18 @@ fn execute_niri_command_on_socket(
             match target_ws {
                 Some(ws) => {
                     if ws.is_focused {
-                        Ok(())
+                        Ok(ExecutorAck::WorkspaceCreated {
+                            workspace_id: ws.id,
+                        })
                     } else {
                         let focus_req = Request::Action(niri_ipc::Action::FocusWorkspace {
                             reference: niri_ipc::WorkspaceReferenceArg::Id(ws.id),
                         });
                         let reply = send_request(&mut stream_writer, &focus_req)?;
                         match reply {
-                            Ok(Response::Handled) => Ok(()),
+                            Ok(Response::Handled) => Ok(ExecutorAck::WorkspaceCreated {
+                                workspace_id: ws.id,
+                            }),
                             Ok(resp) => Err(CompositorCommandError::BackendRejected {
                                 message: format!(
                                     "unexpected response focusing empty workspace: {resp:?}"
@@ -464,8 +475,9 @@ fn publish_reconnecting(
     if *previous != current {
         current.revision = previous.revision.saturating_add(1);
         *revision = current.revision;
-        broker.update_connection(current.connection.clone(), current.capabilities.clone());
-        let _ = tx.send(Arc::new(current));
+        let snap_arc = Arc::new(current);
+        broker.observe_snapshot(snap_arc.clone());
+        let _ = tx.send(snap_arc);
     }
 }
 
@@ -764,18 +776,28 @@ fn publish_snapshot_from_state(
         let mut new_snapshot = new_snapshot;
         new_snapshot.revision = prev.revision.saturating_add(1);
         *revision = new_snapshot.revision;
-        broker.update_connection(
-            new_snapshot.connection.clone(),
-            new_snapshot.capabilities.clone(),
-        );
-        let _ = tx.send(Arc::new(new_snapshot));
+        let snap_arc = Arc::new(new_snapshot);
+        broker.observe_snapshot(snap_arc.clone());
+        let _ = tx.send(snap_arc);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::net::UnixListener;
+    use std::{
+        fs::OpenOptions,
+        os::unix::{io::AsRawFd, net::UnixListener},
+    };
+
+    fn fake_niri_root() -> PathBuf {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("target")
+            .join("fake-niri");
+        std::fs::create_dir_all(&root).expect("failed to create fake Niri fixture root");
+        root
+    }
 
     struct TempSocketDir {
         path: PathBuf,
@@ -783,15 +805,19 @@ mod tests {
 
     impl TempSocketDir {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "fake-niri-{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-            let _ = std::fs::create_dir_all(&path);
-            Self { path }
+            static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+            for _ in 0..100 {
+                let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+                let path =
+                    fake_niri_root().join(format!("fake-niri-{}-{}", std::process::id(), id));
+                match std::fs::create_dir(&path) {
+                    Ok(()) => return Self { path },
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("failed to create fake Niri socket directory: {error}"),
+                }
+            }
+            panic!("could not allocate a fake Niri socket directory");
         }
     }
 
@@ -802,6 +828,7 @@ mod tests {
     }
 
     struct FakeNiriServer {
+        _socket_lock: std::fs::File,
         _dir: TempSocketDir,
         socket_path: PathBuf,
         stop_flag: Arc<AtomicBool>,
@@ -814,9 +841,25 @@ mod tests {
         where
             F: Fn(Request, usize) -> Option<String> + Send + Sync + 'static,
         {
+            let socket_lock = OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .open(fake_niri_root().join("fixture.lock"))
+                .expect("failed to open fake Niri socket lock");
+            // SAFETY: `socket_lock` owns the valid file descriptor for the lock lifetime.
+            if unsafe { libc::flock(socket_lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                panic!("failed to lock fake Niri socket fixture");
+            }
             let dir = TempSocketDir::new();
             let socket_path = dir.path.join("niri.sock");
-            let listener = UnixListener::bind(&socket_path).unwrap();
+            let listener = UnixListener::bind(&socket_path).unwrap_or_else(|error| {
+                panic!(
+                    "failed to bind fake Niri socket {}: {error}",
+                    socket_path.display()
+                )
+            });
             listener.set_nonblocking(true).unwrap();
 
             let stop_flag = Arc::new(AtomicBool::new(false));
@@ -875,6 +918,7 @@ mod tests {
             });
 
             Self {
+                _socket_lock: socket_lock,
                 _dir: dir,
                 socket_path,
                 stop_flag,
@@ -928,7 +972,7 @@ mod tests {
             cancel,
             &reg,
         );
-        assert!(res.is_ok());
+        assert_eq!(res, Ok(ExecutorAck::Success));
 
         let reqs = server.requests();
         assert_eq!(reqs.len(), 1);
@@ -954,7 +998,7 @@ mod tests {
             cancel1,
             &reg1,
         );
-        assert!(res1.is_ok());
+        assert_eq!(res1, Ok(ExecutorAck::Success));
 
         let res2 = execute_niri_command_on_socket(
             &server.socket_path,
@@ -963,7 +1007,7 @@ mod tests {
             cancel2,
             &reg2,
         );
-        assert!(res2.is_ok());
+        assert_eq!(res2, Ok(ExecutorAck::Success));
 
         let reqs = server.requests();
         assert_eq!(reqs.len(), 2);
@@ -991,7 +1035,7 @@ mod tests {
             cancel,
             &reg,
         );
-        assert!(res.is_ok());
+        assert_eq!(res, Ok(ExecutorAck::Success));
 
         let reqs = server.requests();
         assert_eq!(reqs.len(), 1);
@@ -1061,7 +1105,7 @@ mod tests {
             cancel,
             &reg,
         );
-        assert!(res.is_ok());
+        assert_eq!(res, Ok(ExecutorAck::WorkspaceCreated { workspace_id: 3 }));
 
         let reqs = server.requests();
         assert_eq!(reqs.len(), 3);
@@ -1203,10 +1247,22 @@ mod tests {
             },
             executor,
         );
-        broker.update_connection(
-            CompositorConnection::Ready,
-            CompositorCapabilities::default(),
-        );
+        let ready_snap = CompositorSnapshot {
+            connection: CompositorConnection::Ready,
+            workspaces: vec![super::WorkspaceInfo {
+                id: 1,
+                name: None,
+                idx: 1,
+                is_active: true,
+                is_focused: true,
+                is_urgent: false,
+                output_name: None,
+                active_window_id: None,
+            }],
+            focused_workspace_id: Some(1),
+            ..Default::default()
+        };
+        broker.observe_snapshot(Arc::new(ready_snap));
 
         let mut ticket = broker.submit(CompositorCommand::FocusWorkspace(1)).unwrap();
         started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -1234,20 +1290,33 @@ mod tests {
                 execute_niri_command_on_socket(&socket_path, cmd, timeout, cancel, register)
             });
         let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
-        broker.update_connection(
-            CompositorConnection::Ready,
-            CompositorCapabilities::default(),
-        );
+        let ready_snap = CompositorSnapshot {
+            connection: CompositorConnection::Ready,
+            workspaces: vec![super::WorkspaceInfo {
+                id: 1,
+                name: None,
+                idx: 1,
+                is_active: true,
+                is_focused: true,
+                is_urgent: false,
+                output_name: None,
+                active_window_id: None,
+            }],
+            focused_workspace_id: Some(1),
+            ..Default::default()
+        };
+        broker.observe_snapshot(Arc::new(ready_snap));
 
         let ticket = broker.submit(CompositorCommand::FocusWorkspace(1)).unwrap();
         started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        broker.update_connection(
-            CompositorConnection::Reconnecting {
+        broker.observe_snapshot(Arc::new(CompositorSnapshot {
+            revision: 1,
+            connection: CompositorConnection::Reconnecting {
                 attempt: 1,
                 last_error: Some("test".into()),
             },
-            CompositorCapabilities::default(),
-        );
+            ..Default::default()
+        }));
         assert!(matches!(
             ticket.wait_timeout(Duration::from_secs(1)),
             Err(CompositorCommandError::Cancelled {
