@@ -9,6 +9,8 @@ pub enum BuiltinActionId {
     ToggleBar,
     ToggleOverview,
     FocusWorkspace,
+    FocusWindow,
+    CloseWindow,
     CreateWorkspace,
     MoveWindowToWorkspace,
     ReloadConfig,
@@ -29,6 +31,8 @@ impl BuiltinActionId {
         Self::ToggleBar,
         Self::ToggleOverview,
         Self::FocusWorkspace,
+        Self::FocusWindow,
+        Self::CloseWindow,
         Self::CreateWorkspace,
         Self::MoveWindowToWorkspace,
         Self::ReloadConfig,
@@ -49,6 +53,8 @@ impl BuiltinActionId {
             Self::ToggleBar => "toggle_bar",
             Self::ToggleOverview => "toggle_overview",
             Self::FocusWorkspace => "focus_workspace",
+            Self::FocusWindow => "focus_window",
+            Self::CloseWindow => "close_window",
             Self::CreateWorkspace => "create_workspace",
             Self::MoveWindowToWorkspace => "move_window_to_workspace",
             Self::ReloadConfig => "reload_config",
@@ -75,6 +81,8 @@ impl ActionId {
     pub const ToggleBar: Self = Self(Cow::Borrowed("builtin:toggle_bar"));
     pub const ToggleOverview: Self = Self(Cow::Borrowed("builtin:toggle_overview"));
     pub const FocusWorkspace: Self = Self(Cow::Borrowed("builtin:focus_workspace"));
+    pub const FocusWindow: Self = Self(Cow::Borrowed("builtin:focus_window"));
+    pub const CloseWindow: Self = Self(Cow::Borrowed("builtin:close_window"));
     pub const CreateWorkspace: Self = Self(Cow::Borrowed("builtin:create_workspace"));
     pub const MoveWindowToWorkspace: Self = Self(Cow::Borrowed("builtin:move_window_to_workspace"));
     pub const ReloadConfig: Self = Self(Cow::Borrowed("builtin:reload_config"));
@@ -173,6 +181,8 @@ pub enum ActionInvocation {
     ToggleBar,
     ToggleOverview,
     FocusWorkspace(u64),
+    FocusWindow(u64),
+    CloseWindow(u64),
     CreateWorkspace,
     MoveWindowToWorkspace {
         window_id: u64,
@@ -201,6 +211,8 @@ impl ActionInvocation {
             Self::ToggleBar => ActionId::ToggleBar,
             Self::ToggleOverview => ActionId::ToggleOverview,
             Self::FocusWorkspace(_) => ActionId::FocusWorkspace,
+            Self::FocusWindow(_) => ActionId::FocusWindow,
+            Self::CloseWindow(_) => ActionId::CloseWindow,
             Self::CreateWorkspace => ActionId::CreateWorkspace,
             Self::MoveWindowToWorkspace { .. } => ActionId::MoveWindowToWorkspace,
             Self::ReloadConfig => ActionId::ReloadConfig,
@@ -240,6 +252,10 @@ impl From<ActionId> for ActionInvocation {
             Self::ToggleOverview
         } else if id == ActionId::FocusWorkspace {
             Self::FocusWorkspace(1)
+        } else if id == ActionId::FocusWindow {
+            Self::FocusWindow(1)
+        } else if id == ActionId::CloseWindow {
+            Self::CloseWindow(1)
         } else if id == ActionId::CreateWorkspace {
             Self::CreateWorkspace
         } else if id == ActionId::MoveWindowToWorkspace {
@@ -351,6 +367,8 @@ fn builtin_descriptor(id: BuiltinActionId) -> ActionDescriptor {
         BuiltinActionId::FocusWorkspace => {
             ("Focus Compositor Workspace", ActionCategory::Navigation)
         }
+        BuiltinActionId::FocusWindow => ("Focus Window", ActionCategory::Navigation),
+        BuiltinActionId::CloseWindow => ("Close Window", ActionCategory::Navigation),
         BuiltinActionId::CreateWorkspace => ("Create Workspace", ActionCategory::Navigation),
         BuiltinActionId::MoveWindowToWorkspace => (
             "Move Focused Window to Workspace",
@@ -383,6 +401,8 @@ fn action_id(id: BuiltinActionId) -> ActionId {
         BuiltinActionId::ToggleBar => ActionId::ToggleBar,
         BuiltinActionId::ToggleOverview => ActionId::ToggleOverview,
         BuiltinActionId::FocusWorkspace => ActionId::FocusWorkspace,
+        BuiltinActionId::FocusWindow => ActionId::FocusWindow,
+        BuiltinActionId::CloseWindow => ActionId::CloseWindow,
         BuiltinActionId::CreateWorkspace => ActionId::CreateWorkspace,
         BuiltinActionId::MoveWindowToWorkspace => ActionId::MoveWindowToWorkspace,
         BuiltinActionId::ReloadConfig => ActionId::ReloadConfig,

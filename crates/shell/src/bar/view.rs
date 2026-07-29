@@ -60,6 +60,7 @@ pub struct BarView {
     media_track: String,
     datetime_str: String,
     extension_instance_prefix: Option<String>,
+    output_name: Option<String>,
     last_error: Option<String>,
     last_service_update: std::time::Instant,
 }
@@ -121,6 +122,7 @@ impl BarView {
             media_track: "KK - Police ke hathiyar".into(),
             datetime_str: "17:53 · Tue, 21/07".into(),
             extension_instance_prefix: None,
+            output_name: None,
             last_error: None,
             last_service_update: std::time::Instant::now(),
         }
@@ -148,9 +150,20 @@ impl BarView {
         config: ShellConfig,
         display_id: gpui::DisplayId,
     ) -> Entity<Self> {
+        Self::view_with_config_on_display_with_output(window, cx, config, display_id, None)
+    }
+
+    pub fn view_with_config_on_display_with_output(
+        window: &mut Window,
+        cx: &mut App,
+        config: ShellConfig,
+        display_id: gpui::DisplayId,
+        output_name: Option<String>,
+    ) -> Entity<Self> {
         cx.new(|cx| {
             let mut view = Self::new_with_config(window, cx, config);
             view.extension_instance_prefix = Some(format!("bar:{display_id:?}"));
+            view.output_name = output_name;
             view
         })
     }
@@ -234,6 +247,31 @@ impl BarView {
                             "workspaces",
                             snapshot.workspaces.clone(),
                             snapshot.connection.clone(),
+                        )
+                        .into_any_element(),
+                    );
+                }
+                BarWidget::Builtin(BuiltinBarWidget::RunningApps) => {
+                    let snapshot = ShellRuntime::compositor_snapshot(cx);
+                    let app_icons = ShellRuntime::app_icon_index(cx);
+                    let reduced_motion = ShellRuntime::overview_reduced_motion(cx);
+                    let is_vertical = matches!(
+                        self.config.bar.position,
+                        shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
+                    );
+                    let pill_orientation = if is_vertical {
+                        super::widgets::pill_strip::PillOrientation::Vertical
+                    } else {
+                        super::widgets::pill_strip::PillOrientation::Horizontal
+                    };
+                    elements.push(
+                        super::widgets::RunningAppsWidget::new(
+                            format!("running_apps_{section_name}_{index}"),
+                            self.output_name.clone(),
+                            (*snapshot).clone(),
+                            app_icons,
+                            pill_orientation,
+                            reduced_motion,
                         )
                         .into_any_element(),
                     );

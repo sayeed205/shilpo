@@ -17,6 +17,7 @@ pub struct OutputDescriptor {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BarSpec {
     pub display_id: DisplayId,
+    pub output_name: Option<String>,
     pub geometry: BarGeometry,
     pub config: BarConfig,
     pub with_display_geometry: bool,
@@ -59,6 +60,7 @@ pub fn reconcile_output_bars(
                 );
                 let desired_spec = BarSpec {
                     display_id: output.display_id,
+                    output_name: output.name.clone(),
                     geometry,
                     config: bar_config,
                     with_display_geometry: true,
@@ -109,7 +111,8 @@ mod tests {
         let ops = reconcile_output_bars(&outputs, &config, &current_bars);
         assert_eq!(ops.len(), 1);
         assert!(
-            matches!(&ops[0], ReconciliationOp::Create(spec) if spec.display_id == DisplayId::new(1))
+            matches!(&ops[0], ReconciliationOp::Create(spec) if spec.display_id == DisplayId::new(1)
+                && spec.output_name.as_deref() == Some("eDP-1"))
         );
     }
 
@@ -128,6 +131,7 @@ mod tests {
             BarGeometry::calculate(DisplayId::new(1), sample_bounds(1920., 1080.), &bar_config);
         let spec = BarSpec {
             display_id: DisplayId::new(1),
+            output_name: Some("eDP-1".into()),
             geometry,
             config: bar_config,
             with_display_geometry: true,
@@ -157,6 +161,7 @@ mod tests {
         );
         let old_spec = BarSpec {
             display_id: DisplayId::new(1),
+            output_name: Some("eDP-1".into()),
             geometry: old_geometry,
             config: old_bar_config,
             with_display_geometry: true,
@@ -180,6 +185,7 @@ mod tests {
             BarGeometry::calculate(DisplayId::new(1), sample_bounds(1920., 1080.), &bar_config);
         let spec = BarSpec {
             display_id: DisplayId::new(1),
+            output_name: None,
             geometry,
             config: bar_config,
             with_display_geometry: true,
@@ -223,6 +229,7 @@ mod tests {
             BarGeometry::calculate(DisplayId::new(2), sample_bounds(1920., 1080.), &bar_config);
         let spec = BarSpec {
             display_id: DisplayId::new(2),
+            output_name: Some("HDMI-A-1".into()),
             geometry,
             config: bar_config,
             with_display_geometry: true,

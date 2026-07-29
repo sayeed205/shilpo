@@ -1,3 +1,6 @@
+use crate::app_icons::{
+    build_app_icon_index, icon_device_pixels, rasterized_app_icon, resolve_app_icon_path,
+};
 use crate::runtime::ShellRuntime;
 use gpui::{
     Animation, AnimationExt as _, App, AppContext, Context, DragMoveEvent, ElementId, Entity,
@@ -7,7 +10,7 @@ use gpui::{
     prelude::FluentBuilder, px,
 };
 use image::imageops::FilterType;
-use shilpo_services::{Application, CompositorSnapshot, WindowInfo, WorkspaceInfo};
+use shilpo_services::{CompositorSnapshot, WindowInfo, WorkspaceInfo};
 use shilpo_ui::{ActiveTheme, FocusTrapElement, StyledExt, animation::cubic_bezier};
 use std::{
     collections::HashMap,
@@ -116,11 +119,12 @@ struct DraggedOverviewWindow {
 }
 
 impl Render for DraggedOverviewWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let icon = app_icon(
             self.icon_path.clone(),
             self.title.as_ref(),
             px(56.),
+            window.scale_factor(),
             cx.theme().surface_container_highest,
             cx.theme().on_surface,
         );
@@ -181,78 +185,26 @@ pub enum OverviewCloseReason {
     Selection,
 }
 
-fn normalize_app_key(value: &str) -> String {
-    value
-        .trim()
-        .trim_end_matches(".desktop")
-        .to_ascii_lowercase()
-}
-
-fn build_app_icon_index(applications: Vec<Application>) -> HashMap<String, PathBuf> {
-    let mut icons = HashMap::new();
-    for app in applications {
-        let Some(icon_path) = app.icon_path else {
-            continue;
-        };
-
-        let mut aliases = vec![normalize_app_key(&app.name)];
-        if let Some(icon) = app.icon.as_deref() {
-            aliases.push(normalize_app_key(icon));
-        }
-        if let Some(stem) = app.desktop_file.file_stem().and_then(|stem| stem.to_str()) {
-            aliases.push(normalize_app_key(stem));
-        }
-        if let Some(program) = app.exec.split_whitespace().next()
-            && let Some(program) = std::path::Path::new(program)
-                .file_name()
-                .and_then(|name| name.to_str())
-        {
-            aliases.push(normalize_app_key(program));
-        }
-
-        for alias in aliases {
-            if alias.is_empty() {
-                continue;
-            }
-            icons
-                .entry(alias.clone())
-                .or_insert_with(|| icon_path.clone());
-            if let Some(short) = alias.rsplit('.').next() {
-                icons
-                    .entry(short.to_string())
-                    .or_insert_with(|| icon_path.clone());
-            }
-        }
-    }
-    icons
-}
-
 fn app_icon(
     icon_path: Option<PathBuf>,
     fallback_label: &str,
     size: gpui::Pixels,
+    scale_factor: f32,
     background: gpui::Hsla,
     foreground: gpui::Hsla,
 ) -> gpui::AnyElement {
     if let Some(icon_path) = icon_path {
+        let target_size = icon_device_pixels(size.as_f32(), scale_factor);
+        let image = rasterized_app_icon(&icon_path, target_size)
+            .map(img)
+            .unwrap_or_else(|| img(ImageSource::from(icon_path)));
         div()
             .w(size)
             .h(size)
             .flex_none()
             .items_center()
             .justify_center()
-            .rounded_xl()
-            .overflow_hidden()
-            .bg(background)
-            .border_1()
-            .border_color(foreground.opacity(0.12))
-            .shadow_md()
-            .child(
-                img(icon_path)
-                    .w(size)
-                    .h(size)
-                    .object_fit(ObjectFit::Contain),
-            )
+            .child(image.w(size).h(size).object_fit(ObjectFit::Contain))
             .into_any_element()
     } else {
         let initial = fallback_label
@@ -375,6 +327,10 @@ impl WorkspaceOverview {
                 is_focused: true,
                 is_floating: false,
                 is_urgent: false,
+                layout_x: None,
+                layout_y: None,
+                column: None,
+                row: None,
             }],
             Some(1),
         )
@@ -594,24 +550,7 @@ impl WorkspaceOverview {
     }
 
     fn icon_path_for_app(&self, app_id: Option<&str>) -> Option<PathBuf> {
-        let app_id = normalize_app_key(app_id?);
-        self.app_icons
-            .get(&app_id)
-            .or_else(|| {
-                app_id
-                    .rsplit('.')
-                    .next()
-                    .and_then(|short| self.app_icons.get(short))
-            })
-            .or_else(|| {
-                self.app_icons.iter().find_map(|(key, path)| {
-                    (app_id.ends_with(key)
-                        || key.ends_with(&app_id)
-                        || key.starts_with(&format!("{app_id}-")))
-                    .then_some(path)
-                })
-            })
-            .cloned()
+        resolve_app_icon_path(app_id, &self.app_icons)
     }
 }
 
@@ -627,6 +566,7 @@ impl Render for WorkspaceOverview {
         let card_bg = theme.surface_container_high;
         let border_color = theme.outline_variant;
         let viewport = window.viewport_size();
+        let scale_factor = window.scale_factor();
         let has_active_drag = cx.has_active_drag();
 
         // ── Scrim backdrop ──────────────────────────────────────────────
@@ -722,6 +662,7 @@ impl Render for WorkspaceOverview {
                             icon_path,
                             fallback_label,
                             px(icon_size),
+                            scale_factor,
                             theme.surface_container_highest,
                             theme.on_surface,
                         );
@@ -1070,6 +1011,7 @@ impl Focusable for WorkspaceOverview {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shilpo_services::Application;
 
     #[test]
     fn test_workspace_overview_navigation() {

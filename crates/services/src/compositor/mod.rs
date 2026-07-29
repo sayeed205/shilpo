@@ -59,6 +59,7 @@ pub struct CompositorCapabilities {
     pub can_move_window: bool,
     pub can_focus_window: bool,
     pub can_focus_workspace: bool,
+    pub can_close_window: bool,
 }
 
 impl Default for CompositorCapabilities {
@@ -68,6 +69,7 @@ impl Default for CompositorCapabilities {
             can_move_window: true,
             can_focus_window: true,
             can_focus_workspace: true,
+            can_close_window: true,
         }
     }
 }
@@ -86,7 +88,7 @@ pub struct WorkspaceInfo {
 }
 
 /// Generic window information.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WindowInfo {
     pub id: u64,
     pub title: Option<String>,
@@ -95,6 +97,10 @@ pub struct WindowInfo {
     pub is_focused: bool,
     pub is_floating: bool,
     pub is_urgent: bool,
+    pub layout_x: Option<f64>,
+    pub layout_y: Option<f64>,
+    pub column: Option<usize>,
+    pub row: Option<usize>,
 }
 
 /// Revisioned atomic snapshot of the compositor state.
@@ -136,6 +142,7 @@ pub enum CompositorCommand {
     FocusWorkspace(u64),
     FocusWindow(u64),
     FocusPreviousWindow,
+    CloseWindow(u64),
     CreateWorkspace,
     MoveWindowToWorkspace { window_id: u64, workspace_id: u64 },
 }

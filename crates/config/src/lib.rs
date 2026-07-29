@@ -358,7 +358,7 @@ impl JsonSchema for BarWidget {
             object.insert(
                 "pattern".into(),
                 serde_json::Value::String(
-                    r"^(builtin:(launcher|workspaces|active_window|clock|media|sysinfo|network|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
+                    r"^(builtin:(launcher|workspaces|running_apps|clock|media|sysinfo|network|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
                         .into(),
                 ),
             );
@@ -372,7 +372,7 @@ impl JsonSchema for BarWidget {
 pub enum BuiltinBarWidget {
     Launcher,
     Workspaces,
-    ActiveWindow,
+    RunningApps,
     Clock,
     Media,
     Sysinfo,
@@ -387,7 +387,7 @@ impl BuiltinBarWidget {
         match value {
             "Launcher" => Some(Self::Launcher),
             "Workspaces" => Some(Self::Workspaces),
-            "ActiveWindow" => Some(Self::ActiveWindow),
+            "RunningApps" => Some(Self::RunningApps),
             "Clock" => Some(Self::Clock),
             "Media" => Some(Self::Media),
             "Sysinfo" => Some(Self::Sysinfo),
@@ -405,7 +405,7 @@ impl fmt::Display for BuiltinBarWidget {
         let value = match self {
             Self::Launcher => "launcher",
             Self::Workspaces => "workspaces",
-            Self::ActiveWindow => "active_window",
+            Self::RunningApps => "running_apps",
             Self::Clock => "clock",
             Self::Media => "media",
             Self::Sysinfo => "sysinfo",
@@ -425,7 +425,7 @@ impl FromStr for BuiltinBarWidget {
         match value {
             "launcher" => Ok(Self::Launcher),
             "workspaces" => Ok(Self::Workspaces),
-            "active_window" => Ok(Self::ActiveWindow),
+            "running_apps" => Ok(Self::RunningApps),
             "clock" => Ok(Self::Clock),
             "media" => Ok(Self::Media),
             "sysinfo" => Ok(Self::Sysinfo),
@@ -488,7 +488,7 @@ impl Default for BarConfig {
                 start: vec![
                     BarWidget::Builtin(BuiltinBarWidget::Launcher),
                     BarWidget::Builtin(BuiltinBarWidget::Workspaces),
-                    BarWidget::Builtin(BuiltinBarWidget::ActiveWindow),
+                    BarWidget::Builtin(BuiltinBarWidget::RunningApps),
                 ],
                 center: vec![
                     BarWidget::Builtin(BuiltinBarWidget::Clock),
@@ -1734,5 +1734,24 @@ margin = { horizontal = 600, vertical = 6 }
         let mut config = ShellConfig::default();
         config.bar.height = 48;
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_running_apps_config_parsing_and_active_window_rejection() {
+        assert_eq!(
+            BuiltinBarWidget::from_str("running_apps"),
+            Ok(BuiltinBarWidget::RunningApps)
+        );
+        assert!(BuiltinBarWidget::from_str("active_window").is_err());
+        assert_eq!(BuiltinBarWidget::RunningApps.to_string(), "running_apps");
+
+        let valid_widget: BarWidget = serde_json::from_str(r#""builtin:running_apps""#).unwrap();
+        assert_eq!(
+            valid_widget,
+            BarWidget::Builtin(BuiltinBarWidget::RunningApps)
+        );
+
+        let invalid: Result<BarWidget, _> = serde_json::from_str(r#""builtin:active_window""#);
+        assert!(invalid.is_err());
     }
 }

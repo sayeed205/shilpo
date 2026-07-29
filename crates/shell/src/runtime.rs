@@ -170,6 +170,21 @@ fn discovered_wallpaper_needs_theme_sync(
     theme_wallpaper_path != Some(discovered_wallpaper_path)
 }
 
+fn should_restore_overview_prior_focus(
+    reason: crate::overview::OverviewCloseReason,
+    opened_workspace_id: Option<u64>,
+    current_workspace_id: Option<u64>,
+) -> bool {
+    if reason != crate::overview::OverviewCloseReason::Cancel {
+        return false;
+    }
+
+    match (opened_workspace_id, current_workspace_id) {
+        (Some(opened), Some(current)) => opened == current,
+        _ => true,
+    }
+}
+
 pub struct ShellRuntime {
     ipc_server: ShellIpcServer,
     active_config: shilpo_config::ShellConfig,
@@ -183,6 +198,7 @@ pub struct ShellRuntime {
     overview_entity: Option<Entity<crate::overview::WorkspaceOverview>>,
     overview_instance: u64,
     next_overview_instance: u64,
+    overview_opened_workspace_id: Option<u64>,
     current_wallpaper_path: Option<PathBuf>,
     latest_snapshot: Arc<CompositorSnapshot>,
     notification: Option<(
@@ -218,18 +234,55 @@ pub struct ShellRuntime {
 impl Global for ShellRuntime {}
 
 impl ShellRuntime {
+    fn output_name_for_bounds(
+        bounds: Bounds<Pixels>,
+        compositor_outputs: &[CompositorOutput],
+    ) -> Option<String> {
+        let origin_x = bounds.origin.x.as_f32();
+        let origin_y = bounds.origin.y.as_f32();
+        let width = bounds.size.width.as_f32();
+        let height = bounds.size.height.as_f32();
+        let close = |left: f32, right: f32| (left - right).abs() <= 2.0;
+        let geometry_match = |output: &CompositorOutput, size_only: bool| {
+            let scale = output.scale.max(1.0) as f32;
+            let position_matches = close(output.logical_position.0 as f32, origin_x)
+                && close(output.logical_position.1 as f32, origin_y);
+            let size_matches = (close(output.logical_size.0 as f32, width)
+                && close(output.logical_size.1 as f32, height))
+                || (close(output.logical_size.0 as f32 * scale, width)
+                    && close(output.logical_size.1 as f32 * scale, height));
+            size_matches && (size_only || position_matches)
+        };
+
+        compositor_outputs
+            .iter()
+            .find(|output| geometry_match(output, false))
+            .or_else(|| {
+                let size_matches = compositor_outputs
+                    .iter()
+                    .filter(|output| geometry_match(output, true))
+                    .collect::<Vec<_>>();
+                (size_matches.len() == 1).then(|| size_matches[0])
+            })
+            .map(|output| output.name.clone())
+    }
+
     fn output_name_for_display(
         display: &dyn gpui::PlatformDisplay,
         compositor_outputs: &[CompositorOutput],
     ) -> Option<String> {
-        let display_uuid = display.uuid().ok()?;
-        compositor_outputs
-            .iter()
-            .find(|output| {
-                Uuid::new_v5(&Uuid::NAMESPACE_DNS, output.name.as_bytes()) == display_uuid
+        let display_uuid = display.uuid().ok();
+        display_uuid
+            .and_then(|display_uuid| {
+                compositor_outputs
+                    .iter()
+                    .find(|output| {
+                        Uuid::new_v5(&Uuid::NAMESPACE_DNS, output.name.as_bytes()) == display_uuid
+                    })
+                    .map(|output| output.name.clone())
             })
-            .map(|output| output.name.clone())
-            .or_else(|| Some(display_uuid.to_string()))
+            .or_else(|| Self::output_name_for_bounds(display.bounds(), compositor_outputs))
+            .or_else(|| display_uuid.map(|uuid| uuid.to_string()))
     }
 
     pub fn service_commands(cx: &App) -> Option<CommandSender> {
@@ -326,6 +379,7 @@ impl ShellRuntime {
             overview_entity: None,
             overview_instance: 0,
             next_overview_instance: 0,
+            overview_opened_workspace_id: None,
             current_wallpaper_path: initial_wallpaper_path.clone(),
             latest_snapshot: latest_snapshot.clone(),
             notification: None,
@@ -1316,6 +1370,12 @@ impl ShellRuntime {
             {
                 desc.enabled = is_ready && snapshot.capabilities.can_move_window;
             }
+            if let Some(desc) = runtime.actions.descriptor_mut(&ActionId::FocusWindow) {
+                desc.enabled = is_ready && snapshot.capabilities.can_focus_window;
+            }
+            if let Some(desc) = runtime.actions.descriptor_mut(&ActionId::CloseWindow) {
+                desc.enabled = is_ready && snapshot.capabilities.can_close_window;
+            }
 
             let bar_ok = matches!(runtime.bar_state, BarState::Visible | BarState::Hidden);
             runtime.readiness = match &snapshot.connection {
@@ -1361,13 +1421,20 @@ impl ShellRuntime {
         let options = bar_window_options(&spec.geometry, spec.with_display_geometry);
         let display_id = spec.display_id;
         let bar_config = spec.config.clone();
+        let output_name = spec.output_name.clone();
 
         let result = cx.open_window(options, move |window, cx| {
             let shell_config = shilpo_config::ShellConfig {
                 bar: bar_config,
                 ..Default::default()
             };
-            BarView::view_with_config_on_display(window, cx, shell_config, display_id)
+            BarView::view_with_config_on_display_with_output(
+                window,
+                cx,
+                shell_config,
+                display_id,
+                output_name,
+            )
         });
 
         let runtime = cx.global_mut::<Self>();
@@ -1397,6 +1464,7 @@ impl ShellRuntime {
             .unwrap_or_else(|| shilpo_config::ShellConfig::default().bar);
         let spec = crate::bar::BarSpec {
             display_id: geometry.display_id,
+            output_name: None,
             geometry: geometry.clone(),
             config: bar_config,
             with_display_geometry,
@@ -1656,6 +1724,10 @@ impl ShellRuntime {
             return;
         }
         cx.global_mut::<Self>().overview_instance = 0;
+        let opened_workspace_id = cx.global_mut::<Self>().overview_opened_workspace_id.take();
+        let current_workspace_id = Self::compositor_snapshot(cx).focused_workspace_id;
+        let restore_prior_focus =
+            should_restore_overview_prior_focus(reason, opened_workspace_id, current_workspace_id);
         let handle = cx.global_mut::<Self>().overview.take();
         cx.global_mut::<Self>().overview_entity = None;
         if reason == crate::overview::OverviewCloseReason::Selection {
@@ -1666,8 +1738,10 @@ impl ShellRuntime {
         if let Some(handle) = handle {
             let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         }
-        if reason == crate::overview::OverviewCloseReason::Cancel {
+        if restore_prior_focus {
             Self::restore_prior_focus(cx);
+        } else if reason == crate::overview::OverviewCloseReason::Cancel {
+            cx.global_mut::<Self>().prior_window_id = None;
         }
         Self::refresh_bars(cx);
         cx.global::<Self>().publish_status();
@@ -1682,17 +1756,19 @@ impl ShellRuntime {
             .as_ref()
             .and_then(|entity| entity.read(cx).close_reason())
             .unwrap_or(crate::overview::OverviewCloseReason::Cancel);
-        let (had_handle, reason) = {
+        let current_workspace_id = Self::compositor_snapshot(cx).focused_workspace_id;
+        let (had_handle, reason, opened_workspace_id) = {
             let runtime = cx.global_mut::<Self>();
             runtime.overview_instance = 0;
             let had_handle = runtime.overview.take().is_some();
             runtime.overview_entity = None;
-            (had_handle, reason)
+            let opened_workspace_id = runtime.overview_opened_workspace_id.take();
+            (had_handle, reason, opened_workspace_id)
         };
         if !had_handle {
             return;
         }
-        if reason == crate::overview::OverviewCloseReason::Cancel {
+        if should_restore_overview_prior_focus(reason, opened_workspace_id, current_workspace_id) {
             Self::restore_prior_focus(cx);
         } else {
             cx.global_mut::<Self>().prior_window_id = None;
@@ -1783,6 +1859,18 @@ impl ShellRuntime {
             .unwrap_or_default()
     }
 
+    pub fn normalize_app_key(value: &str) -> String {
+        crate::app_icons::normalize_app_key(value)
+    }
+
+    pub fn app_icon_index(
+        cx: &App,
+    ) -> std::sync::Arc<std::collections::HashMap<String, std::path::PathBuf>> {
+        std::sync::Arc::new(crate::app_icons::build_app_icon_index(
+            Self::overview_applications(cx),
+        ))
+    }
+
     pub fn begin_overview_instance(cx: &mut App) -> u64 {
         let runtime = cx.global_mut::<Self>();
         runtime.next_overview_instance = runtime.next_overview_instance.wrapping_add(1);
@@ -1799,6 +1887,10 @@ impl ShellRuntime {
         cx: &mut App,
         requested_display_id: Option<DisplayId>,
     ) {
+        if cx.global::<Self>().overview.is_none() {
+            let focused_workspace_id = Self::compositor_snapshot(cx).focused_workspace_id;
+            cx.global_mut::<Self>().overview_opened_workspace_id = focused_workspace_id;
+        }
         Self::capture_prior_focus(cx);
         Self::close_launcher_for_replacement(cx);
         Self::close_control_center_for_replacement(cx);
@@ -1833,6 +1925,7 @@ impl ShellRuntime {
             }
             Err(error) => {
                 tracing::warn!(error = %error, "cannot open workspace overview window");
+                cx.global_mut::<Self>().overview_opened_workspace_id = None;
                 Self::restore_prior_focus(cx);
             }
         }
@@ -2475,6 +2568,24 @@ impl ShellRuntime {
                     .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
                 Ok(crate::actions::ActionResult::Compositor(ticket))
             }
+            ActionInvocation::FocusWindow(id) => {
+                let comp = Self::compositor(cx)
+                    .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
+                let ticket = comp
+                    .command_broker()
+                    .submit(CompositorCommand::FocusWindow(id))
+                    .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
+                Ok(crate::actions::ActionResult::Compositor(ticket))
+            }
+            ActionInvocation::CloseWindow(id) => {
+                let comp = Self::compositor(cx)
+                    .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
+                let ticket = comp
+                    .command_broker()
+                    .submit(CompositorCommand::CloseWindow(id))
+                    .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
+                Ok(crate::actions::ActionResult::Compositor(ticket))
+            }
             ActionInvocation::CreateWorkspace => {
                 let comp = Self::compositor(cx)
                     .ok_or_else(|| ShellError::ActionFailed("compositor unavailable".into()))?;
@@ -2810,6 +2921,25 @@ mod tests {
     }
 
     #[test]
+    fn closing_overview_after_workspace_change_does_not_restore_origin_focus() {
+        assert!(!should_restore_overview_prior_focus(
+            crate::overview::OverviewCloseReason::Cancel,
+            Some(2),
+            Some(1),
+        ));
+        assert!(should_restore_overview_prior_focus(
+            crate::overview::OverviewCloseReason::Cancel,
+            Some(2),
+            Some(2),
+        ));
+        assert!(!should_restore_overview_prior_focus(
+            crate::overview::OverviewCloseReason::Selection,
+            Some(2),
+            Some(2),
+        ));
+    }
+
+    #[test]
     fn runtime_readiness_and_status_tracking() {
         let mut status = IpcStatus::default();
         assert_eq!(status.readiness, ReadinessState::Starting);
@@ -2955,6 +3085,33 @@ mod tests {
         );
         assert_eq!(bar_geom.display_id, display_id);
         assert_eq!(bar_geom.bounds.size.width, px(3840.));
+    }
+
+    #[test]
+    fn output_name_matching_uses_geometry_when_uuid_mapping_is_unavailable() {
+        let outputs = vec![
+            CompositorOutput {
+                name: "eDP-1".into(),
+                make: None,
+                model: None,
+                logical_position: (0, 0),
+                logical_size: (1920, 1080),
+                scale: 1.0,
+            },
+            CompositorOutput {
+                name: "HDMI-A-1".into(),
+                make: None,
+                model: None,
+                logical_position: (1920, 0),
+                logical_size: (1920, 1080),
+                scale: 1.0,
+            },
+        ];
+        let bounds = Bounds::new(point(px(1920.), px(0.)), size(px(1920.), px(1080.)));
+        assert_eq!(
+            ShellRuntime::output_name_for_bounds(bounds, &outputs),
+            Some("HDMI-A-1".into())
+        );
     }
 
     #[test]

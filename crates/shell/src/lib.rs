@@ -1,4 +1,5 @@
 pub mod actions;
+mod app_icons;
 pub mod bar;
 pub mod control_center;
 pub mod doctor;

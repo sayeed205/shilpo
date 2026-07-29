@@ -1,11 +1,8 @@
-use std::{cell::Cell, rc::Rc, time::Duration};
-
 use crate::actions::ActionInvocation;
 use crate::runtime::ShellRuntime;
 use gpui::{
-    Animation, AnimationExt as _, App, ElementId, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Pixels, RenderOnce, Role, StatefulInteractiveElement, StyleRefinement, Styled,
-    Window, div, px,
+    App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, RenderOnce, Role,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
 };
 use shilpo_services::{CompositorConnection, WorkspaceInfo};
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, tooltip::Tooltip};
@@ -24,25 +21,8 @@ fn workspace_status_label(connection: &CompositorConnection) -> Option<&'static 
 }
 
 const WORKSPACE_SLOT_SIZE: f32 = 26.;
-const WORKSPACE_ACTIVE_MARGIN: f32 = 2.;
-const WORKSPACE_INDICATOR_SIZE: f32 = WORKSPACE_SLOT_SIZE - (WORKSPACE_ACTIVE_MARGIN * 2.);
 const WORKSPACE_DOT_SIZE: f32 = WORKSPACE_SLOT_SIZE * 0.18;
 const WORKSPACE_OVERVIEW_SPLIT_GAP: f32 = 2.;
-const WORKSPACE_MOTION_DURATION: Duration = Duration::from_millis(300);
-const WORKSPACE_LEADING_EDGE_DURATION: Duration = Duration::from_millis(100);
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct WorkspaceIndicatorGeometry {
-    x: Pixels,
-    width: Pixels,
-}
-
-fn indicator_target(index: usize) -> WorkspaceIndicatorGeometry {
-    WorkspaceIndicatorGeometry {
-        x: px(index as f32 * WORKSPACE_SLOT_SIZE + WORKSPACE_ACTIVE_MARGIN),
-        width: px(WORKSPACE_INDICATOR_SIZE),
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct OccupiedBackgroundGeometry {
@@ -85,98 +65,6 @@ fn occupied_background_geometry(
         width,
         left_radius: if joined_left { 0. } else { width / 2. },
         right_radius: if joined_right { 0. } else { width / 2. },
-    }
-}
-
-fn out_sine(progress: f32) -> f32 {
-    (progress.clamp(0., 1.) * std::f32::consts::FRAC_PI_2).sin()
-}
-
-fn lerp_pixels(from: Pixels, target: Pixels, progress: f32) -> Pixels {
-    let from: f32 = from.into();
-    let target: f32 = target.into();
-    px(from + (target - from) * progress)
-}
-
-fn calculate_stretching_geometry(
-    from: WorkspaceIndicatorGeometry,
-    target: WorkspaceIndicatorGeometry,
-    delta: f32,
-) -> WorkspaceIndicatorGeometry {
-    if delta >= 1. {
-        return target;
-    }
-
-    // Inir's AnimatedTabIndexPair moves the leading edge in 100 ms and the
-    // following edge in 300 ms, both with OutSine easing. Keeping the edges
-    // independent creates the elastic capsule without moving foreground dots.
-    let elapsed = WORKSPACE_MOTION_DURATION.as_secs_f32() * delta.clamp(0., 1.);
-    let fast = out_sine(elapsed / WORKSPACE_LEADING_EDGE_DURATION.as_secs_f32());
-    let slow = out_sine(elapsed / WORKSPACE_MOTION_DURATION.as_secs_f32());
-
-    let from_left = from.x;
-    let from_right = from.x + from.width;
-    let target_left = target.x;
-    let target_right = target.x + target.width;
-    let moving_right = target.x >= from.x;
-
-    let (left, right) = if moving_right {
-        (
-            lerp_pixels(from_left, target_left, slow),
-            lerp_pixels(from_right, target_right, fast),
-        )
-    } else {
-        (
-            lerp_pixels(from_left, target_left, fast),
-            lerp_pixels(from_right, target_right, slow),
-        )
-    };
-
-    WorkspaceIndicatorGeometry {
-        x: left,
-        width: (right - left).max(px(WORKSPACE_INDICATOR_SIZE)),
-    }
-}
-
-#[derive(Clone)]
-struct WorkspaceMotionState {
-    target_index: usize,
-    from: WorkspaceIndicatorGeometry,
-    target: WorkspaceIndicatorGeometry,
-    current: Rc<Cell<WorkspaceIndicatorGeometry>>,
-    active_generation: Rc<Cell<u64>>,
-    generation: u64,
-    duration: Duration,
-    active: bool,
-}
-
-impl WorkspaceMotionState {
-    fn new(target_index: usize, target: WorkspaceIndicatorGeometry) -> Self {
-        Self {
-            target_index,
-            from: target,
-            target,
-            current: Rc::new(Cell::new(target)),
-            active_generation: Rc::new(Cell::new(0)),
-            generation: 0,
-            duration: WORKSPACE_MOTION_DURATION,
-            active: false,
-        }
-    }
-
-    fn retarget(&mut self, target_index: usize, target: WorkspaceIndicatorGeometry) -> u64 {
-        if self.target_index == target_index && self.target == target {
-            return self.generation;
-        }
-
-        self.generation = self.generation.wrapping_add(1);
-        self.from = self.current.get();
-        self.target_index = target_index;
-        self.target = target;
-        self.duration = WORKSPACE_MOTION_DURATION;
-        self.active = true;
-        self.active_generation.set(self.generation);
-        self.generation
     }
 }
 
@@ -385,73 +273,15 @@ impl RenderOnce for WorkspacesWidget {
             );
         }
 
-        let active_indicator_element = if let Some(active_idx) = active_workspace_index {
-            let target_geom = indicator_target(active_idx);
-            let motion_key = format!("workspace-motion:{}", self.id);
-            let animation_name = format!("workspace-indicator-motion:{}", self.id);
-
-            let motion = window.use_keyed_state(motion_key, cx, |_, _| {
-                WorkspaceMotionState::new(active_idx, target_geom)
-            });
-
-            let snapshot = motion.read(cx).clone();
-
-            if snapshot.target_index != active_idx || snapshot.target != target_geom {
-                let generation =
-                    motion.update(cx, |state, _| state.retarget(active_idx, target_geom));
-                let duration = motion.read(cx).duration;
-                let motion = motion.clone();
-                cx.spawn(async move |cx| {
-                    cx.background_executor().timer(duration).await;
-                    motion.update(cx, |state, cx| {
-                        if state.generation == generation {
-                            state.active = false;
-                            state.current.set(target_geom);
-                            cx.notify();
-                        }
-                    });
-                })
-                .detach();
-            }
-
-            let state = motion.read(cx);
-            let from_geometry = state.from;
-            let current_geometry = state.current.clone();
-            let active_generation = state.active_generation.clone();
-            let generation = state.generation;
-            let duration = state.duration;
-            let active = state.active;
-
-            let pill = div()
-                .absolute()
-                .top(px(WORKSPACE_ACTIVE_MARGIN))
-                .left(target_geom.x)
-                .w(target_geom.width)
-                .h(px(WORKSPACE_INDICATOR_SIZE))
-                .rounded_full()
-                .bg(cx.theme().primary)
-                .flex();
-
-            if active {
-                pill.with_animation(
-                    ElementId::NamedInteger(animation_name.into(), generation),
-                    Animation::new(duration),
-                    move |pill, delta| {
-                        let geometry =
-                            calculate_stretching_geometry(from_geometry, target_geom, delta);
-                        if active_generation.get() == generation {
-                            current_geometry.set(geometry);
-                        }
-                        pill.left(geometry.x).w(geometry.width)
-                    },
-                )
-                .into_any_element()
-            } else {
-                pill.into_any_element()
-            }
-        } else {
-            div().into_any_element()
-        };
+        let active_indicator_element =
+            crate::bar::widgets::pill_strip::render_active_pill_indicator(
+                &self.id,
+                active_workspace_index,
+                crate::bar::widgets::pill_strip::PillOrientation::Horizontal,
+                false,
+                window,
+                cx,
+            );
 
         if let CompositorConnection::Reconnecting {
             attempt,
@@ -497,6 +327,10 @@ impl RenderOnce for WorkspacesWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bar::widgets::pill_strip::{
+        PILL_INDICATOR_SIZE, calculate_stretching_geometry, indicator_target,
+    };
+    use gpui::Pixels;
 
     fn as_f32(value: Pixels) -> f32 {
         value.into()
@@ -507,9 +341,9 @@ mod tests {
         let first = indicator_target(0);
         let third = indicator_target(2);
 
-        assert_eq!(as_f32(first.x), 2.);
-        assert_eq!(as_f32(first.width), 22.);
-        assert_eq!(as_f32(third.x), 54.);
+        assert_eq!(as_f32(first.position), 2.);
+        assert_eq!(as_f32(first.size), 22.);
+        assert_eq!(as_f32(third.position), 54.);
     }
 
     #[test]
@@ -519,8 +353,8 @@ mod tests {
         let halfway = calculate_stretching_geometry(from, target, 0.5);
         let settled = calculate_stretching_geometry(from, target, 1.);
 
-        assert!(as_f32(halfway.width) > WORKSPACE_INDICATOR_SIZE);
-        assert!(as_f32(halfway.x) > as_f32(from.x));
+        assert!(as_f32(halfway.size) > PILL_INDICATOR_SIZE);
+        assert!(as_f32(halfway.position) > as_f32(from.position));
         assert_eq!(settled, target);
     }
 

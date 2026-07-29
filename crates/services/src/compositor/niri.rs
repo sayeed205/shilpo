@@ -310,6 +310,19 @@ fn execute_niri_command_on_socket(
                 }),
             }
         }
+        CompositorCommand::CloseWindow(id) => {
+            let req = Request::Action(niri_ipc::Action::CloseWindow { id: Some(*id) });
+            let reply = send_request(&mut stream_writer, &req)?;
+            match reply {
+                Ok(Response::Handled) => Ok(ExecutorAck::Success),
+                Ok(resp) => Err(CompositorCommandError::BackendRejected {
+                    message: format!("unexpected niri response: {resp:?}"),
+                }),
+                Err(err) => Err(CompositorCommandError::BackendRejected {
+                    message: err.to_string(),
+                }),
+            }
+        }
         CompositorCommand::MoveWindowToWorkspace {
             window_id,
             workspace_id,
@@ -729,14 +742,30 @@ fn publish_snapshot_from_state(
         .windows
         .windows
         .values()
-        .map(|w| WindowInfo {
-            id: w.id,
-            title: w.title.clone(),
-            app_id: w.app_id.clone(),
-            workspace_id: w.workspace_id,
-            is_focused: w.is_focused,
-            is_floating: w.is_floating,
-            is_urgent: w.is_urgent,
+        .map(|w| {
+            let (layout_x, layout_y) = w
+                .layout
+                .tile_pos_in_workspace_view
+                .map(|(x, y)| (Some(x), Some(y)))
+                .unwrap_or((None, None));
+            let (column, row) = w
+                .layout
+                .pos_in_scrolling_layout
+                .map(|(column, row)| (Some(column), Some(row)))
+                .unwrap_or((None, None));
+            WindowInfo {
+                id: w.id,
+                title: w.title.clone(),
+                app_id: w.app_id.clone(),
+                workspace_id: w.workspace_id,
+                is_focused: w.is_focused,
+                is_floating: w.is_floating,
+                is_urgent: w.is_urgent,
+                layout_x,
+                layout_y,
+                column,
+                row,
+            }
         })
         .collect();
 
@@ -1015,6 +1044,31 @@ mod tests {
         let expected2 = Request::Action(niri_ipc::Action::FocusWindowPrevious {});
         assert_eq!(req_json(&reqs[0]), req_json(&expected1));
         assert_eq!(req_json(&reqs[1]), req_json(&expected2));
+    }
+
+    #[test]
+    fn test_fake_niri_close_window_mapping() {
+        let _guard = serial_guard();
+        let server = FakeNiriServer::start(|_req, _| {
+            Some(serde_json::to_string(&Reply::Ok(Response::Handled)).unwrap())
+        });
+        let (cancel, reg) = dummy_cancel();
+        let result = execute_niri_command_on_socket(
+            &server.socket_path,
+            &CompositorCommand::CloseWindow(101),
+            Duration::from_secs(1),
+            cancel,
+            &reg,
+        );
+        assert_eq!(result, Ok(ExecutorAck::Success));
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            req_json(&requests[0]),
+            req_json(&Request::Action(niri_ipc::Action::CloseWindow {
+                id: Some(101)
+            }))
+        );
     }
 
     #[test]

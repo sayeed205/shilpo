@@ -23,3 +23,4 @@ shilpo-config = { path = "../config" }
 notify.workspace = true
 mcu-material-color.workspace = true
 image.workspace = true
+freedesktop-icons.workspace = true

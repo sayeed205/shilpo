@@ -385,6 +385,9 @@ enum CommandExpectation {
     FocusPreviousWindow {
         previous_window_id: Option<u64>,
     },
+    CloseWindow {
+        window_id: u64,
+    },
     MoveWindowToWorkspace {
         window_id: u64,
         workspace_id: u64,
@@ -480,6 +483,9 @@ impl CommandExpectation {
                     previous_window_id: baseline.focused_window_id,
                 })
             }
+            (CompositorCommand::CloseWindow(id), ExecutorAck::Success) => {
+                Ok(Self::CloseWindow { window_id: *id })
+            }
             (
                 CompositorCommand::MoveWindowToWorkspace {
                     window_id,
@@ -529,6 +535,10 @@ impl ConvergenceState {
                 snapshot.focused_window_id.is_some()
                     && snapshot.focused_window_id != *previous_window_id
             }
+            CommandExpectation::CloseWindow { window_id } => !snapshot
+                .windows
+                .iter()
+                .any(|window| window.id == *window_id),
             CommandExpectation::MoveWindowToWorkspace {
                 window_id,
                 workspace_id,
@@ -595,6 +605,7 @@ impl ConvergenceState {
                 }
             }
             CommandExpectation::FocusPreviousWindow { .. } => None,
+            CommandExpectation::CloseWindow { .. } => None,
         };
         if let Some(target) = disappeared {
             self.terminal = Some(Err(CompositorCommandError::TargetDisappeared(target)));
@@ -850,6 +861,7 @@ impl CompositorCommandBroker {
             CompositorCommand::FocusWindow(_) => state.snapshot.capabilities.can_focus_window,
             CompositorCommand::FocusPreviousWindow => state.snapshot.capabilities.can_focus_window,
             CompositorCommand::FocusWorkspace(_) => state.snapshot.capabilities.can_focus_workspace,
+            CompositorCommand::CloseWindow(_) => state.snapshot.capabilities.can_close_window,
         };
 
         if !cap_ok {
@@ -979,6 +991,7 @@ impl CompositorCommandBroker {
             }),
             CompositorCommand::FocusPreviousWindow => snapshot.windows.len() <= 1,
             CompositorCommand::CreateWorkspace => false,
+            CompositorCommand::CloseWindow(_) => false,
         }
     }
 
@@ -1195,6 +1208,10 @@ mod tests {
             is_focused: focused,
             is_floating: false,
             is_urgent: false,
+            layout_x: None,
+            layout_y: None,
+            column: None,
+            row: None,
         }
     }
 

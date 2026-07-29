@@ -1,4 +1,3 @@
-pub mod active_window;
 pub mod audio;
 pub mod battery;
 pub mod clock;
@@ -7,13 +6,14 @@ pub mod launcher;
 pub mod media;
 pub mod network;
 pub mod perf_media_capsule;
+pub mod pill_strip;
+pub mod running_apps;
 pub mod settings;
 pub mod status_toggles_capsule;
 pub mod sysinfo;
 pub mod window_info_capsule;
 pub mod workspaces;
 
-pub use active_window::ActiveWindowWidget;
 pub use audio::AudioWidget;
 pub use battery::BatteryWidget;
 pub use clock::ClockWidget;
@@ -22,6 +22,7 @@ pub use launcher::LauncherWidget;
 pub use media::MediaWidget;
 pub use network::NetworkWidget;
 pub use perf_media_capsule::PerfMediaCapsule;
+pub use running_apps::RunningAppsWidget;
 pub use settings::SettingsWidget;
 pub use status_toggles_capsule::StatusTogglesCapsule;
 pub use sysinfo::SysInfoWidget;

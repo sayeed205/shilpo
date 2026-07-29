@@ -28,3 +28,4 @@ serde_json.workspace = true
 semver.workspace = true
 reqwest.workspace = true
 image.workspace = true
+resvg.workspace = true
