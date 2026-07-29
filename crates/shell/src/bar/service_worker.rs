@@ -104,6 +104,12 @@ async fn run(
             if !load_config(&updates, &config_path) {
                 return;
             }
+            invalidate_device_snapshots_after_config_reload(
+                &mut audio_last,
+                &mut battery_last,
+                &mut network_last,
+                &mut device_ticks,
+            );
         }
 
         if !sample_device(
@@ -169,6 +175,18 @@ fn send_changed<T: Clone + PartialEq>(
     }
 }
 
+fn invalidate_device_snapshots_after_config_reload(
+    audio: &mut Option<AudioInfo>,
+    battery: &mut Option<BatteryInfo>,
+    network: &mut Option<NetworkInfo>,
+    device_ticks: &mut u8,
+) {
+    *audio = None;
+    *battery = None;
+    *network = None;
+    *device_ticks = 0;
+}
+
 fn sample_device<T: Clone + PartialEq + Default>(
     updates: &UpdateSender,
     previous: &mut Option<T>,
@@ -206,5 +224,38 @@ mod tests {
             WorkerUpdate::Audio
         ));
         assert!(matches!(rx.try_recv(), Ok(WorkerUpdate::Audio(info)) if !info.available));
+    }
+
+    #[test]
+    fn config_reload_replays_unchanged_battery_snapshot() {
+        let (tx, rx) = mpsc::sync_channel(4);
+        let battery = BatteryInfo {
+            percentage: 58,
+            is_charging: true,
+            is_present: true,
+        };
+        let mut previous = Some(battery.clone());
+        let mut audio = Some(AudioInfo::default());
+        let mut network = Some(NetworkInfo::default());
+        let mut device_ticks = 17;
+
+        invalidate_device_snapshots_after_config_reload(
+            &mut audio,
+            &mut previous,
+            &mut network,
+            &mut device_ticks,
+        );
+        assert_eq!(device_ticks, 0);
+        assert!(sample_device(
+            &tx,
+            &mut previous,
+            Some(battery),
+            WorkerUpdate::Battery,
+        ));
+
+        assert!(
+            matches!(rx.try_recv(), Ok(WorkerUpdate::Battery(info)) if info.is_present),
+            "a recreated bar must receive the current battery snapshot"
+        );
     }
 }

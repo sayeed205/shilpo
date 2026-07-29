@@ -1,3 +1,4 @@
+use crate::battery::BatteryIndicator;
 use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
@@ -5,7 +6,7 @@ use gpui::{
     prelude::FluentBuilder, px, relative,
 };
 use shilpo_services::{
-    AudioService, BatteryService, BluetoothService, BrightnessService, NetworkService,
+    AudioService, BatteryInfo, BatteryService, BluetoothService, BrightnessService, NetworkService,
     NightLightService, PowerProfile, PowerProfileService, RecordMode, ScreenCaptureService,
     ScreenshotMode,
 };
@@ -14,7 +15,7 @@ use shilpo_ui::{
     slider::{Slider, SliderEvent, SliderState, SliderValue},
     v_flex,
 };
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 /// M3 Expressive Control Center Panel Overlay View.
 pub struct ControlCenterView {
@@ -26,6 +27,7 @@ pub struct ControlCenterView {
     pub bluetooth_service: Option<BluetoothService>,
     pub power_profile_service: Option<PowerProfileService>,
     pub screen_capture_service: Option<ScreenCaptureService>,
+    battery: BatteryInfo,
     volume_state: Entity<SliderState>,
     brightness_state: Entity<SliderState>,
     dnd_active: bool,
@@ -34,11 +36,16 @@ pub struct ControlCenterView {
     is_recording: bool,
     active_power_profile: PowerProfile,
     focus_handle: FocusHandle,
+    _battery_refresh_task: gpui::Task<()>,
 }
 
 impl ControlCenterView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let battery_service = service_or_warn(BatteryService::new, "battery");
+        let battery = battery_service
+            .as_ref()
+            .map(BatteryService::battery_info)
+            .unwrap_or_default();
         let network_service = service_or_warn(NetworkService::new, "network");
         let audio_service = service_or_warn(AudioService::new, "audio");
         let night_light_service = service_or_warn(NightLightService::new, "night_light");
@@ -136,6 +143,27 @@ impl ControlCenterView {
         })
         .detach();
 
+        let battery_refresh_task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(3)).await;
+                if this
+                    .update(cx, |view, cx| {
+                        let next = view
+                            .battery_service
+                            .as_ref()
+                            .map(BatteryService::battery_info)
+                            .unwrap_or_default();
+                        if replace_battery_if_changed(&mut view.battery, next) {
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+
         Self {
             battery_service,
             network_service,
@@ -145,6 +173,7 @@ impl ControlCenterView {
             bluetooth_service,
             power_profile_service,
             screen_capture_service,
+            battery,
             volume_state,
             brightness_state,
             dnd_active: initial_dnd,
@@ -153,6 +182,7 @@ impl ControlCenterView {
             is_recording: initial_is_recording,
             active_power_profile: initial_power_profile,
             focus_handle,
+            _battery_refresh_task: battery_refresh_task,
         }
     }
 
@@ -304,6 +334,15 @@ fn service_or_warn<T>(create: impl FnOnce() -> anyhow::Result<T>, name: &str) ->
     }
 }
 
+fn replace_battery_if_changed(current: &mut BatteryInfo, next: BatteryInfo) -> bool {
+    if *current == next {
+        return false;
+    }
+
+    *current = next;
+    true
+}
+
 impl Focusable for ControlCenterView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -343,11 +382,7 @@ impl Render for ControlCenterView {
                 .into_any_element()
         })
         .collect::<Vec<_>>();
-        let battery = self
-            .battery_service
-            .as_ref()
-            .map(BatteryService::battery_info)
-            .unwrap_or_default();
+        let battery = self.battery.clone();
         let network = self
             .network_service
             .as_ref()
@@ -471,18 +506,9 @@ impl Render for ControlCenterView {
                                         },
                                     )),
                             )
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .items_center()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_bold()
-                                            .child(format!("{}%", battery.percentage)),
-                                    )
-                                    .child(Icon::new(IconName::BatteryAndroidFull).size(px(16.))),
-                            ),
+                            .when(battery.is_present, |this| {
+                                this.child(BatteryIndicator::new("cc-battery", battery))
+                            }),
                     )
                     // Grid Toggles (WiFi, Bluetooth, DND, Night Light)
                     .child(
@@ -1174,5 +1200,31 @@ impl Render for ControlCenterView {
                     .children(side_panel_entries)
                     .children(extension_entries),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn battery_refresh_only_reports_changes() {
+        let mut current = BatteryInfo {
+            percentage: 58,
+            is_charging: true,
+            is_present: true,
+        };
+        let unchanged = current.clone();
+
+        assert!(!replace_battery_if_changed(&mut current, unchanged));
+        assert!(replace_battery_if_changed(
+            &mut current,
+            BatteryInfo {
+                percentage: 59,
+                is_charging: true,
+                is_present: true,
+            }
+        ));
+        assert_eq!(current.percentage, 59);
     }
 }

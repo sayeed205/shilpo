@@ -1,6 +1,7 @@
 pub mod actions;
 mod app_icons;
 pub mod bar;
+mod battery;
 pub mod control_center;
 pub mod doctor;
 pub mod error;

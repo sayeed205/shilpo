@@ -1,7 +1,5 @@
 pub mod audio;
-pub mod battery;
 pub mod clock;
-pub mod clock_battery_capsule;
 pub mod launcher;
 pub mod media;
 pub mod network;
@@ -15,9 +13,7 @@ pub mod window_info_capsule;
 pub mod workspaces;
 
 pub use audio::AudioWidget;
-pub use battery::BatteryWidget;
 pub use clock::ClockWidget;
-pub use clock_battery_capsule::ClockBatteryCapsule;
 pub use launcher::LauncherWidget;
 pub use media::MediaWidget;
 pub use network::NetworkWidget;

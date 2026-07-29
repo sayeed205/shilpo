@@ -1,0 +1,299 @@
+use gpui::{
+    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
+    Styled, Window, div, px, relative,
+};
+use shilpo_services::BatteryInfo;
+use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, black, green_500, h_flex};
+
+// Android SystemUI renders the unified battery at 20.6 × 12 in the phone status
+// bar. Shilpo's desktop bar and neighboring icons are larger, so scale that
+// geometry up slightly while preserving its proportions.
+const BATTERY_DESKTOP_SCALE: f32 = 1.5;
+const BATTERY_VIEWPORT_WIDTH: f32 = 20.6 * BATTERY_DESKTOP_SCALE;
+const BATTERY_VIEWPORT_HEIGHT: f32 = 12.0 * BATTERY_DESKTOP_SCALE;
+const BATTERY_BODY_WIDTH: f32 = 17.6 * BATTERY_DESKTOP_SCALE;
+const BATTERY_BODY_HEIGHT: f32 = 10.7 * BATTERY_DESKTOP_SCALE;
+const BATTERY_TERMINAL_WIDTH: f32 = 3.0;
+const BATTERY_TERMINAL_HEIGHT: f32 = 7.0;
+const BATTERY_TERMINAL_GAP: f32 = 1.2;
+const BATTERY_CORNER_RADIUS: f32 = 3.6 * BATTERY_DESKTOP_SCALE;
+const BATTERY_PERCENT_TEXT_SIZE: f32 = 8.6 * BATTERY_DESKTOP_SCALE;
+const BATTERY_CHARGING_TEXT_SIZE: f32 = 7.7 * BATTERY_DESKTOP_SCALE;
+const BATTERY_CHARGING_THREE_DIGIT_TEXT_SIZE: f32 = 5.15 * BATTERY_DESKTOP_SCALE;
+const BATTERY_CHARGING_ICON_SIZE: f32 = 5.15 * BATTERY_DESKTOP_SCALE;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BatteryVisualMode {
+    Normal,
+    Low,
+    Charging,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BatteryVisualState {
+    percentage: u8,
+    fill_ratio: f32,
+    mode: BatteryVisualMode,
+}
+
+impl BatteryVisualState {
+    fn from_info(info: &BatteryInfo) -> Option<Self> {
+        if !info.is_present {
+            return None;
+        }
+
+        let percentage = info.percentage.min(100);
+        let mode = if info.is_charging {
+            BatteryVisualMode::Charging
+        } else if info.is_low_battery() {
+            BatteryVisualMode::Low
+        } else {
+            BatteryVisualMode::Normal
+        };
+
+        Some(Self {
+            percentage,
+            fill_ratio: percentage as f32 / 100.0,
+            mode,
+        })
+    }
+}
+
+/// Shared Pixel-style battery indicator for Shilpo shell (bar & Control Center).
+#[derive(IntoElement)]
+pub(crate) struct BatteryIndicator {
+    id: ElementId,
+    info: BatteryInfo,
+    style: StyleRefinement,
+}
+
+impl BatteryIndicator {
+    pub(crate) fn new(id: impl Into<ElementId>, info: BatteryInfo) -> Self {
+        Self {
+            id: id.into(),
+            info,
+            style: StyleRefinement::default(),
+        }
+    }
+}
+
+impl Styled for BatteryIndicator {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for BatteryIndicator {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Some(state) = BatteryVisualState::from_info(&self.info) else {
+            return div().id(self.id).into_any_element();
+        };
+
+        let (fill_color, filled_content_color) = match state.mode {
+            BatteryVisualMode::Normal => (cx.theme().on_surface, cx.theme().surface),
+            BatteryVisualMode::Low => (cx.theme().error, cx.theme().on_error),
+            BatteryVisualMode::Charging => (green_500(), black()),
+        };
+        let fill_width = px(BATTERY_BODY_WIDTH * state.fill_ratio);
+        let fill_right_radius = if state.percentage >= 80 {
+            px(BATTERY_CORNER_RADIUS)
+        } else {
+            px(0.)
+        };
+        let is_charging = state.mode == BatteryVisualMode::Charging;
+        let text_size = if is_charging {
+            if state.percentage == 100 {
+                BATTERY_CHARGING_THREE_DIGIT_TEXT_SIZE
+            } else {
+                BATTERY_CHARGING_TEXT_SIZE
+            }
+        } else {
+            BATTERY_PERCENT_TEXT_SIZE
+        };
+
+        let render_content = move |text_color: gpui::Hsla| {
+            let mut content = h_flex()
+                .items_center()
+                .justify_center()
+                .gap(px(0.3))
+                .text_color(text_color)
+                .child(
+                    div()
+                        .font_family("Noto Sans Black")
+                        .text_size(px(text_size))
+                        .line_height(relative(1.))
+                        .font_weight(gpui::FontWeight::BLACK)
+                        .child(state.percentage.to_string()),
+                );
+
+            if is_charging {
+                content = content.child(
+                    Icon::new(IconName::Bolt)
+                        .size(px(BATTERY_CHARGING_ICON_SIZE))
+                        .text_color(text_color),
+                );
+            }
+
+            content
+        };
+
+        let body = div()
+            .relative()
+            .w(px(BATTERY_BODY_WIDTH))
+            .h(px(BATTERY_BODY_HEIGHT))
+            .rounded(px(BATTERY_CORNER_RADIUS))
+            .bg(cx.theme().surface_container_highest)
+            .overflow_hidden()
+            // Unfilled base layer (track background, unfilled text color)
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(render_content(cx.theme().on_surface)),
+            )
+            // Filled overlay layer (clipped to fill_width, fill background, filled text color)
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(fill_width)
+                    .rounded_tl(px(BATTERY_CORNER_RADIUS))
+                    .rounded_bl(px(BATTERY_CORNER_RADIUS))
+                    .rounded_tr(fill_right_radius)
+                    .rounded_br(fill_right_radius)
+                    .bg(fill_color)
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .w(px(BATTERY_BODY_WIDTH))
+                            .h(px(BATTERY_BODY_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(render_content(filled_content_color)),
+                    ),
+            );
+
+        let nub = div()
+            .w(px(BATTERY_TERMINAL_WIDTH))
+            .h(px(BATTERY_TERMINAL_HEIGHT))
+            .rounded(px(BATTERY_TERMINAL_WIDTH / 2.))
+            .bg(fill_color);
+
+        h_flex()
+            .id(self.id)
+            .w(px(BATTERY_VIEWPORT_WIDTH))
+            .h(px(BATTERY_VIEWPORT_HEIGHT))
+            .items_center()
+            .justify_center()
+            .gap(px(BATTERY_TERMINAL_GAP))
+            .refine_style(&self.style)
+            .child(body)
+            .child(nub)
+            .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_battery_has_no_visual_state() {
+        assert_eq!(BatteryVisualState::from_info(&BatteryInfo::default()), None);
+    }
+
+    #[test]
+    fn normal_percentage_and_fill_are_derived_from_production_state() {
+        let state = BatteryVisualState::from_info(&BatteryInfo {
+            percentage: 60,
+            is_charging: false,
+            is_present: true,
+        })
+        .expect("present battery");
+
+        assert_eq!(state.percentage, 60);
+        assert_eq!(state.fill_ratio, 0.6);
+        assert_eq!(state.mode, BatteryVisualMode::Normal);
+    }
+
+    #[test]
+    fn empty_and_full_batteries_map_to_fill_bounds() {
+        let empty = BatteryVisualState::from_info(&BatteryInfo {
+            percentage: 0,
+            is_charging: false,
+            is_present: true,
+        })
+        .expect("present battery");
+        let full = BatteryVisualState::from_info(&BatteryInfo {
+            percentage: 100,
+            is_charging: false,
+            is_present: true,
+        })
+        .expect("present battery");
+
+        assert_eq!(empty.fill_ratio, 0.0);
+        assert_eq!(full.fill_ratio, 1.0);
+    }
+
+    #[test]
+    fn low_battery_threshold_uses_battery_service_policy() {
+        let low = BatteryVisualState::from_info(&BatteryInfo {
+            percentage: 14,
+            is_charging: false,
+            is_present: true,
+        })
+        .expect("present battery");
+        let normal = BatteryVisualState::from_info(&BatteryInfo {
+            percentage: 15,
+            is_charging: false,
+            is_present: true,
+        })
+        .expect("present battery");
+
+        assert_eq!(low.mode, BatteryVisualMode::Low);
+        assert_eq!(normal.mode, BatteryVisualMode::Normal);
+    }
+
+    #[test]
+    fn charging_takes_precedence_over_low_battery() {
+        let charging = BatteryVisualState::from_info(&BatteryInfo {
+            percentage: 58,
+            is_charging: true,
+            is_present: true,
+        })
+        .expect("present battery");
+        let charging_low = BatteryVisualState::from_info(&BatteryInfo {
+            percentage: 10,
+            is_charging: true,
+            is_present: true,
+        })
+        .expect("present battery");
+
+        assert_eq!(charging.percentage, 58);
+        assert_eq!(charging.fill_ratio, 0.58);
+        assert_eq!(charging.mode, BatteryVisualMode::Charging);
+        assert_eq!(charging_low.mode, BatteryVisualMode::Charging);
+    }
+
+    #[test]
+    fn malformed_percentage_is_clamped() {
+        let state = BatteryVisualState::from_info(&BatteryInfo {
+            percentage: 150,
+            is_charging: false,
+            is_present: true,
+        })
+        .expect("present battery");
+
+        assert_eq!(state.percentage, 100);
+        assert_eq!(state.fill_ratio, 1.0);
+    }
+}

@@ -1,5 +1,6 @@
 use crate::actions::ActionInvocation;
 use crate::bar::service_worker::{self, ConfigUpdate, WorkerCommand, WorkerUpdate};
+use crate::battery::BatteryIndicator;
 use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Path, PathBuilder, Pixels, Point,
@@ -275,6 +276,17 @@ impl BarView {
                         )
                         .into_any_element(),
                     );
+                }
+                BarWidget::Builtin(BuiltinBarWidget::Battery) => {
+                    if self.battery.is_present {
+                        elements.push(
+                            BatteryIndicator::new(
+                                format!("battery_{section_name}_{index}"),
+                                self.battery.clone(),
+                            )
+                            .into_any_element(),
+                        );
+                    }
                 }
                 BarWidget::Extension(ext_ref) => {
                     if let Some(tree) = ShellRuntime::extension_view(cx, ext_ref) {
