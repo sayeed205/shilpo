@@ -358,7 +358,7 @@ impl JsonSchema for BarWidget {
             object.insert(
                 "pattern".into(),
                 serde_json::Value::String(
-                    r"^(builtin:(launcher|workspaces|running_apps|clock|media|sysinfo|network|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
+                    r"^(builtin:(launcher|workspaces|running_apps|clock|date|media|sysinfo|network|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
                         .into(),
                 ),
             );
@@ -374,6 +374,7 @@ pub enum BuiltinBarWidget {
     Workspaces,
     RunningApps,
     Clock,
+    Date,
     Media,
     Sysinfo,
     Network,
@@ -389,6 +390,7 @@ impl BuiltinBarWidget {
             "Workspaces" => Some(Self::Workspaces),
             "RunningApps" => Some(Self::RunningApps),
             "Clock" => Some(Self::Clock),
+            "Date" => Some(Self::Date),
             "Media" => Some(Self::Media),
             "Sysinfo" => Some(Self::Sysinfo),
             "Network" => Some(Self::Network),
@@ -407,6 +409,7 @@ impl fmt::Display for BuiltinBarWidget {
             Self::Workspaces => "workspaces",
             Self::RunningApps => "running_apps",
             Self::Clock => "clock",
+            Self::Date => "date",
             Self::Media => "media",
             Self::Sysinfo => "sysinfo",
             Self::Network => "network",
@@ -427,6 +430,7 @@ impl FromStr for BuiltinBarWidget {
             "workspaces" => Ok(Self::Workspaces),
             "running_apps" => Ok(Self::RunningApps),
             "clock" => Ok(Self::Clock),
+            "date" => Ok(Self::Date),
             "media" => Ok(Self::Media),
             "sysinfo" => Ok(Self::Sysinfo),
             "network" => Ok(Self::Network),
@@ -492,6 +496,7 @@ impl Default for BarConfig {
                 ],
                 center: vec![
                     BarWidget::Builtin(BuiltinBarWidget::Clock),
+                    BarWidget::Builtin(BuiltinBarWidget::Date),
                     BarWidget::Builtin(BuiltinBarWidget::Media),
                 ],
                 end: vec![
@@ -1358,6 +1363,26 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&BarWidget::Builtin(BuiltinBarWidget::Clock)).unwrap(),
             "\"builtin:clock\""
+        );
+        assert_eq!(
+            "builtin:date".parse::<BarWidget>().unwrap(),
+            BarWidget::Builtin(BuiltinBarWidget::Date)
+        );
+        assert_eq!(
+            serde_json::to_string(&BarWidget::Builtin(BuiltinBarWidget::Date)).unwrap(),
+            "\"builtin:date\""
+        );
+        assert!("date".parse::<BarWidget>().is_err());
+    }
+
+    #[test]
+    fn default_bar_places_clock_before_date() {
+        assert_eq!(
+            ShellConfig::default().bar.widgets.center[..2],
+            [
+                BarWidget::Builtin(BuiltinBarWidget::Clock),
+                BarWidget::Builtin(BuiltinBarWidget::Date),
+            ]
         );
     }
     #[test]

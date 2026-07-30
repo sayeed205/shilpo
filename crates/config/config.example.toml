@@ -18,7 +18,7 @@ vertical = 8
 
 [bar.widgets]
 start = ["builtin:launcher", "builtin:workspaces", "builtin:running_apps"]
-center = ["builtin:clock", "builtin:media"]
+center = ["builtin:clock", "builtin:date", "builtin:media"]
 end = ["builtin:sysinfo", "builtin:network", "builtin:audio", "builtin:battery", "builtin:settings"]
 
 # Extension-wide settings are delivered to every contribution from that

@@ -47,6 +47,8 @@ pub fn apply_config_theme(_config: &ShellConfig, _window: Option<&mut Window>, c
 }
 
 /// Status Bar GPUI View (Multi-Capsule Segmented Bar with IPC integration).
+use super::widgets::clock::{format_clock, format_date};
+
 pub struct BarView {
     pub config: ShellConfig,
     service_commands: service_worker::CommandSender,
@@ -59,7 +61,9 @@ pub struct BarView {
     active_title: String,
     #[allow(dead_code)]
     media_track: String,
-    datetime_str: String,
+    time_str: String,
+    date_str: String,
+    _datetime_task: Option<gpui::Task<()>>,
     extension_instance_prefix: Option<String>,
     output_name: Option<String>,
     last_error: Option<String>,
@@ -67,6 +71,25 @@ pub struct BarView {
 }
 
 impl BarView {
+    fn update_datetime(&mut self) -> bool {
+        let now = chrono::Local::now();
+        let fmt = self.config.clock_format.as_deref();
+        let new_time = format_clock(&now, fmt);
+        let new_date = format_date(&now);
+        let mut changed = false;
+
+        if self.time_str != new_time {
+            self.time_str = new_time;
+            changed = true;
+        }
+        if self.date_str != new_date {
+            self.date_str = new_date;
+            changed = true;
+        }
+
+        changed
+    }
+
     pub fn is_stale(&self) -> bool {
         self.last_service_update.elapsed() > std::time::Duration::from_secs(30)
     }
@@ -112,6 +135,24 @@ impl BarView {
             tx
         });
 
+        let now = chrono::Local::now();
+        let time_str = format_clock(&now, config.clock_format.as_deref());
+        let date_str = format_date(&now);
+
+        let _datetime_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let res = this.update(cx, |view, cx| {
+                    if view.update_datetime() {
+                        cx.notify();
+                    }
+                });
+                if res.is_err() {
+                    break;
+                }
+            }
+        }));
+
         Self {
             config,
             service_commands,
@@ -121,7 +162,9 @@ impl BarView {
             app_id: "shilpo.shell".into(),
             active_title: "Shilpo Shell".into(),
             media_track: "KK - Police ke hathiyar".into(),
-            datetime_str: "17:53 · Tue, 21/07".into(),
+            time_str,
+            date_str,
+            _datetime_task,
             extension_instance_prefix: None,
             output_name: None,
             last_error: None,
@@ -201,7 +244,7 @@ impl BarView {
                 self.config = (**config).clone();
                 self.last_error = None;
                 apply_config_theme(&self.config, None, cx);
-                changed = true;
+                changed = self.update_datetime();
             }
             WorkerUpdate::Config(ConfigUpdate::Failed(error)) => {
                 tracing::error!(error = %error, "config reload failed");
@@ -210,14 +253,6 @@ impl BarView {
                 changed = true;
             }
             _ => {}
-        }
-
-        let now = chrono::Local::now();
-        let updated_dt = now.format("%H:%M · %a, %d/%m").to_string();
-
-        if self.datetime_str != updated_dt {
-            self.datetime_str = updated_dt;
-            changed = true;
         }
 
         if changed {
@@ -241,6 +276,14 @@ impl BarView {
 
         for (index, name) in widget_names.iter().enumerate() {
             match name {
+                BarWidget::Builtin(BuiltinBarWidget::Launcher) => {
+                    elements.push(
+                        super::widgets::LauncherWidget::new(format!(
+                            "launcher_{section_name}_{index}"
+                        ))
+                        .into_any_element(),
+                    );
+                }
                 BarWidget::Builtin(BuiltinBarWidget::Workspaces) => {
                     let snapshot = ShellRuntime::compositor_snapshot(cx);
                     elements.push(
@@ -273,6 +316,33 @@ impl BarView {
                             app_icons,
                             pill_orientation,
                             reduced_motion,
+                        )
+                        .into_any_element(),
+                    );
+                }
+                BarWidget::Builtin(BuiltinBarWidget::Clock) => {
+                    elements.push(
+                        super::widgets::ClockWidget::new(
+                            format!("clock_{section_name}_{index}"),
+                            self.time_str.clone(),
+                        )
+                        .into_any_element(),
+                    );
+                }
+                BarWidget::Builtin(BuiltinBarWidget::Date) => {
+                    elements.push(
+                        super::widgets::DateWidget::new(
+                            format!("date_{section_name}_{index}"),
+                            self.date_str.clone(),
+                        )
+                        .into_any_element(),
+                    );
+                }
+                BarWidget::Builtin(BuiltinBarWidget::Media) => {
+                    elements.push(
+                        super::widgets::MediaWidget::new(
+                            format!("media_{section_name}_{index}"),
+                            self.media_track.clone(),
                         )
                         .into_any_element(),
                     );

@@ -13,7 +13,7 @@ pub mod window_info_capsule;
 pub mod workspaces;
 
 pub use audio::AudioWidget;
-pub use clock::ClockWidget;
+pub use clock::{ClockWidget, DateWidget};
 pub use launcher::LauncherWidget;
 pub use media::MediaWidget;
 pub use network::NetworkWidget;
