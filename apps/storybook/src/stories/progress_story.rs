@@ -151,13 +151,11 @@ impl Render for ProgressStory {
                                         this.set_value((this.value - 1.).max(0.));
                                     })),
                             )
-                            .child(
-                                Button::new("circle-button-6")
-                                    .icon(IconName::Add)
-                                    .on_click(cx.listener(|this, _, _, _| {
-                                        this.set_value((this.value + 1.).min(100.));
-                                    })),
-                            ),
+                            .child(Button::new("circle-button-6").icon(IconName::Add).on_click(
+                                cx.listener(|this, _, _, _| {
+                                    this.set_value((this.value + 1.).min(100.));
+                                }),
+                            )),
                     ),
             )
             .child(

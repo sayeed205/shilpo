@@ -228,7 +228,7 @@ impl Render for AlertStory {
                     )
                     .title("Custom Icon")
                     .with_size(self.size)
-                        .icon(IconName::CalendarToday),
+                    .icon(IconName::CalendarToday),
                 ),
             )
     }

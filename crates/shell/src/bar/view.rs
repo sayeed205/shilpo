@@ -59,8 +59,7 @@ pub struct BarView {
     app_id: String,
     #[allow(dead_code)]
     active_title: String,
-    #[allow(dead_code)]
-    media_track: String,
+    media_info: Option<shilpo_services::MediaInfo>,
     time_str: String,
     date_str: String,
     _datetime_task: Option<gpui::Task<()>>,
@@ -161,7 +160,7 @@ impl BarView {
             network,
             app_id: "shilpo.shell".into(),
             active_title: "Shilpo Shell".into(),
-            media_track: "KK - Police ke hathiyar".into(),
+            media_info: None,
             time_str,
             date_str,
             _datetime_task,
@@ -238,6 +237,10 @@ impl BarView {
             }
             WorkerUpdate::Network(value) if &self.network != value => {
                 self.network = value.clone();
+                changed = true;
+            }
+            WorkerUpdate::Media(value) if self.media_info.as_ref() != Some(value) => {
+                self.media_info = Some(value.clone());
                 changed = true;
             }
             WorkerUpdate::Config(ConfigUpdate::Loaded(config)) => {
@@ -339,13 +342,23 @@ impl BarView {
                     );
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Media) => {
-                    elements.push(
-                        super::widgets::MediaWidget::new(
-                            format!("media_{section_name}_{index}"),
-                            self.media_track.clone(),
-                        )
-                        .into_any_element(),
-                    );
+                    if let Some(info) = &self.media_info
+                        && !info.is_empty()
+                    {
+                        let is_vertical = matches!(
+                            self.config.bar.position,
+                            shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
+                        );
+                        elements.push(
+                            super::widgets::MediaWidget::new(
+                                format!("media_{section_name}_{index}"),
+                                info.clone(),
+                                is_vertical,
+                                self.service_commands.clone(),
+                            )
+                            .into_any_element(),
+                        );
+                    }
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Battery) => {
                     if self.battery.is_present {

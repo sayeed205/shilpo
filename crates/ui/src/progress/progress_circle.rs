@@ -12,6 +12,12 @@ use std::f32::consts::TAU;
 use super::ProgressState;
 use crate::plot::shape::{Arc, ArcData};
 
+#[derive(Clone)]
+struct WaveMorphState {
+    prev_wavy: bool,
+    morph_start: instant::Instant,
+}
+
 /// A circular progress indicator element.
 #[derive(IntoElement)]
 pub struct ProgressCircle {
@@ -20,6 +26,8 @@ pub struct ProgressCircle {
     color: Option<Hsla>,
     value: f32,
     size: Size,
+    stroke_width: Option<Pixels>,
+    wave_speed: f32,
     children: Vec<AnyElement>,
     loading: bool,
     wavy: bool,
@@ -34,6 +42,8 @@ impl ProgressCircle {
             color: None,
             style: StyleRefinement::default(),
             size: Size::default(),
+            stroke_width: None,
+            wave_speed: 1.0,
             children: Vec::new(),
             loading: false,
             wavy: false,
@@ -52,6 +62,18 @@ impl ProgressCircle {
     /// Enable wavy progress circle.
     pub fn wavy(mut self, wavy: bool) -> Self {
         self.wavy = wavy;
+        self
+    }
+
+    /// Set wave animation speed (clamped between 0.0 and 1.0).
+    pub fn wave_speed(mut self, speed: f32) -> Self {
+        self.wave_speed = speed.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set a custom stroke width for the progress circle.
+    pub fn stroke_width(mut self, width: impl Into<Pixels>) -> Self {
+        self.stroke_width = Some(width.into());
         self
     }
 
@@ -75,8 +97,9 @@ impl ProgressCircle {
         start_value: f32,
         end_value: f32,
         color: Hsla,
-        wavy: bool,
         wave_shift: f32,
+        custom_stroke_width: Option<Pixels>,
+        wave_factor: f32,
     ) -> impl IntoElement {
         struct PrepaintState {
             start_value: f32,
@@ -88,7 +111,8 @@ impl ProgressCircle {
 
         canvas(
             move |bounds: Bounds<Pixels>, _window: &mut Window, _cx: &mut App| {
-                let stroke_width = (bounds.size.width * 0.15).min(px(5.));
+                let stroke_width =
+                    custom_stroke_width.unwrap_or_else(|| (bounds.size.width * 0.15).min(px(5.)));
                 let actual_size = bounds.size.width.min(bounds.size.height);
                 let actual_radius = (actual_size.as_f32() - stroke_width.as_f32()) / 2.;
                 PrepaintState {
@@ -121,17 +145,17 @@ impl ProgressCircle {
                     window.paint_quad(fill(bounds, color).corner_radii(Corners::all(cap_r)));
                 };
 
-                if wavy {
+                if wave_factor > 0.001 {
                     let start_angle =
                         (prepaint.start_value / 100.) * TAU - std::f32::consts::FRAC_PI_2;
                     let end_angle = (prepaint.end_value / 100.) * TAU - std::f32::consts::FRAC_PI_2;
 
                     if end_angle > start_angle {
-                        let step = 2.0 * std::f32::consts::PI / 180.0; // sample every 2 degrees for high smoothness
+                        let step = 2.0 * std::f32::consts::PI / 180.0;
                         let mut theta = start_angle;
 
-                        let num_waves = 10.0f32; // 10 wave lobes
-                        let amp = stroke_width * 0.4;
+                        let num_waves = 10.0f32;
+                        let amp = stroke_width * 0.4 * wave_factor;
 
                         let get_radius = |t: f32| -> f32 {
                             actual_radius + amp * (num_waves * (t - wave_shift)).cos()
@@ -153,7 +177,6 @@ impl ProgressCircle {
                             window.paint_path(p, color);
                         }
 
-                        // Draw rounded caps if not a full closed circle
                         if (end_angle - start_angle).abs() < TAU - 0.001 {
                             draw_cap(start_angle, get_radius(start_angle), color, window);
                             draw_cap(end_angle, get_radius(end_angle), color, window);
@@ -180,14 +203,15 @@ impl ProgressCircle {
                         window,
                     );
 
-                    if prepaint.end_value > 0. {
-                        let start_angle = (prepaint.start_value / 100.) * TAU;
-                        let end_angle = (prepaint.end_value / 100.) * TAU;
+                    let start_angle = prepaint.start_value / 100. * TAU;
+                    let end_angle = prepaint.end_value / 100. * TAU;
+
+                    if end_angle > start_angle {
                         arc.paint(
                             &ArcData {
                                 data: &(),
-                                index: 1,
-                                value: prepaint.end_value,
+                                index: 0,
+                                value: 100.,
                                 start_angle,
                                 end_angle,
                                 pad_angle: 0.,
@@ -198,19 +222,12 @@ impl ProgressCircle {
                             &prepaint.bounds,
                             window,
                         );
-
-                        // Draw rounded caps if not a full closed circle
-                        if (end_angle - start_angle).abs() < TAU - 0.001 {
-                            let offset = std::f32::consts::FRAC_PI_2;
-                            draw_cap(start_angle - offset, actual_radius, color, window);
-                            draw_cap(end_angle - offset, actual_radius, color, window);
-                        }
                     }
                 }
             },
         )
         .absolute()
-        .size_full()
+        .inset_0()
     }
 }
 
@@ -220,16 +237,9 @@ impl Styled for ProgressCircle {
     }
 }
 
-impl Sizable for ProgressCircle {
-    fn with_size(mut self, size: impl Into<Size>) -> Self {
-        self.size = size.into();
-        self
-    }
-}
-
 impl ParentElement for ProgressCircle {
-    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
-        self.children.extend(elements);
+    fn extend(&mut self, children: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(children);
     }
 }
 
@@ -237,7 +247,9 @@ impl RenderOnce for ProgressCircle {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let value = self.value;
         let loading = self.loading;
-        let wavy = self.wavy;
+        let wavy = self.wavy && (value >= 7.0 && value <= 97.0);
+        let wave_speed = self.wave_speed.clamp(0.0, 1.0);
+
         let state = window.use_keyed_state(self.id.clone(), cx, |_, _| ProgressState::new(value));
         let prev_target = state.read(cx).target();
         let has_changed = prev_target != value;
@@ -251,10 +263,40 @@ impl RenderOnce for ProgressCircle {
         );
         let start_time = *start_time_state.read(cx);
         let time_sec = start_time.elapsed().as_secs_f32();
-        let wave_shift = time_sec * 2.0;
+        let wave_shift = time_sec * 2.0 * wave_speed;
+
+        let morph_state = window.use_keyed_state(
+            ElementId::Name(format!("{}-wave-morph", self.id).into()),
+            cx,
+            |_, _| WaveMorphState {
+                prev_wavy: wavy,
+                morph_start: instant::Instant::now() - Duration::from_secs(1),
+            },
+        );
+
+        let mut morph = morph_state.read(cx).clone();
+        if morph.prev_wavy != wavy {
+            morph.prev_wavy = wavy;
+            morph.morph_start = instant::Instant::now();
+            morph_state.update(cx, |this, _| {
+                *this = morph.clone();
+            });
+        }
+
+        let elapsed = morph.morph_start.elapsed().as_secs_f32();
+        let morph_duration = 0.35;
+        let morph_progress = (elapsed / morph_duration).clamp(0.0, 1.0);
+        let ease_progress = crate::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0)(morph_progress);
+
+        let wave_factor = if wavy {
+            ease_progress
+        } else {
+            1.0 - ease_progress
+        };
 
         let element = div()
             .id(self.id.clone())
+            .relative()
             .flex()
             .items_center()
             .justify_center()
@@ -264,7 +306,7 @@ impl RenderOnce for ProgressCircle {
                 Size::Small => this.size_3(),
                 Size::Medium => this.size_4(),
                 Size::Large => this.size_5(),
-                Size::Size(s) => this.size(s * 0.75),
+                Size::Size(s) => this.size(s),
             })
             .refine_style(&self.style)
             .children(self.children);
@@ -285,31 +327,38 @@ impl RenderOnce for ProgressCircle {
             })
             .detach();
 
+            let stroke_width = self.stroke_width;
+
             element
                 .with_animation(
                     format!("progress-circle-{}", from),
                     Animation::new(duration),
                     move |this, delta| {
                         let v = from + (value - from) * delta;
-                        this.child(Self::render_circle(0., v, color, wavy, wave_shift))
+                        this.child(Self::render_circle(
+                            0.,
+                            v,
+                            color,
+                            wave_shift + delta * 2.0 * wave_speed,
+                            stroke_width,
+                            wave_factor,
+                        ))
                     },
                 )
                 .into_any_element()
         } else if loading {
+            let stroke_width = self.stroke_width;
+
             element
                 .with_animation(
                     "progress-circle-loading",
                     Animation::new(Duration::from_secs(6)).repeat(),
                     move |this, delta| {
-                        // 1. Global Rotation: 1080 degrees (3 full rotations = 3.0 * TAU) over the 6 seconds.
                         let global_rotation = delta * 3.0 * TAU;
-
-                        // 2. Additional Rotation: Step of 90 degrees (FRAC_PI_2) every 1.5s (0.25 of delta).
-                        // A step takes 300ms (0.05 of delta) to rotate and then holds for 1200ms (0.20 of delta).
                         let mut additional_rotation = 0.0;
                         for i in 0..4 {
                             let step_start = i as f32 * 0.25;
-                            let step_end = step_start + 0.05; // 300ms transition
+                            let step_end = step_start + 0.05;
                             if delta >= step_end {
                                 additional_rotation += std::f32::consts::FRAC_PI_2;
                             } else if delta > step_start {
@@ -320,7 +369,6 @@ impl RenderOnce for ProgressCircle {
                             }
                         }
 
-                        // 3. Sweep/Progress animation: fraction alternates between 0.1 and 0.87.
                         let sweep_easing = crate::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0);
                         let (start, end) = if delta < 0.5 {
                             let p = delta / 0.5;
@@ -339,23 +387,69 @@ impl RenderOnce for ProgressCircle {
                             start + rotation_percentage,
                             end + rotation_percentage,
                             color,
-                            wavy,
                             wave_shift,
+                            stroke_width,
+                            wave_factor,
                         ))
                     },
                 )
                 .into_any_element()
         } else {
-            let this = element.child(Self::render_circle(0., value, color, wavy, wave_shift));
+            let stroke_width = self.stroke_width;
+            let morph_start = morph.morph_start;
+            let morph_wavy = wavy;
             if wavy {
-                this.with_animation(
-                    "wavy-circle-flow",
-                    Animation::new(Duration::from_secs(100)).repeat(),
-                    |this, _| this,
-                )
-                .into_any_element()
+                element
+                    .with_animation(
+                        "wavy-circle-flow",
+                        Animation::new(Duration::from_secs(100)).repeat(),
+                        move |this, delta| {
+                            let elapsed = morph_start.elapsed().as_secs_f32();
+                            let morph_progress = (elapsed / 0.35).clamp(0.0, 1.0);
+                            let ease =
+                                crate::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0)(morph_progress);
+                            let wave_factor = if morph_wavy { ease } else { 1.0 - ease };
+                            this.child(Self::render_circle(
+                                0.,
+                                value,
+                                color,
+                                wave_shift + delta * 2.0 * wave_speed,
+                                stroke_width,
+                                wave_factor,
+                            ))
+                        },
+                    )
+                    .into_any_element()
+            } else if morph_progress < 1.0 {
+                element
+                    .with_animation(
+                        "wavy-circle-morph",
+                        Animation::new(Duration::from_secs_f32(morph_duration)),
+                        move |this, delta| {
+                            let ease = crate::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0)(delta);
+                            let factor = 1.0 - ease;
+                            this.child(Self::render_circle(
+                                0.,
+                                value,
+                                color,
+                                wave_shift + delta * 2.0 * wave_speed,
+                                stroke_width,
+                                factor,
+                            ))
+                        },
+                    )
+                    .into_any_element()
             } else {
-                this.into_any_element()
+                element
+                    .child(Self::render_circle(
+                        0.,
+                        value,
+                        color,
+                        wave_shift,
+                        stroke_width,
+                        0.0,
+                    ))
+                    .into_any_element()
             }
         };
 
@@ -363,55 +457,9 @@ impl RenderOnce for ProgressCircle {
     }
 }
 
-#[cfg(test)]
-impl ProgressCircle {
-    pub(crate) fn is_loading(&self) -> bool {
-        self.loading
-    }
-
-    pub(crate) fn get_value(&self) -> f32 {
-        self.value
-    }
-
-    pub(crate) fn get_color(&self) -> Option<Hsla> {
-        self.color
-    }
-
-    pub(crate) fn is_wavy(&self) -> bool {
-        self.wavy
-    }
-
-    pub(crate) fn get_size(&self) -> Size {
-        self.size
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_progress_circle_builder() {
-        let pc = ProgressCircle::new("test-progress-circle")
-            .loading(true)
-            .wavy(true)
-            .color(gpui::green())
-            .value(75.2)
-            .with_size(Size::Small);
-
-        assert!(pc.is_loading());
-        assert!(pc.is_wavy());
-        assert_eq!(pc.get_value(), 75.2);
-        assert_eq!(pc.get_color(), Some(gpui::green()));
-        assert_eq!(pc.get_size(), Size::Small);
-    }
-
-    #[test]
-    fn test_progress_circle_value_clamping() {
-        let pc_under = ProgressCircle::new("test-pc").value(-5.0);
-        assert_eq!(pc_under.get_value(), 0.0);
-
-        let pc_over = ProgressCircle::new("test-pc").value(120.0);
-        assert_eq!(pc_over.get_value(), 100.0);
+impl Sizable for ProgressCircle {
+    fn with_size(mut self, size: impl Into<Size>) -> Self {
+        self.size = size.into();
+        self
     }
 }

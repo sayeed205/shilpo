@@ -208,7 +208,10 @@ impl Render for TabsStory {
                                 .mx_1()
                                 .child(Button::new("inbox").text().xsmall().icon(IconName::Inbox))
                                 .child(
-                                    Button::new("more").text().xsmall().icon(IconName::MoreHoriz),
+                                    Button::new("more")
+                                        .text()
+                                        .xsmall()
+                                        .icon(IconName::MoreHoriz),
                                 ),
                         ),
                 ),

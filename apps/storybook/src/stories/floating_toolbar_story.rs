@@ -65,10 +65,7 @@ impl Render for FloatingToolbarStory {
                                     .child(IconButton::new("ft-btn-1").icon(IconName::Search))
                                     .child(IconButton::new("ft-btn-2").icon(IconName::Close))
                                     .child(IconButton::new("ft-btn-3").icon(IconName::Folder))
-                                    .child(
-                                        IconButton::new("ft-btn-4")
-                                            .icon(IconName::MoreVert),
-                                    ),
+                                    .child(IconButton::new("ft-btn-4").icon(IconName::MoreVert)),
                             )
                             .child(IconButton::new("ft-fab-1").icon(IconName::Add)),
                     ),

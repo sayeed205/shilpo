@@ -96,8 +96,10 @@ tree-sitter-zig = ["tree-sitter", "dep:tree-sitter-zig"]
 
 [dependencies]
 anyhow.workspace = true
+dirs.workspace = true
 gpui = { workspace = true }
 gpui_macros.workspace = true
+reqwest.workspace = true
 shilpo-theme = { workspace = true }
 shilpo-macros = { workspace = true }
 shilpo-assets = { workspace = true }

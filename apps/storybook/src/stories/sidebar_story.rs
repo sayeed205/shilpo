@@ -389,9 +389,7 @@ impl Render for SidebarStory {
                                 )
                             })
                             .when(!icon_collapsed, |this| {
-                                this.child(
-                                    Icon::new(IconName::UnfoldMore).size_4().flex_shrink_0(),
-                                )
+                                this.child(Icon::new(IconName::UnfoldMore).size_4().flex_shrink_0())
                             })
                             .dropdown_menu(|menu, _, _| {
                                 menu.menu(
@@ -481,7 +479,9 @@ impl Render for SidebarStory {
                                     .when(ix == 0, |this| {
                                         this.suffix(|_, _| {
                                             Badge::new().dot().count(1).child(
-                                                div().p_0p5().child(Icon::new(IconName::Notifications)),
+                                                div()
+                                                    .p_0p5()
+                                                    .child(Icon::new(IconName::Notifications)),
                                             )
                                         })
                                     })

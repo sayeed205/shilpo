@@ -54,6 +54,7 @@ pub mod kbd;
 pub mod label;
 pub mod link;
 pub mod list;
+pub mod media;
 pub mod menu;
 pub mod motion;
 pub mod native_menu;
@@ -90,6 +91,7 @@ pub mod toggle_button;
 pub mod tooltip;
 pub mod tree;
 
+pub use media::MediaControl;
 pub use navigation_rail::{
     NavigationRail, NavigationRailArrangement, NavigationRailFooter, NavigationRailHeader,
     NavigationRailItem, NavigationRailMenuButton,

@@ -7901,6 +7901,7 @@ dependencies = [
  "chrono",
  "dirs 6.0.0",
  "freedesktop-icons",
+ "futures-lite",
  "gpui",
  "image",
  "libc",
@@ -7997,6 +7998,7 @@ dependencies = [
  "async-channel",
  "chrono",
  "core-text",
+ "dirs 6.0.0",
  "enum-iterator",
  "futures",
  "gpui",
@@ -8073,6 +8075,7 @@ dependencies = [
  "unicode-segmentation",
  "uuid",
  "windows 0.62.2",
+ "zed-reqwest",
  "zed-sum-tree",
 ]
 

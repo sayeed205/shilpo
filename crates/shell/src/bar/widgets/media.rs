@@ -1,22 +1,31 @@
-use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
-    Styled, Window, div, px,
-};
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex};
+use crate::bar::service_worker::{self, CommandSender, WorkerCommand};
+use crate::runtime::ShellRuntime;
+use gpui::{App, ElementId, IntoElement, RenderOnce, StyleRefinement, Styled, Window};
+use shilpo_services::{MediaCommand, MediaInfo, PlaybackState};
+use shilpo_ui::MediaControl;
 
 /// MPRIS Media player preview widget for Shilpo status bar.
 #[derive(IntoElement)]
 pub struct MediaWidget {
     id: ElementId,
-    track: String,
+    info: MediaInfo,
+    vertical: bool,
+    commands: CommandSender,
     style: StyleRefinement,
 }
 
 impl MediaWidget {
-    pub fn new(id: impl Into<ElementId>, track: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<ElementId>,
+        info: MediaInfo,
+        vertical: bool,
+        commands: CommandSender,
+    ) -> Self {
         Self {
             id: id.into(),
-            track: track.into(),
+            info,
+            vertical,
+            commands,
             style: StyleRefinement::default(),
         }
     }
@@ -30,21 +39,32 @@ impl Styled for MediaWidget {
 
 impl RenderOnce for MediaWidget {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        div()
-            .id(self.id)
-            .px_3()
-            .py_1()
-            .rounded_full()
-            .bg(cx.theme().secondary_container)
-            .text_color(cx.theme().on_secondary_container)
-            .text_sm()
-            .font_medium()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(Icon::new(IconName::PlayArrow).size(px(14.)))
-                    .child(self.track),
-            )
+        let is_playing = self.info.playback_state == PlaybackState::Playing;
+        let progress = self.info.progress();
+        let cmd_tx_play = self.commands.clone();
+        let cmd_tx_next = self.commands.clone();
+
+        MediaControl::new(self.id)
+            .title(self.info.title)
+            .artist(self.info.artist)
+            .art_url(self.info.art_url)
+            .playing(is_playing)
+            .can_play_pause(self.info.can_play_pause)
+            .can_go_next(self.info.can_go_next)
+            .progress(progress)
+            .vertical(self.vertical)
+            .reduced_motion(ShellRuntime::overview_reduced_motion(cx))
+            .on_play_pause(move |_, _, _| {
+                let _ = service_worker::try_send_command(
+                    &cmd_tx_play,
+                    WorkerCommand::Media(MediaCommand::PlayPause),
+                );
+            })
+            .on_next(move |_, _, _| {
+                let _ = service_worker::try_send_command(
+                    &cmd_tx_next,
+                    WorkerCommand::Media(MediaCommand::Next),
+                );
+            })
     }
 }

@@ -1,7 +1,8 @@
 use gpui::BackgroundExecutor;
 use shilpo_config::ShellConfig;
 use shilpo_services::{
-    AudioInfo, AudioService, BatteryInfo, BatteryService, NetworkInfo, NetworkService,
+    AudioInfo, AudioService, BatteryInfo, BatteryService, MediaCommand, MediaInfo, MediaService,
+    NetworkInfo, NetworkService,
 };
 use std::{
     path::PathBuf,
@@ -17,6 +18,7 @@ pub type CommandReceiver = mpsc::Receiver<WorkerCommand>;
 #[derive(Debug)]
 pub enum WorkerCommand {
     ReloadConfig,
+    Media(MediaCommand),
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +32,7 @@ pub enum WorkerUpdate {
     Battery(BatteryInfo),
     Audio(AudioInfo),
     Network(NetworkInfo),
+    Media(MediaInfo),
     Config(ConfigUpdate),
 }
 
@@ -46,6 +49,7 @@ pub fn try_send_command(
     sender.try_send(command)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     executor: BackgroundExecutor,
     updates: UpdateSender,
@@ -54,6 +58,7 @@ pub fn spawn(
     battery: Option<BatteryService>,
     audio: Option<AudioService>,
     network: Option<NetworkService>,
+    media: Option<MediaService>,
 ) -> gpui::Task<()> {
     let worker_executor = executor.clone();
     executor.spawn(async move {
@@ -65,11 +70,13 @@ pub fn spawn(
             battery,
             audio,
             network,
+            media,
         )
         .await
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run(
     executor: BackgroundExecutor,
     updates: UpdateSender,
@@ -78,10 +85,12 @@ async fn run(
     battery: Option<BatteryService>,
     audio: Option<AudioService>,
     network: Option<NetworkService>,
+    media: Option<MediaService>,
 ) {
     let mut battery_last = None;
     let mut audio_last = None;
     let mut network_last = None;
+    let mut media_last = None;
     let mut device_ticks = 0u8;
     let mut pending_reload: Option<Instant> = None;
     let debounce_duration = Duration::from_millis(200);
@@ -96,6 +105,11 @@ async fn run(
                 WorkerCommand::ReloadConfig => {
                     pending_reload = Some(Instant::now());
                 }
+                WorkerCommand::Media(cmd) => {
+                    if let Some(ref service) = media {
+                        service.send_command(cmd);
+                    }
+                }
             }
         }
 
@@ -108,6 +122,7 @@ async fn run(
                 &mut audio_last,
                 &mut battery_last,
                 &mut network_last,
+                &mut media_last,
                 &mut device_ticks,
             );
         }
@@ -117,6 +132,15 @@ async fn run(
             &mut audio_last,
             audio.as_ref().map(AudioService::audio_info),
             WorkerUpdate::Audio,
+        ) {
+            return;
+        }
+
+        if !sample_device(
+            &updates,
+            &mut media_last,
+            media.as_ref().map(MediaService::media_info),
+            WorkerUpdate::Media,
         ) {
             return;
         }
@@ -179,11 +203,13 @@ fn invalidate_device_snapshots_after_config_reload(
     audio: &mut Option<AudioInfo>,
     battery: &mut Option<BatteryInfo>,
     network: &mut Option<NetworkInfo>,
+    media: &mut Option<MediaInfo>,
     device_ticks: &mut u8,
 ) {
     *audio = None;
     *battery = None;
     *network = None;
+    *media = None;
     *device_ticks = 0;
 }
 
@@ -237,12 +263,14 @@ mod tests {
         let mut previous = Some(battery.clone());
         let mut audio = Some(AudioInfo::default());
         let mut network = Some(NetworkInfo::default());
+        let mut media = Some(MediaInfo::default());
         let mut device_ticks = 17;
 
         invalidate_device_snapshots_after_config_reload(
             &mut audio,
             &mut previous,
             &mut network,
+            &mut media,
             &mut device_ticks,
         );
         assert_eq!(device_ticks, 0);

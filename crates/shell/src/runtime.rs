@@ -53,6 +53,7 @@ impl ServiceHub {
         let battery = BatteryService::new().ok();
         let audio = AudioService::new().ok();
         let network = NetworkService::new().ok();
+        let media = shilpo_services::MediaService::new().ok();
         let clipboard = shilpo_services::ClipboardService::new();
         let app_scanner = shilpo_services::AppScanner::new()
             .unwrap_or_else(|_| shilpo_services::AppScanner::new_empty());
@@ -79,6 +80,7 @@ impl ServiceHub {
             battery,
             audio,
             network,
+            media,
         );
 
         let config_dir = config_path
@@ -1073,6 +1075,17 @@ impl ShellRuntime {
                             cx,
                             shilpo_ext::ExtensionEvent::NetworkChanged {
                                 connected: info.available && info.is_connected,
+                            },
+                        );
+                    }
+                    crate::bar::service_worker::WorkerUpdate::Media(info) => {
+                        Self::dispatch_extension_event(
+                            cx,
+                            shilpo_ext::ExtensionEvent::MediaChanged {
+                                title: (!info.title.is_empty()).then_some(info.title.clone()),
+                                artist: (!info.artist.is_empty()).then_some(info.artist.clone()),
+                                playing: info.playback_state
+                                    == shilpo_services::PlaybackState::Playing,
                             },
                         );
                     }

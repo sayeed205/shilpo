@@ -223,7 +223,7 @@ impl RenderOnce for Pagination {
                     .with_size(self.size)
                     .compact()
                     .disabled(self.disabled)
-                        .icon(IconName::MoreHoriz)
+                    .icon(IconName::MoreHoriz)
                     .dropdown_menu({
                         let on_click = on_click.clone();
                         move |mut menu, _, _| {

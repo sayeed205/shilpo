@@ -7,6 +7,7 @@ pub mod compositor;
 pub mod error;
 pub mod ipc;
 pub mod location;
+pub mod media;
 pub mod network;
 pub mod night_light;
 pub mod notifications;
@@ -36,6 +37,7 @@ pub use ipc::{
     ShellIpcServer,
 };
 pub use location::{LocationInfo, LocationService};
+pub use media::{MediaCommand, MediaInfo, MediaService, PlaybackState};
 pub use network::{NetworkInfo, NetworkService, VpnConnection};
 pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_use_dark_mode};
 pub use notifications::{Notification, NotificationService, NotificationUrgency};
