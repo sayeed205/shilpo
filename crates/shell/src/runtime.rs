@@ -1238,6 +1238,10 @@ impl ShellRuntime {
                     ) => {
                         cx.global_mut::<Self>().active_config = (**config).clone();
                         Self::sync_displays(cx);
+                        // A settings-only config edit does not recreate the bar
+                        // window. Reconcile mounted extension instances explicitly
+                        // so their ContributionSettingsChanged event is delivered.
+                        Self::reconcile_bar_extension_instances(cx);
                     }
                     crate::bar::service_worker::WorkerUpdate::Battery(info) => {
                         Self::dispatch_extension_event(
@@ -1648,6 +1652,7 @@ impl ShellRuntime {
             overview_visible: self.overview.is_some(),
             control_center_visible: self.control_center.is_some(),
             health,
+            ..Default::default()
         });
     }
 
@@ -2972,21 +2977,47 @@ impl ShellRuntime {
         let requests = cx.global_mut::<Self>().ipc_server.pop_pending_requests();
         for request in requests {
             match request {
+                IpcRequest::ShowBar => {
+                    if cx.global::<Self>().bars.is_empty() {
+                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
+                    }
+                }
+                IpcRequest::HideBar => {
+                    if !cx.global::<Self>().bars.is_empty() {
+                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
+                    }
+                }
                 IpcRequest::ToggleBar => {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                 }
+                IpcRequest::ShowControlCenter => {
+                    if cx.global::<Self>().control_center.is_none() {
+                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
+                    }
+                }
+                IpcRequest::HideControlCenter => {
+                    if cx.global::<Self>().control_center.is_some() {
+                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
+                    }
+                }
                 IpcRequest::ToggleControlCenter => {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
+                }
+                IpcRequest::ShowOverview => {
+                    if cx.global::<Self>().overview.is_none() {
+                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
+                    }
+                }
+                IpcRequest::HideOverview => {
+                    if cx.global::<Self>().overview.is_some() {
+                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
+                    }
                 }
                 IpcRequest::ToggleOverview => {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
                 }
                 IpcRequest::ReloadConfig => {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ReloadConfig);
-                }
-                IpcRequest::Quit => {
-                    let _ = Self::dispatch_action(cx, ActionInvocation::Quit);
-                    return;
                 }
                 IpcRequest::Compositor(cmd) => {
                     let _ = match cmd {

@@ -28,13 +28,13 @@ USAGE
 done
 
 NIRI_BIN=${NIRI_BIN:-niri}
-if [ -z "${SHILPO_SHELL_BIN:-}" ]; then
-    if [ -x target/debug/shilpo-shell ]; then
-        SHILPO_SHELL_BIN=target/debug/shilpo-shell
-    elif [ -x target/release/shilpo-shell ]; then
-        SHILPO_SHELL_BIN=target/release/shilpo-shell
+if [ -z "${SHILPO_BIN:-}" ]; then
+    if [ -x target/debug/shilpo ]; then
+        SHILPO_BIN=target/debug/shilpo
+    elif [ -x target/release/shilpo ]; then
+        SHILPO_BIN=target/release/shilpo
     else
-        SHILPO_SHELL_BIN=target/debug/shilpo-shell
+        SHILPO_BIN=target/debug/shilpo
     fi
 fi
 SOCKET_PATH=${NIRI_SOCKET:-${NIRI_SOCKET_PATH:-}}
@@ -69,10 +69,10 @@ else
     report SKIP "jq unavailable"
 fi
 
-if [ -x "$SHILPO_SHELL_BIN" ]; then
-    report PASS "Shilpo shell binary available ($SHILPO_SHELL_BIN)"
+if [ -x "$SHILPO_BIN" ]; then
+    report PASS "Shilpo CLI binary available ($SHILPO_BIN)"
 else
-    report SKIP "Shilpo shell binary unavailable ($SHILPO_SHELL_BIN)"
+    report SKIP "Shilpo CLI binary unavailable ($SHILPO_BIN)"
 fi
 
 if [ -n "$SOCKET_PATH" ] && [ -S "$SOCKET_PATH" ]; then
@@ -84,10 +84,10 @@ fi
 if [ "$MODE" = dry-run ]; then
     cat <<'MATRIX'
 Planned checks:
-  1. Shell readiness through: shilpo-shell msg get-status
+  1. Shell readiness through: shilpo shell status
   2. Workspace focus through Shilpo, verified with niri state queries
   3. Window focus and previous-window through Shilpo
-  4. Empty dynamic workspace activation through Shilpo create-workspace
+  4. Empty dynamic workspace activation through Shilpo workspace create
   5. Move-window-to-workspace through Shilpo, followed by restoration
   6. Invalid command IDs are rejected or leave focus unchanged
 MATRIX
@@ -96,13 +96,13 @@ MATRIX
 fi
 
 if ! command -v "$NIRI_BIN" >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1 \
-    || [ ! -x "$SHILPO_SHELL_BIN" ] || [ -z "$SOCKET_PATH" ] || [ ! -S "$SOCKET_PATH" ]; then
+    || [ ! -x "$SHILPO_BIN" ] || [ -z "$SOCKET_PATH" ] || [ ! -S "$SOCKET_PATH" ]; then
     echo "Live prerequisites are unavailable; no mutations were attempted."
     summary
     exit 0
 fi
 
-if ! "$SHILPO_SHELL_BIN" msg get-status >/dev/null 2>&1; then
+if ! "$SHILPO_BIN" shell status >/dev/null 2>&1; then
     report FAIL "Shilpo shell IPC/readiness check"
     summary
     exit 1
@@ -143,13 +143,13 @@ target_workspace=$("$NIRI_BIN" msg -j workspaces \
 
 restore_state() {
     if [ -n "${initial_window:-}" ] && [ "${initial_window:-}" != null ] && [ -n "${initial_workspace:-}" ]; then
-        "$SHILPO_SHELL_BIN" msg move-window-to-workspace "$initial_window" "$initial_workspace" >/dev/null 2>&1 || true
+        "$SHILPO_BIN" window move "$initial_window" --workspace "$initial_workspace" >/dev/null 2>&1 || true
     fi
     if [ -n "${initial_workspace:-}" ] && [ "$initial_workspace" != null ]; then
-        "$SHILPO_SHELL_BIN" msg focus-workspace "$initial_workspace" >/dev/null 2>&1 || true
+        "$SHILPO_BIN" workspace focus "$initial_workspace" >/dev/null 2>&1 || true
     fi
     if [ -n "${initial_window:-}" ] && [ "$initial_window" != null ]; then
-        "$SHILPO_SHELL_BIN" msg focus-window "$initial_window" >/dev/null 2>&1 || true
+        "$SHILPO_BIN" window focus "$initial_window" >/dev/null 2>&1 || true
     fi
 }
 trap restore_state EXIT INT TERM
@@ -185,7 +185,7 @@ if [ "$MODE" = interactive ]; then
 fi
 
 if [ -n "$target_workspace" ] && [ "$target_workspace" != null ]; then
-    if "$SHILPO_SHELL_BIN" msg focus-workspace "$target_workspace" >/dev/null 2>&1 \
+    if "$SHILPO_BIN" workspace focus "$target_workspace" >/dev/null 2>&1 \
         && [ "$(focused_workspace)" = "$target_workspace" ]; then
         report PASS "Workspace focus through Shilpo broker"
     else
@@ -200,9 +200,9 @@ window_count=$(echo "$windows_json" | jq 'length')
 if [ "$window_count" -ge 2 ]; then
     win1=$(echo "$windows_json" | jq -r '.[0].id')
     win2=$(echo "$windows_json" | jq -r '.[1].id')
-    if "$SHILPO_SHELL_BIN" msg focus-window "$win1" >/dev/null 2>&1 \
-        && "$SHILPO_SHELL_BIN" msg focus-window "$win2" >/dev/null 2>&1 \
-        && "$SHILPO_SHELL_BIN" msg focus-previous-window >/dev/null 2>&1 \
+    if "$SHILPO_BIN" window focus "$win1" >/dev/null 2>&1 \
+        && "$SHILPO_BIN" window focus "$win2" >/dev/null 2>&1 \
+        && "$SHILPO_BIN" window focus-previous >/dev/null 2>&1 \
         && [ "$(focused_window)" = "$win1" ]; then
         report PASS "Window focus and previous-window through Shilpo broker"
     else
@@ -212,14 +212,14 @@ else
     report SKIP "Fewer than two windows available for focus test"
 fi
 
-if "$SHILPO_SHELL_BIN" msg create-workspace >/dev/null 2>&1; then
+if "$SHILPO_BIN" workspace create >/dev/null 2>&1; then
     report PASS "Dynamic empty workspace activation through Shilpo broker"
 else
     report FAIL "Dynamic empty workspace activation through Shilpo broker"
 fi
 
 if [ -n "${initial_window:-}" ] && [ -n "$target_workspace" ] && [ "$target_workspace" != null ]; then
-    if "$SHILPO_SHELL_BIN" msg move-window-to-workspace "$initial_window" "$target_workspace" >/dev/null 2>&1 \
+    if "$SHILPO_BIN" window move "$initial_window" --workspace "$target_workspace" >/dev/null 2>&1 \
         && wait_for_window_workspace "$initial_window" "$target_workspace"; then
         report PASS "Window move through Shilpo broker"
     else
@@ -231,7 +231,7 @@ fi
 
 invalid_workspace=$("$NIRI_BIN" msg -j workspaces | jq -r 'if length == 0 then 999999 else ((map(.id) | max) + 1) end')
 before_invalid_workspace=$(focused_workspace)
-if "$SHILPO_SHELL_BIN" msg focus-workspace "$invalid_workspace" >/dev/null 2>&1; then
+if "$SHILPO_BIN" workspace focus "$invalid_workspace" >/dev/null 2>&1; then
     # Niri may acknowledge an unknown action target as Handled.  In that case
     # the safety invariant is that focus does not move to a different target.
     if [ "$(focused_workspace)" = "$before_invalid_workspace" ]; then
@@ -245,7 +245,7 @@ fi
 
 invalid_window=$("$NIRI_BIN" msg -j windows | jq -r 'if length == 0 then 999999 else ((map(.id) | max) + 1) end')
 before_invalid_window=$(focused_window)
-if "$SHILPO_SHELL_BIN" msg focus-window "$invalid_window" >/dev/null 2>&1; then
+if "$SHILPO_BIN" window focus "$invalid_window" >/dev/null 2>&1; then
     if [ "$(focused_window)" = "$before_invalid_window" ]; then
         report PASS "Invalid window leaves focus unchanged"
     else

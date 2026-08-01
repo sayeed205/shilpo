@@ -3,7 +3,6 @@ mod app_icons;
 pub mod bar;
 mod battery;
 pub mod control_center;
-pub mod doctor;
 pub mod error;
 mod extension_http;
 pub mod extension_surface;
@@ -19,7 +18,6 @@ pub use actions::{
 };
 pub use bar::BarView;
 pub use control_center::ControlCenterView;
-pub use doctor::DoctorChecker;
 pub use error::ShellError;
 pub use extensions::{
     ContributionDescriptor, ContributionInstance, ContributionSurface, ExtensionCoordinator,

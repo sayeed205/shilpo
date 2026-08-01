@@ -34,7 +34,7 @@ pub use compositor::{
 pub use error::ServiceError;
 pub use ipc::{
     BarState, IpcError, IpcRequest, IpcResponse, IpcResult, IpcStatus, ReadinessState,
-    ServiceHealth, ServiceLifecycle, ShellIpcServer,
+    ServiceHealth, ServiceLifecycle, ShellIpcClient, ShellIpcServer,
 };
 pub use location::{LocationInfo, LocationService};
 pub use media::{MediaCommand, MediaInfo, MediaService, PlaybackState};

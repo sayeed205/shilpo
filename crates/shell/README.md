@@ -127,7 +127,7 @@ Before disabling fallback/inir modes, execute the following manual cutover smoke
 
 1. **Bar Startup**: Enable and start `shilpo-shell.service` via `systemctl --user start shilpo-shell`. Verify the bar
    renders on the primary monitor.
-2. **Overview Launch**: Trigger `shilpo msg toggle-overview` or press shortcut. Confirm search input focus and rapid
+2. **Overview Launch**: Trigger `shilpo overview toggle` or press shortcut. Confirm search input focus and rapid
    query response.
 3. **Desktop Services Loss & Recovery**: Disconnect NetworkManager or PipeWire daemon; confirm UI controls transition to
    reconnecting/unavailable state without repeated toast popups. Restart services and confirm automatic recovery.

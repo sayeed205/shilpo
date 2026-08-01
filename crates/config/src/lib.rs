@@ -767,6 +767,24 @@ impl ShellConfig {
         Ok(config)
     }
 
+    /// Load and validate an existing configuration without creating or changing it.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        let path = path.as_ref().to_path_buf();
+        let text = fs::read_to_string(&path).map_err(|source| ConfigError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let config: Self = toml::from_str(&text).map_err(|error| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: path.display().to_string(),
+                message: error.to_string(),
+                span: error.span(),
+            },
+        })?;
+        config.validate()?;
+        Ok(config)
+    }
+
     /// Persist this configuration atomically at `path`.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), ConfigError> {
         let path = path.as_ref().to_path_buf();

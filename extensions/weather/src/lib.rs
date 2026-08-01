@@ -707,6 +707,7 @@ mod tests {
         let geocode_request = effects[0]["request_id"].as_str().unwrap().to_owned();
         assert!(geocode_request.starts_with(GEOCODE_REQUEST));
         assert!(effects[0]["url"].as_str().unwrap().contains("Kolkata"));
+        assert!(state.view().to_string().contains("loading_indicator"));
 
         let effects = state.handle_event(Event::HttpResponse {
             request_id: geocode_request,

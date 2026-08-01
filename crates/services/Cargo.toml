@@ -18,6 +18,7 @@ chrono.workspace = true
 tracing.workspace = true
 dirs.workspace = true
 smol.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 libc = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 shilpo-config = { path = "../config" }

@@ -385,7 +385,8 @@ impl ExtensionCli {
     }
 }
 
-pub fn run_cli(args: &[String]) -> i32 {
+#[allow(dead_code)]
+fn run_cli(args: &[String]) -> i32 {
     let Some(command) = args.first().map(String::as_str) else {
         print_usage();
         return 2;
@@ -911,7 +912,7 @@ fn option_value<'a>(args: &'a [String], option: &str) -> Option<&'a str> {
         .map(|pair| pair[1].as_str())
 }
 
-fn write_signing_key(path: &Path) -> Result<PathBuf, String> {
+pub fn write_signing_key(path: &Path) -> Result<PathBuf, String> {
     let (private_key, public_key) = generate_signing_key().map_err(|error| error.to_string())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -992,6 +993,16 @@ fn run_source_command(
         }
         _ => Err(format!("unknown source action '{action}'")),
     }
+}
+
+pub fn source_command(args: &[String], catalog: &ExtensionCatalog) -> Result<String, String> {
+    let action = args
+        .first()
+        .ok_or_else(|| "source requires add, remove, or sync".to_owned())?;
+    let mut legacy_args = Vec::with_capacity(args.len() + 1);
+    legacy_args.push("source".to_owned());
+    legacy_args.extend(args.iter().cloned());
+    run_source_command(action, &legacy_args, catalog)
 }
 
 pub(crate) fn probe_runtime(dir: &Path, manifest: &ExtensionManifest) -> Result<(), String> {
@@ -1262,7 +1273,7 @@ fn append_log(state_dir: &Path, id: &ExtensionId, message: &str) -> Result<(), S
     writeln!(log, "{} {message}", unix_timestamp()).map_err(|error| error.to_string())
 }
 
-fn follow_log(id: &ExtensionId, state_dir: &Path) {
+pub fn follow_log(id: &ExtensionId, state_dir: &Path) {
     let path = log_path(state_dir, id);
     let mut offset = fs::metadata(&path).map_or(0, |metadata| metadata.len());
     loop {

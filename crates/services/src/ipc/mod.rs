@@ -41,12 +41,17 @@ const CLIENT_QUEUE: usize = 32;
 pub enum IpcRequest {
     Compositor(CompositorCommand),
     ReloadConfig,
+    ShowBar,
+    HideBar,
     ToggleBar,
+    ShowControlCenter,
+    HideControlCenter,
     ToggleControlCenter,
+    ShowOverview,
+    HideOverview,
     ToggleOverview,
     GetStatus,
     GetTelemetry,
-    Quit,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -138,6 +143,10 @@ pub struct ServiceHealth {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct IpcStatus {
     pub running: bool,
+    #[serde(default)]
+    pub instance_id: String,
+    #[serde(default)]
+    pub pid: u32,
     pub readiness: ReadinessState,
     pub bar: BarState,
     pub overview_visible: bool,
@@ -452,8 +461,12 @@ impl ShellIpcServer {
         let identity = (m.dev(), m.ino());
         listener.set_nonblocking(true)?;
         let pending = Arc::new(Mutex::new(VecDeque::new()));
+        let instance_id = uuid::Uuid::new_v4().to_string();
+        let pid = std::process::id();
         let status = Arc::new(Mutex::new(IpcStatus {
             running: true,
+            instance_id,
+            pid,
             ..IpcStatus::default()
         }));
         let broker = Arc::new(Mutex::new(None));
@@ -542,8 +555,15 @@ impl ShellIpcServer {
         self.pending.lock().unwrap().drain(..).collect()
     }
 
-    pub fn update_status(&self, status: IpcStatus) {
-        *self.status.lock().unwrap() = status;
+    pub fn update_status(&self, mut status: IpcStatus) {
+        let mut current = self.status.lock().unwrap();
+        if status.instance_id.is_empty() {
+            status.instance_id = current.instance_id.clone();
+        }
+        if status.pid == 0 {
+            status.pid = current.pid;
+        }
+        *current = status;
     }
 
     pub fn send_command(req: IpcRequest) -> Result<IpcResponse, IpcError> {
@@ -576,6 +596,74 @@ impl ShellIpcServer {
             .map(|e| e.message.clone())
             .unwrap_or_else(|| "accepted".into());
         Ok(response)
+    }
+}
+
+/// Typed IPC client interface for shell control and status queries.
+#[derive(Debug, Clone, Default)]
+pub struct ShellIpcClient;
+
+impl ShellIpcClient {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn send(&self, request: IpcRequest) -> Result<IpcResponse, IpcError> {
+        ShellIpcServer::send_command(request)
+    }
+
+    pub fn send_at(&self, path: &Path, request: IpcRequest) -> Result<IpcResponse, IpcError> {
+        ShellIpcServer::send_command_at(path, request)
+    }
+
+    pub fn status(&self) -> Result<IpcStatus, IpcError> {
+        let resp = self.send(IpcRequest::GetStatus)?;
+        if !resp.ok {
+            let err = resp.error.unwrap_or(IpcErrorBody {
+                code: "ipc_error".into(),
+                message: "status request failed".into(),
+            });
+            return Err(IpcError::Code {
+                code: err.code,
+                message: err.message,
+            });
+        }
+        match resp.result {
+            Some(IpcResult::Status(status)) => Ok(status),
+            _ => Err(IpcError::Code {
+                code: "invalid_response".into(),
+                message: "unexpected result from status request".into(),
+            }),
+        }
+    }
+
+    pub fn telemetry(&self) -> Result<ServiceHealth, IpcError> {
+        let resp = self.send(IpcRequest::GetTelemetry)?;
+        if !resp.ok {
+            let err = resp.error.unwrap_or(IpcErrorBody {
+                code: "ipc_error".into(),
+                message: "telemetry request failed".into(),
+            });
+            return Err(IpcError::Code {
+                code: err.code,
+                message: err.message,
+            });
+        }
+        match resp.result {
+            Some(IpcResult::Telemetry(health)) => Ok(health),
+            _ => Err(IpcError::Code {
+                code: "invalid_response".into(),
+                message: "unexpected result from telemetry request".into(),
+            }),
+        }
+    }
+
+    pub fn is_socket_available() -> bool {
+        if let Ok(path) = get_socket_path() {
+            path.exists()
+        } else {
+            false
+        }
     }
 }
 
@@ -860,22 +948,22 @@ mod tests {
             overview_visible: true,
             control_center_visible: false,
             health: health.clone(),
+            ..Default::default()
         });
 
         let response = ShellIpcServer::send_command_at(&path, IpcRequest::GetStatus).unwrap();
 
         assert!(response.ok);
-        assert_eq!(
-            response.result,
-            Some(IpcResult::Status(IpcStatus {
-                running: true,
-                readiness: ReadinessState::Ready,
-                bar: BarState::Visible,
-                overview_visible: true,
-                control_center_visible: false,
-                health: health.clone(),
-            }))
-        );
+        let Some(IpcResult::Status(status_resp)) = response.result else {
+            panic!("expected status response");
+        };
+        assert!(status_resp.running);
+        assert_eq!(status_resp.readiness, ReadinessState::Ready);
+        assert_eq!(status_resp.bar, BarState::Visible);
+        assert!(status_resp.overview_visible);
+        assert!(!status_resp.control_center_visible);
+        assert!(!status_resp.instance_id.is_empty());
+        assert!(status_resp.pid > 0);
 
         assert!(server.pop_pending_requests().is_empty());
         drop(server);
@@ -1035,6 +1123,7 @@ mod tests {
                 uptime_seconds: 120,
                 ..Default::default()
             },
+            ..Default::default()
         };
         let value = serde_json::to_value(&status).unwrap();
         assert_eq!(value["readiness"], "degraded");

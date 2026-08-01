@@ -1,11 +1,15 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::Serialize;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DiagnosticStatus {
     Pass,
     Warn,
     Fail,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DiagnosticItem {
     pub category: String,
     pub name: String,
@@ -14,7 +18,6 @@ pub struct DiagnosticItem {
     pub fix_applied: bool,
 }
 
-/// Doctor diagnostic runner for Shilpo Desktop Shell.
 #[derive(Debug, Clone, Default)]
 pub struct DoctorChecker;
 
@@ -23,13 +26,12 @@ impl DoctorChecker {
         Self
     }
 
-    pub fn default_config_path() -> std::path::PathBuf {
+    pub fn default_config_path() -> PathBuf {
         std::env::var("HOME")
-            .map(|home| std::path::PathBuf::from(home).join(".config/shilpo/config.toml"))
-            .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"))
+            .map(|home| PathBuf::from(home).join(".config/shilpo/config.toml"))
+            .unwrap_or_else(|_| PathBuf::from(".config/shilpo/config.toml"))
     }
 
-    /// Runs all diagnostic checks and attempts auto-fixing if requested.
     pub fn run_diagnostics(&self, auto_fix: bool) -> Vec<DiagnosticItem> {
         vec![
             self.check_niri_compositor(),
@@ -40,7 +42,6 @@ impl DoctorChecker {
         ]
     }
 
-    /// Checks if Niri Wayland compositor IPC socket is accessible.
     pub fn check_niri_compositor(&self) -> DiagnosticItem {
         if let Some(path) = shilpo_services::compositor::niri::resolve_niri_socket_path() {
             if path.exists() {
@@ -76,10 +77,9 @@ impl DoctorChecker {
         }
     }
 
-    /// Checks shell IPC runtime directory and socket status.
     pub fn check_shell_ipc(&self) -> DiagnosticItem {
         let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-            .map(std::path::PathBuf::from)
+            .map(PathBuf::from)
             .unwrap_or_else(|_| std::env::temp_dir());
 
         let shilpo_ipc_dir = runtime_dir.join("shilpo-shell");
@@ -105,7 +105,6 @@ impl DoctorChecker {
         }
     }
 
-    /// Checks configuration file validity and readiness.
     pub fn check_config_file(&self, auto_fix: bool) -> DiagnosticItem {
         let config_path = Self::default_config_path();
         if config_path.exists() {
@@ -148,20 +147,13 @@ impl DoctorChecker {
         }
     }
 
-    /// Checks default wallpaper directory existence and image readiness.
     pub fn check_wallpaper_directory(&self, auto_fix: bool) -> DiagnosticItem {
-        let wallpaper_dir = shilpo_theme::ThemeState::default().wallpaper_dir;
-        let wallpaper_dir = if let Some(rest) = wallpaper_dir
-            .to_str()
-            .and_then(|path| path.strip_prefix("~/"))
-        {
-            std::env::var("HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_default()
-                .join(rest)
-        } else {
-            wallpaper_dir
-        };
+        let config_path = Self::default_config_path();
+        let wallpaper_dir = shilpo_config::ShellConfig::load(&config_path)
+            .unwrap_or_default()
+            .desktop
+            .wallpaper_dir;
+        let wallpaper_dir = expand_home_path(wallpaper_dir);
         if wallpaper_dir.exists() {
             let count = std::fs::read_dir(&wallpaper_dir)
                 .map(|entries| {
@@ -213,7 +205,6 @@ impl DoctorChecker {
         }
     }
 
-    /// Checks if `awww` wallpaper daemon backend CLI client is available on $PATH.
     pub fn check_awww_backend(&self) -> DiagnosticItem {
         let is_installed = std::process::Command::new("awww")
             .arg("--version")
@@ -238,9 +229,8 @@ impl DoctorChecker {
         }
     }
 
-    /// Formats and prints diagnostic items to standard output.
-    pub fn print_report(&self, items: &[DiagnosticItem]) {
-        println!("\n=== Shilpo Shell Doctor Diagnostics ===\n");
+    pub fn format_report(&self, items: &[DiagnosticItem]) -> String {
+        let mut out = String::from("\n=== Shilpo Doctor Diagnostics ===\n\n");
         for item in items {
             let badge = match item.status {
                 DiagnosticStatus::Pass => "[✓ PASS]",
@@ -252,28 +242,47 @@ impl DoctorChecker {
             } else {
                 ""
             };
-            println!(
-                "{:10} {:22} {} {}{}",
+            out.push_str(&format!(
+                "{:10} {:22} {} {}{}\n",
                 badge,
                 format!("[{}]", item.category),
                 item.name,
                 item.message,
                 fix_note
-            );
+            ));
         }
-        println!();
+        out
+    }
+}
+
+fn expand_home_path(path: PathBuf) -> PathBuf {
+    if let Some(rest) = path.to_str().and_then(|path| path.strip_prefix("~/")) {
+        std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join(rest)
+    } else {
+        path
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::expand_home_path;
+    use std::path::PathBuf;
 
     #[test]
-    fn test_doctor_diagnostic_suite() {
-        let doctor = DoctorChecker::new();
-        let results = doctor.run_diagnostics(false);
-        assert!(!results.is_empty());
-        assert!(results.iter().any(|r| r.category == "Configuration"));
+    fn wallpaper_path_expands_home_prefix() {
+        let expanded = expand_home_path(PathBuf::from("~/Pictures/Wallpapers"));
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        assert_eq!(expanded, home.join("Pictures/Wallpapers"));
+    }
+
+    #[test]
+    fn absolute_wallpaper_path_is_preserved() {
+        let path = PathBuf::from("/srv/wallpapers");
+        assert_eq!(expand_home_path(path.clone()), path);
     }
 }

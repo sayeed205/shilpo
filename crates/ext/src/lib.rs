@@ -23,7 +23,7 @@ pub use catalog::{
 pub use circuit_breaker::{CircuitBreaker, DiagnosticCode, DiagnosticLevel, ExtensionDiagnostic};
 pub use cli::{
     DevelopmentRegistration, ExtensionCli, ExtensionCliResult, default_extension_state_dir,
-    development_registrations,
+    development_registrations, follow_log, source_command, write_signing_key,
 };
 pub use effects::{
     AuthorizedHostEffect, AuthorizedHostEffectKind, AuthorizedHttpRequest, HostEffect,

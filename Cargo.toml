@@ -9,6 +9,7 @@ members = [
     "crates/ext",
     "crates/shell",
     "crates/settings",
+    "crates/cli",
     "dotfiles/shilpo-dotfiles",
     "apps/storybook",
 ]

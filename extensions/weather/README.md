@@ -85,7 +85,7 @@ temperature_unit = "celsius"
 Reload a running shell after editing the configuration:
 
 ```bash
-./target/release/shilpo-shell msg reload-config
+./target/release/shilpo config reload
 ```
 
 When the shell was built with the default development profile, use `./target/debug/shilpo-shell` instead.
@@ -100,7 +100,7 @@ cargo build --manifest-path extensions/Cargo.toml \
   -p shilpo-weather-extension --target wasm32-wasip2 --release
 cp extensions/target/wasm32-wasip2/release/shilpo_weather_extension.wasm \
   extensions/weather/extension.wasm
-./target/release/shilpo-shell ext reload org.shilpo.weather
+./target/release/shilpo ext reload org.shilpo.weather
 ```
 
 The shell does not need to restart. Run `ext dev` from the build section once to register the development path; later
@@ -120,8 +120,8 @@ The widget normally moves through these states:
 Inspect registration state and follow extension diagnostics with:
 
 ```bash
-./target/release/shilpo-shell ext list
-./target/release/shilpo-shell ext logs org.shilpo.weather --follow
+./target/release/shilpo ext list
+./target/release/shilpo ext logs org.shilpo.weather --follow
 ```
 
 Weather data is provided by [Open-Meteo](https://open-meteo.com/). Location search data is based on GeoNames through

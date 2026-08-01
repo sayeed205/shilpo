@@ -286,7 +286,7 @@ pub struct RegistryRelease {
     pub key_rotation: Option<KeyRotationDelegation>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CatalogExtension {
     pub release: RegistryRelease,
     pub source: RegistrySource,
@@ -294,7 +294,7 @@ pub struct CatalogExtension {
     pub publisher_conflict: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstalledExtension {
     pub receipt: InstallationReceipt,
     pub manifest: ExtensionManifest,
@@ -302,7 +302,8 @@ pub struct InstalledExtension {
     pub package_dir: PathBuf,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub enum UpdateState {
     UpToDate,
     Available,
@@ -315,7 +316,7 @@ pub enum UpdateState {
     DevelopmentOverrideActive,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExtensionUpdate {
     pub id: ExtensionId,
     pub installed_version: Version,
@@ -323,7 +324,7 @@ pub struct ExtensionUpdate {
     pub state: UpdateState,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExtensionCatalogSnapshot {
     pub discover: Vec<CatalogExtension>,
     pub installed: Vec<InstalledExtension>,
@@ -872,7 +873,7 @@ impl ExtensionCatalog {
         install_result
     }
 
-    fn installed(&self) -> Result<Vec<InstalledExtension>, CatalogError> {
+    pub fn installed(&self) -> Result<Vec<InstalledExtension>, CatalogError> {
         let directory = self.paths.receipts_dir();
         let Ok(entries) = fs::read_dir(&directory) else {
             return Ok(Vec::new());

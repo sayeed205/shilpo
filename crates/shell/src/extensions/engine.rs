@@ -341,6 +341,14 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
                         settings: instance.settings.clone(),
                     },
                 ));
+                // Settings can change the rendered tree immediately (for
+                // example, weather enters its loading state before the
+                // network response arrives). Do not require every guest to
+                // remember an explicit invalidate_view effect for this
+                // host-owned state transition.
+                changes
+                    .invalidated_views
+                    .push(instance.contribution.clone());
             }
             next.insert(instance.id.clone(), instance);
         }
@@ -882,6 +890,18 @@ mod tests {
         }
     }
 
+    struct QuietGuest;
+
+    impl GuestExtension for QuietGuest {
+        fn on_event(&mut self, _event: &ExtensionEvent) -> Vec<HostEffect> {
+            Vec::new()
+        }
+
+        fn view(&self, _contribution_id: &str) -> Option<ViewTree> {
+            None
+        }
+    }
+
     #[test]
     fn invalidate_view_effect_becomes_a_view_change() {
         let manifest = ExtensionManifest::from_toml(
@@ -912,5 +932,45 @@ mod tests {
             }]
         );
         assert!(changes.effects.is_empty());
+    }
+
+    #[test]
+    fn settings_changes_invalidate_the_affected_view() {
+        let manifest = ExtensionManifest::from_toml(
+            r#"
+                id = "org.shilpo.test"
+                name = "Test"
+                version = "1.0.0"
+
+                [[contributions.bar_widgets]]
+                id = "bar"
+                name = "Bar"
+            "#,
+        )
+        .unwrap();
+        let extension_id = manifest.id.clone();
+        let contribution = CanonicalId {
+            extension_id: extension_id.clone(),
+            contribution_id: ContributionId::new("bar").unwrap(),
+        };
+        let mut session = ExtensionSession::new(InMemoryRuntime::default());
+        session
+            .register(manifest, Box::new(QuietGuest), Vec::new())
+            .unwrap();
+
+        let instance = |settings| ContributionInstance {
+            id: "weather".into(),
+            contribution: contribution.clone(),
+            output: None,
+            width: 100.0,
+            height: 24.0,
+            settings,
+        };
+        let _ = session.reconcile_instances([instance(serde_json::json!({"location": "A"}))]);
+        let changes = session.reconcile_instances([instance(serde_json::json!({
+            "location": "B"
+        }))]);
+
+        assert_eq!(changes.invalidated_views, vec![contribution]);
     }
 }
