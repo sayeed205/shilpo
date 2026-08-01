@@ -25,7 +25,10 @@ pub use cli::{
     DevelopmentRegistration, ExtensionCli, ExtensionCliResult, default_extension_state_dir,
     development_registrations,
 };
-pub use effects::{HostEffect, WallpaperSource};
+pub use effects::{
+    AuthorizedHostEffect, AuthorizedHostEffectKind, AuthorizedHttpRequest, HostEffect,
+    WallpaperSource,
+};
 pub use events::{EventKind, ExtensionEvent};
 pub use manifest::{
     CanonicalId, Capability, CapabilityKind, ContributionId, ExtensionId, ExtensionManifest,
@@ -244,8 +247,8 @@ mod tests {
             .unwrap();
         assert_eq!(result.accepted.len(), 1);
         assert!(matches!(
-            result.accepted[0],
-            HostEffect::ShowNotification { .. }
+            result.accepted[0].kind(),
+            AuthorizedHostEffectKind::NonHttp(HostEffect::ShowNotification { .. })
         ));
         assert_eq!(result.rejected.len(), 1);
         assert!(matches!(result.rejected[0], HostEffect::HttpRequest { .. }));
@@ -253,6 +256,260 @@ mod tests {
             host.diagnostics().last().map(|diagnostic| diagnostic.code),
             Some(DiagnosticCode::CapabilityDenied)
         );
+    }
+
+    struct SingleEffectGuest(HostEffect);
+
+    impl GuestExtension for SingleEffectGuest {
+        fn on_event(&mut self, _: &ExtensionEvent) -> Vec<HostEffect> {
+            vec![self.0.clone()]
+        }
+
+        fn view(&self, _: &str) -> Option<ViewTree> {
+            None
+        }
+    }
+
+    #[test]
+    fn host_http_authorization_uses_canonical_host_and_path() {
+        let manifest = ExtensionManifest::from_toml(MANIFEST).unwrap();
+        let extension_id = manifest.id.clone();
+        let mut host = ExtensionHost::<InMemoryRuntime>::default();
+        host.register(
+            manifest,
+            Box::new(SingleEffectGuest(HostEffect::HttpRequest {
+                request_id: "req1".into(),
+                url: "HTTPS://API.EXAMPLE.COM/clock/sub/../current".into(),
+                method: "GET".into(),
+            })),
+            vec![Capability::NetworkHttp {
+                hosts: vec!["api.example.com".into()],
+                paths: vec!["/clock/*".into()],
+            }],
+        )
+        .unwrap();
+
+        let result = host
+            .dispatch_event(&extension_id, &ExtensionEvent::ShellStarted)
+            .unwrap();
+        assert_eq!(result.accepted.len(), 1);
+        assert_eq!(result.rejected.len(), 0);
+        if let AuthorizedHostEffectKind::HttpRequest(req) = result.accepted[0].kind() {
+            assert_eq!(req.request_id(), "req1");
+            assert_eq!(req.url().as_str(), "https://api.example.com/clock/current");
+            assert_eq!(req.url().host_str(), Some("api.example.com"));
+            assert_eq!(req.url().path(), "/clock/current");
+        } else {
+            panic!("expected AuthorizedHttpRequest");
+        }
+    }
+
+    #[test]
+    fn host_http_authorization_intersects_manifest_and_grant_scopes() {
+        let manifest = ExtensionManifest::from_toml(MANIFEST).unwrap();
+        let extension_id = manifest.id.clone();
+
+        // 1. Manifest allows /clock/*, but user grant only allows /clock/public/*
+        let mut host1 = ExtensionHost::<InMemoryRuntime>::default();
+        host1
+            .register(
+                manifest.clone(),
+                Box::new(SingleEffectGuest(HostEffect::HttpRequest {
+                    request_id: "req1".into(),
+                    url: "https://api.example.com/clock/private/data".into(),
+                    method: "GET".into(),
+                })),
+                vec![Capability::NetworkHttp {
+                    hosts: vec!["api.example.com".into()],
+                    paths: vec!["/clock/public/*".into()],
+                }],
+            )
+            .unwrap();
+
+        let res1 = host1
+            .dispatch_event(&extension_id, &ExtensionEvent::ShellStarted)
+            .unwrap();
+        assert_eq!(res1.accepted.len(), 0);
+        assert_eq!(res1.rejected.len(), 1);
+
+        // 2. Grant allows all hosts, but manifest restricts to api.example.com
+        let mut host2 = ExtensionHost::<InMemoryRuntime>::default();
+        host2
+            .register(
+                manifest,
+                Box::new(SingleEffectGuest(HostEffect::HttpRequest {
+                    request_id: "req2".into(),
+                    url: "https://other.example.com/clock/current".into(),
+                    method: "GET".into(),
+                })),
+                vec![Capability::NetworkHttp {
+                    hosts: vec!["*".into()],
+                    paths: vec!["/clock/*".into()],
+                }],
+            )
+            .unwrap();
+
+        let res2 = host2
+            .dispatch_event(&extension_id, &ExtensionEvent::ShellStarted)
+            .unwrap();
+        assert_eq!(res2.accepted.len(), 0);
+        assert_eq!(res2.rejected.len(), 1);
+    }
+
+    #[test]
+    fn host_http_authorization_rejects_unsupported_request_policy() {
+        let manifest = ExtensionManifest::from_toml(MANIFEST).unwrap();
+        let extension_id = manifest.id.clone();
+
+        let bad_effects = vec![
+            // non-HTTPS
+            HostEffect::HttpRequest {
+                request_id: "1".into(),
+                url: "http://api.example.com/clock/current".into(),
+                method: "GET".into(),
+            },
+            // non-GET method
+            HostEffect::HttpRequest {
+                request_id: "2".into(),
+                url: "https://api.example.com/clock/current".into(),
+                method: "POST".into(),
+            },
+            // embedded credentials
+            HostEffect::HttpRequest {
+                request_id: "3".into(),
+                url: "https://user:pass@api.example.com/clock/current".into(),
+                method: "GET".into(),
+            },
+            // fragments
+            HostEffect::HttpRequest {
+                request_id: "4".into(),
+                url: "https://api.example.com/clock/current#section".into(),
+                method: "GET".into(),
+            },
+            // relative/schemeless
+            HostEffect::HttpRequest {
+                request_id: "5".into(),
+                url: "/clock/current".into(),
+                method: "GET".into(),
+            },
+            // missing host
+            HostEffect::HttpRequest {
+                request_id: "6".into(),
+                url: "https:///clock/current".into(),
+                method: "GET".into(),
+            },
+        ];
+
+        for effect in bad_effects {
+            let mut host = ExtensionHost::<InMemoryRuntime>::default();
+            host.register(
+                manifest.clone(),
+                Box::new(SingleEffectGuest(effect)),
+                vec![Capability::NetworkHttp {
+                    hosts: vec!["api.example.com".into()],
+                    paths: vec!["/clock/*".into()],
+                }],
+            )
+            .unwrap();
+
+            let res = host
+                .dispatch_event(&extension_id, &ExtensionEvent::ShellStarted)
+                .unwrap();
+            assert_eq!(
+                res.accepted.len(),
+                0,
+                "expected rejection for unsupported policy"
+            );
+            assert_eq!(res.rejected.len(), 1);
+        }
+    }
+
+    #[test]
+    fn host_http_authorization_handles_parser_differentials_consistently() {
+        let manifest = ExtensionManifest::from_toml(MANIFEST).unwrap();
+        let extension_id = manifest.id.clone();
+
+        let differential_effects = vec![
+            // authority delimiter spoofing
+            (
+                HostEffect::HttpRequest {
+                    request_id: "diff1".into(),
+                    url: "https://api.example.com@evil.example/clock/current".into(),
+                    method: "GET".into(),
+                },
+                false, // should be rejected since evil.example is not granted
+            ),
+            // explicit default port
+            (
+                HostEffect::HttpRequest {
+                    request_id: "diff2".into(),
+                    url: "https://api.example.com:443/clock/current".into(),
+                    method: "GET".into(),
+                },
+                true, // allowed matching api.example.com host
+            ),
+            // percent-encoded path
+            (
+                HostEffect::HttpRequest {
+                    request_id: "diff3".into(),
+                    url: "https://api.example.com/%63lock/current".into(),
+                    method: "GET".into(),
+                },
+                false, // Url::path() /%63lock/current does not match /clock/* without secondary decoding
+            ),
+            // query string included
+            (
+                HostEffect::HttpRequest {
+                    request_id: "diff4".into(),
+                    url: "https://api.example.com/clock/current?foo=bar".into(),
+                    method: "GET".into(),
+                },
+                true, // query string excluded from path pattern matching
+            ),
+            // backslash in authority/path
+            (
+                HostEffect::HttpRequest {
+                    request_id: "diff5".into(),
+                    url: "https://api.example.com\\evil.example/clock/current".into(),
+                    method: "GET".into(),
+                },
+                false, // rejected / invalid target
+            ),
+        ];
+
+        for (effect, should_accept) in differential_effects {
+            let mut host = ExtensionHost::<InMemoryRuntime>::default();
+            host.register(
+                manifest.clone(),
+                Box::new(SingleEffectGuest(effect.clone())),
+                vec![Capability::NetworkHttp {
+                    hosts: vec!["api.example.com".into()],
+                    paths: vec!["/clock/*".into()],
+                }],
+            )
+            .unwrap();
+
+            let res = host
+                .dispatch_event(&extension_id, &ExtensionEvent::ShellStarted)
+                .unwrap();
+            if should_accept {
+                assert_eq!(
+                    res.accepted.len(),
+                    1,
+                    "expected acceptance for effect {:?}",
+                    effect
+                );
+                assert_eq!(res.rejected.len(), 0);
+            } else {
+                assert_eq!(
+                    res.accepted.len(),
+                    0,
+                    "expected rejection for effect {:?}",
+                    effect
+                );
+                assert_eq!(res.rejected.len(), 1);
+            }
+        }
     }
 
     #[test]
@@ -398,6 +655,21 @@ mod tests {
             );
         }
 
+        let replacement_error = runtime
+            .replace(
+                &id,
+                WasmModule::from_bytes(b"(component)"),
+                RuntimeBudget::default(),
+            )
+            .unwrap_err();
+        assert_eq!(replacement_error.kind(), RuntimeFailureKind::Load);
+        assert_eq!(
+            runtime
+                .dispatch(&id, &ExtensionEvent::ShellStarted, RuntimeBudget::default())
+                .unwrap(),
+            Vec::<HostEffect>::new()
+        );
+
         let invalid_id = ExtensionId::new("io.github.test.invalid-output").unwrap();
         let invalid_component = VALID_COMPONENT.replacen(
             "(data (i32.const 0) \"[]\")",
@@ -486,6 +758,15 @@ mod tests {
         type Module = ();
 
         fn load(
+            &mut self,
+            _: &ExtensionId,
+            _: Self::Module,
+            _: RuntimeBudget,
+        ) -> Result<(), RuntimeError> {
+            Ok(())
+        }
+
+        fn replace(
             &mut self,
             _: &ExtensionId,
             _: Self::Module,

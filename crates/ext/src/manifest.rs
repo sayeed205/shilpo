@@ -404,12 +404,9 @@ impl Capability {
                     .iter()
                     .any(|pattern| wildcard_matches(pattern, action_id))
             }
-            (Self::NetworkHttp { hosts, paths }, HostEffect::HttpRequest { url, .. }) => {
-                parse_http_target(url).is_some_and(|(host, path)| {
-                    hosts.iter().any(|pattern| wildcard_matches(pattern, host))
-                        && (paths.is_empty()
-                            || paths.iter().any(|pattern| wildcard_matches(pattern, path)))
-                })
+            (Self::NetworkHttp { .. }, HostEffect::HttpRequest { url, method, .. }) => {
+                crate::effects::CanonicalHttpTarget::parse(url, method)
+                    .is_some_and(|target| self.allows_http_target(&target))
             }
             (
                 Self::ProcessExec {
@@ -428,6 +425,19 @@ impl Capability {
                 paths.iter().any(|pattern| wildcard_matches(pattern, path))
             }
             (Self::LocationRead, HostEffect::LocationRead) => true,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn allows_http_target(&self, target: &crate::effects::CanonicalHttpTarget) -> bool {
+        match self {
+            Self::NetworkHttp { hosts, paths } => {
+                let host = target.host();
+                let path = target.path();
+                hosts.iter().any(|pattern| wildcard_matches(pattern, host))
+                    && (paths.is_empty()
+                        || paths.iter().any(|pattern| wildcard_matches(pattern, path)))
+            }
             _ => false,
         }
     }
@@ -473,24 +483,6 @@ fn arguments_match(patterns: &[String], arguments: &[String]) -> bool {
                 .zip(arguments)
                 .all(|(pattern, argument)| wildcard_matches(pattern, argument))
     }
-}
-
-fn parse_http_target(url: &str) -> Option<(&str, &str)> {
-    let remainder = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
-    let path_start = remainder.find('/').unwrap_or(remainder.len());
-    let authority = &remainder[..path_start];
-    let path = if path_start == remainder.len() {
-        "/"
-    } else {
-        &remainder[path_start..]
-    };
-    let host = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    let host = host.split(':').next()?;
-    (!host.is_empty()).then_some((host, path))
 }
 
 impl Contributions {

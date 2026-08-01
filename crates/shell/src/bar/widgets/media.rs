@@ -1,4 +1,4 @@
-use crate::bar::service_worker::{self, CommandSender, WorkerCommand};
+use crate::bar::service_worker::{self, CommandSender, DeviceCommand, WorkerCommand};
 use crate::runtime::ShellRuntime;
 use gpui::{App, ElementId, IntoElement, RenderOnce, StyleRefinement, Styled, Window};
 use shilpo_services::{MediaCommand, MediaInfo, PlaybackState};
@@ -57,13 +57,13 @@ impl RenderOnce for MediaWidget {
             .on_play_pause(move |_, _, _| {
                 let _ = service_worker::try_send_command(
                     &cmd_tx_play,
-                    WorkerCommand::Media(MediaCommand::PlayPause),
+                    WorkerCommand::Device(DeviceCommand::Media(MediaCommand::PlayPause)),
                 );
             })
             .on_next(move |_, _, _| {
                 let _ = service_worker::try_send_command(
                     &cmd_tx_next,
-                    WorkerCommand::Media(MediaCommand::Next),
+                    WorkerCommand::Device(DeviceCommand::Media(MediaCommand::Next)),
                 );
             })
     }

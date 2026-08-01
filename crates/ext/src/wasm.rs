@@ -121,6 +121,49 @@ impl WasmRuntime {
             )
         })
     }
+
+    fn instantiate_module(
+        &self,
+        module: &WasmModule,
+        budget: RuntimeBudget,
+    ) -> Result<WasmInstance, RuntimeError> {
+        let component = compile_component(&self.engine, &module.bytes)?;
+        validate_component_type(&self.engine, &component)?;
+        let mut linker = Linker::<WasmState>::new(&self.engine);
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(|error| {
+            RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                format!("failed to configure sandboxed WASI imports: {error:#}"),
+            )
+        })?;
+        let state = WasmState {
+            limits: StoreLimitsBuilder::new()
+                .memory_size(budget.max_memory_bytes)
+                .instances(16)
+                .memories(8)
+                .tables(16)
+                .build(),
+            table: ResourceTable::new(),
+            wasi: WasiCtxBuilder::new().build(),
+        };
+        let mut store = Store::new(&self.engine, state);
+        store.limiter(|state| &mut state.limits);
+        configure_store(&mut store, budget)?;
+        let instance = linker
+            .instantiate(&mut store, &component)
+            .map_err(|error| classify_wasmtime_error("component instantiation failed", error))?;
+        let on_event = instance
+            .get_typed_func::<(String,), (String,)>(&mut store, "on-event")
+            .map_err(|error| classify_wasmtime_error("missing on-event export", error))?;
+        let view = instance
+            .get_typed_func::<(String,), (String,)>(&mut store, "view")
+            .map_err(|error| classify_wasmtime_error("missing view export", error))?;
+        Ok(WasmInstance {
+            store,
+            on_event,
+            view,
+        })
+    }
 }
 
 fn configure_store(
@@ -159,47 +202,25 @@ impl ExtensionRuntime for WasmRuntime {
             ));
         }
 
-        let component = compile_component(&self.engine, &module.bytes)?;
-        validate_component_type(&self.engine, &component)?;
-        let mut linker = Linker::<WasmState>::new(&self.engine);
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(|error| {
-            RuntimeError::with_kind(
-                RuntimeFailureKind::Load,
-                format!("failed to configure sandboxed WASI imports: {error:#}"),
-            )
-        })?;
-        let state = WasmState {
-            limits: StoreLimitsBuilder::new()
-                .memory_size(budget.max_memory_bytes)
-                .instances(16)
-                .memories(8)
-                .tables(16)
-                .build(),
-            table: ResourceTable::new(),
-            wasi: WasiCtxBuilder::new().build(),
-        };
-        let mut store = Store::new(&self.engine, state);
-        store.limiter(|state| &mut state.limits);
-        configure_store(&mut store, budget)?;
+        let instance = self.instantiate_module(&module, budget)?;
+        self.instances.insert(extension_id.clone(), instance);
+        Ok(())
+    }
 
-        let instance = linker
-            .instantiate(&mut store, &component)
-            .map_err(|error| classify_wasmtime_error("component instantiation failed", error))?;
-        let on_event = instance
-            .get_typed_func::<(String,), (String,)>(&mut store, "on-event")
-            .map_err(|error| classify_wasmtime_error("missing on-event export", error))?;
-        let view = instance
-            .get_typed_func::<(String,), (String,)>(&mut store, "view")
-            .map_err(|error| classify_wasmtime_error("missing view export", error))?;
-
-        self.instances.insert(
-            extension_id.clone(),
-            WasmInstance {
-                store,
-                on_event,
-                view,
-            },
-        );
+    fn replace(
+        &mut self,
+        extension_id: &ExtensionId,
+        module: Self::Module,
+        budget: RuntimeBudget,
+    ) -> Result<(), RuntimeError> {
+        if !self.instances.contains_key(extension_id) {
+            return Err(RuntimeError::with_kind(
+                RuntimeFailureKind::Unavailable,
+                format!("extension '{extension_id}' is not loaded"),
+            ));
+        }
+        let replacement = self.instantiate_module(&module, budget)?;
+        self.instances.insert(extension_id.clone(), replacement);
         Ok(())
     }
 

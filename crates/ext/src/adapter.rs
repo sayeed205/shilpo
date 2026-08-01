@@ -1,4 +1,4 @@
-use crate::effects::HostEffect;
+use crate::effects::{AuthorizedHostEffect, HostEffect};
 use crate::events::ExtensionEvent;
 use crate::manifest::{CanonicalId, Capability, ExtensionId, ExtensionManifest, ManifestError};
 use crate::view::{ViewLimits, ViewTree, ViewValidationError};
@@ -92,6 +92,14 @@ pub trait ExtensionRuntime {
         module: Self::Module,
         budget: RuntimeBudget,
     ) -> Result<(), RuntimeError>;
+    /// Validate and stage a replacement before making it active. Implementations
+    /// must leave the existing instance untouched when staging fails.
+    fn replace(
+        &mut self,
+        extension_id: &ExtensionId,
+        module: Self::Module,
+        budget: RuntimeBudget,
+    ) -> Result<(), RuntimeError>;
     fn unload(&mut self, extension_id: &ExtensionId) -> Result<(), RuntimeError>;
     fn dispatch(
         &mut self,
@@ -126,6 +134,21 @@ impl ExtensionRuntime for InMemoryRuntime {
                 "extension '{extension_id}' is already loaded"
             )));
         }
+        Ok(())
+    }
+
+    fn replace(
+        &mut self,
+        extension_id: &ExtensionId,
+        module: Self::Module,
+        _budget: RuntimeBudget,
+    ) -> Result<(), RuntimeError> {
+        if !self.guests.contains_key(extension_id) {
+            return Err(RuntimeError::new(format!(
+                "extension '{extension_id}' is not loaded"
+            )));
+        }
+        self.guests.insert(extension_id.clone(), module);
         Ok(())
     }
 
@@ -219,7 +242,7 @@ struct Registration {
 
 #[derive(Debug, Default, PartialEq)]
 pub struct DispatchResult {
-    pub accepted: Vec<HostEffect>,
+    pub accepted: Vec<AuthorizedHostEffect>,
     pub rejected: Vec<HostEffect>,
 }
 
@@ -299,6 +322,38 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
         Ok(())
     }
 
+    pub fn replace(
+        &mut self,
+        manifest: ExtensionManifest,
+        module: R::Module,
+        grants: Vec<Capability>,
+    ) -> Result<(), HostError> {
+        manifest.validate()?;
+        let id = manifest.id.clone();
+        if !self.registrations.contains_key(&id) {
+            return Err(HostError::NotRegistered(id));
+        }
+        for grant in &grants {
+            if !manifest
+                .capabilities
+                .iter()
+                .any(|requested| requested.kind() == grant.kind())
+            {
+                return Err(HostError::UndeclaredGrant(format!("{:?}", grant.kind())));
+            }
+        }
+
+        // The runtime stages and validates the new instance before swapping it
+        // into the active slot, so a malformed replacement leaves the old one
+        // available for dispatch and rendering.
+        self.runtime
+            .replace(&id, module, self.runtime_budget)
+            .map_err(HostError::Runtime)?;
+        self.registrations
+            .insert(id, Registration { manifest, grants });
+        Ok(())
+    }
+
     pub fn dispatch_event(
         &mut self,
         extension_id: &ExtensionId,
@@ -359,20 +414,9 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
         };
         let mut result = DispatchResult::default();
         for effect in effects {
-            let allowed = effect_is_unprivileged(&effect, &registration.manifest)
-                || (registration
-                    .manifest
-                    .capabilities
-                    .iter()
-                    .any(|capability| capability.allows_effect(&effect))
-                    && registration
-                        .grants
-                        .iter()
-                        .any(|capability| capability.allows_effect(&effect)));
-            if allowed {
-                result.accepted.push(effect);
-            } else {
-                result.rejected.push(effect);
+            match authorize_effect(effect, registration) {
+                Ok(authorized) => result.accepted.push(authorized),
+                Err(rejected) => result.rejected.push(rejected),
             }
         }
         if result.rejected.is_empty() {
@@ -489,5 +533,64 @@ fn diagnostic_code(kind: RuntimeFailureKind) -> DiagnosticCode {
         RuntimeFailureKind::FuelExhausted => DiagnosticCode::FuelExhausted,
         RuntimeFailureKind::MemoryLimit => DiagnosticCode::MemoryLimit,
         RuntimeFailureKind::InvalidOutput => DiagnosticCode::InvalidOutput,
+    }
+}
+
+fn authorize_effect(
+    effect: HostEffect,
+    registration: &Registration,
+) -> Result<AuthorizedHostEffect, HostEffect> {
+    match effect {
+        HostEffect::HttpRequest {
+            request_id,
+            url,
+            method,
+        } => {
+            let target = match crate::effects::CanonicalHttpTarget::parse(&url, &method) {
+                Some(target) => target,
+                None => {
+                    return Err(HostEffect::HttpRequest {
+                        request_id,
+                        url,
+                        method,
+                    });
+                }
+            };
+            let declared = registration
+                .manifest
+                .capabilities
+                .iter()
+                .any(|capability| capability.allows_http_target(&target));
+            let granted = registration
+                .grants
+                .iter()
+                .any(|capability| capability.allows_http_target(&target));
+            if declared && granted {
+                Ok(AuthorizedHostEffect::http_request(request_id, target))
+            } else {
+                Err(HostEffect::HttpRequest {
+                    request_id,
+                    url,
+                    method,
+                })
+            }
+        }
+        effect => {
+            let allowed = effect_is_unprivileged(&effect, &registration.manifest)
+                || (registration
+                    .manifest
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability.allows_effect(&effect))
+                    && registration
+                        .grants
+                        .iter()
+                        .any(|capability| capability.allows_effect(&effect)));
+            if allowed {
+                AuthorizedHostEffect::non_http(effect)
+            } else {
+                Err(effect)
+            }
+        }
     }
 }

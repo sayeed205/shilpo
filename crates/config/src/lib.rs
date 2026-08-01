@@ -1,3 +1,6 @@
+pub mod session_store;
+pub use session_store::*;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use shilpo_ext::{CanonicalId, ExtensionId};
@@ -937,320 +940,6 @@ impl ShellSessionState {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct OutputBarState {
-    pub visible: bool,
-    pub position_edge: String,
-    pub thickness: u32,
-    pub exclusive_zone: Option<u32>,
-    pub active_workspace_id: Option<u64>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ClipboardItem {
-    pub id: u64,
-    pub text: String,
-    pub timestamp: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct AudioPreference {
-    pub default_device: Option<String>,
-    pub default_port: Option<String>,
-}
-
-pub struct HeedSessionStore {
-    env: heed::Env,
-    output_bars_db: heed::Database<heed::types::Str, heed::types::SerdeJson<OutputBarState>>,
-    clipboard_history_db: heed::Database<
-        heed::types::U64<heed::byteorder::NativeEndian>,
-        heed::types::SerdeJson<ClipboardItem>,
-    >,
-    audio_pref_db: heed::Database<heed::types::Str, heed::types::SerdeJson<AudioPreference>>,
-    _lock_file: Option<fs::File>,
-}
-
-impl HeedSessionStore {
-    pub fn default_db_dir() -> PathBuf {
-        let base = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-            .unwrap_or_else(|| PathBuf::from("."));
-        base.join("shilpo").join("session.lmdb")
-    }
-
-    pub fn open_or_create(dir: &Path) -> Result<Self, ConfigError> {
-        if let Err(e) = fs::create_dir_all(dir) {
-            return Err(ConfigError::Io {
-                path: dir.to_path_buf(),
-                source: e,
-            });
-        }
-
-        let lock_path = dir.join("session.lock");
-        let lock_file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .ok();
-
-        let env = unsafe {
-            heed::EnvOpenOptions::new()
-                .max_dbs(10)
-                .map_size(10 * 1024 * 1024)
-                .open(dir)
-                .map_err(|e| ConfigError::Parse {
-                    diagnostic: ConfigDiagnostic {
-                        path: dir.display().to_string(),
-                        message: e.to_string(),
-                        span: None,
-                    },
-                })?
-        };
-
-        let mut wtxn = env.write_txn().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: dir.display().to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })?;
-
-        let output_bars_db = env
-            .create_database(&mut wtxn, Some("output_bars"))
-            .map_err(|e| ConfigError::Parse {
-                diagnostic: ConfigDiagnostic {
-                    path: dir.display().to_string(),
-                    message: e.to_string(),
-                    span: None,
-                },
-            })?;
-
-        let clipboard_history_db = env
-            .create_database(&mut wtxn, Some("clipboard_history"))
-            .map_err(|e| ConfigError::Parse {
-                diagnostic: ConfigDiagnostic {
-                    path: dir.display().to_string(),
-                    message: e.to_string(),
-                    span: None,
-                },
-            })?;
-
-        let audio_pref_db = env
-            .create_database(&mut wtxn, Some("audio_preference"))
-            .map_err(|e| ConfigError::Parse {
-                diagnostic: ConfigDiagnostic {
-                    path: dir.display().to_string(),
-                    message: e.to_string(),
-                    span: None,
-                },
-            })?;
-
-        wtxn.commit().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: dir.display().to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })?;
-
-        Ok(Self {
-            env,
-            output_bars_db,
-            clipboard_history_db,
-            audio_pref_db,
-            _lock_file: lock_file,
-        })
-    }
-
-    pub fn open_or_repair(dir: &Path) -> Result<Self, ConfigError> {
-        match Self::open_or_create(dir) {
-            Ok(store) => Ok(store),
-            Err(e) => {
-                eprintln!(
-                    "LMDB session store open failed (path = {}): {e}; resetting corrupt store directory",
-                    dir.display()
-                );
-                let _ = fs::remove_dir_all(dir);
-                Self::open_or_create(dir)
-            }
-        }
-    }
-
-    pub fn save_clipboard_item(&self, item: &ClipboardItem) -> Result<(), ConfigError> {
-        let mut wtxn = self.env.write_txn().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: item.id.to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })?;
-        self.clipboard_history_db
-            .put(&mut wtxn, &item.id, item)
-            .map_err(|e| ConfigError::Parse {
-                diagnostic: ConfigDiagnostic {
-                    path: item.id.to_string(),
-                    message: e.to_string(),
-                    span: None,
-                },
-            })?;
-        wtxn.commit().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: item.id.to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })
-    }
-
-    pub fn get_clipboard_history(&self) -> Result<Vec<ClipboardItem>, ConfigError> {
-        let rtxn = self.env.read_txn().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: "clipboard_history".to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })?;
-        let mut items = Vec::new();
-        if let Ok(iter) = self.clipboard_history_db.iter(&rtxn) {
-            for (_, item) in iter.flatten() {
-                items.push(item);
-            }
-        }
-        items.sort_by_key(|i| i.id);
-        items.reverse();
-        Ok(items)
-    }
-
-    pub fn clear_clipboard_history(&self) -> Result<(), ConfigError> {
-        let mut wtxn = self.env.write_txn().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: "clipboard_history".to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })?;
-        self.clipboard_history_db
-            .clear(&mut wtxn)
-            .map_err(|e| ConfigError::Parse {
-                diagnostic: ConfigDiagnostic {
-                    path: "clipboard_history".to_string(),
-                    message: e.to_string(),
-                    span: None,
-                },
-            })?;
-        wtxn.commit().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: "clipboard_history".to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })
-    }
-
-    pub fn get_output_bar(&self, output_name: &str) -> Result<Option<OutputBarState>, ConfigError> {
-        let rtxn = self.env.read_txn().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: output_name.to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })?;
-
-        let state =
-            self.output_bars_db
-                .get(&rtxn, output_name)
-                .map_err(|e| ConfigError::Parse {
-                    diagnostic: ConfigDiagnostic {
-                        path: output_name.to_string(),
-                        message: e.to_string(),
-                        span: None,
-                    },
-                })?;
-
-        Ok(state)
-    }
-
-    pub fn put_output_bar(
-        &self,
-        output_name: &str,
-        state: &OutputBarState,
-    ) -> Result<(), ConfigError> {
-        let mut wtxn = self.env.write_txn().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: output_name.to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })?;
-
-        self.output_bars_db
-            .put(&mut wtxn, output_name, state)
-            .map_err(|e| ConfigError::Parse {
-                diagnostic: ConfigDiagnostic {
-                    path: output_name.to_string(),
-                    message: e.to_string(),
-                    span: None,
-                },
-            })?;
-
-        wtxn.commit().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: output_name.to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })?;
-
-        Ok(())
-    }
-
-    pub fn save_audio_preference(&self, pref: &AudioPreference) -> Result<(), ConfigError> {
-        let mut wtxn = self.env.write_txn().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: "audio_preference".to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })?;
-        self.audio_pref_db
-            .put(&mut wtxn, "default", pref)
-            .map_err(|e| ConfigError::Parse {
-                diagnostic: ConfigDiagnostic {
-                    path: "audio_preference".to_string(),
-                    message: e.to_string(),
-                    span: None,
-                },
-            })?;
-        wtxn.commit().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: "audio_preference".to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })
-    }
-
-    pub fn get_audio_preference(&self) -> Result<AudioPreference, ConfigError> {
-        let rtxn = self.env.read_txn().map_err(|e| ConfigError::Parse {
-            diagnostic: ConfigDiagnostic {
-                path: "audio_preference".to_string(),
-                message: e.to_string(),
-                span: None,
-            },
-        })?;
-        let pref = self
-            .audio_pref_db
-            .get(&rtxn, "default")
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        Ok(pref)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1284,7 +973,7 @@ mod tests {
         let db_dir = std::env::temp_dir().join(format!("shilpo-heed-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&db_dir);
 
-        let store = HeedSessionStore::open_or_create(&db_dir).unwrap();
+        let store = HeedSessionStore::open(&db_dir).unwrap();
         let state = OutputBarState {
             visible: true,
             position_edge: "top".to_string(),
@@ -1563,22 +1252,36 @@ margin = { horizontal = 600, vertical = 6 }
         let db_dir = std::env::temp_dir().join(format!("shilpo-clip-{}.lmdb", std::process::id()));
         let _ = std::fs::remove_dir_all(&db_dir);
 
-        let store = HeedSessionStore::open_or_create(&db_dir).unwrap();
-        assert!(store.get_clipboard_history().unwrap().is_empty());
+        let store = HeedSessionStore::open(&db_dir).unwrap();
+        assert!(
+            store
+                .clipboard_history(DEFAULT_CLIPBOARD_HISTORY_LIMIT)
+                .unwrap()
+                .is_empty()
+        );
 
         let item = ClipboardItem {
             id: 100,
             text: "Hello Shilpo".to_string(),
             timestamp: "12:00:00".to_string(),
         };
-        store.save_clipboard_item(&item).unwrap();
+        store
+            .record_clipboard_item(&item, DEFAULT_CLIPBOARD_HISTORY_LIMIT)
+            .unwrap();
 
-        let history = store.get_clipboard_history().unwrap();
+        let history = store
+            .clipboard_history(DEFAULT_CLIPBOARD_HISTORY_LIMIT)
+            .unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0], item);
 
         store.clear_clipboard_history().unwrap();
-        assert!(store.get_clipboard_history().unwrap().is_empty());
+        assert!(
+            store
+                .clipboard_history(DEFAULT_CLIPBOARD_HISTORY_LIMIT)
+                .unwrap()
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(db_dir);
     }
@@ -1591,8 +1294,14 @@ margin = { horizontal = 600, vertical = 6 }
         std::fs::create_dir_all(&db_dir).unwrap();
         std::fs::write(db_dir.join("data.mdb"), b"CORRUPTED_GARBAGE_BYTES_12345").unwrap();
 
-        let store = HeedSessionStore::open_or_repair(&db_dir).unwrap();
-        assert!(store.get_clipboard_history().unwrap().is_empty());
+        let opened = HeedSessionStore::open_with_recovery(&db_dir).unwrap();
+        assert!(
+            opened
+                .store
+                .clipboard_history(DEFAULT_CLIPBOARD_HISTORY_LIMIT)
+                .unwrap()
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(db_dir);
     }
@@ -1640,7 +1349,7 @@ margin = { horizontal = 600, vertical = 6 }
         let db_dir = std::env::temp_dir().join(format!("shilpo-lock-{}.lmdb", std::process::id()));
         let _ = std::fs::remove_dir_all(&db_dir);
 
-        let store = HeedSessionStore::open_or_create(&db_dir).unwrap();
+        let store = HeedSessionStore::open(&db_dir).unwrap();
         assert!(db_dir.join("session.lock").exists());
         drop(store);
 

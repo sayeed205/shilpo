@@ -86,6 +86,10 @@ impl AudioService {
     }
 
     pub fn list_devices(&self) -> Vec<AudioDevice> {
+        Self::list_devices_static()
+    }
+
+    pub fn list_devices_static() -> Vec<AudioDevice> {
         let mut devices = Vec::new();
 
         // Query output sinks
@@ -147,6 +151,56 @@ impl AudioService {
         devices
     }
 
+    pub fn increase_volume(&self, step: u8) {
+        let _ = Command::new("wpctl")
+            .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{step}%+")])
+            .status();
+    }
+
+    pub fn decrease_volume(&self, step: u8) {
+        let _ = Command::new("wpctl")
+            .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{step}%-")])
+            .status();
+    }
+
+    pub fn set_volume(&self, vol: u8) {
+        let _ = Command::new("pactl")
+            .args(["set-sink-volume", "@DEFAULT_SINK@", &format!("{vol}%")])
+            .status();
+    }
+
+    pub fn toggle_mute(&self) {
+        let _ = Command::new("wpctl")
+            .args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
+            .status();
+    }
+
+    pub fn set_stream_volume(&self, index: u32, percentage: u8) -> Result<()> {
+        let status = Command::new("pactl")
+            .args([
+                "set-sink-input-volume",
+                &index.to_string(),
+                &format!("{percentage}%"),
+            ])
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("failed to set audio stream volume"))
+        }
+    }
+
+    pub fn toggle_stream_mute(&self, index: u32) -> Result<()> {
+        let status = Command::new("pactl")
+            .args(["set-sink-input-mute", &index.to_string(), "toggle"])
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("failed to toggle audio stream mute"))
+        }
+    }
+
     pub fn set_default_device(&self, device_id: &str, is_input: bool) -> Result<()> {
         let cmd = if is_input {
             "set-default-source"
@@ -162,35 +216,11 @@ impl AudioService {
         }
     }
 
-    pub fn set_sink_input_volume(&self, index: u32, volume_pct: u8) -> Result<()> {
-        let status = Command::new("pactl")
-            .args([
-                "set-sink-input-volume",
-                &index.to_string(),
-                &format!("{}%", volume_pct),
-            ])
-            .status()?;
-
-        if status.success() {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("failed to set sink input volume"))
-        }
-    }
-
-    pub fn toggle_sink_input_mute(&self, index: u32) -> Result<()> {
-        let status = Command::new("pactl")
-            .args(["set-sink-input-mute", &index.to_string(), "toggle"])
-            .status()?;
-
-        if status.success() {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("failed to toggle sink input mute"))
-        }
-    }
-
     pub fn list_ports(&self) -> Vec<AudioPort> {
+        Self::list_ports_static()
+    }
+
+    pub fn list_ports_static() -> Vec<AudioPort> {
         let mut ports = Vec::new();
         if let Ok(output) = Command::new("pactl").args(["list", "sinks"]).output()
             && output.status.success()

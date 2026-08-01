@@ -11,7 +11,9 @@ use crate::{
     bar::{BarView, geometry::BarGeometry},
     control_center::ControlCenterView,
     error::ShellError,
-    extensions::{ContributionDescriptor, ContributionSurface, ExtensionChanges, ShellExtensions},
+    extensions::{
+        ContributionDescriptor, ContributionSurface, ExtensionCoordinator, ExtensionGeneration,
+    },
     launcher::LauncherView,
 };
 
@@ -19,10 +21,12 @@ use std::collections::HashMap;
 
 use crate::bar::service_worker::{self, CommandSender, UpdateReceiver, WorkerCommand};
 use shilpo_services::{
-    AudioService, BatteryService, CompositorAdapter, CompositorCommand, CompositorConnection,
-    CompositorOutput, CompositorSnapshot, NetworkService, NiriCompositorService,
-    NotificationService,
+    CompositorAdapter, CompositorCommand, CompositorConnection, CompositorOutput,
+    CompositorSnapshot, NiriCompositorService, NotificationService,
 };
+#[cfg(not(test))]
+use std::path::PathBuf;
+#[cfg(test)]
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 use uuid::Uuid;
@@ -40,6 +44,8 @@ pub struct ServiceHub {
     pub clipboard: shilpo_services::ClipboardService,
     pub app_scanner: shilpo_services::AppScanner,
     pub service_commands: CommandSender,
+    pub device_snapshot: crate::bar::service_worker::DeviceSnapshot,
+    pub availability: crate::bar::service_worker::ServiceAvailability,
     pub notif_rx: Arc<Mutex<mpsc::Receiver<shilpo_services::Notification>>>,
     pub updates_rx: Arc<Mutex<UpdateReceiver>>,
     pub _service_task: Option<gpui::Task<()>>,
@@ -48,13 +54,14 @@ pub struct ServiceHub {
 }
 
 impl ServiceHub {
-    pub fn new(executor: gpui::BackgroundExecutor, config_path: PathBuf) -> Self {
+    pub fn new(
+        executor: gpui::BackgroundExecutor,
+        config_path: PathBuf,
+        session_store: Option<Arc<shilpo_config::HeedSessionStore>>,
+    ) -> Self {
         let compositor: Arc<dyn CompositorAdapter> = NiriCompositorService::new();
-        let battery = BatteryService::new().ok();
-        let audio = AudioService::new().ok();
-        let network = NetworkService::new().ok();
-        let media = shilpo_services::MediaService::new().ok();
-        let clipboard = shilpo_services::ClipboardService::new();
+        let (device_services, availability) = crate::bar::service_worker::DeviceServices::new();
+        let clipboard = shilpo_services::ClipboardService::with_store(session_store);
         let app_scanner = shilpo_services::AppScanner::new()
             .unwrap_or_else(|_| shilpo_services::AppScanner::new_empty());
         let app_watcher = app_scanner.start_watcher();
@@ -77,10 +84,7 @@ impl ServiceHub {
             updates_tx,
             commands_rx,
             config_path.clone(),
-            battery,
-            audio,
-            network,
-            media,
+            device_services,
         );
 
         let config_dir = config_path
@@ -130,6 +134,8 @@ impl ServiceHub {
             clipboard,
             app_scanner,
             service_commands,
+            device_snapshot: crate::bar::service_worker::DeviceSnapshot::default(),
+            availability,
             notif_rx: Arc::new(Mutex::new(notif_rx)),
             updates_rx: Arc::new(Mutex::new(updates_rx)),
             _service_task: Some(service_task),
@@ -165,6 +171,7 @@ fn query_awww_wallpaper_path() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+#[cfg(test)]
 fn discovered_wallpaper_needs_theme_sync(
     theme_wallpaper_path: Option<&Path>,
     discovered_wallpaper_path: &Path,
@@ -216,11 +223,18 @@ pub struct ShellRuntime {
         Entity<crate::osd::OsdView>,
     )>,
     _osd_generation: u64,
-    extensions: Option<ShellExtensions>,
+    extensions: Option<ExtensionCoordinator>,
     extension_surfaces: HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
     extension_panel: Option<(WindowHandle<shilpo_ui::Root>, shilpo_ext::CanonicalId)>,
     extension_output_ids: std::collections::HashSet<DisplayId>,
-    extension_http_in_flight: std::collections::HashSet<(shilpo_ext::ExtensionId, String)>,
+    extension_tasks: std::collections::HashMap<
+        (
+            crate::extensions::ExtensionGeneration,
+            shilpo_ext::ExtensionId,
+            String,
+        ),
+        gpui::Task<()>,
+    >,
     extension_location_service: shilpo_services::LocationService,
     actions: ActionRegistry,
     keybindings: crate::actions::KeybindingManager,
@@ -322,7 +336,7 @@ impl ShellRuntime {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
-                cx.update(|cx| {
+                cx.update(|cx: &mut gpui::App| {
                     shilpo_ui::Theme::global_mut(cx).apply_state(&state);
                     let overview = if cx.has_global::<Self>() {
                         let runtime = cx.global_mut::<Self>();
@@ -350,13 +364,96 @@ impl ShellRuntime {
         let (session_state, _restored_fallback) =
             shilpo_config::ShellSessionState::restore_with_fallback(&session_path);
         let heed_dir = shilpo_config::HeedSessionStore::default_db_dir();
-        let heed_store = shilpo_config::HeedSessionStore::open_or_repair(&heed_dir)
-            .ok()
-            .map(Arc::new);
-        let hub = ServiceHub::new(cx.background_executor().clone(), config_path);
+        let heed_store = match shilpo_config::HeedSessionStore::open_with_recovery(&heed_dir) {
+            Ok(opened) => {
+                if let shilpo_config::RecoveryOutcome::Quarantined { ref path } = opened.recovery {
+                    tracing::warn!(
+                        quarantine_path = %path.display(),
+                        "LMDB session store was corrupted and has been quarantined"
+                    );
+                }
+                Some(Arc::new(opened.store))
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "LMDB session store open failed; session features running unpersisted");
+                None
+            }
+        };
+        let hub = ServiceHub::new(
+            cx.background_executor().clone(),
+            config_path,
+            heed_store.clone(),
+        );
         apply_notification_dnd(hub.notification.as_ref(), session_state.dnd_active);
-        let extensions = match ShellExtensions::load_default() {
-            Ok(extensions) => Some(extensions),
+        let extensions = match shilpo_ext::WasmRuntime::new() {
+            Ok(runtime) => {
+                let paths = shilpo_ext::CatalogPaths::platform_default();
+                match crate::extensions::ExtensionEngine::new(runtime, paths.clone()) {
+                    Ok(engine) => {
+                        let (command_tx, command_rx) = std::sync::mpsc::sync_channel(64);
+                        let (update_tx, update_rx) = std::sync::mpsc::sync_channel(64);
+                        let snapshot = std::sync::Arc::new(std::sync::RwLock::new(
+                            crate::extensions::ExtensionSnapshot::default(),
+                        ));
+
+                        let watch_paths = vec![
+                            shilpo_ext::default_extension_state_dir().join("dev"),
+                            paths.data_dir.join("installed"),
+                            paths.data_dir.join("activated"),
+                        ];
+                        let mut watcher = None;
+                        let mut fallback_scan = None;
+                        match crate::extensions::ExtensionWatcher::new(
+                            command_tx.clone(),
+                            watch_paths,
+                        ) {
+                            Ok(w) => watcher = Some(w),
+                            Err(error) => {
+                                tracing::warn!(%error, "ExtensionWatcher failed, falling back to 30s background scan");
+                                let fallback_tx = command_tx.clone();
+                                let executor = cx.background_executor().clone();
+                                let executor_inner = executor.clone();
+                                fallback_scan = Some(executor.clone().spawn(async move {
+                                    loop {
+                                        executor_inner
+                                            .timer(std::time::Duration::from_secs(30))
+                                            .await;
+                                        if fallback_tx
+                                            .send(
+                                                crate::extensions::ExtensionCommand::SourcesChanged,
+                                            )
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+                                }));
+                            }
+                        }
+
+                        let worker_task = engine.run_worker_loop(
+                            cx.background_executor().clone(),
+                            command_rx,
+                            update_tx,
+                            snapshot.clone(),
+                        );
+
+                        Some(crate::extensions::ExtensionCoordinator::new_with_executor(
+                            Some(cx.background_executor().clone()),
+                            snapshot,
+                            command_tx,
+                            update_rx,
+                            Some(worker_task),
+                            watcher,
+                            fallback_scan,
+                        ))
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "extension engine load failed");
+                        None
+                    }
+                }
+            }
             Err(error) => {
                 tracing::warn!(error = %error, "extension runtime is unavailable");
                 None
@@ -393,7 +490,7 @@ impl ShellRuntime {
             extension_surfaces: HashMap::new(),
             extension_panel: None,
             extension_output_ids: std::collections::HashSet::new(),
-            extension_http_in_flight: std::collections::HashSet::new(),
+            extension_tasks: std::collections::HashMap::new(),
             extension_location_service: shilpo_services::LocationService::new(),
             actions: ActionRegistry::default(),
             keybindings: crate::actions::KeybindingManager::with_defaults(),
@@ -403,59 +500,28 @@ impl ShellRuntime {
             start_time: std::time::Instant::now(),
             service_hub: Some(hub),
             _window_closed: None,
-            _ipc_task: cx.spawn(async |_| {}),
+            _ipc_task: gpui::Task::ready(()),
         });
         let wallpaper_probe = cx.background_spawn(async { query_awww_wallpaper_path() });
         let theme_wallpaper_path = initial_wallpaper_path;
-        let theme_client_for_wallpaper_sync = theme_client.clone();
-        cx.spawn(async move |cx| {
-            let Some(wallpaper_path) = wallpaper_probe.await else {
-                return;
-            };
-            cx.update(|cx| {
-                if !cx.has_global::<Self>() {
-                    return;
-                }
-                let overview = {
-                    let runtime = cx.global_mut::<Self>();
-                    runtime.current_wallpaper_path = Some(wallpaper_path.clone());
-                    runtime.overview_entity.clone()
-                };
-                if let Some(overview) = overview {
-                    overview.update(cx, |view, cx| {
-                        view.update_wallpaper_path(Some(wallpaper_path.clone()), cx);
-                    });
-                }
-            });
-
-            if discovered_wallpaper_needs_theme_sync(
-                theme_wallpaper_path.as_deref(),
-                &wallpaper_path,
-            ) {
-                let wallpaper = wallpaper_path.to_string_lossy();
-                match theme_client_for_wallpaper_sync
-                    .set_wallpaper(&wallpaper)
-                    .await
-                {
-                    Ok(()) => tracing::info!(
-                        path = %wallpaper_path.display(),
-                        "synchronized compositor wallpaper with theme palette"
-                    ),
-                    Err(error) => tracing::warn!(
-                        path = %wallpaper_path.display(),
-                        error = %error,
-                        "failed to synchronize compositor wallpaper with theme palette"
-                    ),
-                }
+        shilpo_theme::ThemeClient::spawn_task(async move {
+            let client = shilpo_theme::ThemeClient::new().await;
+            if let Some(wallpaper_path) = wallpaper_probe.await {
+                let _ = client
+                    .set_wallpaper(&wallpaper_path.to_string_lossy())
+                    .await;
+            } else if let Some(wallpaper_path) = theme_wallpaper_path {
+                let _ = client
+                    .set_wallpaper(&wallpaper_path.to_string_lossy())
+                    .await;
             }
-        })
-        .detach();
+        });
         Self::on_compositor_snapshot_changed(cx, latest_snapshot);
 
         cx.spawn(async move |cx| {
             while rx.changed().await.is_ok() {
                 let snapshot = rx.borrow().clone();
-                cx.update(|cx| {
+                cx.update(|cx: &mut gpui::App| {
                     Self::on_compositor_snapshot_changed(cx, snapshot);
                 });
             }
@@ -463,7 +529,10 @@ impl ShellRuntime {
         .detach();
 
         let subscription = cx.on_window_closed(|cx, window_id| {
-            let runtime = cx.global_mut::<Self>();
+            if !cx.has_global::<ShellRuntime>() {
+                return;
+            }
+            let runtime = cx.global_mut::<ShellRuntime>();
             runtime
                 .bars
                 .retain(|_, (handle, _)| handle.window_id() != window_id);
@@ -511,7 +580,7 @@ impl ShellRuntime {
             }
             runtime.publish_status();
             if closed_launcher {
-                Self::dispatch_surface_lifecycle(
+                ShellRuntime::dispatch_surface_lifecycle(
                     cx,
                     ContributionSurface::Launcher,
                     false,
@@ -520,7 +589,7 @@ impl ShellRuntime {
                 );
             }
             if closed_control_center {
-                Self::dispatch_surface_lifecycle(
+                ShellRuntime::dispatch_surface_lifecycle(
                     cx,
                     ContributionSurface::ControlCenter,
                     false,
@@ -529,21 +598,13 @@ impl ShellRuntime {
                 );
             }
             if let Some(contribution) = closed_extension_panel {
-                let changes = cx
-                    .global_mut::<Self>()
-                    .extensions
-                    .as_mut()
-                    .map(|extensions| {
-                        extensions.dispatch_to(
-                            &contribution.extension_id,
-                            &shilpo_ext::ExtensionEvent::ContributionUnmounted {
-                                contribution_id: contribution.contribution_id.to_string(),
-                                instance_id: None,
-                            },
-                        )
-                    })
-                    .unwrap_or_default();
-                Self::apply_extension_changes(cx, changes);
+                ShellRuntime::dispatch_extension_event(
+                    cx,
+                    shilpo_ext::ExtensionEvent::ContributionUnmounted {
+                        contribution_id: contribution.contribution_id.to_string(),
+                        instance_id: None,
+                    },
+                );
             }
         });
         cx.global_mut::<Self>()._window_closed = Some(subscription);
@@ -556,7 +617,7 @@ impl ShellRuntime {
                     .await;
                 cx.update(Self::sync_displays);
                 cx.update(Self::drain_service_hub);
-                cx.update(Self::poll_extensions);
+                cx.update(Self::drain_extensions);
                 cx.update(Self::drain_ipc);
             }
         });
@@ -575,7 +636,7 @@ impl ShellRuntime {
     }
 
     pub fn extension_surface_views(
-        cx: &mut App,
+        cx: &App,
         surface: ContributionSurface,
     ) -> Vec<(shilpo_ext::CanonicalId, shilpo_ext::ViewTree)> {
         let descriptors = Self::extension_descriptors(cx, surface);
@@ -588,13 +649,10 @@ impl ShellRuntime {
             .collect()
     }
 
-    pub fn extension_view(
-        cx: &mut App,
-        id: &shilpo_ext::CanonicalId,
-    ) -> Option<shilpo_ext::ViewTree> {
-        cx.global_mut::<Self>()
+    pub fn extension_view(cx: &App, id: &shilpo_ext::CanonicalId) -> Option<shilpo_ext::ViewTree> {
+        cx.global::<Self>()
             .extensions
-            .as_mut()
+            .as_ref()
             .and_then(|extensions| extensions.view(id))
     }
 
@@ -617,13 +675,17 @@ impl ShellRuntime {
         event_id: impl Into<String>,
         value: Option<serde_json::Value>,
     ) {
-        let changes = cx
-            .global_mut::<Self>()
-            .extensions
-            .as_mut()
-            .map(|extensions| extensions.input(contribution, instance_id, event_id, value))
-            .unwrap_or_default();
-        Self::apply_extension_changes(cx, changes);
+        if let Some(ext) = cx.global::<Self>().extensions.as_ref()
+            && let Err(error) = ext.send_command(crate::extensions::ExtensionCommand::Input {
+                expected: ext.generation(),
+                contribution: contribution.clone(),
+                instance_id: instance_id.map(ToString::to_string),
+                event_id: event_id.into(),
+                value,
+            })
+        {
+            tracing::warn!(%error, "extension input was not queued");
+        }
     }
 
     pub fn open_extension_panel(cx: &mut App, contribution: shilpo_ext::CanonicalId) {
@@ -636,21 +698,18 @@ impl ShellRuntime {
                 cx.global_mut::<Self>().extension_panel = Some((handle, current));
                 return;
             }
-            let changes = cx
-                .global_mut::<Self>()
-                .extensions
-                .as_mut()
-                .map(|extensions| {
-                    extensions.dispatch_to(
-                        &current.extension_id,
-                        &shilpo_ext::ExtensionEvent::ContributionUnmounted {
+            if let Some(ext) = cx.global::<Self>().extensions.as_ref()
+                && let Err(error) =
+                    ext.send_command(crate::extensions::ExtensionCommand::Lifecycle {
+                        expected: ext.generation(),
+                        event: shilpo_ext::ExtensionEvent::ContributionUnmounted {
                             contribution_id: current.contribution_id.to_string(),
                             instance_id: None,
                         },
-                    )
-                })
-                .unwrap_or_default();
-            Self::apply_extension_changes(cx, changes);
+                    })
+            {
+                tracing::warn!(%error, "extension unmount was not queued");
+            }
             let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         }
         let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
@@ -678,101 +737,120 @@ impl ShellRuntime {
             crate::extension_surface::ExtensionSurfaceView::view(view_id, None, window, cx)
         }) {
             Ok(handle) => {
-                let changes = cx
-                    .global_mut::<Self>()
-                    .extensions
-                    .as_mut()
-                    .map(|extensions| {
-                        extensions.dispatch_to(
-                            &contribution.extension_id,
-                            &shilpo_ext::ExtensionEvent::ContributionMounted {
+                if let Some(ext) = cx.global::<Self>().extensions.as_ref()
+                    && let Err(error) =
+                        ext.send_command(crate::extensions::ExtensionCommand::Lifecycle {
+                            expected: ext.generation(),
+                            event: shilpo_ext::ExtensionEvent::ContributionMounted {
                                 contribution_id: contribution.contribution_id.to_string(),
                                 instance_id: None,
                                 width: 420.,
                                 height: 600.,
                             },
-                        )
-                    })
-                    .unwrap_or_default();
+                        })
+                {
+                    tracing::warn!(%error, "extension mount was not queued");
+                }
                 cx.global_mut::<Self>().extension_panel = Some((handle, contribution));
-                Self::apply_extension_changes(cx, changes);
             }
             Err(error) => tracing::warn!(error = %error, "failed to open extension side panel"),
         }
     }
 
-    fn poll_extensions(cx: &mut App) {
-        if !cx.has_global::<Self>() {
+    fn drain_extensions(cx: &mut App) {
+        if !cx.has_global::<ShellRuntime>() {
             return;
         }
-        let changes = cx
-            .global_mut::<Self>()
-            .extensions
-            .as_mut()
-            .map(ShellExtensions::poll_hot_reload)
-            .unwrap_or_default();
-        let catalog_changed = changes.catalog_changed;
-        if catalog_changed {
-            Self::sync_extension_actions(cx);
+        let updates = {
+            let runtime = cx.global::<ShellRuntime>();
+            runtime
+                .extensions
+                .as_ref()
+                .map(|ext| ext.drain_updates())
+                .unwrap_or_default()
+        };
+        for update in updates {
+            ShellRuntime::apply_extension_update(cx, update);
         }
-        Self::apply_extension_changes(cx, changes);
-        if catalog_changed {
-            let (launcher_open, control_center_open, panel) = {
-                let runtime = cx.global::<Self>();
-                (
-                    runtime.launcher.is_some(),
-                    runtime.control_center.is_some(),
-                    runtime.extension_panel.as_ref().map(|(_, id)| id.clone()),
-                )
-            };
-            if launcher_open {
-                Self::dispatch_surface_lifecycle(
-                    cx,
-                    ContributionSurface::Launcher,
-                    true,
-                    640.,
-                    480.,
-                );
-            }
-            if control_center_open {
-                Self::dispatch_surface_lifecycle(
-                    cx,
-                    ContributionSurface::ControlCenter,
-                    true,
-                    340.,
-                    540.,
-                );
-            }
-            if let Some(contribution) = panel {
-                let changes = cx
-                    .global_mut::<Self>()
-                    .extensions
-                    .as_mut()
-                    .map(|extensions| {
-                        extensions.dispatch_to(
-                            &contribution.extension_id,
-                            &shilpo_ext::ExtensionEvent::ContributionMounted {
-                                contribution_id: contribution.contribution_id.to_string(),
-                                instance_id: None,
-                                width: 420.,
-                                height: 600.,
-                            },
-                        )
-                    })
-                    .unwrap_or_default();
-                Self::apply_extension_changes(cx, changes);
-            }
+    }
+
+    fn apply_extension_update(cx: &mut App, update: crate::extensions::ExtensionUpdate) {
+        let current_gen = cx
+            .global::<ShellRuntime>()
+            .extensions
+            .as_ref()
+            .map(|ext| ext.generation());
+        if current_gen.is_some_and(|target_gen| update.generation < target_gen) {
+            return;
+        }
+
+        if update
+            .snapshot
+            .as_ref()
+            .is_some_and(|s| s.catalog_changed_at.is_some())
+        {
+            ShellRuntime::sync_extension_actions(cx);
+            // The initial extension snapshot is loaded asynchronously. The
+            // first display reconciliation can therefore run before any
+            // descriptors exist; reconcile again once the catalog is live so
+            // each mounted instance receives its settings event and starts its
+            // initial refresh.
+            ShellRuntime::reconcile_bar_extension_instances(cx);
+        }
+
+        for (extension_id, effect) in update.effects {
+            ShellRuntime::execute_extension_effect(cx, &extension_id, update.generation, effect);
+        }
+
+        if let Some(snapshot) = &update.snapshot {
+            let active_gen = snapshot.generation;
+            cx.global_mut::<ShellRuntime>()
+                .extension_tasks
+                .retain(|(task_gen, _, _), _| *task_gen >= active_gen);
+        }
+
+        if update.snapshot.is_some() || !update.invalidated_views.is_empty() {
+            cx.refresh_windows();
         }
     }
 
     fn dispatch_extension_event(cx: &mut App, event: shilpo_ext::ExtensionEvent) {
-        let changes = cx
-            .global_mut::<Self>()
-            .extensions
-            .as_mut()
-            .map(|extensions| extensions.dispatch_all(&event))
-            .unwrap_or_default();
-        Self::apply_extension_changes(cx, changes);
+        if let Some(ext) = cx.global::<ShellRuntime>().extensions.as_ref() {
+            let cmd = match event {
+                shilpo_ext::ExtensionEvent::PowerChanged {
+                    percentage,
+                    charging,
+                } => crate::extensions::ExtensionCommand::Replaceable(
+                    crate::extensions::ReplaceableEvent::Power {
+                        percentage,
+                        charging,
+                    },
+                ),
+                shilpo_ext::ExtensionEvent::NetworkChanged { connected } => {
+                    crate::extensions::ExtensionCommand::Replaceable(
+                        crate::extensions::ReplaceableEvent::Network { connected },
+                    )
+                }
+                shilpo_ext::ExtensionEvent::MediaChanged {
+                    title,
+                    artist,
+                    playing,
+                } => crate::extensions::ExtensionCommand::Replaceable(
+                    crate::extensions::ReplaceableEvent::Media {
+                        title,
+                        artist,
+                        playing,
+                    },
+                ),
+                _ => crate::extensions::ExtensionCommand::Lifecycle {
+                    expected: ext.generation(),
+                    event,
+                },
+            };
+            if let Err(error) = ext.send_command(cmd) {
+                tracing::warn!(%error, "extension event was not queued");
+            }
+        }
     }
 
     fn dispatch_surface_lifecycle(
@@ -782,41 +860,45 @@ impl ShellRuntime {
         width: f32,
         height: f32,
     ) {
-        let descriptors = Self::extension_descriptors(cx, surface);
-        for descriptor in descriptors {
-            let event = if mounted {
-                shilpo_ext::ExtensionEvent::ContributionMounted {
-                    contribution_id: descriptor.id.contribution_id.to_string(),
-                    instance_id: None,
-                    width,
-                    height,
+        let descriptors = ShellRuntime::extension_descriptors(cx, surface);
+        if let Some(ext) = cx.global::<ShellRuntime>().extensions.as_ref() {
+            let expected_gen = ext.generation();
+            for descriptor in descriptors {
+                let event = if mounted {
+                    shilpo_ext::ExtensionEvent::ContributionMounted {
+                        contribution_id: descriptor.id.contribution_id.to_string(),
+                        instance_id: None,
+                        width,
+                        height,
+                    }
+                } else {
+                    shilpo_ext::ExtensionEvent::ContributionUnmounted {
+                        contribution_id: descriptor.id.contribution_id.to_string(),
+                        instance_id: None,
+                    }
+                };
+                if let Err(error) =
+                    ext.send_command(crate::extensions::ExtensionCommand::Lifecycle {
+                        expected: expected_gen,
+                        event,
+                    })
+                {
+                    tracing::warn!(%error, "extension lifecycle event was not queued");
                 }
-            } else {
-                shilpo_ext::ExtensionEvent::ContributionUnmounted {
-                    contribution_id: descriptor.id.contribution_id.to_string(),
-                    instance_id: None,
-                }
-            };
-            let changes = cx
-                .global_mut::<Self>()
-                .extensions
-                .as_mut()
-                .map(|extensions| extensions.dispatch_to(&descriptor.id.extension_id, &event))
-                .unwrap_or_default();
-            Self::apply_extension_changes(cx, changes);
+            }
         }
     }
 
     fn sync_extension_actions(cx: &mut App) {
-        let desired = Self::extension_descriptors(cx, ContributionSurface::Action);
+        let desired = ShellRuntime::extension_descriptors(cx, ContributionSurface::Action);
         let existing = cx
-            .global::<Self>()
+            .global::<ShellRuntime>()
             .actions
             .all()
             .into_iter()
             .filter_map(|descriptor| descriptor.id.extension_id())
             .collect::<Vec<_>>();
-        let actions = &mut cx.global_mut::<Self>().actions;
+        let actions = &mut cx.global_mut::<ShellRuntime>().actions;
         for id in existing {
             actions.unregister_extension(&id);
         }
@@ -829,191 +911,189 @@ impl ShellRuntime {
         }
     }
 
-    fn apply_extension_changes(cx: &mut App, changes: ExtensionChanges) {
-        let refresh_views = changes.catalog_changed || !changes.invalidated_views.is_empty();
-        for (extension_id, effect) in changes.effects {
-            match effect {
-                shilpo_ext::HostEffect::InvokeAction { action_id, payload } => {
-                    match action_id.parse::<ActionId>() {
-                        Ok(id) => {
-                            let invocation = match id.extension_id() {
-                                Some(id) => ActionInvocation::Extension { id, payload },
-                                None => id.into(),
-                            };
-                            if let Err(error) = Self::dispatch_action(cx, invocation) {
-                                tracing::warn!(
-                                    extension = %extension_id,
-                                    error = %error,
-                                    "extension action effect failed"
-                                );
-                            }
+    fn execute_extension_effect(
+        cx: &mut App,
+        extension_id: &shilpo_ext::ExtensionId,
+        generation: ExtensionGeneration,
+        effect: shilpo_ext::AuthorizedHostEffect,
+    ) {
+        match effect.into_kind() {
+            shilpo_ext::AuthorizedHostEffectKind::NonHttp(
+                shilpo_ext::HostEffect::InvokeAction { action_id, payload },
+            ) => {
+                let invocation = action_id
+                    .parse::<ActionId>()
+                    .map_err(|err| err.to_string())
+                    .and_then(|id| ActionInvocation::from_id_and_payload(id, payload));
+                match invocation {
+                    Ok(inv) => {
+                        if let Err(error) = ShellRuntime::dispatch_action(cx, inv) {
+                            tracing::warn!(
+                                extension = %extension_id,
+                                error = %error,
+                                "extension action effect failed"
+                            );
                         }
-                        Err(error) => tracing::warn!(
-                            extension = %extension_id,
-                            error = %error,
-                            "extension returned an invalid action ID"
-                        ),
                     }
+                    Err(error) => tracing::warn!(
+                        extension = %extension_id,
+                        error = %error,
+                        "extension returned an invalid action invocation"
+                    ),
                 }
-                shilpo_ext::HostEffect::ShowNotification { title, body, icon } => {
-                    let mut notification = shilpo_services::Notification::new(title, body);
-                    notification.app_name = extension_id.to_string();
-                    notification.app_icon = icon;
-                    crate::bar::view::open_notification_toast(cx, notification);
+            }
+            shilpo_ext::AuthorizedHostEffectKind::NonHttp(
+                shilpo_ext::HostEffect::ShowNotification { title, body, icon },
+            ) => {
+                let mut notification = shilpo_services::Notification::new(title, body);
+                notification.app_name = extension_id.to_string();
+                notification.app_icon = icon;
+                crate::bar::view::open_notification_toast(cx, notification);
+            }
+            shilpo_ext::AuthorizedHostEffectKind::NonHttp(
+                shilpo_ext::HostEffect::SetThemeSource { color },
+            ) => {
+                let argb = crate::bar::view::parse_hex_color(&color).unwrap_or(0xFF006C4C);
+                shilpo_theme::ThemeClient::spawn_task(async move {
+                    let client = shilpo_theme::ThemeClient::new().await;
+                    let _ = client.set_custom_seed(argb).await;
+                    let _ = client
+                        .set_color_source(shilpo_theme::ColorSource::Custom)
+                        .await;
+                });
+            }
+            shilpo_ext::AuthorizedHostEffectKind::NonHttp(
+                shilpo_ext::HostEffect::SetWallpaper { path, .. },
+            ) => {
+                shilpo_theme::ThemeClient::spawn_task(async move {
+                    let client = shilpo_theme::ThemeClient::new().await;
+                    let _ = client.set_wallpaper(&path).await;
+                });
+            }
+            shilpo_ext::AuthorizedHostEffectKind::NonHttp(
+                shilpo_ext::HostEffect::ClipboardWrite { text },
+            ) => {
+                let result = cx
+                    .global::<ShellRuntime>()
+                    .service_hub
+                    .as_ref()
+                    .map(|hub| hub.clipboard.copy_text(&text));
+                if let Some(Err(error)) = result {
+                    tracing::warn!(
+                        extension = %extension_id,
+                        error = %error,
+                        "extension clipboard effect failed"
+                    );
                 }
-                shilpo_ext::HostEffect::SetThemeSource { color } => {
-                    let argb = crate::bar::view::parse_hex_color(&color).unwrap_or(0xFF006C4C);
-                    shilpo_theme::ThemeClient::spawn_task(async move {
-                        let client = shilpo_theme::ThemeClient::new().await;
-                        let _ = client.set_custom_seed(argb).await;
-                        let _ = client
-                            .set_color_source(shilpo_theme::ColorSource::Custom)
-                            .await;
-                    });
-                }
-                shilpo_ext::HostEffect::SetWallpaper { path, .. } => {
-                    shilpo_theme::ThemeClient::spawn_task(async move {
-                        let client = shilpo_theme::ThemeClient::new().await;
-                        let _ = client.set_wallpaper(&path).await;
-                    });
-                }
-                shilpo_ext::HostEffect::ClipboardWrite { text } => {
-                    let result = cx
-                        .global::<Self>()
-                        .service_hub
-                        .as_ref()
-                        .map(|hub| hub.clipboard.copy_text(&text));
-                    if let Some(Err(error)) = result {
-                        tracing::warn!(
-                            extension = %extension_id,
-                            error = %error,
-                            "extension clipboard effect failed"
-                        );
+            }
+            shilpo_ext::AuthorizedHostEffectKind::HttpRequest(request) => {
+                let request_id = request.request_id().to_string();
+                let key = (generation, extension_id.clone(), request_id.clone());
+                let accepted = {
+                    let in_flight = &mut cx.global_mut::<ShellRuntime>().extension_tasks;
+                    request_id.len() <= 128
+                        && !request_id.is_empty()
+                        && in_flight.len() < 8
+                        && !in_flight.contains_key(&key)
+                };
+                if !accepted {
+                    if let Some(ext) = cx.global::<ShellRuntime>().extensions.as_ref()
+                        && let Err(error) = ext.send_command(crate::extensions::ExtensionCommand::Response {
+                        expected: generation,
+                        extension_id: extension_id.clone(),
+                        event: shilpo_ext::ExtensionEvent::HttpResponse {
+                            request_id,
+                            status: None,
+                            body: String::new(),
+                            error: Some(
+                                "request ID is invalid, duplicated, or the HTTP limit was reached"
+                                    .into(),
+                            ),
+                        },
+                    })
+                    {
+                        tracing::warn!(%error, "extension rejection response was not queued");
                     }
+                    return;
                 }
-                shilpo_ext::HostEffect::HttpRequest {
-                    request_id,
-                    url,
-                    method,
-                } => {
-                    let key = (extension_id.clone(), request_id.clone());
-                    let accepted = {
-                        let in_flight = &mut cx.global_mut::<Self>().extension_http_in_flight;
-                        request_id.len() <= 128
-                            && !request_id.is_empty()
-                            && in_flight.len() < 8
-                            && in_flight.insert(key.clone())
+                let ext_id = extension_id.clone();
+                let task_key = key.clone();
+                let task = cx.spawn(async move |cx| {
+                    let response = crate::extension_http::fetch(request).await;
+                    cx.update(|cx: &mut gpui::App| {
+                        if cx.has_global::<ShellRuntime>() {
+                            cx.global_mut::<ShellRuntime>()
+                                .extension_tasks
+                                .remove(&task_key);
+                        }
+                        if let Some(ext) = cx.global::<ShellRuntime>().extensions.as_ref()
+                            && let Err(error) =
+                                ext.send_command(crate::extensions::ExtensionCommand::Response {
+                                    expected: generation,
+                                    extension_id: ext_id,
+                                    event: response,
+                                })
+                        {
+                            tracing::warn!(%error, "extension HTTP response was not queued");
+                        }
+                    });
+                });
+                cx.global_mut::<ShellRuntime>()
+                    .extension_tasks
+                    .insert(key.clone(), task);
+            }
+            shilpo_ext::AuthorizedHostEffectKind::NonHttp(shilpo_ext::HostEffect::LocationRead) => {
+                let location_service = cx
+                    .global::<ShellRuntime>()
+                    .extension_location_service
+                    .clone();
+                let ext_id = extension_id.clone();
+                let task_id = uuid::Uuid::new_v4().to_string();
+                let key = (generation, extension_id.clone(), task_id);
+                let task_key = key.clone();
+                let task = cx.spawn(async move |cx| {
+                    let result = location_service.read_location_async().await;
+                    let event = match result {
+                        Ok(info) => shilpo_ext::ExtensionEvent::LocationResponse {
+                            latitude: Some(info.latitude),
+                            longitude: Some(info.longitude),
+                            accuracy_meters: Some(info.accuracy_meters),
+                            error: None,
+                        },
+                        Err(error) => shilpo_ext::ExtensionEvent::LocationResponse {
+                            latitude: None,
+                            longitude: None,
+                            accuracy_meters: None,
+                            error: Some(error),
+                        },
                     };
-                    if !accepted {
-                        let changes = cx
-                            .global_mut::<Self>()
-                            .extensions
-                            .as_mut()
-                            .map(|extensions| {
-                                extensions.dispatch_to(
-                                    &extension_id,
-                                    &shilpo_ext::ExtensionEvent::HttpResponse {
-                                        request_id,
-                                        status: None,
-                                        body: String::new(),
-                                        error: Some(
-                                            "request ID is invalid, duplicated, or the HTTP limit was reached"
-                                                .into(),
-                                        ),
-                                    },
-                                )
-                            })
-                            .unwrap_or_default();
-                        Self::apply_extension_changes(cx, changes);
-                        continue;
-                    }
-                    cx.spawn(async move |cx| {
-                        let response = crate::extension_http::fetch(request_id, url, method).await;
-                        cx.update(|cx| {
-                            cx.global_mut::<Self>()
-                                .extension_http_in_flight
-                                .remove(&key);
-                            let changes = cx
-                                .global_mut::<Self>()
-                                .extensions
-                                .as_mut()
-                                .map(|extensions| extensions.dispatch_to(&extension_id, &response))
-                                .unwrap_or_default();
-                            Self::apply_extension_changes(cx, changes);
-                        });
-                    })
-                    .detach();
-                }
-                shilpo_ext::HostEffect::LocationRead => {
-                    let location_service = cx.global::<Self>().extension_location_service.clone();
-                    cx.spawn(async move |cx| {
-                        let result = location_service.read_location_async().await;
-                        let event = match result {
-                            Ok(info) => shilpo_ext::ExtensionEvent::LocationResponse {
-                                latitude: Some(info.latitude),
-                                longitude: Some(info.longitude),
-                                accuracy_meters: Some(info.accuracy_meters),
-                                error: None,
-                            },
-                            Err(error) => shilpo_ext::ExtensionEvent::LocationResponse {
-                                latitude: None,
-                                longitude: None,
-                                accuracy_meters: None,
-                                error: Some(error),
-                            },
-                        };
-                        cx.update(|cx| {
-                            let changes = cx
-                                .global_mut::<Self>()
-                                .extensions
-                                .as_mut()
-                                .map(|extensions| extensions.dispatch_to(&extension_id, &event))
-                                .unwrap_or_default();
-                            Self::apply_extension_changes(cx, changes);
-                        });
-                    })
-                    .detach();
-                }
-                effect => tracing::debug!(
-                    extension = %extension_id,
-                    ?effect,
-                    "accepted extension effect has no shell service adapter yet"
-                ),
+                    cx.update(|cx: &mut gpui::App| {
+                        if cx.has_global::<ShellRuntime>() {
+                            cx.global_mut::<ShellRuntime>()
+                                .extension_tasks
+                                .remove(&task_key);
+                        }
+                        if let Some(ext) = cx.global::<ShellRuntime>().extensions.as_ref()
+                            && let Err(error) =
+                                ext.send_command(crate::extensions::ExtensionCommand::Response {
+                                    expected: generation,
+                                    extension_id: ext_id,
+                                    event,
+                                })
+                        {
+                            tracing::warn!(%error, "extension location response was not queued");
+                        }
+                    });
+                });
+                cx.global_mut::<ShellRuntime>()
+                    .extension_tasks
+                    .insert(key.clone(), task);
             }
-        }
-        if refresh_views {
-            let bar_handles = cx
-                .global::<Self>()
-                .bars
-                .values()
-                .map(|(handle, _)| *handle)
-                .collect::<Vec<_>>();
-            for handle in bar_handles {
-                let _ = handle.update(cx, |_, window, _| window.refresh());
-            }
-            let surface_handles = cx
-                .global::<Self>()
-                .extension_surfaces
-                .values()
-                .map(|(handle, _)| *handle)
-                .collect::<Vec<_>>();
-            for handle in surface_handles {
-                let _ = handle.update(cx, |_, window, _| window.refresh());
-            }
-            let overlay_handles = {
-                let runtime = cx.global::<Self>();
-                [
-                    runtime.extension_panel.as_ref().map(|(handle, _)| *handle),
-                    runtime.launcher,
-                    runtime.control_center,
-                ]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-            };
-            for handle in overlay_handles {
-                let _ = handle.update(cx, |_, window, _| window.refresh());
-            }
+            shilpo_ext::AuthorizedHostEffectKind::NonHttp(effect) => tracing::debug!(
+                extension = %extension_id,
+                ?effect,
+                "accepted extension effect has no shell service adapter yet"
+            ),
         }
     }
 
@@ -1054,6 +1134,9 @@ impl ShellRuntime {
 
         if !updates.is_empty() {
             for upd in &updates {
+                if let Some(ref mut hub) = cx.global_mut::<Self>().service_hub {
+                    hub.device_snapshot.apply(upd);
+                }
                 match upd {
                     crate::bar::service_worker::WorkerUpdate::Config(
                         crate::bar::service_worker::ConfigUpdate::Loaded(config),
@@ -1253,13 +1336,15 @@ impl ShellRuntime {
             });
         }
 
-        let changes = cx
-            .global_mut::<Self>()
-            .extensions
-            .as_mut()
-            .map(|extensions| extensions.reconcile_instances(instances))
-            .unwrap_or_default();
-        Self::apply_extension_changes(cx, changes);
+        if let Some(ext) = cx.global::<Self>().extensions.as_ref()
+            && let Err(error) =
+                ext.send_command(crate::extensions::ExtensionCommand::ReconcileInstances {
+                    expected: ext.generation(),
+                    desired: instances,
+                })
+        {
+            tracing::warn!(%error, "extension instance reconciliation was not queued");
+        }
 
         let stale = cx
             .global::<Self>()
@@ -1319,6 +1404,40 @@ impl ShellRuntime {
         }
     }
 
+    fn reconcile_bar_extension_instances(cx: &mut App) {
+        let config = cx.global::<Self>().active_config.clone();
+        let mut instances = Vec::new();
+        for (display_id, (_, spec)) in &cx.global::<Self>().bars {
+            for (section, widgets) in [
+                ("start", &spec.config.widgets.start),
+                ("center", &spec.config.widgets.center),
+                ("end", &spec.config.widgets.end),
+            ] {
+                for (index, widget) in widgets.iter().enumerate() {
+                    if let shilpo_config::BarWidget::Extension(contribution) = widget {
+                        instances.push(crate::extensions::ContributionInstance {
+                            id: format!("bar:{display_id:?}:{section}:{index}"),
+                            contribution: contribution.clone(),
+                            output: Some(format!("{display_id:?}")),
+                            width: spec.geometry.bounds.size.width.as_f32(),
+                            height: spec.config.height as f32,
+                            settings: extension_settings(&config, &contribution.extension_id, None),
+                        });
+                    }
+                }
+            }
+        }
+        if let Some(ext) = cx.global::<Self>().extensions.as_ref()
+            && let Err(error) =
+                ext.send_command(crate::extensions::ExtensionCommand::ReconcileInstances {
+                    expected: ext.generation(),
+                    desired: instances,
+                })
+        {
+            tracing::warn!(%error, "extension bar instance reconciliation was not queued");
+        }
+    }
+
     fn publish_status(&self) {
         let snapshot = &self.latest_snapshot;
         let (attempt, last_err) = match &snapshot.connection {
@@ -1339,9 +1458,21 @@ impl ShellRuntime {
                 .service_hub
                 .as_ref()
                 .map(|h| h.compositor.command_broker().telemetry()),
-            battery_service_available: shilpo_services::BatteryService::new().is_ok(),
-            audio_service_available: shilpo_services::AudioService::new().is_ok(),
-            network_service_available: shilpo_services::NetworkService::new().is_ok(),
+            battery_service_available: self
+                .service_hub
+                .as_ref()
+                .map(|h| h.availability.battery_available)
+                .unwrap_or(false),
+            audio_service_available: self
+                .service_hub
+                .as_ref()
+                .map(|h| h.availability.audio_available)
+                .unwrap_or(false),
+            network_service_available: self
+                .service_hub
+                .as_ref()
+                .map(|h| h.availability.network_available)
+                .unwrap_or(false),
             notification_service_available: self
                 .service_hub
                 .as_ref()
@@ -1833,7 +1964,7 @@ impl ShellRuntime {
                 tracing::trace!(revision, window_id, "overview window focus applied");
             }
             Err(error) => {
-                cx.update(|cx| Self::show_compositor_error_toast(cx, &error));
+                cx.update(|cx: &mut gpui::App| Self::show_compositor_error_toast(cx, &error));
             }
         })
         .detach();
@@ -2026,6 +2157,22 @@ impl ShellRuntime {
         // leave handle stale; update_window failure is expected in that case.
         let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
         true
+    }
+
+    pub fn device_snapshot(cx: &App) -> crate::bar::service_worker::DeviceSnapshot {
+        cx.global::<Self>()
+            .service_hub
+            .as_ref()
+            .map(|h| h.device_snapshot.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn dispatch_device_command(cx: &App, command: crate::bar::service_worker::DeviceCommand) {
+        if let Some(hub) = cx.global::<Self>().service_hub.as_ref() {
+            let _ = hub
+                .service_commands
+                .try_send(crate::bar::service_worker::WorkerCommand::Device(command));
+        }
     }
 
     pub fn forget_control_center(cx: &mut App) {
@@ -2313,7 +2460,7 @@ impl ShellRuntime {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(2))
                 .await;
-            cx.update(|cx| {
+            cx.update(|cx: &mut gpui::App| {
                 if cx.has_global::<Self>() {
                     let runtime = cx.global_mut::<Self>();
                     if let Some((current_gen, handle, _)) = &runtime.osd
@@ -2414,7 +2561,7 @@ impl ShellRuntime {
                         tracing::trace!(revision, "compositor command applied");
                     }
                     Err(err) => {
-                        cx.update(|cx| {
+                        cx.update(|cx: &mut gpui::App| {
                             tracing::warn!(error = %err, "compositor command failed");
                             Self::show_compositor_error_toast(cx, &err);
                         });
@@ -2474,11 +2621,8 @@ impl ShellRuntime {
         }
     }
 
-    pub fn dispatch_action(
-        cx: &mut App,
-        action: impl Into<ActionInvocation>,
-    ) -> Result<(), ShellError> {
-        match Self::dispatch_invocation(cx, action.into()) {
+    pub fn dispatch_action(cx: &mut App, action: ActionInvocation) -> Result<(), ShellError> {
+        match Self::dispatch_invocation(cx, action) {
             Ok(crate::actions::ActionResult::Immediate) => Ok(()),
             Ok(crate::actions::ActionResult::Compositor(ticket)) => {
                 cx.spawn(async move |cx| match ticket.await {
@@ -2486,7 +2630,7 @@ impl ShellRuntime {
                         tracing::trace!(revision, "compositor action applied");
                     }
                     Err(err) => {
-                        cx.update(|cx| {
+                        cx.update(|cx: &mut gpui::App| {
                             tracing::warn!(error = %err, "compositor action failed");
                             Self::show_compositor_error_toast(cx, &err);
                         });
@@ -2624,79 +2768,90 @@ impl ShellRuntime {
                 Ok(crate::actions::ActionResult::Compositor(ticket))
             }
             ActionInvocation::VolumeUp => {
-                let _ = std::process::Command::new("wpctl")
-                    .args(["set-volume", "@DEFAULT_AUDIO_SINK@", "5%+"])
-                    .status();
-                if let Ok(audio) = shilpo_services::AudioService::new() {
-                    let info = audio.audio_info();
-                    Self::show_osd(
-                        cx,
-                        crate::osd::OsdKind::Volume {
-                            level: info.volume as u32,
-                            muted: info.is_muted,
-                        },
-                    );
-                }
+                Self::dispatch_device_command(
+                    cx,
+                    crate::bar::service_worker::DeviceCommand::Audio(
+                        crate::bar::service_worker::AudioCommand::StepDefaultVolume(
+                            crate::bar::service_worker::VolumeStep::Up,
+                        ),
+                    ),
+                );
+                let info = Self::device_snapshot(cx).audio;
+                let target_vol = (info.volume + 5).min(100);
+                Self::show_osd(
+                    cx,
+                    crate::osd::OsdKind::Volume {
+                        level: target_vol as u32,
+                        muted: info.is_muted,
+                    },
+                );
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::VolumeDown => {
-                let _ = std::process::Command::new("wpctl")
-                    .args(["set-volume", "@DEFAULT_AUDIO_SINK@", "5%-"])
-                    .status();
-                if let Ok(audio) = shilpo_services::AudioService::new() {
-                    let info = audio.audio_info();
-                    Self::show_osd(
-                        cx,
-                        crate::osd::OsdKind::Volume {
-                            level: info.volume as u32,
-                            muted: info.is_muted,
-                        },
-                    );
-                }
+                Self::dispatch_device_command(
+                    cx,
+                    crate::bar::service_worker::DeviceCommand::Audio(
+                        crate::bar::service_worker::AudioCommand::StepDefaultVolume(
+                            crate::bar::service_worker::VolumeStep::Down,
+                        ),
+                    ),
+                );
+                let info = Self::device_snapshot(cx).audio;
+                let target_vol = info.volume.saturating_sub(5);
+                Self::show_osd(
+                    cx,
+                    crate::osd::OsdKind::Volume {
+                        level: target_vol as u32,
+                        muted: info.is_muted,
+                    },
+                );
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::VolumeMute => {
-                let _ = std::process::Command::new("wpctl")
-                    .args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
-                    .status();
-                if let Ok(audio) = shilpo_services::AudioService::new() {
-                    let info = audio.audio_info();
-                    Self::show_osd(
-                        cx,
-                        crate::osd::OsdKind::Volume {
-                            level: info.volume as u32,
-                            muted: info.is_muted,
-                        },
-                    );
-                }
+                Self::dispatch_device_command(
+                    cx,
+                    crate::bar::service_worker::DeviceCommand::Audio(
+                        crate::bar::service_worker::AudioCommand::ToggleDefaultMute,
+                    ),
+                );
+                let info = Self::device_snapshot(cx).audio;
+                Self::show_osd(
+                    cx,
+                    crate::osd::OsdKind::Volume {
+                        level: info.volume as u32,
+                        muted: !info.is_muted,
+                    },
+                );
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::BrightnessUp => {
-                if let Ok(brightness) = shilpo_services::BrightnessService::new() {
-                    let info = brightness.brightness_info();
-                    let new_pct = (info.percentage + 5).min(100);
-                    brightness.set_brightness(new_pct);
-                    Self::show_osd(
-                        cx,
-                        crate::osd::OsdKind::Brightness {
-                            level: new_pct as u32,
-                        },
-                    );
-                }
+                let info = Self::device_snapshot(cx).brightness;
+                let target_pct = (info.percentage + 5).min(100);
+                Self::dispatch_device_command(
+                    cx,
+                    crate::bar::service_worker::DeviceCommand::Brightness(target_pct),
+                );
+                Self::show_osd(
+                    cx,
+                    crate::osd::OsdKind::Brightness {
+                        level: target_pct as u32,
+                    },
+                );
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::BrightnessDown => {
-                if let Ok(brightness) = shilpo_services::BrightnessService::new() {
-                    let info = brightness.brightness_info();
-                    let new_pct = info.percentage.saturating_sub(5);
-                    brightness.set_brightness(new_pct);
-                    Self::show_osd(
-                        cx,
-                        crate::osd::OsdKind::Brightness {
-                            level: new_pct as u32,
-                        },
-                    );
-                }
+                let info = Self::device_snapshot(cx).brightness;
+                let target_pct = info.percentage.saturating_sub(5);
+                Self::dispatch_device_command(
+                    cx,
+                    crate::bar::service_worker::DeviceCommand::Brightness(target_pct),
+                );
+                Self::show_osd(
+                    cx,
+                    crate::osd::OsdKind::Brightness {
+                        level: target_pct as u32,
+                    },
+                );
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::TakeScreenshot => {
@@ -2728,22 +2883,22 @@ impl ShellRuntime {
         for request in requests {
             match request {
                 IpcRequest::ToggleBar => {
-                    let _ = Self::dispatch_action(cx, ActionId::ToggleBar);
+                    let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                 }
                 IpcRequest::ToggleLauncher => {
-                    let _ = Self::dispatch_action(cx, ActionId::ToggleLauncher);
+                    let _ = Self::dispatch_action(cx, ActionInvocation::ToggleLauncher);
                 }
                 IpcRequest::ToggleControlCenter => {
-                    let _ = Self::dispatch_action(cx, ActionId::ToggleControlCenter);
+                    let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
                 }
                 IpcRequest::ToggleOverview => {
-                    let _ = Self::dispatch_action(cx, ActionId::ToggleOverview);
+                    let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
                 }
                 IpcRequest::ReloadConfig => {
-                    let _ = Self::dispatch_action(cx, ActionId::ReloadConfig);
+                    let _ = Self::dispatch_action(cx, ActionInvocation::ReloadConfig);
                 }
                 IpcRequest::Quit => {
-                    let _ = Self::dispatch_action(cx, ActionId::Quit);
+                    let _ = Self::dispatch_action(cx, ActionInvocation::Quit);
                     return;
                 }
                 IpcRequest::Compositor(cmd) => {
@@ -2778,55 +2933,63 @@ impl ShellRuntime {
         if !cx.has_global::<Self>() {
             return;
         }
-        let stopping = cx
-            .global_mut::<Self>()
-            .extensions
-            .as_mut()
-            .map(|extensions| extensions.dispatch_all(&shilpo_ext::ExtensionEvent::ShellStopping))
-            .unwrap_or_default();
-        Self::apply_extension_changes(cx, stopping);
-        let (
-            bars,
-            extension_surfaces,
-            extension_panel,
-            launcher,
-            control_center,
-            notification,
-            _service_hub,
-        ) = {
-            let runtime = cx.global_mut::<Self>();
-            (
-                std::mem::take(&mut runtime.bars),
-                std::mem::take(&mut runtime.extension_surfaces),
-                runtime.extension_panel.take(),
-                runtime.launcher.take(),
-                runtime.control_center.take(),
-                runtime.notification.take(),
-                runtime.service_hub.take(),
+        let shutdown_task = cx.global::<Self>().extensions.as_ref().map(|ext| {
+            ext.shutdown(
+                cx.background_executor().clone(),
+                std::time::Duration::from_millis(300),
             )
-        };
-        for (_, (handle, _)) in bars {
-            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
-        }
-        for (_, (handle, _)) in extension_surfaces {
-            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
-        }
-        if let Some((handle, _)) = extension_panel {
-            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
-        }
-        if let Some(handle) = launcher {
-            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
-        }
-        if let Some(handle) = control_center {
-            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
-        }
-        if let Some((_, _, handle)) = notification {
-            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
-        }
-        let runtime = cx.global_mut::<Self>();
-        runtime.bar_state = BarState::Hidden;
-        runtime.publish_status();
-        cx.quit();
+        });
+
+        cx.spawn(async move |cx| {
+            if let Some(task) = shutdown_task {
+                let _ = task.await;
+            }
+            cx.update(|cx| {
+                let (
+                    bars,
+                    extension_surfaces,
+                    extension_panel,
+                    launcher,
+                    control_center,
+                    notification,
+                    _service_hub,
+                ) = {
+                    let runtime = cx.global_mut::<Self>();
+                    (
+                        std::mem::take(&mut runtime.bars),
+                        std::mem::take(&mut runtime.extension_surfaces),
+                        runtime.extension_panel.take(),
+                        runtime.launcher.take(),
+                        runtime.control_center.take(),
+                        runtime.notification.take(),
+                        runtime.service_hub.take(),
+                    )
+                };
+                for (_, (handle, _)) in bars {
+                    let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+                }
+                for (_, (handle, _)) in extension_surfaces {
+                    let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+                }
+                if let Some((handle, _)) = extension_panel {
+                    let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+                }
+                if let Some(handle) = launcher {
+                    let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+                }
+                if let Some(handle) = control_center {
+                    let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+                }
+                if let Some((_, _, handle)) = notification {
+                    let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+                }
+                let runtime = cx.global_mut::<Self>();
+                runtime.bar_state = BarState::Hidden;
+                runtime.publish_status();
+                cx.quit();
+            });
+        })
+        .detach();
     }
 }
 

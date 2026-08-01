@@ -30,15 +30,23 @@ impl BrightnessInfo {
 /// System screen brightness service.
 pub struct BrightnessService {
     info: Arc<Mutex<BrightnessInfo>>,
+    _task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for BrightnessService {
+    fn drop(&mut self) {
+        if let Some(task) = self._task.take() {
+            task.abort();
+        }
+    }
 }
 
 impl BrightnessService {
     pub fn new() -> Result<Self> {
         let info = Arc::new(Mutex::new(BrightnessInfo::default()));
-        let service = Self { info };
 
-        let info_clone = service.info.clone();
-        tokio::spawn(async move {
+        let info_clone = info.clone();
+        let task = tokio::spawn(async move {
             loop {
                 let info = query_brightness()
                     .map(|percentage| BrightnessInfo {
@@ -51,7 +59,10 @@ impl BrightnessService {
             }
         });
 
-        Ok(service)
+        Ok(Self {
+            info,
+            _task: Some(task),
+        })
     }
 
     pub fn brightness_info(&self) -> BrightnessInfo {
@@ -121,5 +132,28 @@ mod tests {
         assert_eq!(BrightnessInfo::perceptual_percent_to_raw(100), 100);
         assert_eq!(BrightnessInfo::perceptual_percent_to_raw(50), 25);
         assert_eq!(BrightnessInfo::raw_to_perceptual_percent(25), 50);
+    }
+
+    #[tokio::test]
+    async fn test_brightness_task_cancellation() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+        let task = tokio::spawn(async move {
+            let _sentinel = tx;
+            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+        });
+
+        let service = BrightnessService {
+            info: Arc::new(Mutex::new(BrightnessInfo::default())),
+            _task: Some(task),
+        };
+
+        tokio::task::yield_now().await;
+        drop(service);
+        tokio::task::yield_now().await;
+
+        assert!(
+            rx.recv().await.is_none(),
+            "Sentinel should be dropped, channel closed"
+        );
     }
 }

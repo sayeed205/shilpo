@@ -68,6 +68,45 @@ impl BuiltinActionId {
             Self::RecordScreen => "record_screen",
         }
     }
+
+    pub fn input_requirement(self) -> ActionInputRequirement {
+        match self {
+            Self::ToggleLauncher
+            | Self::ToggleControlCenter
+            | Self::ToggleBar
+            | Self::ToggleOverview
+            | Self::CreateWorkspace
+            | Self::ReloadConfig
+            | Self::Quit
+            | Self::VolumeUp
+            | Self::VolumeDown
+            | Self::VolumeMute
+            | Self::BrightnessUp
+            | Self::BrightnessDown
+            | Self::TakeScreenshot
+            | Self::RecordScreen => ActionInputRequirement::NoInput,
+            Self::FocusWorkspace => ActionInputRequirement::WorkspaceId,
+            Self::FocusWindow | Self::CloseWindow => ActionInputRequirement::WindowId,
+            Self::MoveWindowToWorkspace => ActionInputRequirement::WindowAndWorkspace,
+        }
+    }
+}
+
+/// Input requirement classification for shell actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionInputRequirement {
+    NoInput,
+    WorkspaceId,
+    WindowId,
+    WindowAndWorkspace,
+    OptionalJson,
+}
+
+impl ActionInputRequirement {
+    pub fn can_invoke_without_input(self) -> bool {
+        matches!(self, Self::NoInput | Self::OptionalJson)
+    }
 }
 
 /// Stable, namespaced identifier for built-in and extension-provided actions.
@@ -203,6 +242,25 @@ pub enum ActionInvocation {
     },
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceActionInput {
+    workspace_id: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WindowActionInput {
+    window_id: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WindowWorkspaceActionInput {
+    window_id: u64,
+    workspace_id: u64,
+}
+
 impl ActionInvocation {
     pub fn id(&self) -> ActionId {
         match self {
@@ -228,6 +286,96 @@ impl ActionInvocation {
         }
     }
 
+    pub fn from_id_and_payload(
+        id: ActionId,
+        payload: Option<serde_json::Value>,
+    ) -> Result<Self, String> {
+        if let Some(ext_id) = id.extension_id() {
+            return Ok(Self::Extension {
+                id: ext_id,
+                payload,
+            });
+        }
+
+        let builtin = BuiltinActionId::ALL
+            .iter()
+            .copied()
+            .find(|b| action_id(*b) == id)
+            .ok_or_else(|| format!("unknown action ID '{id}'"))?;
+
+        match builtin.input_requirement() {
+            ActionInputRequirement::NoInput => match payload {
+                None | Some(serde_json::Value::Null) => match builtin {
+                    BuiltinActionId::ToggleLauncher => Ok(Self::ToggleLauncher),
+                    BuiltinActionId::ToggleControlCenter => Ok(Self::ToggleControlCenter),
+                    BuiltinActionId::ToggleBar => Ok(Self::ToggleBar),
+                    BuiltinActionId::ToggleOverview => Ok(Self::ToggleOverview),
+                    BuiltinActionId::CreateWorkspace => Ok(Self::CreateWorkspace),
+                    BuiltinActionId::ReloadConfig => Ok(Self::ReloadConfig),
+                    BuiltinActionId::Quit => Ok(Self::Quit),
+                    BuiltinActionId::VolumeUp => Ok(Self::VolumeUp),
+                    BuiltinActionId::VolumeDown => Ok(Self::VolumeDown),
+                    BuiltinActionId::VolumeMute => Ok(Self::VolumeMute),
+                    BuiltinActionId::BrightnessUp => Ok(Self::BrightnessUp),
+                    BuiltinActionId::BrightnessDown => Ok(Self::BrightnessDown),
+                    BuiltinActionId::TakeScreenshot => Ok(Self::TakeScreenshot),
+                    BuiltinActionId::RecordScreen => Ok(Self::RecordScreen),
+                    _ => unreachable!(),
+                },
+                Some(_) => Err(format!("action '{id}' does not accept input parameters")),
+            },
+            ActionInputRequirement::WorkspaceId => {
+                let value = payload
+                    .ok_or_else(|| format!("action '{id}' requires a 'workspace_id' parameter"))?;
+                if value.is_null() {
+                    return Err(format!("action '{id}' requires a 'workspace_id' parameter"));
+                }
+                let input: WorkspaceActionInput = serde_json::from_value(value)
+                    .map_err(|_| format!("action '{id}' requires a 'workspace_id' parameter"))?;
+                match builtin {
+                    BuiltinActionId::FocusWorkspace => Ok(Self::FocusWorkspace(input.workspace_id)),
+                    _ => unreachable!(),
+                }
+            }
+            ActionInputRequirement::WindowId => {
+                let value = payload
+                    .ok_or_else(|| format!("action '{id}' requires a 'window_id' parameter"))?;
+                if value.is_null() {
+                    return Err(format!("action '{id}' requires a 'window_id' parameter"));
+                }
+                let input: WindowActionInput = serde_json::from_value(value)
+                    .map_err(|_| format!("action '{id}' requires a 'window_id' parameter"))?;
+                match builtin {
+                    BuiltinActionId::FocusWindow => Ok(Self::FocusWindow(input.window_id)),
+                    BuiltinActionId::CloseWindow => Ok(Self::CloseWindow(input.window_id)),
+                    _ => unreachable!(),
+                }
+            }
+            ActionInputRequirement::WindowAndWorkspace => {
+                let value = payload.ok_or_else(|| {
+                    format!("action '{id}' requires 'window_id' and 'workspace_id' parameters")
+                })?;
+                if value.is_null() {
+                    return Err(format!(
+                        "action '{id}' requires 'window_id' and 'workspace_id' parameters"
+                    ));
+                }
+                let input: WindowWorkspaceActionInput =
+                    serde_json::from_value(value).map_err(|_| {
+                        format!("action '{id}' requires 'window_id' and 'workspace_id' parameters")
+                    })?;
+                match builtin {
+                    BuiltinActionId::MoveWindowToWorkspace => Ok(Self::MoveWindowToWorkspace {
+                        window_id: input.window_id,
+                        workspace_id: input.workspace_id,
+                    }),
+                    _ => unreachable!(),
+                }
+            }
+            ActionInputRequirement::OptionalJson => unreachable!(),
+        }
+    }
+
     /// Verifies that this invocation matches the provided action descriptor.
     pub fn matches_descriptor(&self, descriptor: &ActionDescriptor) -> bool {
         self.id() == descriptor.id
@@ -240,55 +388,6 @@ pub enum ActionResult {
     Compositor(shilpo_services::CommandTicket),
 }
 
-impl From<ActionId> for ActionInvocation {
-    fn from(id: ActionId) -> Self {
-        if id == ActionId::ToggleLauncher {
-            Self::ToggleLauncher
-        } else if id == ActionId::ToggleControlCenter {
-            Self::ToggleControlCenter
-        } else if id == ActionId::ToggleBar {
-            Self::ToggleBar
-        } else if id == ActionId::ToggleOverview {
-            Self::ToggleOverview
-        } else if id == ActionId::FocusWorkspace {
-            Self::FocusWorkspace(1)
-        } else if id == ActionId::FocusWindow {
-            Self::FocusWindow(1)
-        } else if id == ActionId::CloseWindow {
-            Self::CloseWindow(1)
-        } else if id == ActionId::CreateWorkspace {
-            Self::CreateWorkspace
-        } else if id == ActionId::MoveWindowToWorkspace {
-            Self::MoveWindowToWorkspace {
-                window_id: 0,
-                workspace_id: 1,
-            }
-        } else if id == ActionId::ReloadConfig {
-            Self::ReloadConfig
-        } else if id == ActionId::Quit {
-            Self::Quit
-        } else if id == ActionId::VolumeUp {
-            Self::VolumeUp
-        } else if id == ActionId::VolumeDown {
-            Self::VolumeDown
-        } else if id == ActionId::VolumeMute {
-            Self::VolumeMute
-        } else if id == ActionId::BrightnessUp {
-            Self::BrightnessUp
-        } else if id == ActionId::BrightnessDown {
-            Self::BrightnessDown
-        } else if id == ActionId::TakeScreenshot {
-            Self::TakeScreenshot
-        } else if id == ActionId::RecordScreen {
-            Self::RecordScreen
-        } else if let Some(id) = id.extension_id() {
-            Self::Extension { id, payload: None }
-        } else {
-            unreachable!("ActionId construction validates its namespace")
-        }
-    }
-}
-
 /// Metadata descriptor for a registered shell action.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionDescriptor {
@@ -296,6 +395,7 @@ pub struct ActionDescriptor {
     pub name: String,
     pub label: String,
     pub category: ActionCategory,
+    pub input: ActionInputRequirement,
     pub enabled: bool,
 }
 
@@ -347,6 +447,7 @@ impl ActionRegistry {
                 name: name.into(),
                 label: label.into(),
                 category: ActionCategory::Extension,
+                input: ActionInputRequirement::OptionalJson,
                 enabled: true,
             },
         );
@@ -384,12 +485,13 @@ fn builtin_descriptor(id: BuiltinActionId) -> ActionDescriptor {
         BuiltinActionId::TakeScreenshot => ("Take Screenshot", ActionCategory::System),
         BuiltinActionId::RecordScreen => ("Record Screen Video", ActionCategory::System),
     };
-    let id = action_id(id);
+    let id_action = action_id(id);
     ActionDescriptor {
-        name: id.name().to_owned(),
-        id,
+        name: id_action.name().to_owned(),
+        id: id_action,
         label: label.to_owned(),
         category,
+        input: id.input_requirement(),
         enabled: true,
     }
 }
@@ -550,7 +652,245 @@ mod tests {
 
             let json = serde_json::to_string(desc).unwrap();
             assert!(json.contains(&desc.name));
+            assert!(json.contains("input"));
         }
+    }
+
+    #[test]
+    fn builtin_and_extension_input_requirements_mapping() {
+        let registry = ActionRegistry::default();
+        let find_req = |id: &ActionId| registry.descriptor(id).unwrap().input;
+
+        assert_eq!(
+            find_req(&ActionId::ToggleLauncher),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(
+            find_req(&ActionId::ToggleControlCenter),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(
+            find_req(&ActionId::ToggleBar),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(
+            find_req(&ActionId::ToggleOverview),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(
+            find_req(&ActionId::CreateWorkspace),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(
+            find_req(&ActionId::ReloadConfig),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(find_req(&ActionId::Quit), ActionInputRequirement::NoInput);
+        assert_eq!(
+            find_req(&ActionId::VolumeUp),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(
+            find_req(&ActionId::VolumeDown),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(
+            find_req(&ActionId::VolumeMute),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(
+            find_req(&ActionId::BrightnessUp),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(
+            find_req(&ActionId::BrightnessDown),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(
+            find_req(&ActionId::TakeScreenshot),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(
+            find_req(&ActionId::RecordScreen),
+            ActionInputRequirement::NoInput
+        );
+
+        assert_eq!(
+            find_req(&ActionId::FocusWorkspace),
+            ActionInputRequirement::WorkspaceId
+        );
+        assert_eq!(
+            find_req(&ActionId::FocusWindow),
+            ActionInputRequirement::WindowId
+        );
+        assert_eq!(
+            find_req(&ActionId::CloseWindow),
+            ActionInputRequirement::WindowId
+        );
+        assert_eq!(
+            find_req(&ActionId::MoveWindowToWorkspace),
+            ActionInputRequirement::WindowAndWorkspace
+        );
+
+        let canonical: CanonicalId = "io.github.alice.world-clock/refresh".parse().unwrap();
+        let mut reg_ext = ActionRegistry::default();
+        let ext_id = reg_ext
+            .register_extension(canonical, "refresh", "Refresh World Clock")
+            .unwrap();
+        assert_eq!(
+            reg_ext.descriptor(&ext_id).unwrap().input,
+            ActionInputRequirement::OptionalJson
+        );
+    }
+
+    #[test]
+    fn from_id_and_payload_no_input_actions() {
+        let inv_none =
+            ActionInvocation::from_id_and_payload(ActionId::ToggleLauncher, None).unwrap();
+        assert_eq!(inv_none, ActionInvocation::ToggleLauncher);
+
+        let inv_null = ActionInvocation::from_id_and_payload(
+            ActionId::ToggleLauncher,
+            Some(serde_json::json!(null)),
+        )
+        .unwrap();
+        assert_eq!(inv_null, ActionInvocation::ToggleLauncher);
+
+        let err = ActionInvocation::from_id_and_payload(
+            ActionId::ToggleLauncher,
+            Some(serde_json::json!({"foo": "bar"})),
+        )
+        .unwrap_err();
+        assert!(err.contains("does not accept input parameters"));
+        assert!(err.contains("builtin:toggle_launcher"));
+    }
+
+    #[test]
+    fn from_id_and_payload_parameterized_actions() {
+        let inv_ws = ActionInvocation::from_id_and_payload(
+            ActionId::FocusWorkspace,
+            Some(serde_json::json!({"workspace_id": 7})),
+        )
+        .unwrap();
+        assert_eq!(inv_ws, ActionInvocation::FocusWorkspace(7));
+
+        let inv_win = ActionInvocation::from_id_and_payload(
+            ActionId::FocusWindow,
+            Some(serde_json::json!({"window_id": 42})),
+        )
+        .unwrap();
+        assert_eq!(inv_win, ActionInvocation::FocusWindow(42));
+
+        let inv_close = ActionInvocation::from_id_and_payload(
+            ActionId::CloseWindow,
+            Some(serde_json::json!({"window_id": 42})),
+        )
+        .unwrap();
+        assert_eq!(inv_close, ActionInvocation::CloseWindow(42));
+
+        let inv_move = ActionInvocation::from_id_and_payload(
+            ActionId::MoveWindowToWorkspace,
+            Some(serde_json::json!({"window_id": 42, "workspace_id": 7})),
+        )
+        .unwrap();
+        assert_eq!(
+            inv_move,
+            ActionInvocation::MoveWindowToWorkspace {
+                window_id: 42,
+                workspace_id: 7
+            }
+        );
+    }
+
+    #[test]
+    fn from_id_and_payload_parameterized_rejects_missing_null_and_malformed() {
+        let parameterized = vec![
+            ActionId::FocusWorkspace,
+            ActionId::FocusWindow,
+            ActionId::CloseWindow,
+            ActionId::MoveWindowToWorkspace,
+        ];
+
+        for id in parameterized {
+            assert!(ActionInvocation::from_id_and_payload(id.clone(), None).is_err());
+            assert!(
+                ActionInvocation::from_id_and_payload(id.clone(), Some(serde_json::json!(null)))
+                    .is_err()
+            );
+        }
+
+        // Missing required field
+        let err_missing = ActionInvocation::from_id_and_payload(
+            ActionId::FocusWorkspace,
+            Some(serde_json::json!({})),
+        )
+        .unwrap_err();
+        assert!(err_missing.contains("workspace_id"));
+        assert!(err_missing.contains("builtin:focus_workspace"));
+
+        // Wrong type (string instead of u64)
+        let err_type = ActionInvocation::from_id_and_payload(
+            ActionId::FocusWindow,
+            Some(serde_json::json!({"window_id": "42"})),
+        )
+        .unwrap_err();
+        assert!(err_type.contains("window_id"));
+
+        // Negative number
+        let err_neg = ActionInvocation::from_id_and_payload(
+            ActionId::CloseWindow,
+            Some(serde_json::json!({"window_id": -1})),
+        )
+        .unwrap_err();
+        assert!(err_neg.contains("window_id"));
+
+        // Unknown extra field
+        let err_extra = ActionInvocation::from_id_and_payload(
+            ActionId::MoveWindowToWorkspace,
+            Some(serde_json::json!({"window_id": 1, "workspace_id": 2, "extra": true})),
+        )
+        .unwrap_err();
+        assert!(err_extra.contains("builtin:move_window_to_workspace"));
+    }
+
+    #[test]
+    fn from_id_and_payload_preserves_extension_payloads() {
+        let canonical: CanonicalId = "io.github.alice.world-clock/refresh".parse().unwrap();
+        let ext_id = ActionId::extension(canonical.clone());
+
+        // None
+        let inv_none = ActionInvocation::from_id_and_payload(ext_id.clone(), None).unwrap();
+        assert_eq!(
+            inv_none,
+            ActionInvocation::Extension {
+                id: canonical.clone(),
+                payload: None
+            }
+        );
+
+        // Some(null)
+        let inv_null =
+            ActionInvocation::from_id_and_payload(ext_id.clone(), Some(serde_json::json!(null)))
+                .unwrap();
+        assert_eq!(
+            inv_null,
+            ActionInvocation::Extension {
+                id: canonical.clone(),
+                payload: Some(serde_json::json!(null))
+            }
+        );
+
+        // Arbitrary nested JSON
+        let nested = serde_json::json!({"city": "Tokyo", "items": [1, 2, 3]});
+        let inv_nested =
+            ActionInvocation::from_id_and_payload(ext_id.clone(), Some(nested.clone())).unwrap();
+        assert_eq!(
+            inv_nested,
+            ActionInvocation::Extension {
+                id: canonical,
+                payload: Some(nested)
+            }
+        );
     }
 
     #[test]

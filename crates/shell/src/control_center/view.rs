@@ -6,28 +6,21 @@ use gpui::{
     prelude::FluentBuilder, px, relative,
 };
 use shilpo_services::{
-    AudioService, BatteryInfo, BatteryService, BluetoothService, BrightnessService, NetworkService,
-    NightLightService, PowerProfile, PowerProfileService, RecordMode, ScreenCaptureService,
-    ScreenshotMode,
+    BluetoothService, NightLightService, PowerProfile, PowerProfileService, RecordMode,
+    ScreenCaptureService, ScreenshotMode,
 };
 use shilpo_ui::{
     ActiveTheme, Colorize, FocusTrapElement, Icon, IconName, Sizable, StyledExt, h_flex,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
     v_flex,
 };
-use std::{sync::Arc, time::Duration};
 
 /// M3 Expressive Control Center Panel Overlay View.
 pub struct ControlCenterView {
-    pub battery_service: Option<BatteryService>,
-    pub network_service: Option<NetworkService>,
-    pub audio_service: Option<AudioService>,
-    pub brightness_service: Option<Arc<BrightnessService>>,
     pub night_light_service: Option<NightLightService>,
     pub bluetooth_service: Option<BluetoothService>,
     pub power_profile_service: Option<PowerProfileService>,
     pub screen_capture_service: Option<ScreenCaptureService>,
-    battery: BatteryInfo,
     volume_state: Entity<SliderState>,
     brightness_state: Entity<SliderState>,
     dnd_active: bool,
@@ -36,29 +29,17 @@ pub struct ControlCenterView {
     is_recording: bool,
     active_power_profile: PowerProfile,
     focus_handle: FocusHandle,
-    _battery_refresh_task: gpui::Task<()>,
+    device_snapshot: crate::bar::service_worker::DeviceSnapshot,
+    _device_snapshot_task: gpui::Task<()>,
 }
 
 impl ControlCenterView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let battery_service = service_or_warn(BatteryService::new, "battery");
-        let battery = battery_service
-            .as_ref()
-            .map(BatteryService::battery_info)
-            .unwrap_or_default();
-        let network_service = service_or_warn(NetworkService::new, "network");
-        let audio_service = service_or_warn(AudioService::new, "audio");
+        let snapshot = ShellRuntime::device_snapshot(cx);
         let night_light_service = service_or_warn(NightLightService::new, "night_light");
         let bluetooth_service = service_or_warn(BluetoothService::new, "bluetooth");
         let power_profile_service = service_or_warn(PowerProfileService::new, "power_profile");
         let screen_capture_service = service_or_warn(ScreenCaptureService::new, "screen_capture");
-        let brightness_service = match BrightnessService::new() {
-            Ok(service) => Some(Arc::new(service)),
-            Err(error) => {
-                tracing::warn!(error = %error, "brightness service unavailable");
-                None
-            }
-        };
 
         let initial_is_recording = screen_capture_service
             .as_ref()
@@ -80,25 +61,12 @@ impl ControlCenterView {
             .unwrap_or(false);
         let initial_dnd = ShellRuntime::is_dnd_active(cx);
 
-        let audio_available = audio_service
-            .as_ref()
-            .map(|service| service.audio_info().available)
-            .unwrap_or(false);
-        let initial_volume = audio_service
-            .as_ref()
-            .map(|service| service.audio_info().volume as f32)
-            .unwrap_or(0.0);
-        let initial_brightness = brightness_service
-            .as_ref()
-            .map(|service| service.brightness_info().percentage as f32)
-            .unwrap_or(0.0);
-
         let volume_state = cx.new(|_| {
             SliderState::new()
                 .min(0.0)
                 .max(100.0)
                 .step(1.0)
-                .default_value(initial_volume)
+                .default_value(snapshot.audio.volume as f32)
         });
 
         let brightness_state = cx.new(|_| {
@@ -106,7 +74,7 @@ impl ControlCenterView {
                 .min(0.0)
                 .max(100.0)
                 .step(1.0)
-                .default_value(initial_brightness)
+                .default_value(snapshot.brightness.percentage as f32)
         });
 
         let focus_handle = cx.focus_handle();
@@ -118,62 +86,54 @@ impl ControlCenterView {
         });
 
         // Subscribe to volume changes
-        cx.subscribe(&volume_state, move |_, _, event: &SliderEvent, _| {
-            if audio_available && let SliderEvent::Change(SliderValue::Single(val)) = event {
-                let _ = std::process::Command::new("pactl")
-                    .args([
-                        "set-sink-volume",
-                        "@DEFAULT_SINK@",
-                        &format!("{}%", val.round() as u8),
-                    ])
-                    .spawn();
+        cx.subscribe(&volume_state, |_, _, event: &SliderEvent, cx| {
+            if let SliderEvent::Change(SliderValue::Single(val)) = event {
+                ShellRuntime::dispatch_device_command(
+                    cx,
+                    crate::bar::service_worker::DeviceCommand::Audio(
+                        crate::bar::service_worker::AudioCommand::SetDefaultVolume(
+                            val.round() as u8
+                        ),
+                    ),
+                );
             }
         })
         .detach();
 
         // Subscribe to brightness changes
-        let brightness_srv_clone = brightness_service.clone();
-        cx.subscribe(&brightness_state, move |_, _, event: &SliderEvent, _| {
-            if let Some(service) = &brightness_srv_clone
-                && service.brightness_info().available
-                && let SliderEvent::Change(SliderValue::Single(val)) = event
-            {
-                service.set_brightness(val.round() as u8);
+        cx.subscribe(&brightness_state, |_, _, event: &SliderEvent, cx| {
+            if let SliderEvent::Change(SliderValue::Single(val)) = event {
+                ShellRuntime::dispatch_device_command(
+                    cx,
+                    crate::bar::service_worker::DeviceCommand::Brightness(val.round() as u8),
+                );
             }
         })
         .detach();
 
-        let battery_refresh_task = cx.spawn(async move |this, cx| {
+        let snapshot_clone = snapshot.clone();
+        let _device_snapshot_task = cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(Duration::from_secs(3)).await;
-                if this
-                    .update(cx, |view, cx| {
-                        let next = view
-                            .battery_service
-                            .as_ref()
-                            .map(BatteryService::battery_info)
-                            .unwrap_or_default();
-                        if replace_battery_if_changed(&mut view.battery, next) {
-                            cx.notify();
-                        }
-                    })
-                    .is_err()
-                {
-                    return;
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(250))
+                    .await;
+                let res = this.update(cx, |view, cx| {
+                    let snapshot = ShellRuntime::device_snapshot(cx);
+                    if replace_device_snapshot_if_changed(&mut view.device_snapshot, snapshot) {
+                        cx.notify();
+                    }
+                });
+                if res.is_err() {
+                    break;
                 }
             }
         });
 
         Self {
-            battery_service,
-            network_service,
-            audio_service,
-            brightness_service,
             night_light_service,
             bluetooth_service,
             power_profile_service,
             screen_capture_service,
-            battery,
             volume_state,
             brightness_state,
             dnd_active: initial_dnd,
@@ -182,7 +142,8 @@ impl ControlCenterView {
             is_recording: initial_is_recording,
             active_power_profile: initial_power_profile,
             focus_handle,
-            _battery_refresh_task: battery_refresh_task,
+            device_snapshot: snapshot_clone,
+            _device_snapshot_task,
         }
     }
 
@@ -261,46 +222,72 @@ impl ControlCenterView {
     }
 
     fn select_audio_device(&mut self, device_id: &str, is_input: bool, cx: &mut Context<Self>) {
-        if let Some(service) = &self.audio_service {
-            let _ = service.set_default_device(device_id, is_input);
-            ShellRuntime::save_audio_preference(cx, Some(device_id.to_string()), None);
-        }
+        ShellRuntime::dispatch_device_command(
+            cx,
+            crate::bar::service_worker::DeviceCommand::Audio(
+                crate::bar::service_worker::AudioCommand::SetDefaultDevice {
+                    device_id: device_id.to_string(),
+                    is_input,
+                },
+            ),
+        );
+        ShellRuntime::save_audio_preference(cx, Some(device_id.to_string()), None);
         cx.notify();
     }
 
     fn select_audio_port(&mut self, sink_name: &str, port_name: &str, cx: &mut Context<Self>) {
-        if let Some(service) = &self.audio_service {
-            let _ = service.set_sink_port(sink_name, port_name);
-            ShellRuntime::save_audio_preference(cx, None, Some(port_name.to_string()));
-        }
+        ShellRuntime::dispatch_device_command(
+            cx,
+            crate::bar::service_worker::DeviceCommand::Audio(
+                crate::bar::service_worker::AudioCommand::SetSinkPort {
+                    sink_name: sink_name.to_string(),
+                    port_name: port_name.to_string(),
+                },
+            ),
+        );
+        ShellRuntime::save_audio_preference(cx, None, Some(port_name.to_string()));
         cx.notify();
     }
 
     fn toggle_simultaneous_audio(&mut self, cx: &mut Context<Self>) {
-        if let Some(service) = &self.audio_service {
-            let _ = service.toggle_simultaneous_output();
-        }
+        ShellRuntime::dispatch_device_command(
+            cx,
+            crate::bar::service_worker::DeviceCommand::Audio(
+                crate::bar::service_worker::AudioCommand::ToggleSimultaneousOutput,
+            ),
+        );
         cx.notify();
     }
 
     fn toggle_wifi(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        if let Some(service) = &self.network_service {
-            let _ = service.set_wifi_enabled(enabled);
-        }
+        ShellRuntime::dispatch_device_command(
+            cx,
+            crate::bar::service_worker::DeviceCommand::Network(
+                crate::bar::service_worker::NetworkCommand::SetWifiEnabled(enabled),
+            ),
+        );
         cx.notify();
     }
 
     fn deactivate_vpn(&mut self, active_conn_path: &str, cx: &mut Context<Self>) {
-        if let Some(service) = &self.network_service {
-            let _ = service.deactivate_connection(active_conn_path);
-        }
+        ShellRuntime::dispatch_device_command(
+            cx,
+            crate::bar::service_worker::DeviceCommand::Network(
+                crate::bar::service_worker::NetworkCommand::DeactivateConnection(
+                    active_conn_path.to_string(),
+                ),
+            ),
+        );
         cx.notify();
     }
 
     fn toggle_airplane_mode(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        if let Some(service) = &self.network_service {
-            let _ = service.set_airplane_mode_enabled(enabled);
-        }
+        ShellRuntime::dispatch_device_command(
+            cx,
+            crate::bar::service_worker::DeviceCommand::Network(
+                crate::bar::service_worker::NetworkCommand::SetAirplaneModeEnabled(enabled),
+            ),
+        );
         cx.notify();
     }
 
@@ -334,13 +321,16 @@ fn service_or_warn<T>(create: impl FnOnce() -> anyhow::Result<T>, name: &str) ->
     }
 }
 
-fn replace_battery_if_changed(current: &mut BatteryInfo, next: BatteryInfo) -> bool {
-    if *current == next {
-        return false;
+fn replace_device_snapshot_if_changed(
+    current: &mut crate::bar::service_worker::DeviceSnapshot,
+    new: crate::bar::service_worker::DeviceSnapshot,
+) -> bool {
+    if *current == new {
+        false
+    } else {
+        *current = new;
+        true
     }
-
-    *current = next;
-    true
 }
 
 impl Focusable for ControlCenterView {
@@ -382,22 +372,10 @@ impl Render for ControlCenterView {
                 .into_any_element()
         })
         .collect::<Vec<_>>();
-        let battery = self.battery.clone();
-        let network = self
-            .network_service
-            .as_ref()
-            .map(NetworkService::network_info)
-            .unwrap_or_default();
-        let audio_available = self
-            .audio_service
-            .as_ref()
-            .map(|service| service.audio_info().available)
-            .unwrap_or(false);
-        let brightness_available = self
-            .brightness_service
-            .as_ref()
-            .map(|service| service.brightness_info().available)
-            .unwrap_or(false);
+        let battery = self.device_snapshot.battery.clone();
+        let network = self.device_snapshot.network.clone();
+        let audio_available = self.device_snapshot.audio.available;
+        let brightness_available = self.device_snapshot.brightness.available;
 
         // Grid toggles
         let wifi_bg = if network.available && network.is_connected {
@@ -761,16 +739,8 @@ impl Render for ControlCenterView {
                     )
                     // Audio Devices & Ports Selector
                     .when(audio_available, |this| {
-                        let devices = self
-                            .audio_service
-                            .as_ref()
-                            .map(|s| s.list_devices())
-                            .unwrap_or_default();
-                        let ports = self
-                            .audio_service
-                            .as_ref()
-                            .map(|s| s.list_ports())
-                            .unwrap_or_default();
+                        let devices = self.device_snapshot.audio_hardware.devices.clone();
+                        let ports = self.device_snapshot.audio_hardware.ports.clone();
 
                         this.child(
                             v_flex()
@@ -1200,31 +1170,5 @@ impl Render for ControlCenterView {
                     .children(side_panel_entries)
                     .children(extension_entries),
             )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn battery_refresh_only_reports_changes() {
-        let mut current = BatteryInfo {
-            percentage: 58,
-            is_charging: true,
-            is_present: true,
-        };
-        let unchanged = current.clone();
-
-        assert!(!replace_battery_if_changed(&mut current, unchanged));
-        assert!(replace_battery_if_changed(
-            &mut current,
-            BatteryInfo {
-                percentage: 59,
-                is_charging: true,
-                is_present: true,
-            }
-        ));
-        assert_eq!(current.percentage, 59);
     }
 }

@@ -170,6 +170,49 @@ manifest, component, settings-schema, and asset changes. A replacement generatio
 so a broken edit leaves the last valid runtime and view tree active. Reconciliation runs after output, configuration,
 and catalog changes.
 
+## Threading Topology and Off-Main-Thread Execution Seams
+
+To guarantee that guest execution, filesystem IO, WASM loading, catalog rescans, and file watching never stall GPUI's 60
+FPS rendering pipeline, the extension subsystem is decoupled into a GPUI coordinator and a background worker engine:
+
+```mermaid
+flowchart TD
+    subgraph GPUI Main Thread
+        COORD[ExtensionCoordinator] -->|Arc RwLock| SNAP[ExtensionSnapshot]
+        COORD -->|mpsc command_tx| ENGINE
+        UI[Shell UI Views / Bar / CC] -->|Read Only| SNAP
+    end
+
+    subgraph Background Thread
+        ENGINE[ExtensionEngine] -->|WASM guest load and execution| SESS[ExtensionSession]
+        ENGINE -->|mpsc update_tx| COORD
+        ENGINE -->|Write Lock| SNAP
+        WATCH[ExtensionWatcher / notify] -->|SourcesChanged| ENGINE
+    end
+```
+
+### Components
+
+1. **`ExtensionEngine<R>` (Background Worker Thread)**
+    - Executes Wasmtime guest module loading, WASM guest function invocations (`view`, `on-event`), catalog rescans,
+      manifest parsing, settings schema reading, and filesystem fingerprinting.
+    - Listens on `mpsc::Receiver<ExtensionCommand>` in a dedicated background task loop.
+    - Emits `ExtensionUpdate` messages over sync channel to `ExtensionCoordinator` and updates the shared immutable
+      `ExtensionSnapshot` in `Arc<RwLock<ExtensionSnapshot>>`.
+2. **`ExtensionCoordinator` (GPUI Thread Handle)**
+    - Owned by `ShellRuntime` on the GPUI main thread.
+    - Exposes zero-allocation `Arc<RwLock<ExtensionSnapshot>>` for immediate synchronous reads of pre-validated
+      `ViewTree`s, `ContributionDescriptor`s, and `settings_schemas`.
+    - Sends user inputs, lifecycle events, and surface reconciliations as channel commands (`ExtensionCommand::Input`,
+      `ExtensionCommand::Lifecycle`, `ExtensionCommand::ReconcileInstances`).
+    - Generation tracking (`ExtensionGeneration`) on snapshots and commands guarantees that stale responses from
+      reloaded or disabled extensions are safely ignored.
+3. **`ExtensionWatcher` (Background File Watcher)**
+    - Wraps `notify::RecommendedWatcher` monitoring development registrations (`development-registrations.json`),
+      installed packages (`installed`), and active symlinks (`activated`).
+    - Dispatches debounced `ExtensionCommand::SourcesChanged` messages to `ExtensionEngine` without periodic filesystem
+      polling loops.
+
 ## Package model
 
 An installed package has this shape:
@@ -335,6 +378,11 @@ excluded.
 Every interactive node carries a guest-defined event ID. The GPUI adapter returns that ID and a typed value to the host.
 The guest updates its state and returns a new view tree.
 
+When a guest emits `invalidate_view`, the engine converts the effect into a canonical contribution invalidation,
+rebuilds the immutable snapshot from the guest's current state, and asks the owning GPUI surface to repaint. The effect
+is therefore a coordination signal rather than a service operation; without the snapshot rebuild, a surface could remain
+on its initial cached tree.
+
 The host rejects trees that exceed configured depth, node count, text, image, or list limits. The last valid tree stays
 visible if a later render fails.
 
@@ -371,7 +419,11 @@ Extensions return effects instead of directly mutating the shell or operating sy
 The host validates every effect against the manifest, the user's grants, and current shell policy before calling a
 concrete adapter.
 
-HTTP effects carry a guest-defined request ID. The host currently permits bounded HTTPS `GET` requests, disables
+HTTP effects carry a guest-defined request ID. The raw guest URL is parsed once by `ExtensionHost` into a canonical HTTP
+target, where HTTPS, `GET`, host presence, credential absence, and fragment absence are verified before constructing an
+authorized request type. Both the declared manifest scope and user grant match the same canonical host/path (host
+patterns exclude ports and path patterns exclude queries, while the parsed `Url` retains both for transport). The shell
+transports that exact parsed URL without reparsing raw text. The host permits bounded HTTPS `GET` requests, disables
 redirects, limits response bodies to 1 MiB, and returns status/body/error through a correlated `http_response` event.
 The guest never receives a socket or ambient network stack. A host-generated `timer_fired` event named `minute` provides
 a coarse refresh heartbeat without giving guests their own schedulers.

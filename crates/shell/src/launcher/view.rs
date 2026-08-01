@@ -1,4 +1,4 @@
-use crate::actions::ActionDescriptor;
+use crate::actions::{ActionDescriptor, ActionInvocation};
 use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
@@ -118,9 +118,10 @@ fn search_results(
         actions
             .iter()
             .filter(|action| {
-                query.is_empty()
-                    || action.label.to_lowercase().contains(&query)
-                    || action.name.contains(&query)
+                action.input.can_invoke_without_input()
+                    && (query.is_empty()
+                        || action.label.to_lowercase().contains(&query)
+                        || action.name.contains(&query))
             })
             .cloned()
             .map(LauncherSearchResult::Action),
@@ -313,9 +314,21 @@ impl LauncherView {
                     window.remove_window();
                 }
                 LauncherSearchResult::Action(action) => {
-                    let _ = ShellRuntime::dispatch_action(cx, action.id.clone());
-                    ShellRuntime::forget_launcher(cx);
-                    window.remove_window();
+                    match ActionInvocation::from_id_and_payload(action.id.clone(), None) {
+                        Ok(invocation) => {
+                            if let Ok(()) = ShellRuntime::dispatch_action(cx, invocation) {
+                                ShellRuntime::forget_launcher(cx);
+                                window.remove_window();
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                action_id = %action.id,
+                                error = %err,
+                                "launcher action dispatch failed"
+                            );
+                        }
+                    }
                 }
                 LauncherSearchResult::FilePath(path) => {
                     let _ = std::process::Command::new("xdg-open").arg(path).spawn();
@@ -1089,5 +1102,39 @@ mod tests {
             results.first(),
             Some(LauncherSearchResult::App(app)) if app.name == "Editor"
         ));
+    }
+
+    #[test]
+    fn search_results_omits_parameterized_actions_and_includes_no_input_and_extension_actions() {
+        let scanner = AppScanner::from_applications(vec![]);
+        let mut registry = crate::actions::ActionRegistry::default();
+        let canonical: shilpo_ext::CanonicalId =
+            "io.github.alice.world-clock/refresh".parse().unwrap();
+        let ext_id = registry
+            .register_extension(canonical, "refresh", "Refresh World Clock")
+            .unwrap();
+
+        let results = search_results(&scanner, "", LauncherCategory::All, &[], &registry.all());
+
+        let action_ids: Vec<crate::actions::ActionId> = results
+            .into_iter()
+            .filter_map(|r| match r {
+                LauncherSearchResult::Action(a) => Some(a.id),
+                _ => None,
+            })
+            .collect();
+
+        // Parameterized actions must be absent
+        assert!(!action_ids.contains(&crate::actions::ActionId::FocusWorkspace));
+        assert!(!action_ids.contains(&crate::actions::ActionId::FocusWindow));
+        assert!(!action_ids.contains(&crate::actions::ActionId::CloseWindow));
+        assert!(!action_ids.contains(&crate::actions::ActionId::MoveWindowToWorkspace));
+
+        // Representative no-input actions must be present
+        assert!(action_ids.contains(&crate::actions::ActionId::ToggleLauncher));
+        assert!(action_ids.contains(&crate::actions::ActionId::CreateWorkspace));
+
+        // Registered extension action must be present
+        assert!(action_ids.contains(&ext_id));
     }
 }

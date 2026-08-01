@@ -22,7 +22,8 @@ pub use control_center::ControlCenterView;
 pub use doctor::DoctorChecker;
 pub use error::ShellError;
 pub use extensions::{
-    ContributionDescriptor, ContributionInstance, ContributionSurface, ShellExtensions,
+    ContributionDescriptor, ContributionInstance, ContributionSurface, ExtensionCoordinator,
+    ExtensionSnapshot,
 };
 pub use launcher::LauncherView;
 pub use notification::NotificationToastView;
