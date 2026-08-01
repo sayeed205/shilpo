@@ -1,0 +1,16 @@
+[Unit]
+Description=Shilpo Desktop Shell
+Documentation=man:shilpo-shell(1) https://github.com/sayeed205/shilpo
+PartOf=graphical-session.target
+After=graphical-session-pre.target
+
+[Service]
+ExecStart=/usr/bin/shilpo-shell
+Restart=on-failure
+RestartSec=2s
+KillSignal=SIGTERM
+TimeoutStopSec=5s
+Environment=XDG_CURRENT_DESKTOP=niri
+
+[Install]
+WantedBy=graphical-session.target

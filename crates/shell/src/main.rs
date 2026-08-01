@@ -249,6 +249,10 @@ async fn main() {
     let app = gpui_platform::application().with_assets(Assets);
     let ipc_server = match ShellIpcServer::new() {
         Ok(server) => server,
+        Err(shilpo_services::IpcError::AlreadyRunning) => {
+            eprintln!("shilpo-shell is already running");
+            std::process::exit(2);
+        }
         Err(error) => {
             eprintln!("Unable to start secure shell IPC: {error}");
             std::process::exit(1);

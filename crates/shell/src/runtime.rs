@@ -27,7 +27,10 @@ use shilpo_services::{
 use std::path::PathBuf;
 #[cfg(test)]
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
+use std::{
+    sync::{Arc, Mutex, mpsc},
+    time::Instant,
+};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,12 +43,18 @@ struct ExtensionSurfaceSpec {
 pub struct ServiceHub {
     pub compositor: Arc<dyn CompositorAdapter>,
     pub notification: Option<NotificationService>,
+    pub notification_state: shilpo_services::ServiceLifecycle,
+    pub notification_last_error: Option<String>,
+    notification_attempt: u32,
+    notification_next_retry: Option<Instant>,
+    notification_dnd: bool,
     pub clipboard: shilpo_services::ClipboardService,
     pub app_scanner: shilpo_services::AppScanner,
     pub service_commands: CommandSender,
     pub device_snapshot: crate::bar::service_worker::DeviceSnapshot,
     pub availability: crate::bar::service_worker::ServiceAvailability,
     pub notif_rx: Arc<Mutex<mpsc::Receiver<shilpo_services::Notification>>>,
+    pub notif_tx: mpsc::Sender<shilpo_services::Notification>,
     pub updates_rx: Arc<Mutex<UpdateReceiver>>,
     pub _service_task: Option<gpui::Task<()>>,
     pub _watcher: Option<notify::RecommendedWatcher>,
@@ -64,17 +73,23 @@ impl ServiceHub {
         let app_scanner = shilpo_services::AppScanner::new()
             .unwrap_or_else(|_| shilpo_services::AppScanner::new_empty());
         let app_watcher = app_scanner.start_watcher();
-        let notification = match NotificationService::new() {
-            Ok(s) => Some(s),
-            Err(e) => {
-                tracing::warn!(error = %e, "notification service unavailable; toasts disabled");
-                None
-            }
-        };
+        let (notification, notification_state, notification_last_error) =
+            match NotificationService::new() {
+                Ok(s) => (Some(s), shilpo_services::ServiceLifecycle::Ready, None),
+                Err(e) => {
+                    let err_str = e.to_string();
+                    tracing::warn!(error = %err_str, "notification service unavailable; toasts disabled");
+                    (
+                        None,
+                        shilpo_services::ServiceLifecycle::Connecting { attempt: 1 },
+                        Some(err_str),
+                    )
+                }
+            };
 
         let (notif_tx, notif_rx) = mpsc::channel();
         if let Some(service) = &notification {
-            service.set_new_notification_sender(notif_tx);
+            service.set_new_notification_sender(notif_tx.clone());
         }
 
         let (updates_tx, updates_rx, service_commands, commands_rx) = service_worker::channels();
@@ -127,19 +142,75 @@ impl ServiceHub {
             }
         };
 
+        let notification_attempt = if notification.is_some() { 0 } else { 1 };
+        let notification_next_retry = notification
+            .is_none()
+            .then(|| Instant::now() + service_worker::backoff_delay(notification_attempt));
+
         Self {
             compositor,
             notification,
+            notification_state,
+            notification_last_error,
+            notification_attempt,
+            notification_next_retry,
+            notification_dnd: false,
             clipboard,
             app_scanner,
             service_commands,
             device_snapshot: crate::bar::service_worker::DeviceSnapshot::default(),
             availability,
             notif_rx: Arc::new(Mutex::new(notif_rx)),
+            notif_tx,
             updates_rx: Arc::new(Mutex::new(updates_rx)),
             _service_task: Some(service_task),
             _watcher: watcher,
             _app_watcher: app_watcher,
+        }
+    }
+
+    fn poll_notification_reconnect(&mut self) {
+        if self
+            .notification
+            .as_ref()
+            .is_some_and(|service| !service.is_healthy())
+        {
+            self.notification = None;
+            self.notification_attempt = self.notification_attempt.saturating_add(1);
+            self.notification_state = shilpo_services::ServiceLifecycle::Connecting {
+                attempt: self.notification_attempt,
+            };
+            self.notification_last_error = Some("notification D-Bus connection closed".into());
+            self.notification_next_retry =
+                Some(Instant::now() + service_worker::backoff_delay(self.notification_attempt));
+        }
+        if self.notification.is_some()
+            || !self
+                .notification_next_retry
+                .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return;
+        }
+
+        match NotificationService::new() {
+            Ok(service) => {
+                service.set_new_notification_sender(self.notif_tx.clone());
+                service.set_dnd_enabled(self.notification_dnd);
+                self.notification = Some(service);
+                self.notification_state = shilpo_services::ServiceLifecycle::Ready;
+                self.notification_last_error = None;
+                self.notification_attempt = 0;
+                self.notification_next_retry = None;
+            }
+            Err(error) => {
+                self.notification_attempt = self.notification_attempt.saturating_add(1);
+                self.notification_state = shilpo_services::ServiceLifecycle::Connecting {
+                    attempt: self.notification_attempt,
+                };
+                self.notification_last_error = Some(error.to_string());
+                self.notification_next_retry =
+                    Some(Instant::now() + service_worker::backoff_delay(self.notification_attempt));
+            }
         }
     }
 }
@@ -377,11 +448,12 @@ impl ShellRuntime {
                 None
             }
         };
-        let hub = ServiceHub::new(
+        let mut hub = ServiceHub::new(
             cx.background_executor().clone(),
             config_path,
             heed_store.clone(),
         );
+        hub.notification_dnd = session_state.dnd_active;
         apply_notification_dnd(hub.notification.as_ref(), session_state.dnd_active);
         let extensions = match shilpo_ext::WasmRuntime::new() {
             Ok(runtime) => {
@@ -1080,6 +1152,11 @@ impl ShellRuntime {
             return;
         }
 
+        if let Some(hub) = cx.global_mut::<Self>().service_hub.as_mut() {
+            hub.poll_notification_reconnect();
+        }
+        cx.global::<Self>().publish_status();
+
         let notifs = {
             let runtime = cx.global_mut::<Self>();
             let mut list = Vec::new();
@@ -1116,6 +1193,46 @@ impl ShellRuntime {
                     hub.device_snapshot.apply(upd);
                 }
                 match upd {
+                    crate::bar::service_worker::WorkerUpdate::ServiceStateChange {
+                        service,
+                        state,
+                        last_error,
+                    } => {
+                        if let Some(hub) = cx.global_mut::<Self>().service_hub.as_mut() {
+                            let available = state.is_ready();
+                            match *service {
+                                "battery" => {
+                                    hub.availability.battery_available = available;
+                                    hub.availability.battery_state = *state;
+                                    hub.availability.battery_last_error = last_error.clone();
+                                }
+                                "audio" => {
+                                    hub.availability.audio_available = available;
+                                    hub.availability.audio_state = *state;
+                                    hub.availability.audio_last_error = last_error.clone();
+                                }
+                                "network" => {
+                                    hub.availability.network_available = available;
+                                    hub.availability.network_state = *state;
+                                    hub.availability.network_last_error = last_error.clone();
+                                }
+                                "media" => {
+                                    hub.availability.media_available = available;
+                                    hub.availability.media_state = *state;
+                                    hub.availability.media_last_error = last_error.clone();
+                                }
+                                "brightness" => {
+                                    hub.availability.brightness_available = available;
+                                    hub.availability.brightness_state = *state;
+                                    hub.availability.brightness_last_error = last_error.clone();
+                                }
+                                _ => tracing::warn!(service, "unknown service state update"),
+                            }
+                        }
+                    }
+                    crate::bar::service_worker::WorkerUpdate::CommandRejected {
+                        reason, ..
+                    } => tracing::warn!(%reason, "device command rejected"),
                     crate::bar::service_worker::WorkerUpdate::Config(
                         crate::bar::service_worker::ConfigUpdate::Loaded(config),
                     ) => {
@@ -1441,21 +1558,85 @@ impl ShellRuntime {
                 .as_ref()
                 .map(|h| h.availability.battery_available)
                 .unwrap_or(false),
+            battery_state: self
+                .service_hub
+                .as_ref()
+                .map(|h| h.availability.battery_state)
+                .unwrap_or_default(),
+            battery_last_error: self
+                .service_hub
+                .as_ref()
+                .and_then(|h| h.availability.battery_last_error.clone()),
             audio_service_available: self
                 .service_hub
                 .as_ref()
                 .map(|h| h.availability.audio_available)
                 .unwrap_or(false),
+            audio_state: self
+                .service_hub
+                .as_ref()
+                .map(|h| h.availability.audio_state)
+                .unwrap_or_default(),
+            audio_last_error: self
+                .service_hub
+                .as_ref()
+                .and_then(|h| h.availability.audio_last_error.clone()),
             network_service_available: self
                 .service_hub
                 .as_ref()
                 .map(|h| h.availability.network_available)
                 .unwrap_or(false),
+            network_state: self
+                .service_hub
+                .as_ref()
+                .map(|h| h.availability.network_state)
+                .unwrap_or_default(),
+            network_last_error: self
+                .service_hub
+                .as_ref()
+                .and_then(|h| h.availability.network_last_error.clone()),
             notification_service_available: self
                 .service_hub
                 .as_ref()
-                .and_then(|h| h.notification.as_ref())
-                .is_some(),
+                .map(|h| h.notification_state.is_ready())
+                .unwrap_or(false),
+            notification_state: self
+                .service_hub
+                .as_ref()
+                .map(|h| h.notification_state)
+                .unwrap_or_default(),
+            notification_last_error: self
+                .service_hub
+                .as_ref()
+                .and_then(|h| h.notification_last_error.clone()),
+            media_service_available: self
+                .service_hub
+                .as_ref()
+                .map(|h| h.availability.media_available)
+                .unwrap_or(false),
+            media_state: self
+                .service_hub
+                .as_ref()
+                .map(|h| h.availability.media_state)
+                .unwrap_or_default(),
+            media_last_error: self
+                .service_hub
+                .as_ref()
+                .and_then(|h| h.availability.media_last_error.clone()),
+            brightness_service_available: self
+                .service_hub
+                .as_ref()
+                .map(|h| h.availability.brightness_available)
+                .unwrap_or(false),
+            brightness_state: self
+                .service_hub
+                .as_ref()
+                .map(|h| h.availability.brightness_state)
+                .unwrap_or_default(),
+            brightness_last_error: self
+                .service_hub
+                .as_ref()
+                .and_then(|h| h.availability.brightness_last_error.clone()),
             heed_store_available: self.heed_store.is_some(),
             uptime_seconds: self.start_time.elapsed().as_secs(),
         };
@@ -2185,6 +2366,9 @@ impl ShellRuntime {
             {
                 notif.set_dnd_enabled(enabled);
             }
+            if let Some(hub) = runtime.service_hub.as_mut() {
+                hub.notification_dnd = enabled;
+            }
         }
     }
 
@@ -2318,7 +2502,7 @@ impl ShellRuntime {
         }
         // Generation check above makes delayed expiry harmless after replacement.
         // Entry is taken before close so stale expiry cannot retain registry state.
-        Self::dismiss_notification(cx, notification_id);
+        Self::expire_notification_id(cx, notification_id);
         let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
     }
 
@@ -2344,6 +2528,18 @@ impl ShellRuntime {
                 .and_then(|hub| hub.notification.as_ref())
         {
             notification.dismiss(notification_id);
+        }
+    }
+
+    fn expire_notification_id(cx: &App, notification_id: u32) {
+        if cx.has_global::<Self>()
+            && let Some(notification) = cx
+                .global::<Self>()
+                .service_hub
+                .as_ref()
+                .and_then(|hub| hub.notification.as_ref())
+        {
+            notification.expire(notification_id);
         }
     }
 

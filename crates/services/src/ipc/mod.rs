@@ -69,6 +69,23 @@ pub enum ReadinessState {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "state", content = "attempt")]
+pub enum ServiceLifecycle {
+    #[default]
+    Unavailable,
+    Connecting {
+        attempt: u32,
+    },
+    Ready,
+}
+
+impl ServiceLifecycle {
+    pub fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ServiceHealth {
     pub compositor_connected: bool,
@@ -83,9 +100,37 @@ pub struct ServiceHealth {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compositor_telemetry: Option<crate::compositor::CompositorBrokerTelemetry>,
     pub battery_service_available: bool,
+    #[serde(default)]
+    pub battery_state: ServiceLifecycle,
+    #[serde(default)]
+    pub battery_last_error: Option<String>,
     pub audio_service_available: bool,
+    #[serde(default)]
+    pub audio_state: ServiceLifecycle,
+    #[serde(default)]
+    pub audio_last_error: Option<String>,
     pub network_service_available: bool,
+    #[serde(default)]
+    pub network_state: ServiceLifecycle,
+    #[serde(default)]
+    pub network_last_error: Option<String>,
     pub notification_service_available: bool,
+    #[serde(default)]
+    pub notification_state: ServiceLifecycle,
+    #[serde(default)]
+    pub notification_last_error: Option<String>,
+    #[serde(default)]
+    pub media_service_available: bool,
+    #[serde(default)]
+    pub media_state: ServiceLifecycle,
+    #[serde(default)]
+    pub media_last_error: Option<String>,
+    #[serde(default)]
+    pub brightness_service_available: bool,
+    #[serde(default)]
+    pub brightness_state: ServiceLifecycle,
+    #[serde(default)]
+    pub brightness_last_error: Option<String>,
     pub heed_store_available: bool,
     pub uptime_seconds: u64,
 }
@@ -805,6 +850,7 @@ mod tests {
             notification_service_available: true,
             heed_store_available: true,
             uptime_seconds: 42,
+            ..Default::default()
         };
 
         server.update_status(IpcStatus {
@@ -855,6 +901,7 @@ mod tests {
             notification_service_available: true,
             heed_store_available: true,
             uptime_seconds: 42,
+            ..Default::default()
         };
 
         server.update_status(IpcStatus {
@@ -986,6 +1033,7 @@ mod tests {
                 notification_service_available: true,
                 heed_store_available: true,
                 uptime_seconds: 120,
+                ..Default::default()
             },
         };
         let value = serde_json::to_value(&status).unwrap();

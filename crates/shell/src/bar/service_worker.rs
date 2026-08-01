@@ -82,7 +82,17 @@ impl DeviceSnapshot {
                     true
                 }
             }
-            WorkerUpdate::Config(_) => false,
+            WorkerUpdate::Config(_) | WorkerUpdate::CommandRejected { .. } => false,
+            WorkerUpdate::ServiceStateChange { service, state, .. } => {
+                let available = state.is_ready();
+                match *service {
+                    "audio" => self.audio.available = available,
+                    "network" => self.network.available = available,
+                    "brightness" => self.brightness.available = available,
+                    _ => return false,
+                }
+                true
+            }
         }
     }
 }
@@ -90,10 +100,20 @@ impl DeviceSnapshot {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ServiceAvailability {
     pub battery_available: bool,
+    pub battery_state: shilpo_services::ServiceLifecycle,
+    pub battery_last_error: Option<String>,
     pub audio_available: bool,
+    pub audio_state: shilpo_services::ServiceLifecycle,
+    pub audio_last_error: Option<String>,
     pub network_available: bool,
+    pub network_state: shilpo_services::ServiceLifecycle,
+    pub network_last_error: Option<String>,
     pub media_available: bool,
+    pub media_state: shilpo_services::ServiceLifecycle,
+    pub media_last_error: Option<String>,
     pub brightness_available: bool,
+    pub brightness_state: shilpo_services::ServiceLifecycle,
+    pub brightness_last_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,30 +183,152 @@ pub enum WorkerUpdate {
     Brightness(BrightnessInfo),
     AudioHardware(AudioHardwareSnapshot),
     Config(ConfigUpdate),
+    ServiceStateChange {
+        service: &'static str,
+        state: shilpo_services::ServiceLifecycle,
+        last_error: Option<String>,
+    },
+    CommandRejected {
+        command: DeviceCommand,
+        reason: String,
+    },
+}
+
+pub fn backoff_delay(attempt: u32) -> Duration {
+    match attempt {
+        0 | 1 => Duration::from_secs(1),
+        2 => Duration::from_secs(2),
+        3 => Duration::from_secs(4),
+        4 => Duration::from_secs(8),
+        5 => Duration::from_secs(16),
+        _ => Duration::from_secs(30),
+    }
+}
+
+pub struct ServiceSlot<T> {
+    pub instance: Option<T>,
+    pub state: shilpo_services::ServiceLifecycle,
+    pub attempt: u32,
+    pub next_retry: Option<Instant>,
+    pub last_error: Option<String>,
+}
+
+impl<T> Default for ServiceSlot<T> {
+    fn default() -> Self {
+        Self {
+            instance: None,
+            state: shilpo_services::ServiceLifecycle::Unavailable,
+            attempt: 0,
+            next_retry: None,
+            last_error: None,
+        }
+    }
+}
+
+impl<T> ServiceSlot<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn ready(instance: T) -> Self {
+        Self {
+            instance: Some(instance),
+            state: shilpo_services::ServiceLifecycle::Ready,
+            attempt: 0,
+            next_retry: None,
+            last_error: None,
+        }
+    }
+
+    pub fn failed(error: String, attempt: u32, now: Instant) -> Self {
+        let delay = backoff_delay(attempt);
+        Self {
+            instance: None,
+            state: shilpo_services::ServiceLifecycle::Connecting { attempt },
+            attempt,
+            next_retry: Some(now + delay),
+            last_error: Some(error),
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.state.is_ready() && self.instance.is_some()
+    }
+
+    pub fn mark_failed(&mut self, error: String, now: Instant) {
+        self.instance = None;
+        self.attempt = self.attempt.saturating_add(1);
+        let delay = backoff_delay(self.attempt);
+        self.state = shilpo_services::ServiceLifecycle::Connecting {
+            attempt: self.attempt,
+        };
+        self.next_retry = Some(now + delay);
+        self.last_error = Some(error);
+    }
+
+    pub fn mark_ready(&mut self, instance: T) {
+        self.instance = Some(instance);
+        self.state = shilpo_services::ServiceLifecycle::Ready;
+        self.attempt = 0;
+        self.next_retry = None;
+        self.last_error = None;
+    }
+
+    pub fn mark_unavailable(&mut self, error: impl Into<String>) {
+        self.instance = None;
+        self.state = shilpo_services::ServiceLifecycle::Unavailable;
+        self.last_error = Some(error.into());
+    }
 }
 
 pub struct DeviceServices {
-    pub battery: Option<BatteryService>,
-    pub audio: Option<AudioService>,
-    pub network: Option<NetworkService>,
-    pub media: Option<MediaService>,
-    pub brightness: Option<BrightnessService>,
+    pub battery: ServiceSlot<BatteryService>,
+    pub audio: ServiceSlot<AudioService>,
+    pub network: ServiceSlot<NetworkService>,
+    pub media: ServiceSlot<MediaService>,
+    pub brightness: ServiceSlot<BrightnessService>,
 }
 
 impl DeviceServices {
     pub fn new() -> (Self, ServiceAvailability) {
-        let battery = BatteryService::new().ok();
-        let audio = AudioService::new().ok();
-        let network = NetworkService::new().ok();
-        let media = MediaService::new().ok();
-        let brightness = BrightnessService::new().ok();
+        let now = Instant::now();
+        let battery = match BatteryService::new() {
+            Ok(s) => ServiceSlot::ready(s),
+            Err(e) => ServiceSlot::failed(e.to_string(), 1, now),
+        };
+        let audio = match AudioService::new() {
+            Ok(s) => ServiceSlot::ready(s),
+            Err(e) => ServiceSlot::failed(e.to_string(), 1, now),
+        };
+        let network = match NetworkService::new() {
+            Ok(s) => ServiceSlot::ready(s),
+            Err(e) => ServiceSlot::failed(e.to_string(), 1, now),
+        };
+        let media = match MediaService::new() {
+            Ok(s) => ServiceSlot::ready(s),
+            Err(e) => ServiceSlot::failed(e.to_string(), 1, now),
+        };
+        let brightness = match BrightnessService::new() {
+            Ok(s) => ServiceSlot::ready(s),
+            Err(e) => ServiceSlot::failed(e.to_string(), 1, now),
+        };
 
         let availability = ServiceAvailability {
-            battery_available: battery.is_some(),
-            audio_available: audio.is_some(),
-            network_available: network.is_some(),
-            media_available: media.is_some(),
-            brightness_available: brightness.is_some(),
+            battery_available: battery.is_ready(),
+            battery_state: battery.state,
+            battery_last_error: battery.last_error.clone(),
+            audio_available: audio.is_ready(),
+            audio_state: audio.state,
+            audio_last_error: audio.last_error.clone(),
+            network_available: network.is_ready(),
+            network_state: network.state,
+            network_last_error: network.last_error.clone(),
+            media_available: media.is_ready(),
+            media_state: media.state,
+            media_last_error: media.last_error.clone(),
+            brightness_available: brightness.is_ready(),
+            brightness_state: brightness.state,
+            brightness_last_error: brightness.last_error.clone(),
         };
 
         (
@@ -201,10 +343,10 @@ impl DeviceServices {
         )
     }
 
-    pub fn handle_command(&self, cmd: &DeviceCommand) {
+    pub fn handle_command(&mut self, updates: &UpdateSender, cmd: &DeviceCommand) {
         match cmd {
             DeviceCommand::Audio(audio_cmd) => {
-                if let Some(ref audio) = self.audio {
+                if let Some(ref audio) = self.audio.instance {
                     match audio_cmd {
                         AudioCommand::SetDefaultVolume(vol) => audio.set_volume(*vol),
                         AudioCommand::StepDefaultVolume(VolumeStep::Up) => audio.increase_volume(5),
@@ -234,10 +376,15 @@ impl DeviceServices {
                             let _ = audio.toggle_simultaneous_output();
                         }
                     }
+                } else {
+                    let _ = updates.try_send(WorkerUpdate::CommandRejected {
+                        command: cmd.clone(),
+                        reason: "Audio service unavailable or reconnecting".into(),
+                    });
                 }
             }
             DeviceCommand::Network(net_cmd) => {
-                if let Some(ref network) = self.network {
+                if let Some(ref network) = self.network.instance {
                     let _ = match net_cmd {
                         NetworkCommand::SetWifiEnabled(b) => network.set_wifi_enabled(*b),
                         NetworkCommand::DeactivateConnection(p) => network.deactivate_connection(p),
@@ -247,16 +394,142 @@ impl DeviceServices {
                             network.set_airplane_mode_enabled(*b)
                         }
                     };
+                } else {
+                    let _ = updates.try_send(WorkerUpdate::CommandRejected {
+                        command: cmd.clone(),
+                        reason: "Network service unavailable or reconnecting".into(),
+                    });
                 }
             }
             DeviceCommand::Brightness(val) => {
-                if let Some(ref brightness) = self.brightness {
+                if let Some(ref brightness) = self.brightness.instance {
                     brightness.set_brightness(*val);
+                } else {
+                    let _ = updates.try_send(WorkerUpdate::CommandRejected {
+                        command: cmd.clone(),
+                        reason: "Brightness service unavailable or reconnecting".into(),
+                    });
                 }
             }
             DeviceCommand::Media(m) => {
-                if let Some(ref media) = self.media {
+                if let Some(ref media) = self.media.instance {
                     media.send_command(*m);
+                } else {
+                    let _ = updates.try_send(WorkerUpdate::CommandRejected {
+                        command: cmd.clone(),
+                        reason: "Media service unavailable or reconnecting".into(),
+                    });
+                }
+            }
+        }
+    }
+
+    pub fn poll_reconnect(&mut self, updates: &UpdateSender, now: Instant) {
+        if !self.battery.is_ready() && self.battery.next_retry.is_some_and(|t| now >= t) {
+            self.battery.instance = None; // Drop old instance before reconnecting
+            match BatteryService::new() {
+                Ok(s) => {
+                    self.battery = ServiceSlot::ready(s);
+                    let _ = updates.try_send(WorkerUpdate::ServiceStateChange {
+                        service: "battery",
+                        state: self.battery.state,
+                        last_error: None,
+                    });
+                }
+                Err(e) => {
+                    self.battery =
+                        ServiceSlot::failed(e.to_string(), self.battery.attempt + 1, now);
+                    let _ = updates.try_send(WorkerUpdate::ServiceStateChange {
+                        service: "battery",
+                        state: self.battery.state,
+                        last_error: self.battery.last_error.clone(),
+                    });
+                }
+            }
+        }
+        if !self.audio.is_ready() && self.audio.next_retry.is_some_and(|t| now >= t) {
+            self.audio.instance = None;
+            match AudioService::new() {
+                Ok(s) => {
+                    self.audio = ServiceSlot::ready(s);
+                    let _ = updates.try_send(WorkerUpdate::ServiceStateChange {
+                        service: "audio",
+                        state: self.audio.state,
+                        last_error: None,
+                    });
+                }
+                Err(e) => {
+                    self.audio = ServiceSlot::failed(e.to_string(), self.audio.attempt + 1, now);
+                    let _ = updates.try_send(WorkerUpdate::ServiceStateChange {
+                        service: "audio",
+                        state: self.audio.state,
+                        last_error: self.audio.last_error.clone(),
+                    });
+                }
+            }
+        }
+        if !self.network.is_ready() && self.network.next_retry.is_some_and(|t| now >= t) {
+            self.network.instance = None;
+            match NetworkService::new() {
+                Ok(s) => {
+                    self.network = ServiceSlot::ready(s);
+                    let _ = updates.try_send(WorkerUpdate::ServiceStateChange {
+                        service: "network",
+                        state: self.network.state,
+                        last_error: None,
+                    });
+                }
+                Err(e) => {
+                    self.network =
+                        ServiceSlot::failed(e.to_string(), self.network.attempt + 1, now);
+                    let _ = updates.try_send(WorkerUpdate::ServiceStateChange {
+                        service: "network",
+                        state: self.network.state,
+                        last_error: self.network.last_error.clone(),
+                    });
+                }
+            }
+        }
+        if !self.media.is_ready() && self.media.next_retry.is_some_and(|t| now >= t) {
+            self.media.instance = None;
+            match MediaService::new() {
+                Ok(s) => {
+                    self.media = ServiceSlot::ready(s);
+                    let _ = updates.try_send(WorkerUpdate::ServiceStateChange {
+                        service: "media",
+                        state: self.media.state,
+                        last_error: None,
+                    });
+                }
+                Err(e) => {
+                    self.media = ServiceSlot::failed(e.to_string(), self.media.attempt + 1, now);
+                    let _ = updates.try_send(WorkerUpdate::ServiceStateChange {
+                        service: "media",
+                        state: self.media.state,
+                        last_error: self.media.last_error.clone(),
+                    });
+                }
+            }
+        }
+        if !self.brightness.is_ready() && self.brightness.next_retry.is_some_and(|t| now >= t) {
+            self.brightness.instance = None;
+            match BrightnessService::new() {
+                Ok(s) => {
+                    self.brightness = ServiceSlot::ready(s);
+                    let _ = updates.try_send(WorkerUpdate::ServiceStateChange {
+                        service: "brightness",
+                        state: self.brightness.state,
+                        last_error: None,
+                    });
+                }
+                Err(e) => {
+                    self.brightness =
+                        ServiceSlot::failed(e.to_string(), self.brightness.attempt + 1, now);
+                    let _ = updates.try_send(WorkerUpdate::ServiceStateChange {
+                        service: "brightness",
+                        state: self.brightness.state,
+                        last_error: self.brightness.last_error.clone(),
+                    });
                 }
             }
         }
@@ -293,7 +566,7 @@ async fn run(
     updates: UpdateSender,
     commands: CommandReceiver,
     config_path: PathBuf,
-    services: DeviceServices,
+    mut services: DeviceServices,
 ) {
     let mut battery_last = None;
     let mut audio_last = None;
@@ -310,13 +583,15 @@ async fn run(
     }
 
     loop {
+        services.poll_reconnect(&updates, Instant::now());
+
         while let Ok(command) = commands.try_recv() {
             match command {
                 WorkerCommand::ReloadConfig => {
                     pending_reload = Some(Instant::now());
                 }
                 WorkerCommand::Device(cmd) => {
-                    services.handle_command(&cmd);
+                    services.handle_command(&updates, &cmd);
                     if let DeviceCommand::Audio(
                         AudioCommand::SetDefaultDevice { .. }
                         | AudioCommand::SetSinkPort { .. }
@@ -327,10 +602,14 @@ async fn run(
                         if !sample_device(
                             &updates,
                             &mut audio_hardware_last,
-                            services.audio.as_ref().map(|a| AudioHardwareSnapshot {
-                                devices: a.list_devices(),
-                                ports: a.list_ports(),
-                            }),
+                            services
+                                .audio
+                                .instance
+                                .as_ref()
+                                .map(|a| AudioHardwareSnapshot {
+                                    devices: a.list_devices(),
+                                    ports: a.list_ports(),
+                                }),
                             WorkerUpdate::AudioHardware,
                         ) {
                             return;
@@ -359,7 +638,11 @@ async fn run(
         if !sample_device(
             &updates,
             &mut audio_last,
-            services.audio.as_ref().map(AudioService::audio_info),
+            services
+                .audio
+                .instance
+                .as_ref()
+                .map(AudioService::audio_info),
             WorkerUpdate::Audio,
         ) {
             return;
@@ -368,7 +651,11 @@ async fn run(
         if !sample_device(
             &updates,
             &mut media_last,
-            services.media.as_ref().map(MediaService::media_info),
+            services
+                .media
+                .instance
+                .as_ref()
+                .map(MediaService::media_info),
             WorkerUpdate::Media,
         ) {
             return;
@@ -378,7 +665,11 @@ async fn run(
             if !sample_device(
                 &updates,
                 &mut battery_last,
-                services.battery.as_ref().map(BatteryService::battery_info),
+                services
+                    .battery
+                    .instance
+                    .as_ref()
+                    .map(BatteryService::battery_info),
                 WorkerUpdate::Battery,
             ) {
                 return;
@@ -386,7 +677,11 @@ async fn run(
             if !sample_device(
                 &updates,
                 &mut network_last,
-                services.network.as_ref().map(NetworkService::network_info),
+                services
+                    .network
+                    .instance
+                    .as_ref()
+                    .map(NetworkService::network_info),
                 WorkerUpdate::Network,
             ) {
                 return;
@@ -394,10 +689,14 @@ async fn run(
             if !sample_device(
                 &updates,
                 &mut audio_hardware_last,
-                services.audio.as_ref().map(|a| AudioHardwareSnapshot {
-                    devices: a.list_devices(),
-                    ports: a.list_ports(),
-                }),
+                services
+                    .audio
+                    .instance
+                    .as_ref()
+                    .map(|a| AudioHardwareSnapshot {
+                        devices: a.list_devices(),
+                        ports: a.list_ports(),
+                    }),
                 WorkerUpdate::AudioHardware,
             ) {
                 return;
@@ -407,6 +706,7 @@ async fn run(
                 &mut brightness_last,
                 services
                     .brightness
+                    .instance
                     .as_ref()
                     .map(BrightnessService::brightness_info),
                 WorkerUpdate::Brightness,
@@ -565,5 +865,51 @@ mod tests {
             matches!(rx.try_recv(), Ok(WorkerUpdate::Battery(info)) if info.is_present),
             "a recreated bar must receive the current battery snapshot"
         );
+    }
+
+    #[test]
+    fn backoff_delay_exponential_growth_and_cap() {
+        assert_eq!(backoff_delay(1), Duration::from_secs(1));
+        assert_eq!(backoff_delay(2), Duration::from_secs(2));
+        assert_eq!(backoff_delay(3), Duration::from_secs(4));
+        assert_eq!(backoff_delay(4), Duration::from_secs(8));
+        assert_eq!(backoff_delay(5), Duration::from_secs(16));
+        assert_eq!(backoff_delay(6), Duration::from_secs(30));
+        assert_eq!(backoff_delay(10), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn service_slot_reconnect_lifecycle_and_rejection() {
+        use shilpo_services::ipc::ServiceLifecycle;
+
+        let mut slot = ServiceSlot::<()>::new();
+        assert_eq!(slot.state, ServiceLifecycle::Unavailable);
+        assert!(slot.instance.is_none());
+
+        let now = Instant::now();
+        // Fail first attempt -> enters Connecting { attempt: 1 }
+        slot.mark_failed("connection failed".into(), now);
+        assert_eq!(slot.state, ServiceLifecycle::Connecting { attempt: 1 });
+        assert_eq!(slot.last_error.as_deref(), Some("connection failed"));
+        assert!(slot.next_retry.is_some());
+
+        // Second failure -> attempt 2
+        slot.mark_failed("connection refused".into(), now);
+        assert_eq!(slot.state, ServiceLifecycle::Connecting { attempt: 2 });
+        assert_eq!(slot.last_error.as_deref(), Some("connection refused"));
+
+        // Ready transition
+        slot.mark_ready(());
+        assert_eq!(slot.state, ServiceLifecycle::Ready);
+        assert!(slot.instance.is_some());
+        assert_eq!(slot.attempt, 0);
+        assert!(slot.last_error.is_none());
+        assert!(slot.next_retry.is_none());
+
+        // Disconnect -> Unavailable
+        slot.mark_unavailable("backend disconnected");
+        assert_eq!(slot.state, ServiceLifecycle::Unavailable);
+        assert!(slot.instance.is_none());
+        assert_eq!(slot.last_error.as_deref(), Some("backend disconnected"));
     }
 }

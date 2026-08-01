@@ -3,7 +3,66 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-use zbus::{Connection, interface};
+use zbus::{Connection, interface, object_server::SignalEmitter};
+
+const NOTIFICATION_OBJECT_PATH: &str = "/org/freedesktop/Notifications";
+
+trait NotificationSignalSink: Send + Sync {
+    fn action_invoked(&self, id: u32, action_key: String);
+    fn notification_closed(&self, id: u32, reason: NotificationCloseReason);
+}
+
+struct DbusNotificationSignalSink {
+    emitter: SignalEmitter<'static>,
+}
+
+impl NotificationSignalSink for DbusNotificationSignalSink {
+    fn action_invoked(&self, id: u32, action_key: String) {
+        let emitter = self.emitter.clone();
+        let connection = emitter.connection().clone();
+        connection
+            .executor()
+            .spawn(
+                async move {
+                    if let Err(error) =
+                        NotificationServer::action_invoked(&emitter, id, &action_key).await
+                    {
+                        tracing::warn!(%error, id, action = %action_key, "failed to emit notification action signal");
+                    }
+                },
+                "notification-action-invoked",
+            )
+            .detach();
+    }
+
+    fn notification_closed(&self, id: u32, reason: NotificationCloseReason) {
+        let emitter = self.emitter.clone();
+        let connection = emitter.connection().clone();
+        connection
+            .executor()
+            .spawn(
+                async move {
+                    if let Err(error) =
+                        NotificationServer::notification_closed(&emitter, id, reason as u32).await
+                    {
+                        tracing::warn!(%error, id, ?reason, "failed to emit notification closed signal");
+                    }
+                },
+                "notification-closed",
+            )
+            .detach();
+    }
+}
+
+/// Reasons reported by the freedesktop `NotificationClosed` signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum NotificationCloseReason {
+    Expired = 1,
+    DismissedByUser = 2,
+    ClosedByRequest = 3,
+    Undefined = 4,
+}
 
 /// Notification urgency levels per Freedesktop Desktop Notifications Specification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -51,6 +110,7 @@ pub struct NotificationService {
     new_notif_sender: Arc<Mutex<Option<std::sync::mpsc::Sender<Notification>>>>,
     dnd_enabled: Arc<Mutex<bool>>,
     _connection: Option<Connection>,
+    signal_sink: Option<Arc<dyn NotificationSignalSink>>,
 }
 
 impl NotificationService {
@@ -81,6 +141,7 @@ impl NotificationService {
             new_notif_sender: Arc::new(Mutex::new(None)),
             dnd_enabled: Arc::new(Mutex::new(false)),
             _connection: None,
+            signal_sink: None,
         }
     }
 
@@ -92,37 +153,48 @@ impl NotificationService {
         let new_notif_sender = Arc::new(Mutex::new(None));
         let dnd_enabled = Arc::new(Mutex::new(false));
 
-        let service = Self {
+        let server = NotificationServer {
             notifications: notifications.clone(),
             history: history.clone(),
+            next_id,
             new_notif_sender: new_notif_sender.clone(),
             dnd_enabled: dnd_enabled.clone(),
-            _connection: Some(connection.clone()),
-        };
-
-        let server = NotificationServer {
-            notifications,
-            history,
-            next_id,
-            new_notif_sender,
-            dnd_enabled,
         };
 
         connection
             .object_server()
-            .at("/org/freedesktop/Notifications", server)
+            .at(NOTIFICATION_OBJECT_PATH, server)
             .await?;
 
         connection
             .request_name("org.freedesktop.Notifications")
             .await?;
 
-        Ok(service)
+        let signal_emitter =
+            SignalEmitter::new(&connection, NOTIFICATION_OBJECT_PATH)?.into_owned();
+
+        Ok(Self {
+            notifications,
+            history,
+            new_notif_sender,
+            dnd_enabled,
+            _connection: Some(connection),
+            signal_sink: Some(Arc::new(DbusNotificationSignalSink {
+                emitter: signal_emitter,
+            })),
+        })
     }
 
     /// Returns true if this service is connected to a live D-Bus session.
     pub fn is_dbus_connected(&self) -> bool {
         self._connection.is_some()
+    }
+
+    /// Returns whether the session-bus connection backing the daemon is still alive.
+    pub fn is_healthy(&self) -> bool {
+        self._connection
+            .as_ref()
+            .is_some_and(|connection| !connection.is_closed())
     }
 
     /// Sets up a channel sender to receive newly arrived notifications.
@@ -138,20 +210,50 @@ impl NotificationService {
 
     /// Clears an active notification by its unique ID.
     pub fn dismiss(&self, id: u32) {
-        let mut lock = self.notifications.lock().unwrap();
-        lock.retain(|n| n.id != id);
+        self.close(id, NotificationCloseReason::DismissedByUser);
+    }
+
+    /// Expires a notification and reports the corresponding protocol close reason.
+    pub fn expire(&self, id: u32) {
+        self.close(id, NotificationCloseReason::Expired);
     }
 
     /// Clears all active notifications.
     pub fn dismiss_all(&self) {
-        let mut lock = self.notifications.lock().unwrap();
-        lock.clear();
+        let ids = {
+            let mut lock = self.notifications.lock().unwrap();
+            let ids = lock
+                .iter()
+                .map(|notification| notification.id)
+                .collect::<Vec<_>>();
+            lock.clear();
+            ids
+        };
+        for id in ids {
+            self.emit_closed(id, NotificationCloseReason::DismissedByUser);
+        }
     }
 
     /// Invokes a notification action callback and dismisses the notification.
     pub fn invoke_action(&self, id: u32, action_key: &str) {
+        let action_exists = {
+            let lock = self.notifications.lock().unwrap();
+            lock.iter()
+                .find(|notification| notification.id == id)
+                .is_some_and(|notification| {
+                    notification
+                        .actions
+                        .iter()
+                        .any(|(key, _)| key == action_key)
+                })
+        };
+        if !action_exists {
+            tracing::warn!(id, action = %action_key, "Ignoring unknown notification action");
+            return;
+        }
         tracing::info!(id = id, action = %action_key, "Notification action invoked");
-        self.dismiss(id);
+        self.emit_action_invoked(id, action_key.to_string());
+        self.close(id, NotificationCloseReason::DismissedByUser);
     }
 
     /// Sets whether Do Not Disturb mode is enabled.
@@ -207,6 +309,30 @@ impl NotificationService {
         tracing::info!(id = id, text = %reply_text, "Sending inline reply to notification");
         self.dismiss(id);
         Ok(())
+    }
+
+    fn close(&self, id: u32, reason: NotificationCloseReason) {
+        let removed = {
+            let mut lock = self.notifications.lock().unwrap();
+            let previous_len = lock.len();
+            lock.retain(|notification| notification.id != id);
+            lock.len() != previous_len
+        };
+        if removed {
+            self.emit_closed(id, reason);
+        }
+    }
+
+    fn emit_action_invoked(&self, id: u32, action_key: String) {
+        if let Some(sink) = &self.signal_sink {
+            sink.action_invoked(id, action_key);
+        }
+    }
+
+    fn emit_closed(&self, id: u32, reason: NotificationCloseReason) {
+        if let Some(sink) = &self.signal_sink {
+            sink.notification_closed(id, reason);
+        }
     }
 
     /// Returns historical notifications up to cap.
@@ -345,13 +471,30 @@ impl NotificationServer {
         id
     }
 
-    fn close_notification(&self, id: u32) {
-        let mut list = self.notifications.lock().unwrap();
-        list.retain(|n| n.id != id);
+    async fn close_notification(
+        &self,
+        id: u32,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
+        let removed = {
+            let mut list = self.notifications.lock().unwrap();
+            let previous_len = list.len();
+            list.retain(|notification| notification.id != id);
+            list.len() != previous_len
+        };
+        if removed {
+            Self::notification_closed(
+                &emitter,
+                id,
+                NotificationCloseReason::ClosedByRequest as u32,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     fn get_capabilities(&self) -> Vec<String> {
-        vec!["body".to_string()]
+        vec!["actions".to_string(), "body".to_string()]
     }
 
     fn get_server_information(&self) -> (String, String, String, String) {
@@ -362,11 +505,52 @@ impl NotificationServer {
             "1.2".to_string(),
         )
     }
+
+    #[zbus(signal)]
+    async fn action_invoked(
+        emitter: &SignalEmitter<'_>,
+        id: u32,
+        action_key: &str,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn notification_closed(
+        emitter: &SignalEmitter<'_>,
+        id: u32,
+        reason: u32,
+    ) -> zbus::Result<()>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum RecordedSignal {
+        ActionInvoked(u32, String),
+        Closed(u32, NotificationCloseReason),
+    }
+
+    #[derive(Default)]
+    struct RecordingSignalSink {
+        signals: Mutex<Vec<RecordedSignal>>,
+    }
+
+    impl NotificationSignalSink for RecordingSignalSink {
+        fn action_invoked(&self, id: u32, action_key: String) {
+            self.signals
+                .lock()
+                .unwrap()
+                .push(RecordedSignal::ActionInvoked(id, action_key));
+        }
+
+        fn notification_closed(&self, id: u32, reason: NotificationCloseReason) {
+            self.signals
+                .lock()
+                .unwrap()
+                .push(RecordedSignal::Closed(id, reason));
+        }
+    }
 
     #[tokio::test]
     async fn test_notification_creation_and_dismiss() {
@@ -684,7 +868,9 @@ mod tests {
 
     #[test]
     fn test_notification_action_invocation() {
-        let service = NotificationService::new_offline();
+        let sink = Arc::new(RecordingSignalSink::default());
+        let mut service = NotificationService::new_offline();
+        service.signal_sink = Some(sink.clone());
         let mut notif = Notification::new("Test", "Body");
         notif.id = 42;
         notif.actions = vec![("default".to_string(), "Open".to_string())];
@@ -693,6 +879,64 @@ mod tests {
         assert_eq!(service.notifications().len(), 1);
         service.invoke_action(42, "default");
         assert_eq!(service.notifications().len(), 0);
+        assert_eq!(
+            *sink.signals.lock().unwrap(),
+            vec![
+                RecordedSignal::ActionInvoked(42, "default".to_string()),
+                RecordedSignal::Closed(42, NotificationCloseReason::DismissedByUser),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_unknown_notification_action_is_ignored() {
+        let sink = Arc::new(RecordingSignalSink::default());
+        let mut service = NotificationService::new_offline();
+        service.signal_sink = Some(sink.clone());
+        let mut notif = Notification::new("Test", "Body");
+        notif.id = 42;
+        notif.actions = vec![("default".to_string(), "Open".to_string())];
+        service.notifications.lock().unwrap().push(notif);
+
+        service.invoke_action(42, "missing");
+
+        assert_eq!(service.notifications().len(), 1);
+        assert!(sink.signals.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_notification_close_reasons_and_capabilities() {
+        let sink = Arc::new(RecordingSignalSink::default());
+        let mut service = NotificationService::new_offline();
+        service.signal_sink = Some(sink.clone());
+        for id in [1, 2] {
+            let mut notification = Notification::new(format!("Test {id}"), "Body");
+            notification.id = id;
+            service.notifications.lock().unwrap().push(notification);
+        }
+
+        service.expire(1);
+        service.dismiss(2);
+
+        assert!(service.notifications().is_empty());
+        assert_eq!(
+            *sink.signals.lock().unwrap(),
+            vec![
+                RecordedSignal::Closed(1, NotificationCloseReason::Expired),
+                RecordedSignal::Closed(2, NotificationCloseReason::DismissedByUser),
+            ]
+        );
+
+        let server = NotificationServer {
+            notifications: Arc::new(Mutex::new(Vec::new())),
+            history: Arc::new(Mutex::new(Vec::new())),
+            next_id: Arc::new(Mutex::new(0)),
+            new_notif_sender: Arc::new(Mutex::new(None)),
+            dnd_enabled: Arc::new(Mutex::new(false)),
+        };
+        assert_eq!(server.get_capabilities(), vec!["actions", "body"]);
+        assert_eq!(NotificationCloseReason::ClosedByRequest as u32, 3);
+        assert_eq!(NotificationCloseReason::Undefined as u32, 4);
     }
 
     #[test]

@@ -238,6 +238,29 @@ fn app_icon(
     }
 }
 
+/// State of native launcher search queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LauncherSearchState {
+    #[default]
+    Idle,
+    Pending {
+        generation: u64,
+    },
+    Ready {
+        generation: u64,
+    },
+}
+
+impl LauncherSearchState {
+    pub fn is_idle(&self) -> bool {
+        matches!(self, Self::Idle)
+    }
+
+    pub fn is_ready_for_generation(&self, generation: u64) -> bool {
+        matches!(self, Self::Ready { generation: g } if *g == generation)
+    }
+}
+
 /// Interactive Niri workspace filmstrip overview surface.
 pub struct WorkspaceOverview {
     workspaces: Vec<WorkspaceInfo>,
@@ -261,6 +284,7 @@ pub struct WorkspaceOverview {
     selected_result_index: Option<usize>,
     result_scroll_handle: ScrollHandle,
     query_generation: u64,
+    search_state: LauncherSearchState,
     _search_task: Option<gpui::Task<()>>,
     _catalog_task: Option<gpui::Task<()>>,
 }
@@ -307,6 +331,7 @@ impl WorkspaceOverview {
             selected_result_index: None,
             result_scroll_handle: ScrollHandle::default(),
             query_generation: 0,
+            search_state: LauncherSearchState::Idle,
             _search_task: None,
             _catalog_task: None,
         }
@@ -502,16 +527,46 @@ impl WorkspaceOverview {
         }
     }
 
+    fn set_search_results(
+        &mut self,
+        results: Vec<SearchResult>,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if self.query_generation != generation {
+            return;
+        }
+        self.search_results = results;
+        self.search_state = LauncherSearchState::Ready { generation };
+        self.selected_result_index = if self.search_results.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+        if !self.search_results.is_empty() {
+            self.result_scroll_handle.scroll_to_item(0);
+        }
+        cx.notify();
+    }
+
     fn update_search(&mut self, text: String, cx: &mut Context<Self>) {
         self.query_generation += 1;
         let query_gen = self.query_generation;
 
+        self.search_results.clear();
+        self.selected_result_index = None;
+        self.result_scroll_handle.scroll_to_item(0);
+
         if text.trim().is_empty() {
-            self.search_results.clear();
-            self.selected_result_index = None;
+            self.search_state = LauncherSearchState::Idle;
             cx.notify();
             return;
         }
+
+        self.search_state = LauncherSearchState::Pending {
+            generation: query_gen,
+        };
+        cx.notify();
 
         let task = cx.spawn(async move |this, cx| {
             cx.background_executor()
@@ -533,18 +588,12 @@ impl WorkspaceOverview {
                                     Some(text.clone().into()),
                                 );
                             }
-                            if let Some(search) = &view.search {
-                                view.search_results = search.search(&text);
-                            }
-                            view.selected_result_index = if view.search_results.is_empty() {
-                                None
+                            let results = if let Some(search) = &view.search {
+                                search.search(&text)
                             } else {
-                                Some(0)
+                                Vec::new()
                             };
-                            if !view.search_results.is_empty() {
-                                view.result_scroll_handle.scroll_to_item(0);
-                            }
-                            cx.notify();
+                            view.set_search_results(results, query_gen, cx);
                         }
                     });
                 }
@@ -554,6 +603,12 @@ impl WorkspaceOverview {
     }
 
     fn activate_result(&mut self, index: usize, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self
+            .search_state
+            .is_ready_for_generation(self.query_generation)
+        {
+            return;
+        }
         if index < self.search_results.len() {
             match &self.search_results[index].intent {
                 SearchIntent::LaunchApp(app) => {
@@ -651,14 +706,22 @@ impl WorkspaceOverview {
                 }
             }
             "enter" => {
-                if !self.search_results.is_empty() {
+                if self
+                    .search_state
+                    .is_ready_for_generation(self.query_generation)
+                    && !self.search_results.is_empty()
+                {
                     cx.stop_propagation();
                     let idx = self.selected_result_index.unwrap_or(0);
                     self.activate_result(idx, window, cx);
                 }
             }
             "down" => {
-                if !self.search_results.is_empty() {
+                if self
+                    .search_state
+                    .is_ready_for_generation(self.query_generation)
+                    && !self.search_results.is_empty()
+                {
                     cx.stop_propagation();
                     let len = self.search_results.len();
                     let current = self.selected_result_index.unwrap_or(0);
@@ -669,7 +732,11 @@ impl WorkspaceOverview {
                 }
             }
             "up" => {
-                if !self.search_results.is_empty() {
+                if self
+                    .search_state
+                    .is_ready_for_generation(self.query_generation)
+                    && !self.search_results.is_empty()
+                {
                     cx.stop_propagation();
                     let current = self.selected_result_index.unwrap_or(0);
                     let next = current.saturating_sub(1);
@@ -775,10 +842,15 @@ impl WorkspaceOverview {
                                 .as_ref()
                                 .map(|state| state.read(cx).value().to_string())
                                 .unwrap_or_default();
-                            if let Some(search) = &view.search {
-                                view.search_results = search.search(&query);
+                            if !query.trim().is_empty() {
+                                let generation = view.query_generation;
+                                if let Some(search) = &view.search {
+                                    let results = search.search(&query);
+                                    view.set_search_results(results, generation, cx);
+                                }
+                            } else {
+                                cx.notify();
                             }
-                            cx.notify();
                         });
                     }
                 }
@@ -1722,5 +1794,34 @@ mod tests {
             overview.icon_path_for_app(Some("jetbrains-rustrover")),
             Some(icon_path)
         );
+    }
+
+    #[test]
+    fn launcher_search_state_generation_safety() {
+        let mut search_state = LauncherSearchState::Idle;
+        assert!(search_state.is_idle());
+        assert!(!search_state.is_ready_for_generation(1));
+
+        // Enter pending state for query generation 1
+        search_state = LauncherSearchState::Pending { generation: 1 };
+        assert!(!search_state.is_idle());
+        assert!(!search_state.is_ready_for_generation(1));
+
+        // Stale result for generation 0 is ignored
+        assert!(!search_state.is_ready_for_generation(0));
+
+        // Results arrive for generation 1
+        search_state = LauncherSearchState::Ready { generation: 1 };
+        assert!(search_state.is_ready_for_generation(1));
+        assert!(!search_state.is_ready_for_generation(2)); // Generation 2 cannot activate gen 1
+
+        // User typed new query -> query_generation becomes 2, search_state becomes Pending { generation: 2 }
+        search_state = LauncherSearchState::Pending { generation: 2 };
+        assert!(!search_state.is_ready_for_generation(1)); // Stale gen 1 results rejected
+        assert!(!search_state.is_ready_for_generation(2)); // Gen 2 still pending
+
+        // Results arrive for generation 2
+        search_state = LauncherSearchState::Ready { generation: 2 };
+        assert!(search_state.is_ready_for_generation(2));
     }
 }
