@@ -4,7 +4,6 @@ use std::{borrow::Cow, collections::BTreeMap, fmt, str::FromStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BuiltinActionId {
-    ToggleLauncher,
     ToggleControlCenter,
     ToggleBar,
     ToggleOverview,
@@ -26,7 +25,6 @@ pub enum BuiltinActionId {
 
 impl BuiltinActionId {
     const ALL: &'static [Self] = &[
-        Self::ToggleLauncher,
         Self::ToggleControlCenter,
         Self::ToggleBar,
         Self::ToggleOverview,
@@ -48,7 +46,6 @@ impl BuiltinActionId {
 
     fn name(self) -> &'static str {
         match self {
-            Self::ToggleLauncher => "toggle_launcher",
             Self::ToggleControlCenter => "toggle_control_center",
             Self::ToggleBar => "toggle_bar",
             Self::ToggleOverview => "toggle_overview",
@@ -71,8 +68,7 @@ impl BuiltinActionId {
 
     pub fn input_requirement(self) -> ActionInputRequirement {
         match self {
-            Self::ToggleLauncher
-            | Self::ToggleControlCenter
+            Self::ToggleControlCenter
             | Self::ToggleBar
             | Self::ToggleOverview
             | Self::CreateWorkspace
@@ -115,7 +111,6 @@ pub struct ActionId(Cow<'static, str>);
 
 #[allow(non_upper_case_globals)]
 impl ActionId {
-    pub const ToggleLauncher: Self = Self(Cow::Borrowed("builtin:toggle_launcher"));
     pub const ToggleControlCenter: Self = Self(Cow::Borrowed("builtin:toggle_control_center"));
     pub const ToggleBar: Self = Self(Cow::Borrowed("builtin:toggle_bar"));
     pub const ToggleOverview: Self = Self(Cow::Borrowed("builtin:toggle_overview"));
@@ -215,7 +210,6 @@ pub enum ActionCategory {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionInvocation {
-    ToggleLauncher,
     ToggleControlCenter,
     ToggleBar,
     ToggleOverview,
@@ -264,7 +258,6 @@ struct WindowWorkspaceActionInput {
 impl ActionInvocation {
     pub fn id(&self) -> ActionId {
         match self {
-            Self::ToggleLauncher => ActionId::ToggleLauncher,
             Self::ToggleControlCenter => ActionId::ToggleControlCenter,
             Self::ToggleBar => ActionId::ToggleBar,
             Self::ToggleOverview => ActionId::ToggleOverview,
@@ -306,7 +299,6 @@ impl ActionInvocation {
         match builtin.input_requirement() {
             ActionInputRequirement::NoInput => match payload {
                 None | Some(serde_json::Value::Null) => match builtin {
-                    BuiltinActionId::ToggleLauncher => Ok(Self::ToggleLauncher),
                     BuiltinActionId::ToggleControlCenter => Ok(Self::ToggleControlCenter),
                     BuiltinActionId::ToggleBar => Ok(Self::ToggleBar),
                     BuiltinActionId::ToggleOverview => Ok(Self::ToggleOverview),
@@ -461,7 +453,6 @@ impl ActionRegistry {
 
 fn builtin_descriptor(id: BuiltinActionId) -> ActionDescriptor {
     let (label, category) = match id {
-        BuiltinActionId::ToggleLauncher => ("Toggle Launcher Overlay", ActionCategory::Overlay),
         BuiltinActionId::ToggleControlCenter => ("Toggle Control Center", ActionCategory::Overlay),
         BuiltinActionId::ToggleBar => ("Toggle Desktop Bar", ActionCategory::System),
         BuiltinActionId::ToggleOverview => ("Toggle Workspace Overview", ActionCategory::Overlay),
@@ -498,7 +489,6 @@ fn builtin_descriptor(id: BuiltinActionId) -> ActionDescriptor {
 
 fn action_id(id: BuiltinActionId) -> ActionId {
     match id {
-        BuiltinActionId::ToggleLauncher => ActionId::ToggleLauncher,
         BuiltinActionId::ToggleControlCenter => ActionId::ToggleControlCenter,
         BuiltinActionId::ToggleBar => ActionId::ToggleBar,
         BuiltinActionId::ToggleOverview => ActionId::ToggleOverview,
@@ -572,7 +562,7 @@ impl KeybindingManager {
     pub fn with_defaults() -> Self {
         let mut mgr = Self::new();
         let defaults = [
-            ("super+space", ActionId::ToggleLauncher),
+            ("super+space", ActionId::ToggleOverview),
             ("super+c", ActionId::ToggleControlCenter),
             ("super+b", ActionId::ToggleBar),
             ("super+shift+r", ActionId::ReloadConfig),
@@ -634,6 +624,12 @@ impl KeybindingManager {
     pub fn bindings(&self) -> &std::collections::HashMap<Shortcut, ActionId> {
         &self.bindings
     }
+
+    pub fn shortcut_for(&self, action: &ActionId) -> Option<Shortcut> {
+        self.bindings
+            .iter()
+            .find_map(|(s, a)| (a == action).then(|| s.clone()))
+    }
 }
 
 #[cfg(test)]
@@ -662,7 +658,7 @@ mod tests {
         let find_req = |id: &ActionId| registry.descriptor(id).unwrap().input;
 
         assert_eq!(
-            find_req(&ActionId::ToggleLauncher),
+            find_req(&ActionId::ToggleOverview),
             ActionInputRequirement::NoInput
         );
         assert_eq!(
@@ -746,23 +742,23 @@ mod tests {
     #[test]
     fn from_id_and_payload_no_input_actions() {
         let inv_none =
-            ActionInvocation::from_id_and_payload(ActionId::ToggleLauncher, None).unwrap();
-        assert_eq!(inv_none, ActionInvocation::ToggleLauncher);
+            ActionInvocation::from_id_and_payload(ActionId::ToggleOverview, None).unwrap();
+        assert_eq!(inv_none, ActionInvocation::ToggleOverview);
 
         let inv_null = ActionInvocation::from_id_and_payload(
-            ActionId::ToggleLauncher,
+            ActionId::ToggleOverview,
             Some(serde_json::json!(null)),
         )
         .unwrap();
-        assert_eq!(inv_null, ActionInvocation::ToggleLauncher);
+        assert_eq!(inv_null, ActionInvocation::ToggleOverview);
 
         let err = ActionInvocation::from_id_and_payload(
-            ActionId::ToggleLauncher,
+            ActionId::ToggleOverview,
             Some(serde_json::json!({"foo": "bar"})),
         )
         .unwrap_err();
         assert!(err.contains("does not accept input parameters"));
-        assert!(err.contains("builtin:toggle_launcher"));
+        assert!(err.contains("builtin:toggle_overview"));
     }
 
     #[test]
@@ -901,7 +897,7 @@ mod tests {
         assert_eq!(sc.to_spec(), "super+space");
 
         let mgr = KeybindingManager::with_defaults();
-        assert_eq!(mgr.action_for(&sc), Some(ActionId::ToggleLauncher));
+        assert_eq!(mgr.action_for(&sc), Some(ActionId::ToggleOverview));
 
         let sc_bar = Shortcut::parse("super+b").unwrap();
         assert_eq!(mgr.action_for(&sc_bar), Some(ActionId::ToggleBar));
@@ -927,13 +923,13 @@ mod tests {
         let sc = Shortcut::parse("super+space").unwrap();
 
         let conflict = mgr.find_conflict(&sc, ActionId::Quit);
-        assert_eq!(conflict, Some(ActionId::ToggleLauncher));
+        assert_eq!(conflict, Some(ActionId::ToggleOverview));
 
         let _ = mgr.unregister(&sc);
         assert_eq!(mgr.action_for(&sc), None);
 
         mgr.reset_to_defaults();
-        assert_eq!(mgr.action_for(&sc), Some(ActionId::ToggleLauncher));
+        assert_eq!(mgr.action_for(&sc), Some(ActionId::ToggleOverview));
     }
 
     #[test]

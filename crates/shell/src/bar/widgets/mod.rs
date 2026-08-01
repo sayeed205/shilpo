@@ -1,6 +1,5 @@
 pub mod audio;
 pub mod clock;
-pub mod launcher;
 pub mod media;
 pub mod network;
 pub mod perf_media_capsule;
@@ -14,7 +13,6 @@ pub mod workspaces;
 
 pub use audio::AudioWidget;
 pub use clock::{ClockWidget, DateWidget};
-pub use launcher::LauncherWidget;
 pub use media::MediaWidget;
 pub use network::NetworkWidget;
 pub use perf_media_capsule::PerfMediaCapsule;

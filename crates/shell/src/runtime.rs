@@ -14,7 +14,6 @@ use crate::{
     extensions::{
         ContributionDescriptor, ContributionSurface, ExtensionCoordinator, ExtensionGeneration,
     },
-    launcher::LauncherView,
 };
 
 use std::collections::HashMap;
@@ -201,7 +200,6 @@ pub struct ShellRuntime {
     last_bar_specs: Vec<(BarGeometry, bool)>,
     bar_state: BarState,
     readiness: shilpo_services::ipc::ReadinessState,
-    launcher: Option<WindowHandle<shilpo_ui::Root>>,
     control_center: Option<WindowHandle<shilpo_ui::Root>>,
     overview: Option<WindowHandle<shilpo_ui::Root>>,
     overview_entity: Option<Entity<crate::overview::WorkspaceOverview>>,
@@ -472,7 +470,6 @@ impl ShellRuntime {
             last_bar_specs: Vec::new(),
             bar_state: BarState::Starting,
             readiness: shilpo_services::ipc::ReadinessState::Starting,
-            launcher: None,
             control_center: None,
             overview: None,
             overview_entity: None,
@@ -542,16 +539,6 @@ impl ShellRuntime {
             if runtime.bars.is_empty() {
                 runtime.bar_state = BarState::Hidden;
             }
-            let closed_launcher = if runtime
-                .launcher
-                .as_ref()
-                .is_some_and(|handle| handle.window_id() == window_id)
-            {
-                runtime.launcher = None;
-                true
-            } else {
-                false
-            };
             let closed_control_center = if runtime
                 .control_center
                 .as_ref()
@@ -579,15 +566,6 @@ impl ShellRuntime {
                 runtime.notification = None;
             }
             runtime.publish_status();
-            if closed_launcher {
-                ShellRuntime::dispatch_surface_lifecycle(
-                    cx,
-                    ContributionSurface::Launcher,
-                    false,
-                    640.,
-                    480.,
-                );
-            }
             if closed_control_center {
                 ShellRuntime::dispatch_surface_lifecycle(
                     cx,
@@ -853,7 +831,7 @@ impl ShellRuntime {
         }
     }
 
-    fn dispatch_surface_lifecycle(
+    pub(crate) fn dispatch_surface_lifecycle(
         cx: &mut App,
         surface: ContributionSurface,
         mounted: bool,
@@ -1486,7 +1464,7 @@ impl ShellRuntime {
             running: true,
             readiness: self.readiness,
             bar: self.bar_state.clone(),
-            launcher_visible: self.launcher.is_some(),
+            overview_visible: self.overview.is_some(),
             control_center_visible: self.control_center.is_some(),
             health,
         });
@@ -1737,98 +1715,6 @@ impl ShellRuntime {
         }
     }
 
-    pub fn open_or_focus_launcher(cx: &mut App) {
-        Self::capture_prior_focus(cx);
-        Self::close_control_center(cx);
-        let handle = cx.global_mut::<Self>().launcher.take();
-        if let Some(handle) = handle
-            && handle
-                .update(cx, |_, window, _| {
-                    window.activate_window();
-                })
-                .is_ok()
-        {
-            cx.global_mut::<Self>().launcher = Some(handle);
-            cx.global::<Self>().publish_status();
-            return;
-        }
-        let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
-            (display.bounds(), Some(display.id()))
-        } else {
-            (
-                Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
-                None,
-            )
-        };
-        let launcher_size = size(px(640.), px(480.));
-        let origin = point(
-            display_bounds.origin.x + (display_bounds.size.width - launcher_size.width) / 2.0,
-            display_bounds.origin.y + (display_bounds.size.height - launcher_size.height) / 2.0,
-        );
-        let options = overlay_options(
-            "shilpo-launcher",
-            "launcher",
-            launcher_size,
-            origin,
-            display_id,
-        );
-        match cx.open_window(options, LauncherView::view) {
-            Ok(handle) => {
-                cx.global_mut::<Self>().launcher = Some(handle);
-                Self::dispatch_surface_lifecycle(
-                    cx,
-                    ContributionSurface::Launcher,
-                    true,
-                    640.,
-                    480.,
-                );
-            }
-            Err(error) => {
-                tracing::error!(error = %error, overlay = "launcher", "failed to open overlay window")
-            }
-        }
-        cx.global::<Self>().publish_status();
-    }
-
-    pub fn toggle_launcher(cx: &mut App) {
-        if cx.global::<Self>().launcher.is_some() {
-            Self::close_launcher(cx);
-        } else {
-            Self::open_or_focus_launcher(cx);
-        }
-    }
-
-    pub fn close_launcher(cx: &mut App) {
-        if !Self::remove_launcher_surface(cx) {
-            return;
-        }
-        Self::restore_prior_focus(cx);
-        cx.global::<Self>().publish_status();
-    }
-
-    fn close_launcher_for_replacement(cx: &mut App) {
-        let _ = Self::remove_launcher_surface(cx);
-    }
-
-    fn remove_launcher_surface(cx: &mut App) -> bool {
-        let handle = cx.global_mut::<Self>().launcher.take();
-        let Some(handle) = handle else { return false };
-        Self::dispatch_surface_lifecycle(cx, ContributionSurface::Launcher, false, 640., 480.);
-        // Registry entry is invalidated above. A close racing with this call can
-        // leave handle stale; update_window failure is expected in that case.
-        let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
-        true
-    }
-
-    pub fn forget_launcher(cx: &mut App) {
-        let had_handle = cx.global_mut::<Self>().launcher.take().is_some();
-        if had_handle {
-            Self::dispatch_surface_lifecycle(cx, ContributionSurface::Launcher, false, 640., 480.);
-            Self::restore_prior_focus(cx);
-        }
-        cx.global::<Self>().publish_status();
-    }
-
     pub fn toggle_overview(cx: &mut App) {
         if cx.global::<Self>().overview.is_some() {
             Self::close_overview(cx);
@@ -1867,6 +1753,13 @@ impl ShellRuntime {
         if cx.global::<Self>().overview_instance != instance_id {
             return;
         }
+        Self::dispatch_surface_lifecycle(
+            cx,
+            crate::extensions::ContributionSurface::Launcher,
+            false,
+            0.0,
+            0.0,
+        );
         cx.global_mut::<Self>().overview_instance = 0;
         let opened_workspace_id = cx.global_mut::<Self>().overview_opened_workspace_id.take();
         let current_workspace_id = Self::compositor_snapshot(cx).focused_workspace_id;
@@ -1895,6 +1788,13 @@ impl ShellRuntime {
         if !cx.has_global::<Self>() || cx.global::<Self>().overview_instance != instance_id {
             return;
         }
+        Self::dispatch_surface_lifecycle(
+            cx,
+            crate::extensions::ContributionSurface::Launcher,
+            false,
+            0.0,
+            0.0,
+        );
         let entity = cx.global::<Self>().overview_entity.clone();
         let reason = entity
             .as_ref()
@@ -2036,7 +1936,6 @@ impl ShellRuntime {
             cx.global_mut::<Self>().overview_opened_workspace_id = focused_workspace_id;
         }
         Self::capture_prior_focus(cx);
-        Self::close_launcher_for_replacement(cx);
         Self::close_control_center_for_replacement(cx);
         let handle = cx.global_mut::<Self>().overview.take();
         if let Some(handle) = handle
@@ -2078,7 +1977,6 @@ impl ShellRuntime {
 
     pub fn open_or_focus_control_center(cx: &mut App) {
         Self::capture_prior_focus(cx);
-        Self::close_launcher(cx);
         let handle = cx.global_mut::<Self>().control_center.take();
         if let Some(handle) = handle
             && handle
@@ -2692,10 +2590,6 @@ impl ShellRuntime {
         }
 
         match invocation {
-            ActionInvocation::ToggleLauncher => {
-                Self::toggle_launcher(cx);
-                Ok(crate::actions::ActionResult::Immediate)
-            }
             ActionInvocation::ToggleControlCenter => {
                 Self::toggle_control_center(cx);
                 Ok(crate::actions::ActionResult::Immediate)
@@ -2885,9 +2779,6 @@ impl ShellRuntime {
                 IpcRequest::ToggleBar => {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                 }
-                IpcRequest::ToggleLauncher => {
-                    let _ = Self::dispatch_action(cx, ActionInvocation::ToggleLauncher);
-                }
                 IpcRequest::ToggleControlCenter => {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
                 }
@@ -2949,7 +2840,6 @@ impl ShellRuntime {
                     bars,
                     extension_surfaces,
                     extension_panel,
-                    launcher,
                     control_center,
                     notification,
                     _service_hub,
@@ -2959,7 +2849,6 @@ impl ShellRuntime {
                         std::mem::take(&mut runtime.bars),
                         std::mem::take(&mut runtime.extension_surfaces),
                         runtime.extension_panel.take(),
-                        runtime.launcher.take(),
                         runtime.control_center.take(),
                         runtime.notification.take(),
                         runtime.service_hub.take(),
@@ -2972,9 +2861,6 @@ impl ShellRuntime {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
                 if let Some((handle, _)) = extension_panel {
-                    let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
-                }
-                if let Some(handle) = launcher {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
                 if let Some(handle) = control_center {
@@ -2990,6 +2876,21 @@ impl ShellRuntime {
             });
         })
         .detach();
+    }
+
+    pub fn keybinding_descriptors(cx: &App) -> Vec<(String, String)> {
+        let runtime = cx.global::<Self>();
+        runtime
+            .actions
+            .all()
+            .into_iter()
+            .filter_map(|desc| {
+                runtime
+                    .keybindings
+                    .shortcut_for(&desc.id)
+                    .map(|shortcut| (shortcut.to_spec(), desc.label))
+            })
+            .collect()
     }
 }
 

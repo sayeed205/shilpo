@@ -361,7 +361,7 @@ impl JsonSchema for BarWidget {
             object.insert(
                 "pattern".into(),
                 serde_json::Value::String(
-                    r"^(builtin:(launcher|workspaces|running_apps|clock|date|media|sysinfo|network|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
+                    r"^(builtin:(workspaces|running_apps|clock|date|media|sysinfo|network|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
                         .into(),
                 ),
             );
@@ -373,7 +373,6 @@ impl JsonSchema for BarWidget {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
 #[serde(rename_all = "PascalCase")]
 pub enum BuiltinBarWidget {
-    Launcher,
     Workspaces,
     RunningApps,
     Clock,
@@ -389,7 +388,6 @@ pub enum BuiltinBarWidget {
 impl BuiltinBarWidget {
     fn from_legacy_str(value: &str) -> Option<Self> {
         match value {
-            "Launcher" => Some(Self::Launcher),
             "Workspaces" => Some(Self::Workspaces),
             "RunningApps" => Some(Self::RunningApps),
             "Clock" => Some(Self::Clock),
@@ -408,7 +406,6 @@ impl BuiltinBarWidget {
 impl fmt::Display for BuiltinBarWidget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
-            Self::Launcher => "launcher",
             Self::Workspaces => "workspaces",
             Self::RunningApps => "running_apps",
             Self::Clock => "clock",
@@ -429,7 +426,6 @@ impl FromStr for BuiltinBarWidget {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "launcher" => Ok(Self::Launcher),
             "workspaces" => Ok(Self::Workspaces),
             "running_apps" => Ok(Self::RunningApps),
             "clock" => Ok(Self::Clock),
@@ -493,7 +489,6 @@ impl Default for BarConfig {
             exclusive_zone: None,
             widgets: BarWidgets {
                 start: vec![
-                    BarWidget::Builtin(BuiltinBarWidget::Launcher),
                     BarWidget::Builtin(BuiltinBarWidget::Workspaces),
                     BarWidget::Builtin(BuiltinBarWidget::RunningApps),
                 ],
@@ -1179,9 +1174,9 @@ widget_spacing = 6
 horizontal = 16
 vertical = 6
 [bar.widgets]
-start = ["Launcher"]
-center = ["Clock"]
-end = ["Settings"]
+start = ["builtin:workspaces"]
+center = ["builtin:clock"]
+end = ["builtin:settings"]
 
 [outputs."DP-1"]
 position = "Bottom"
@@ -1226,9 +1221,9 @@ widget_spacing = 6
 horizontal = 16
 vertical = 6
 [bar.widgets]
-start = ["Launcher"]
-center = ["Clock"]
-end = ["Settings"]
+start = ["builtin:workspaces"]
+center = ["builtin:clock"]
+end = ["builtin:settings"]
 
 [outputs."DP-1"]
 margin = { horizontal = 600, vertical = 6 }

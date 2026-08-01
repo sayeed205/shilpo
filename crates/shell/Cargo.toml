@@ -29,3 +29,4 @@ semver.workspace = true
 reqwest.workspace = true
 image.workspace = true
 resvg.workspace = true
+fasteval = "0.2"

@@ -30,7 +30,7 @@ async fn main() {
             let cmd = &args[2];
             let req = match cmd.as_str() {
                 "get-status" => IpcRequest::GetStatus,
-                "toggle-launcher" => IpcRequest::ToggleLauncher,
+                "toggle-overview" => IpcRequest::ToggleOverview,
                 "toggle-control-center" => IpcRequest::ToggleControlCenter,
                 "reload-config" => IpcRequest::ReloadConfig,
                 "toggle-bar" => IpcRequest::ToggleBar,
@@ -180,10 +180,10 @@ async fn main() {
                             println!("Applied (revision {})", revision)
                         }
                         Some(IpcResult::Status(status)) => println!(
-                            "running={} bar={:?} launcher_visible={} control_center_visible={} health={:?}",
+                            "running={} bar={:?} overview_visible={} control_center_visible={} health={:?}",
                             status.running,
                             status.bar,
-                            status.launcher_visible,
+                            status.overview_visible,
                             status.control_center_visible,
                             status.health
                         ),

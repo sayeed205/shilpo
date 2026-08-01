@@ -5,7 +5,7 @@ use gpui::{
     ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
     StyleRefinement, Styled, StyledImage as _, Window, div, img, prelude::FluentBuilder as _, px,
 };
-use std::path::PathBuf;
+use std::{io::Read, path::PathBuf};
 
 const MAX_ARTWORK_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CACHED_ARTWORKS: usize = 32;
@@ -61,14 +61,14 @@ fn cached_artwork_path(art_url: &str) -> Option<PathBuf> {
     )
 }
 
-async fn download_artwork(url: String, target: PathBuf) -> Option<PathBuf> {
-    let client = reqwest::Client::builder()
+fn download_artwork(url: String, target: PathBuf) -> Option<PathBuf> {
+    let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
-        .redirect_policy(reqwest::redirect::Policy::none())
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent("Shilpo Media Artwork/0.1")
         .build()
         .ok()?;
-    let mut response = client.get(&url).send().await.ok()?;
+    let response = client.get(&url).send().ok()?;
     if !response.status().is_success()
         || response
             .content_length()
@@ -78,11 +78,12 @@ async fn download_artwork(url: String, target: PathBuf) -> Option<PathBuf> {
     }
 
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.ok()? {
-        if bytes.len().saturating_add(chunk.len()) > MAX_ARTWORK_BYTES {
-            return None;
-        }
-        bytes.extend_from_slice(&chunk);
+    response
+        .take((MAX_ARTWORK_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > MAX_ARTWORK_BYTES {
+        return None;
     }
 
     let cache_dir = target.parent()?;
@@ -238,9 +239,10 @@ impl RenderOnce for MediaControl {
                     let state = artwork_state.clone();
                     let requested_url = art_url.clone();
                     cx.spawn(async move |cx| {
+                        let download_url = requested_url.clone();
                         let downloaded = cx
                             .background_executor()
-                            .spawn(download_artwork(requested_url.clone(), target))
+                            .spawn(async move { download_artwork(download_url, target) })
                             .await;
                         _ = state.update(cx, |state, cx| {
                             if state.url == requested_url {

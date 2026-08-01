@@ -153,7 +153,7 @@ pub fn binary_exists(bin: &str) -> bool {
     false
 }
 
-fn find_terminal_emulator() -> Option<String> {
+pub fn find_terminal_emulator() -> Option<String> {
     for term in ["foot", "alacritty", "kitty", "xterm", "x-terminal-emulator"] {
         if binary_exists(term) {
             return Some(term.to_string());

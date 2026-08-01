@@ -279,14 +279,6 @@ impl BarView {
 
         for (index, name) in widget_names.iter().enumerate() {
             match name {
-                BarWidget::Builtin(BuiltinBarWidget::Launcher) => {
-                    elements.push(
-                        super::widgets::LauncherWidget::new(format!(
-                            "launcher_{section_name}_{index}"
-                        ))
-                        .into_any_element(),
-                    );
-                }
                 BarWidget::Builtin(BuiltinBarWidget::Workspaces) => {
                     let snapshot = ShellRuntime::compositor_snapshot(cx);
                     elements.push(

@@ -1,17 +1,26 @@
 use crate::app_icons::{
     build_app_icon_index, icon_device_pixels, rasterized_app_icon, resolve_app_icon_path,
 };
+use crate::overview_search::{
+    OverviewSearch, SearchIntent, SearchMode, SearchResult, SearchResultIcon,
+};
 use crate::runtime::ShellRuntime;
 use gpui::{
     Animation, AnimationExt as _, App, AppContext, Context, DragMoveEvent, ElementId, Entity,
     FocusHandle, Focusable, Image, ImageFormat, ImageSource, InteractiveElement, IntoElement,
-    KeyDownEvent, MouseButton, ObjectFit, ParentElement, Render, Role, ScrollWheelEvent,
-    SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div, img,
-    prelude::FluentBuilder, px,
+    KeyDownEvent, MouseButton, ObjectFit, ParentElement, Render, Role, ScrollHandle,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div,
+    img, prelude::FluentBuilder, px,
 };
 use image::imageops::FilterType;
 use shilpo_services::{CompositorSnapshot, WindowInfo, WorkspaceInfo};
-use shilpo_ui::{ActiveTheme, FocusTrapElement, StyledExt, animation::cubic_bezier};
+use shilpo_ui::{
+    ActiveTheme, FocusTrapElement, Icon, IconName, StyledExt,
+    animation::cubic_bezier,
+    h_flex,
+    input::{Input, InputEvent, InputState, InputVariant},
+    v_flex,
+};
 use std::{
     collections::HashMap,
     io::Cursor,
@@ -31,6 +40,7 @@ const MAX_VISIBLE_WORKSPACES: usize = 3;
 const PREVIEW_RADIUS: f32 = 20.0;
 const INTER_WORKSPACE_RADIUS: f32 = 8.0;
 const PREVIEW_GAP: f32 = 6.0;
+const SEARCH_SURFACE_WIDTH: f32 = 500.0;
 const STAGE_HORIZONTAL_PADDING: f32 = 10.0;
 const STAGE_VERTICAL_PADDING: f32 = 10.0;
 const STAGE_BORDER_WIDTH: f32 = 1.0;
@@ -245,6 +255,14 @@ pub struct WorkspaceOverview {
     app_icons: HashMap<String, PathBuf>,
     drag_target_workspace_id: Option<u64>,
     workspace_view_start: usize,
+    input_state: Option<Entity<InputState>>,
+    search: Option<OverviewSearch>,
+    search_results: Vec<SearchResult>,
+    selected_result_index: Option<usize>,
+    result_scroll_handle: ScrollHandle,
+    query_generation: u64,
+    _search_task: Option<gpui::Task<()>>,
+    _catalog_task: Option<gpui::Task<()>>,
 }
 
 impl WorkspaceOverview {
@@ -283,6 +301,14 @@ impl WorkspaceOverview {
             app_icons: HashMap::new(),
             drag_target_workspace_id: None,
             workspace_view_start,
+            input_state: None,
+            search: None,
+            search_results: Vec::new(),
+            selected_result_index: None,
+            result_scroll_handle: ScrollHandle::default(),
+            query_generation: 0,
+            _search_task: None,
+            _catalog_task: None,
         }
     }
 
@@ -476,10 +502,206 @@ impl WorkspaceOverview {
         }
     }
 
-    fn handle_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        if event.keystroke.key == "escape" {
-            cx.stop_propagation();
-            self.begin_close(OverviewCloseReason::Cancel, cx);
+    fn update_search(&mut self, text: String, cx: &mut Context<Self>) {
+        self.query_generation += 1;
+        let query_gen = self.query_generation;
+
+        if text.trim().is_empty() {
+            self.search_results.clear();
+            self.selected_result_index = None;
+            cx.notify();
+            return;
+        }
+
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(60))
+                .await;
+            cx.update(|cx| {
+                if let Some(entity) = this.upgrade() {
+                    entity.update(cx, |view, cx| {
+                        if view.query_generation == query_gen {
+                            for descriptor in ShellRuntime::extension_descriptors(
+                                cx,
+                                crate::extensions::ContributionSurface::Launcher,
+                            ) {
+                                ShellRuntime::dispatch_extension_input(
+                                    cx,
+                                    &descriptor.id,
+                                    None,
+                                    "query",
+                                    Some(text.clone().into()),
+                                );
+                            }
+                            if let Some(search) = &view.search {
+                                view.search_results = search.search(&text);
+                            }
+                            view.selected_result_index = if view.search_results.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            };
+                            if !view.search_results.is_empty() {
+                                view.result_scroll_handle.scroll_to_item(0);
+                            }
+                            cx.notify();
+                        }
+                    });
+                }
+            });
+        });
+        self._search_task = Some(task);
+    }
+
+    fn activate_result(&mut self, index: usize, _window: &mut Window, cx: &mut Context<Self>) {
+        if index < self.search_results.len() {
+            match &self.search_results[index].intent {
+                SearchIntent::LaunchApp(app) => {
+                    ShellRuntime::record_recent_app(cx, &app.exec);
+                    app.launch_with_feedback(|err_msg| {
+                        tracing::warn!(error = %err_msg, "application launch failed");
+                    });
+                    self.begin_close(OverviewCloseReason::Selection, cx);
+                }
+                SearchIntent::InvokeAction(action) => {
+                    if let Ok(invocation) = crate::actions::ActionInvocation::from_id_and_payload(
+                        action.id.clone(),
+                        None,
+                    ) {
+                        let _ = ShellRuntime::dispatch_action(cx, invocation);
+                        self.begin_close(OverviewCloseReason::Selection, cx);
+                    }
+                }
+                SearchIntent::CopyClipboard(item) => {
+                    ShellRuntime::copy_clipboard_text(cx, &item.text);
+                    self.begin_close(OverviewCloseReason::Selection, cx);
+                }
+                SearchIntent::CopyCalculation(val) => {
+                    ShellRuntime::copy_clipboard_text(cx, val);
+                    self.begin_close(OverviewCloseReason::Selection, cx);
+                }
+                SearchIntent::ExecuteCommand(cmd) => {
+                    let terminal = std::env::var("TERMINAL")
+                        .ok()
+                        .or_else(shilpo_services::find_terminal_emulator);
+                    if let Some(terminal) = terminal {
+                        if let Err(error) = std::process::Command::new(terminal)
+                            .args(["-e", "sh", "-lc", cmd])
+                            .spawn()
+                        {
+                            tracing::warn!(%error, "failed to launch command terminal");
+                        }
+                        self.begin_close(OverviewCloseReason::Selection, cx);
+                    } else {
+                        tracing::warn!(
+                            "cannot execute overview command: no terminal emulator found"
+                        );
+                    }
+                }
+                SearchIntent::OpenWeb(url) => {
+                    match std::process::Command::new("xdg-open").arg(url).spawn() {
+                        Ok(_) => self.begin_close(OverviewCloseReason::Selection, cx),
+                        Err(error) => tracing::warn!(%error, "failed to open web search"),
+                    }
+                }
+                SearchIntent::OpenPath(path) => {
+                    match std::process::Command::new("xdg-open").arg(path).spawn() {
+                        Ok(_) => self.begin_close(OverviewCloseReason::Selection, cx),
+                        Err(error) => tracing::warn!(%error, "failed to open path"),
+                    }
+                }
+                SearchIntent::OpenUri(uri) => {
+                    match std::process::Command::new("xdg-open").arg(uri).spawn() {
+                        Ok(_) => self.begin_close(OverviewCloseReason::Selection, cx),
+                        Err(error) => tracing::warn!(%error, "failed to open URI"),
+                    }
+                }
+                SearchIntent::CopyKeybinding(shortcut) => {
+                    ShellRuntime::copy_clipboard_text(cx, shortcut);
+                    self.begin_close(OverviewCloseReason::Selection, cx);
+                }
+            }
+        }
+    }
+
+    fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let query_text = self
+            .input_state
+            .as_ref()
+            .map(|s| s.read(cx).value().to_string())
+            .unwrap_or_default();
+        let is_query_empty = query_text.trim().is_empty();
+
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                cx.stop_propagation();
+                if !is_query_empty {
+                    if let Some(input_state) = &self.input_state {
+                        input_state.update(cx, |state, cx| {
+                            state.set_value("", window, cx);
+                        });
+                    }
+                } else {
+                    self.begin_close(OverviewCloseReason::Cancel, cx);
+                }
+            }
+            "enter" => {
+                if !self.search_results.is_empty() {
+                    cx.stop_propagation();
+                    let idx = self.selected_result_index.unwrap_or(0);
+                    self.activate_result(idx, window, cx);
+                }
+            }
+            "down" => {
+                if !self.search_results.is_empty() {
+                    cx.stop_propagation();
+                    let len = self.search_results.len();
+                    let current = self.selected_result_index.unwrap_or(0);
+                    let next = (current + 1).min(len - 1);
+                    self.selected_result_index = Some(next);
+                    self.result_scroll_handle.scroll_to_item(next);
+                    cx.notify();
+                }
+            }
+            "up" => {
+                if !self.search_results.is_empty() {
+                    cx.stop_propagation();
+                    let current = self.selected_result_index.unwrap_or(0);
+                    let next = current.saturating_sub(1);
+                    self.selected_result_index = Some(next);
+                    self.result_scroll_handle.scroll_to_item(next);
+                    cx.notify();
+                }
+            }
+            "left" | "right" if is_query_empty => {
+                let forward = event.keystroke.key == "right";
+                let workspace_ids = self
+                    .workspaces
+                    .iter()
+                    .map(|workspace| workspace.id)
+                    .collect::<Vec<_>>();
+                if adjacent_workspace(&workspace_ids, self.active_workspace_id, forward).is_some() {
+                    cx.stop_propagation();
+                    self.focus_adjacent_workspace(&workspace_ids, forward, cx);
+                }
+            }
+            "tab" => {
+                if let Some(first) = self.search_results.first() {
+                    cx.stop_propagation();
+                    let completion = first.title.clone();
+                    if let Some(input_state) = &self.input_state {
+                        input_state.update(cx, |state, cx| {
+                            state.set_value(completion, window, cx);
+                        });
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -489,6 +711,20 @@ impl WorkspaceOverview {
         let reduced_motion = ShellRuntime::overview_reduced_motion(cx);
         let wallpaper_path = ShellRuntime::overview_wallpaper_path(cx);
         let app_icons = build_app_icon_index(ShellRuntime::overview_applications(cx));
+        let scanner =
+            ShellRuntime::app_scanner(cx).unwrap_or_else(shilpo_services::AppScanner::new_empty);
+        let scanner_for_catalog = scanner.clone();
+        let recent_apps = ShellRuntime::recent_apps(cx);
+        let actions = ShellRuntime::action_descriptors(cx);
+        let clipboard_history = ShellRuntime::clipboard_history(cx);
+        let keybindings = ShellRuntime::keybinding_descriptors(cx);
+        let search_engine = OverviewSearch::new(
+            scanner,
+            recent_apps,
+            actions,
+            clipboard_history,
+            keybindings,
+        );
 
         window.on_window_should_close(cx, move |_, cx| {
             ShellRuntime::forget_overview(cx, instance_id);
@@ -502,9 +738,61 @@ impl WorkspaceOverview {
             ov.wallpaper_path = wallpaper_path;
             ov.load_wallpaper_preview(cx);
             ov.app_icons = app_icons;
-            let focus_handle = cx.focus_handle();
+
+            let input_state =
+                cx.new(|cx| InputState::new(window, cx).placeholder("Search, calculate or run"));
+
+            cx.subscribe(&input_state, |this, state, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = state.read(cx).value().to_string();
+                    this.update_search(text, cx);
+                }
+            })
+            .detach();
+
+            let focus_handle = input_state.read(cx).focus_handle(cx);
             focus_handle.focus(window, cx);
             ov.focus_handle = Some(focus_handle);
+            ov.input_state = Some(input_state);
+            ov.search = Some(search_engine);
+
+            let catalog_rx = scanner_for_catalog.subscribe();
+            ov._catalog_task = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                    let changed = catalog_rx.try_recv().is_ok();
+                    if changed {
+                        let Some(entity) = this.upgrade() else {
+                            break;
+                        };
+                        entity.update(cx, |view, cx| {
+                            view.app_icons =
+                                build_app_icon_index(ShellRuntime::overview_applications(cx));
+                            let query = view
+                                .input_state
+                                .as_ref()
+                                .map(|state| state.read(cx).value().to_string())
+                                .unwrap_or_default();
+                            if let Some(search) = &view.search {
+                                view.search_results = search.search(&query);
+                            }
+                            cx.notify();
+                        });
+                    }
+                }
+            }));
+
+            // Mount extension surface for Launcher contributions
+            ShellRuntime::dispatch_surface_lifecycle(
+                cx,
+                crate::extensions::ContributionSurface::Launcher,
+                true,
+                640.,
+                480.,
+            );
+
             // Schedule entry → visible transition.
             let gen_id = ov.generation;
             if reduced_motion {
@@ -556,7 +844,7 @@ impl WorkspaceOverview {
 
 impl Render for WorkspaceOverview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let is_interactive = self.is_interactive();
         let generation = self.generation;
         let phase = self.phase;
@@ -864,7 +1152,353 @@ impl Render for WorkspaceOverview {
         let available_scroll_height =
             (stage_max_height - (STAGE_VERTICAL_PADDING * 2.0) - 2.0).max(220.0);
         let scroll_height = available_scroll_height.min(filmstrip_height(visible_workspace_count));
-        let stage = div()
+
+        let query_text = self
+            .input_state
+            .as_ref()
+            .map(|s| s.read(cx).value().to_string())
+            .unwrap_or_default();
+        let is_query_empty = query_text.trim().is_empty();
+
+        let prefix_icon = match crate::overview_search::parser::parse_query(&query_text).0 {
+            SearchMode::Apps | SearchMode::Command => IconName::Terminal,
+            SearchMode::Actions => IconName::Settings,
+            SearchMode::Clipboard | SearchMode::Calculator | SearchMode::Keybindings => {
+                IconName::Star
+            }
+            SearchMode::WebSearch | SearchMode::Default => IconName::Search,
+        };
+
+        let search_bar = if let Some(input_state) = &self.input_state {
+            div()
+                .id("overview_search_bar")
+                .w(px(if is_query_empty {
+                    PREVIEW_WIDTH + 34.0
+                } else {
+                    SEARCH_SURFACE_WIDTH
+                }))
+                .h(px(56.0))
+                .px_2()
+                .py_2()
+                .gap_2()
+                .flex()
+                .items_center()
+                .bg(theme.surface_container)
+                .rounded_full()
+                .shadow_md()
+                .when(!is_query_empty, |bar| {
+                    bar.rounded_tl(px(28.))
+                        .rounded_tr(px(28.))
+                        .rounded_bl(px(0.))
+                        .rounded_br(px(0.))
+                        .shadow_none()
+                })
+                .role(Role::Search)
+                .aria_label("Search, calculate or run")
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(34.0))
+                        .h(px(34.0))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(theme.primary)
+                        .child(
+                            Icon::new(prefix_icon)
+                                .size(px(19.))
+                                .text_color(theme.on_primary),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("overview_search_input")
+                        .flex_1()
+                        .h(px(40.0))
+                        .px_2()
+                        .bg(theme.surface_container_high)
+                        .rounded_full()
+                        .items_center()
+                        .child(
+                            div()
+                                .w_full()
+                                .h(px(32.0))
+                                .flex()
+                                .items_center()
+                                .relative()
+                                .top(px(2.0))
+                                .child(
+                                    Input::new(input_state)
+                                        .appearance(false)
+                                        .bordered(false)
+                                        .focus_bordered(false)
+                                        .variant(InputVariant::Filled),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .w(px(28.0))
+                        .h(px(34.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(theme.on_surface_variant)
+                        .child(Icon::new(IconName::Dashboard).size(px(18.))),
+                )
+                .child(
+                    div()
+                        .w(px(28.0))
+                        .h(px(34.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(theme.on_surface_variant)
+                        .child(Icon::new(IconName::Airwave).size(px(18.))),
+                )
+        } else {
+            div().id("overview_search_bar_empty")
+        };
+
+        let content_panel = if is_query_empty {
+            div()
+                .id("overview-workspace-filmstrip")
+                // Preserve the full preview dimensions inside the card's
+                // horizontal/vertical padding.
+                .w(px(PREVIEW_WIDTH + 16.0))
+                .max_h(px(scroll_height + 20.0))
+                .gap(px(PREVIEW_GAP))
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .on_scroll_wheel(
+                    cx.listener(move |view, event: &ScrollWheelEvent, window, cx| {
+                        let delta_y = event.delta.pixel_delta(window.line_height()).y;
+                        if delta_y == px(0.) {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        if !has_active_drag {
+                            view.focus_adjacent_workspace(
+                                &visible_workspace_ids,
+                                delta_y < px(0.),
+                                cx,
+                            );
+                        }
+                    }),
+                )
+                .children(card_elements)
+                .bg(theme.surface_container)
+                .rounded(px(28.))
+                .px_2()
+                .py(px(10.0))
+                .shadow_md()
+                .into_any_element()
+        } else {
+            let scale_factor = window.scale_factor();
+            let provider_views = ShellRuntime::extension_surface_views(
+                cx,
+                crate::extensions::ContributionSurface::Launcher,
+            )
+            .into_iter()
+            .map(|(id, tree)| {
+                crate::bar::ext_view_adapter::render_ext_view_tree(&id, None, &tree, window, cx)
+            })
+            .collect::<Vec<_>>();
+
+            let result_items: Vec<_> = self
+                .search_results
+                .iter()
+                .enumerate()
+                .map(|(index, result)| {
+                    let is_first_result = index == 0;
+                    let is_last_result = index + 1 == self.search_results.len();
+                    let result_top_radius = px(if is_first_result {
+                        PREVIEW_RADIUS
+                    } else {
+                        INTER_WORKSPACE_RADIUS
+                    });
+                    let result_bottom_radius = px(if is_last_result {
+                        PREVIEW_RADIUS
+                    } else {
+                        INTER_WORKSPACE_RADIUS
+                    });
+                    let is_selected = self.selected_result_index == Some(index);
+                    let is_suggestion = matches!(
+                        &result.intent,
+                        SearchIntent::ExecuteCommand(_) | SearchIntent::OpenWeb(_)
+                    );
+                    let bg = if is_selected {
+                        theme.primary_container.opacity(0.12)
+                    } else {
+                        theme.surface_container_high.opacity(0.34)
+                    };
+                    let icon_element = match &result.icon {
+                        SearchResultIcon::AppIcon(path) => app_icon(
+                            path.clone(),
+                            &result.title,
+                            px(28.),
+                            scale_factor,
+                            theme.surface_container_highest,
+                            theme.on_surface,
+                        ),
+                        SearchResultIcon::Named(icon_name) => {
+                            Icon::new(*icon_name).size(px(26.)).into_any_element()
+                        }
+                        SearchResultIcon::Initial(ch) => {
+                            div().child(ch.to_string()).into_any_element()
+                        }
+                    };
+
+                    h_flex()
+                        .id(ElementId::NamedInteger(
+                            "search-result-item".into(),
+                            index as u64,
+                        ))
+                        .w_full()
+                        .px_1()
+                        .py_2()
+                        .rounded_tl(result_top_radius)
+                        .rounded_tr(result_top_radius)
+                        .rounded_bl(result_bottom_radius)
+                        .rounded_br(result_bottom_radius)
+                        .bg(bg)
+                        .gap_3()
+                        .items_center()
+                        .cursor_pointer()
+                        .hover(|item| item.bg(theme.primary_container.opacity(0.2)).shadow_sm())
+                        .active(|item| item.bg(theme.primary_container.opacity(0.28)))
+                        .role(Role::Button)
+                        .aria_label(format!("{}: {}", result.result_type, result.title))
+                        .child(
+                            div()
+                                .w(px(36.))
+                                .h(px(36.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(icon_element),
+                        )
+                        .child(if is_suggestion {
+                            v_flex()
+                                .flex_1()
+                                .gap_0()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.on_surface_variant)
+                                        .child(result.description.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme.on_surface)
+                                        .child(result.title.clone()),
+                                )
+                                .into_any_element()
+                        } else {
+                            v_flex()
+                                .flex_1()
+                                .gap_0()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_semibold()
+                                        .text_color(theme.on_surface)
+                                        .child(result.title.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.on_surface_variant)
+                                        .child(result.description.clone()),
+                                )
+                                .into_any_element()
+                        })
+                        .when(is_interactive, |el| {
+                            el.on_click(cx.listener(move |view, _, window, cx| {
+                                cx.stop_propagation();
+                                view.activate_result(index, window, cx);
+                            }))
+                        })
+                        .into_any_element()
+                })
+                .collect();
+
+            let provider_views = provider_views
+                .into_iter()
+                .take(8usize.saturating_sub(result_items.len()))
+                .collect::<Vec<_>>();
+            if result_items.is_empty() && provider_views.is_empty() {
+                div()
+                    .w(px(SEARCH_SURFACE_WIDTH))
+                    .py_4()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
+                    .text_color(theme.on_surface_variant)
+                    .child("No matching results")
+                    .into_any_element()
+            } else {
+                let result_count = result_items.len() + provider_views.len();
+                let list_height = (result_count as f32 * 56.0
+                    + result_count.saturating_sub(1) as f32 * 8.0)
+                    .min(360.0);
+                let result_list = div()
+                    .id("overview-search-results-scroll")
+                    .w_full()
+                    .h(px(list_height))
+                    .track_scroll(&self.result_scroll_handle)
+                    .overflow_y_scroll()
+                    .gap_2()
+                    .flex()
+                    .flex_col()
+                    .children(result_items)
+                    .children(provider_views);
+                div()
+                    .id("overview-search-results")
+                    .w(px(SEARCH_SURFACE_WIDTH))
+                    .h(px(list_height + 20.0))
+                    .relative()
+                    .bg(theme.surface_container)
+                    .rounded_3xl()
+                    .p(px(10.0))
+                    .overflow_hidden()
+                    .shadow_md()
+                    .child(result_list)
+                    .when(!is_query_empty, |results| {
+                        results
+                            .rounded_tl(px(0.))
+                            .rounded_tr(px(0.))
+                            .rounded_bl(px(32.))
+                            .rounded_br(px(32.))
+                            .shadow_none()
+                    })
+                    .into_any_element()
+            }
+        };
+
+        let content_panel = if self.reduced_motion {
+            content_panel
+        } else {
+            div()
+                .id("overview_content_transition")
+                .child(content_panel)
+                .with_animation(
+                    ElementId::NamedInteger(
+                        "overview-content-motion".into(),
+                        self.query_generation,
+                    ),
+                    Animation::new(Duration::from_millis(220))
+                        .with_easing(cubic_bezier(0.2, 0.0, 0.0, 1.0)),
+                    |content, delta| content.opacity(delta),
+                )
+                .into_any_element()
+        };
+
+        let stage = v_flex()
             .id("overview_stage")
             .role(Role::Dialog)
             .aria_label("Workspace Overview")
@@ -873,49 +1507,22 @@ impl Render for WorkspaceOverview {
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 cx.stop_propagation();
             })
-            .w(px(PREVIEW_WIDTH
-                + STAGE_HORIZONTAL_PADDING * 2.0
+            .w(px((if is_query_empty {
+                PREVIEW_WIDTH + 34.0
+            } else {
+                SEARCH_SURFACE_WIDTH
+            }) + STAGE_HORIZONTAL_PADDING * 2.0
                 + STAGE_BORDER_WIDTH * 2.0))
             .max_h(px(stage_max_height))
             .px(px(STAGE_HORIZONTAL_PADDING))
             .py(px(STAGE_VERTICAL_PADDING))
-            .flex()
-            .flex_col()
+            .gap(if is_query_empty { px(8.0) } else { px(0.0) })
             .items_center()
-            .bg(theme.surface_container.opacity(0.98))
-            .border_1()
-            .border_color(theme.outline_variant.opacity(0.62))
-            .rounded(px(32.))
-            .shadow_lg()
-            .child(
-                div()
-                    .id("overview-workspace-filmstrip")
-                    .w(px(PREVIEW_WIDTH))
-                    .max_h(px(scroll_height))
-                    .gap(px(PREVIEW_GAP))
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .on_scroll_wheel(cx.listener(
-                        move |view, event: &ScrollWheelEvent, window, cx| {
-                            let delta_y = event.delta.pixel_delta(window.line_height()).y;
-                            if delta_y == px(0.) {
-                                return;
-                            }
-                            cx.stop_propagation();
-                            if !has_active_drag {
-                                view.focus_adjacent_workspace(
-                                    &visible_workspace_ids,
-                                    delta_y < px(0.),
-                                    cx,
-                                );
-                            }
-                        },
-                    ))
-                    .children(card_elements),
-            )
-            .on_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
-                view.handle_key_down(event, cx);
+            .bg(gpui::transparent_black())
+            .child(search_bar)
+            .child(content_panel)
+            .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                view.handle_key_down(event, window, cx);
             }));
 
         let stage = if !self.reduced_motion && phase != OverviewPhase::Visible {

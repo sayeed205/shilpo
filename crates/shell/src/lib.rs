@@ -8,10 +8,10 @@ pub mod error;
 mod extension_http;
 pub mod extension_surface;
 pub mod extensions;
-pub mod launcher;
 pub mod notification;
 pub mod osd;
 pub mod overview;
+pub mod overview_search;
 pub mod runtime;
 
 pub use actions::{
@@ -25,7 +25,6 @@ pub use extensions::{
     ContributionDescriptor, ContributionInstance, ContributionSurface, ExtensionCoordinator,
     ExtensionSnapshot,
 };
-pub use launcher::LauncherView;
 pub use notification::NotificationToastView;
 pub use osd::{OsdKind, OsdView};
 pub use overview::WorkspaceOverview;

@@ -43,8 +43,8 @@ impl Default for LocaleCatalogue {
             "Do Not Disturb".to_string(),
         );
         en_us.insert(
-            "launcher.search_placeholder".to_string(),
-            "Search applications...".to_string(),
+            "overview.search_placeholder".to_string(),
+            "Search, calculate or run".to_string(),
         );
         catalogue.translations.insert("en-US".to_string(), en_us);
 
@@ -69,8 +69,8 @@ impl Default for LocaleCatalogue {
             "বিরক্ত করবেন না".to_string(),
         );
         bn_in.insert(
-            "launcher.search_placeholder".to_string(),
-            "অ্যাপ্লিকেশন খুঁজুন...".to_string(),
+            "overview.search_placeholder".to_string(),
+            "খুঁজুন, গণনা করুন বা চালান...".to_string(),
         );
         catalogue.translations.insert("bn-IN".to_string(), bn_in);
 
@@ -234,15 +234,15 @@ mod tests {
         let catalogue = LocaleCatalogue::new("bn-IN");
         assert_eq!(catalogue.tr("control_center.network"), "নেটওয়ার্ক");
         assert_eq!(
-            catalogue.tr("launcher.search_placeholder"),
-            "অ্যাপ্লিকেশন খুঁজুন..."
+            catalogue.tr("overview.search_placeholder"),
+            "খুঁজুন, গণনা করুন বা চালান..."
         );
     }
 
     #[test]
     fn test_assistive_tech_overlay_announcements() {
         let catalogue = LocaleCatalogue::new("en-US");
-        let announcement = catalogue.announce_status("Launcher overlay opened");
-        assert_eq!(announcement, "[Announce (en-US)] Launcher overlay opened");
+        let announcement = catalogue.announce_status("Workspace overview opened");
+        assert_eq!(announcement, "[Announce (en-US)] Workspace overview opened");
     }
 }

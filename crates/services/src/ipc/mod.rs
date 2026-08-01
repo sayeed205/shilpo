@@ -42,7 +42,6 @@ pub enum IpcRequest {
     Compositor(CompositorCommand),
     ReloadConfig,
     ToggleBar,
-    ToggleLauncher,
     ToggleControlCenter,
     ToggleOverview,
     GetStatus,
@@ -96,7 +95,7 @@ pub struct IpcStatus {
     pub running: bool,
     pub readiness: ReadinessState,
     pub bar: BarState,
-    pub launcher_visible: bool,
+    pub overview_visible: bool,
     pub control_center_visible: bool,
     #[serde(default)]
     pub health: ServiceHealth,
@@ -812,7 +811,7 @@ mod tests {
             running: true,
             readiness: ReadinessState::Ready,
             bar: BarState::Visible,
-            launcher_visible: true,
+            overview_visible: true,
             control_center_visible: false,
             health: health.clone(),
         });
@@ -826,7 +825,7 @@ mod tests {
                 running: true,
                 readiness: ReadinessState::Ready,
                 bar: BarState::Visible,
-                launcher_visible: true,
+                overview_visible: true,
                 control_center_visible: false,
                 health: health.clone(),
             }))
@@ -972,7 +971,7 @@ mod tests {
             running: true,
             readiness: ReadinessState::Degraded,
             bar: BarState::OpenFailed,
-            launcher_visible: false,
+            overview_visible: false,
             control_center_visible: true,
             health: ServiceHealth {
                 compositor_connected: true,
@@ -992,7 +991,7 @@ mod tests {
         let value = serde_json::to_value(&status).unwrap();
         assert_eq!(value["readiness"], "degraded");
         assert_eq!(value["bar"], "open_failed");
-        assert_eq!(value["launcher_visible"], false);
+        assert_eq!(value["overview_visible"], false);
         assert_eq!(value["control_center_visible"], true);
         assert_eq!(value["health"]["compositor_connected"], true);
         assert_eq!(value["health"]["uptime_seconds"], 120);
@@ -1026,7 +1025,7 @@ mod tests {
         for _ in 0..10 {
             let socket_path = path.clone();
             handles.push(std::thread::spawn(move || {
-                let req = IpcRequest::ToggleLauncher;
+                let req = IpcRequest::ToggleOverview;
                 let _ = ShellIpcServer::send_command_at(&socket_path, req);
             }));
         }

@@ -347,7 +347,7 @@ Configuration uses namespaced contribution references.
 
 ```toml
 [bar.widgets]
-start = ["builtin:launcher", "builtin:workspaces"]
+start = ["builtin:workspaces"]
 center = ["ext:io.github.alice.world-clock/bar"]
 end = ["builtin:network", "builtin:battery"]
 ```
