@@ -196,6 +196,8 @@ pub enum ThemeSeedAction {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum ThemeWallpaperAction {
+    /// Show the current wallpaper and wallpaper directory
+    Get,
     /// Set wallpaper file path
     Set { path: PathBuf },
     /// Select random wallpaper from directory

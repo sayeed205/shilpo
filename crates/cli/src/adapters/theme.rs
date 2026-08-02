@@ -1,4 +1,4 @@
-use shilpo_theme::{ColorSource, ThemeClient, ThemeMode};
+use shilpo_theme::{ColorSource, ThemeClient, ThemeMode, ThemeState};
 use std::path::Path;
 
 pub struct ThemeAdapter;
@@ -67,6 +67,11 @@ impl ThemeAdapter {
             .await
             .map_err(|e| (3, format!("failed to communicate with theme daemon: {e}")))?;
         Ok(format!("Wallpaper updated to {path_str}"))
+    }
+
+    pub async fn get_wallpaper() -> Result<ThemeState, (i32, String)> {
+        let client = ThemeClient::new().await;
+        Ok(client.current_state())
     }
 
     pub async fn random_wallpaper() -> Result<String, (i32, String)> {

@@ -147,6 +147,16 @@ fn test_cli_parser_theme_and_doctor() {
         panic!("Expected Theme Mode Set Dark");
     }
 
+    let cli = Cli::try_parse_from(["shilpo", "theme", "wallpaper", "get"]).unwrap();
+    if let Some(Commands::Theme {
+        command: crate::args::ThemeCommands::Wallpaper { action },
+    }) = cli.command
+    {
+        assert!(matches!(action, crate::args::ThemeWallpaperAction::Get));
+    } else {
+        panic!("Expected Theme Wallpaper Get");
+    }
+
     let cli = Cli::try_parse_from(["shilpo", "doctor", "--fix", "--first-login"]).unwrap();
     if let Some(Commands::Doctor { fix, first_login }) = cli.command {
         assert!(fix);

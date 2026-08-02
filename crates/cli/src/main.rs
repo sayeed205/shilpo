@@ -461,6 +461,34 @@ async fn main() {
                 },
             },
             ThemeCommands::Wallpaper { action } => match action {
+                ThemeWallpaperAction::Get => match ThemeAdapter::get_wallpaper().await {
+                    Ok(state) => {
+                        let path = state.wallpaper_path.as_deref().map_or_else(
+                            || "<none>".to_string(),
+                            |path| path.display().to_string(),
+                        );
+                        let directory = state.wallpaper_dir.display().to_string();
+                        output.success(
+                            "theme.wallpaper.get",
+                            &serde_json::json!({
+                                "path": state.wallpaper_path,
+                                "directory": state.wallpaper_dir,
+                            }),
+                            Some(&format!(
+                                "Current wallpaper: {path}\nWallpaper directory: {directory}"
+                            )),
+                            Vec::new(),
+                        )
+                    }
+                    Err((code, msg)) => output.error(
+                        "theme.wallpaper.get",
+                        "theme_daemon_unavailable",
+                        &msg,
+                        None,
+                        Vec::new(),
+                        code,
+                    ),
+                },
                 ThemeWallpaperAction::Set { path } => {
                     match ThemeAdapter::set_wallpaper(&path).await {
                         Ok(msg) => output.success(
