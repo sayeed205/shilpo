@@ -68,6 +68,62 @@ fn default_wallpaper_dir() -> PathBuf {
     PathBuf::from("~/Pictures/Wallpapers")
 }
 
+/// Resolve Shilpo XDG configuration directory (`$XDG_CONFIG_HOME/shilpo` or `$HOME/.config/shilpo`).
+pub fn config_dir() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .unwrap_or_else(|| PathBuf::from(".config"))
+        .join("shilpo")
+}
+
+/// Resolve Shilpo primary configuration file path (`$XDG_CONFIG_HOME/shilpo/config.toml`).
+pub fn default_config_path() -> PathBuf {
+    config_dir().join("config.toml")
+}
+
+/// Resolve Shilpo XDG state directory (`$XDG_STATE_HOME/shilpo` or `$HOME/.local/state/shilpo`).
+pub fn state_dir() -> PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
+        .unwrap_or_else(|| PathBuf::from(".local/state"))
+        .join("shilpo")
+}
+
+/// Resolve Shilpo XDG cache directory (`$XDG_CACHE_HOME/shilpo` or `$HOME/.cache/shilpo`).
+pub fn cache_dir() -> PathBuf {
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(|| PathBuf::from(".cache"))
+        .join("shilpo")
+}
+
+/// Resolve Shilpo XDG data directory (`$XDG_DATA_HOME/shilpo` or `$HOME/.local/share/shilpo`).
+pub fn data_dir() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .unwrap_or_else(|| PathBuf::from(".local/share"))
+        .join("shilpo")
+}
+
+/// Path to doctor JSON report (`$XDG_STATE_HOME/shilpo/doctor-report.json`).
+pub fn doctor_report_json_path() -> PathBuf {
+    state_dir().join("doctor-report.json")
+}
+
+/// Path to doctor human text report (`$XDG_STATE_HOME/shilpo/doctor-report.txt`).
+pub fn doctor_report_txt_path() -> PathBuf {
+    state_dir().join("doctor-report.txt")
+}
+
+/// Marker file indicating one-shot first-login doctor check ran (`$XDG_STATE_HOME/shilpo/first-login-completed`).
+pub fn doctor_first_login_marker_path() -> PathBuf {
+    state_dir().join("first-login-completed")
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DesktopWidgetConfig {

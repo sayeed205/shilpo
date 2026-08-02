@@ -497,12 +497,17 @@ async fn main() {
                 },
             },
         },
-        Commands::Doctor { fix } => {
+        Commands::Doctor { fix, first_login } => {
             let doctor = DoctorChecker::new();
-            let items = doctor.run_diagnostics(fix);
-            let has_fail = items
-                .iter()
-                .any(|i| i.status == adapters::doctor::DiagnosticStatus::Fail);
+            let (items, has_fail) = if first_login {
+                doctor.run_first_login_report(fix)
+            } else {
+                let items = doctor.run_diagnostics(fix);
+                let fail = items
+                    .iter()
+                    .any(|i| i.status == adapters::doctor::DiagnosticStatus::Fail);
+                (items, fail)
+            };
             let report_str = doctor.format_report(&items);
             if has_fail {
                 output.error(

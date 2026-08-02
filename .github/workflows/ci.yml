@@ -1,0 +1,45 @@
+name: Shilpo Arch Desktop CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  arch-desktop-ci:
+    name: Arch Linux Container Verification
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Update Pacman & Install Build Toolchain
+        run: |
+          pacman -Syu --noconfirm base-devel clang cmake git pkgconf rustup niri shellcheck bash gawk pciutils cargo-nextest
+
+      - name: Setup Rust Stable Toolchain
+        run: |
+          rustup default stable
+          rustup target add wasm32-wasip2
+
+      - name: Verify Code Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy Linter
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run Workspace Unit & Integration Tests
+        run: cargo nextest run --workspace
+
+      - name: Build Weather Extension Component
+        run: cargo build --locked --manifest-path extensions/Cargo.toml -p shilpo-weather-extension --target wasm32-wasip2 --release
+
+      - name: Run Static Checks Suite
+        run: ./scripts/static_checks.sh
+
+      - name: Run Installer Integration Test Suite
+        run: ./tests/test_installer.sh

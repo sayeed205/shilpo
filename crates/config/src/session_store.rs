@@ -115,11 +115,7 @@ pub struct HeedSessionStore {
 
 impl HeedSessionStore {
     pub fn default_db_dir() -> PathBuf {
-        let base = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-            .unwrap_or_else(|| PathBuf::from("."));
-        base.join("shilpo").join("session.lmdb")
+        crate::data_dir().join("session.lmdb")
     }
 
     pub fn is_corrupt_error(err: &heed::Error) -> bool {

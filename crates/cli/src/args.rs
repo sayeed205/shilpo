@@ -73,6 +73,9 @@ pub enum Commands {
         /// Attempt automatic fixes for warnings/errors
         #[arg(long)]
         fix: bool,
+        /// Run as first-login one-shot task: write reports, send desktop notification, mark complete
+        #[arg(long)]
+        first_login: bool,
     },
     /// Shell extension development, packaging, and catalog management
     Ext {

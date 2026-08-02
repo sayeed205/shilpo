@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Resolve repository root directory before executing any manifests or templates
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$SCRIPT_DIR
+cd "$REPO_ROOT" || exit 1
+
+# Source Bash installer modules
+# shellcheck source=scripts/install/utils.sh
+source "$REPO_ROOT/scripts/install/utils.sh"
+# shellcheck source=scripts/install/preflight.sh
+source "$REPO_ROOT/scripts/install/preflight.sh"
+# shellcheck source=scripts/install/packages_gpu.sh
+source "$REPO_ROOT/scripts/install/packages_gpu.sh"
+# shellcheck source=scripts/install/paru.sh
+source "$REPO_ROOT/scripts/install/paru.sh"
+# shellcheck source=scripts/install/build.sh
+source "$REPO_ROOT/scripts/install/build.sh"
+# shellcheck source=scripts/install/staging.sh
+source "$REPO_ROOT/scripts/install/staging.sh"
+# shellcheck source=scripts/install/services.sh
+source "$REPO_ROOT/scripts/install/services.sh"
+# shellcheck source=scripts/install/doctor.sh
+source "$REPO_ROOT/scripts/install/doctor.sh"
+# shellcheck source=scripts/install/uninstall.sh
+source "$REPO_ROOT/scripts/install/uninstall.sh"
+
+usage() {
+  cat <<'EOF'
+Shilpo Arch Linux Desktop Installer
+
+Usage:
+  ./setup install [-y|--dry-run]  Install Arch packages, build, stage, enable desktop
+  ./setup update [-y|--dry-run]   Reconcile dependencies, rebuild, and update desktop
+  ./setup doctor                  Run desktop capability and environment diagnostic checks
+  ./setup uninstall               Remove Shilpo binaries and user session services
+
+Options:
+  -y, --yes          Suppress package/build interactive prompts (never reboots automatically)
+  --dry-run          Print commands and validate without modifying system files
+  -h, --help         Show this help summary
+EOF
+}
+
+COMMAND=""
+ASSUME_YES=false
+DRY_RUN=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    install|update|doctor|uninstall)
+      if [[ -n $COMMAND ]]; then
+        error "Multiple commands specified: '$COMMAND' and '$1'"
+        exit 2
+      fi
+      COMMAND=$1
+      ;;
+    -y|--yes)
+      ASSUME_YES=true
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      error "Unknown argument or unsupported option '$1'"
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [[ -z $COMMAND ]]; then
+  usage
+  exit 0
+fi
+
+export ASSUME_YES DRY_RUN REPO_ROOT
+
+case "$COMMAND" in
+  install)
+    run_preflight
+    resolve_and_install_packages
+    ensure_paru
+    build_release
+    stage_and_commit_files
+    activate_services_and_shell
+    prompt_reboot
+    ;;
+  update)
+    run_preflight
+    resolve_and_install_packages
+    ensure_paru
+    build_release
+    stage_and_commit_files
+    activate_services_and_shell
+    if [[ -n ${WAYLAND_DISPLAY:-} || -n ${NIRI_SOCKET:-} ]]; then
+      log "Restarting Shilpo shell daemon in active Niri session"
+      if command -v systemctl >/dev/null 2>&1; then
+        run systemctl --user restart shilpo-shell.service shilpo-themed.service || true
+      fi
+    fi
+    log "Shilpo desktop update complete"
+    ;;
+  doctor)
+    run_doctor
+    ;;
+  uninstall)
+    uninstall_shilpo
+    ;;
+  *)
+    error "Unknown command '$COMMAND'"
+    usage >&2
+    exit 2
+    ;;
+esac

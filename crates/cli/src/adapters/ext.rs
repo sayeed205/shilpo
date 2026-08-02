@@ -32,18 +32,10 @@ impl ExtAdapter {
         if result.success {
             if ShellIpcClient::is_socket_available() {
                 if let Err(e) = self.ipc.send(IpcRequest::ReloadConfig) {
-                    result.warnings.push(format!(
-                        "Local mutation succeeded, but live daemon refresh failed: {e}"
-                    ));
-                    result.success = false;
-                    result.exit_code = 1;
+                    record_refresh_warning(result, format!("live daemon refresh failed: {e}"));
                 }
             } else {
-                result
-                    .warnings
-                    .push("Local mutation succeeded, but live shell daemon is not running".into());
-                result.success = false;
-                result.exit_code = 3;
+                record_refresh_warning(result, "live shell daemon is not running");
             }
         }
     }
@@ -648,5 +640,34 @@ impl ExtAdapter {
                 exit_code: 1,
             },
         }
+    }
+}
+
+fn record_refresh_warning(result: &mut ExtOpResult, reason: impl Into<String>) {
+    result
+        .warnings
+        .push(format!("Local mutation succeeded, but {}", reason.into()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ExtOpResult, record_refresh_warning};
+
+    #[test]
+    fn daemon_refresh_failure_keeps_local_mutation_successful() {
+        let mut result = ExtOpResult {
+            success: true,
+            data: serde_json::Value::Null,
+            human_message: "extension enabled".into(),
+            warnings: Vec::new(),
+            exit_code: 0,
+        };
+
+        record_refresh_warning(&mut result, "live shell daemon is not running");
+
+        assert!(result.success);
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("Local mutation succeeded"));
     }
 }

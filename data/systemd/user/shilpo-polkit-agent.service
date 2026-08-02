@@ -1,0 +1,12 @@
+[Unit]
+Description=Shilpo Polkit Authentication Agent
+PartOf=niri.service
+After=niri.service
+
+[Service]
+ExecStart=@POLKIT_AGENT@
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=niri.service

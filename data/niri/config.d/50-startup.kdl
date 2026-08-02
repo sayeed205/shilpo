@@ -1,0 +1,5 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 50 — Processes spawned at login
+// ─────────────────────────────────────────────────────────────────────────────
+// Note: Shilpo services (shilpo-shell, shilpo-themed, shilpo-wallpaper, etc.)
+// are managed by systemd user services via niri.service.wants.

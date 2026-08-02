@@ -1,0 +1,34 @@
+# Shilpo Starship Prompt Configuration
+format = """
+$username\
+$hostname\
+$directory\
+$git_branch\
+$git_status\
+$rust\
+$cmd_duration\
+$line_break\
+$character"""
+
+[character]
+success_symbol = "[➜](bold green)"
+error_symbol = "[➜](bold red)"
+
+[directory]
+style = "bold cyan"
+truncation_length = 3
+
+[git_branch]
+style = "bold purple"
+symbol = "🌱 "
+
+[git_status]
+style = "bold red"
+
+[rust]
+symbol = "🦀 "
+style = "bold red"
+
+[username]
+style_user = "bold blue"
+show_always = false

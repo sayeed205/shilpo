@@ -1,0 +1,13 @@
+[Unit]
+Description=Shilpo GNOME Keyring Session Agent
+PartOf=niri.service
+After=niri.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/gnome-keyring-daemon --foreground --components=secrets,ssh
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=niri.service

@@ -147,11 +147,12 @@ fn test_cli_parser_theme_and_doctor() {
         panic!("Expected Theme Mode Set Dark");
     }
 
-    let cli = Cli::try_parse_from(["shilpo", "doctor", "--fix"]).unwrap();
-    if let Some(Commands::Doctor { fix }) = cli.command {
+    let cli = Cli::try_parse_from(["shilpo", "doctor", "--fix", "--first-login"]).unwrap();
+    if let Some(Commands::Doctor { fix, first_login }) = cli.command {
         assert!(fix);
+        assert!(first_login);
     } else {
-        panic!("Expected Doctor with --fix");
+        panic!("Expected Doctor with --fix and --first-login");
     }
 }
 

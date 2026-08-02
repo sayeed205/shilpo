@@ -1,0 +1,22 @@
+# Shilpo Swaylock Configuration
+daemonize
+ignore-empty-password
+show-failed-attempts
+
+color=1e1e2eff
+font="JetBrainsMono Nerd Font"
+
+indicator-radius=100
+indicator-thickness=8
+
+line-color=313244ff
+ring-color=89b4fa00
+inside-color=181825aa
+key-hl-color=cba6f7ff
+separator-color=00000000
+
+text-color=cdd6f4ff
+text-clear-color=a6adc8ff
+text-caps-lock-color=f9e2af00
+text-ver-color=89b4faff
+text-wrong-color=f38ba8ff

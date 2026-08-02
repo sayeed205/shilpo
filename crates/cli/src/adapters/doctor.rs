@@ -15,6 +15,10 @@ pub struct DiagnosticItem {
     pub name: String,
     pub status: DiagnosticStatus,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repair_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit_identifier: Option<String>,
     pub fix_applied: bool,
 }
 
@@ -27,79 +31,411 @@ impl DoctorChecker {
     }
 
     pub fn default_config_path() -> PathBuf {
-        std::env::var("HOME")
-            .map(|home| PathBuf::from(home).join(".config/shilpo/config.toml"))
-            .unwrap_or_else(|_| PathBuf::from(".config/shilpo/config.toml"))
+        shilpo_config::default_config_path()
     }
 
     pub fn run_diagnostics(&self, auto_fix: bool) -> Vec<DiagnosticItem> {
         vec![
             self.check_niri_compositor(),
-            self.check_shell_ipc(),
+            self.check_systemd_user_units(),
+            self.check_dbus_theme(),
+            self.check_desktop_services(),
+            self.check_gpu_vulkan(),
+            self.check_wallpaper_daemon(auto_fix),
+            self.check_niri_bindings(),
             self.check_config_file(auto_fix),
-            self.check_wallpaper_directory(auto_fix),
-            self.check_awww_backend(),
+            self.check_weather_extension(),
+            self.check_terminal_fonts_cursors(),
+            self.check_xdg_user_dirs(auto_fix),
         ]
     }
 
+    pub fn run_first_login_report(&self, auto_fix: bool) -> (Vec<DiagnosticItem>, bool) {
+        let items = self.run_diagnostics(auto_fix);
+        let has_fail = items.iter().any(|i| i.status == DiagnosticStatus::Fail);
+
+        let state_dir = shilpo_config::state_dir();
+        let _ = std::fs::create_dir_all(&state_dir);
+
+        let json_path = shilpo_config::doctor_report_json_path();
+        let txt_path = shilpo_config::doctor_report_txt_path();
+        let marker_path = shilpo_config::doctor_first_login_marker_path();
+
+        if let Ok(json) = serde_json::to_string_pretty(&items) {
+            let _ = std::fs::write(&json_path, json);
+        }
+        let report_txt = self.format_report(&items);
+        let _ = std::fs::write(&txt_path, &report_txt);
+
+        let title = if has_fail {
+            "Shilpo Desktop Diagnostics: Issues Found"
+        } else {
+            "Shilpo Desktop Readiness Check: Passed"
+        };
+        let body = if has_fail {
+            "Some desktop services or dependencies require attention. View report at ~/.local/state/shilpo/doctor-report.txt"
+        } else {
+            "All core desktop features, GPU drivers, and session units are operational."
+        };
+
+        let _ = std::process::Command::new("notify-send")
+            .arg(title)
+            .arg(body)
+            .status();
+
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        let _ = std::fs::write(&marker_path, format!("completed_at={timestamp}\n"));
+
+        (items, has_fail)
+    }
+
     pub fn check_niri_compositor(&self) -> DiagnosticItem {
-        if let Some(path) = shilpo_services::compositor::niri::resolve_niri_socket_path() {
-            if path.exists() {
-                DiagnosticItem {
-                    category: "Compositor".into(),
-                    name: "Niri IPC Socket".into(),
-                    status: DiagnosticStatus::Pass,
-                    message: format!("Active socket found at {}", path.display()),
-                    fix_applied: false,
-                }
-            } else {
-                DiagnosticItem {
-                    category: "Compositor".into(),
-                    name: "Niri IPC Socket".into(),
-                    status: DiagnosticStatus::Warn,
-                    message: format!(
-                        "Socket path set to {} but socket file does not exist",
-                        path.display()
-                    ),
-                    fix_applied: false,
-                }
+        let socket_active = shilpo_services::compositor::niri::resolve_niri_socket_path()
+            .map(|p| p.exists())
+            .unwrap_or(false)
+            || std::env::var("WAYLAND_DISPLAY").is_ok()
+            || std::process::Command::new("pgrep")
+                .arg("niri")
+                .output()
+                .is_ok_and(|o| o.status.success());
+
+        if socket_active {
+            DiagnosticItem {
+                category: "Compositor".into(),
+                name: "Niri Session & IPC Socket".into(),
+                status: DiagnosticStatus::Pass,
+                message: "Active Niri Wayland session and socket detected".into(),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
             }
         } else {
             DiagnosticItem {
                 category: "Compositor".into(),
-                name: "Niri IPC Socket".into(),
+                name: "Niri Session & IPC Socket".into(),
                 status: DiagnosticStatus::Warn,
-                message:
-                "Neither $NIRI_SOCKET nor $NIRI_SOCKET_PATH is set (running in offline/headless fallback mode)"
-                    .into(),
+                message: "Niri session is not currently running (offline mode)".into(),
+                repair_command: Some("niri".into()),
+                unit_identifier: None,
                 fix_applied: false,
             }
         }
     }
 
-    pub fn check_shell_ipc(&self) -> DiagnosticItem {
-        let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+    pub fn check_systemd_user_units(&self) -> DiagnosticItem {
+        let config_home = std::env::var("XDG_CONFIG_HOME")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::temp_dir());
+            .unwrap_or_else(|_| {
+                std::env::var("HOME")
+                    .map(|h| PathBuf::from(h).join(".config"))
+                    .unwrap_or_else(|_| PathBuf::from(".config"))
+            });
+        let wants_dir = config_home.join("systemd/user/niri.service.wants");
 
-        let shilpo_ipc_dir = runtime_dir.join("shilpo-shell");
-        if shilpo_ipc_dir.exists() {
+        let required_units = [
+            "shilpo-shell.service",
+            "shilpo-themed.service",
+            "shilpo-wallpaper.service",
+            "shilpo-polkit-agent.service",
+            "shilpo-network-agent.service",
+            "shilpo-keyring.service",
+            "shilpo-swayidle.service",
+            "shilpo-first-login.service",
+        ];
+
+        let missing: Vec<&str> = required_units
+            .iter()
+            .copied()
+            .filter(|u| !wants_dir.join(u).exists())
+            .collect();
+
+        let failed_output = std::process::Command::new("systemctl")
+            .args(["--user", "--failed", "--no-legend"])
+            .output();
+
+        let has_failed_units = failed_output
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("shilpo"))
+            .unwrap_or(false);
+        let inactive_units: Vec<&str> = required_units
+            .iter()
+            .copied()
+            .filter(|unit| {
+                !std::process::Command::new("systemctl")
+                    .args(["--user", "is-active", "--quiet", unit])
+                    .status()
+                    .is_ok_and(|status| status.success())
+            })
+            .collect();
+
+        if !missing.is_empty() {
             DiagnosticItem {
-                category: "Shell IPC".into(),
-                name: "Runtime Directory".into(),
-                status: DiagnosticStatus::Pass,
-                message: format!("Directory ready at {}", shilpo_ipc_dir.display()),
+                category: "Systemd".into(),
+                name: "Niri Session Wants Links".into(),
+                status: DiagnosticStatus::Fail,
+                message: format!("Missing niri.service.wants links: {}", missing.join(", ")),
+                repair_command: Some("./setup update".into()),
+                unit_identifier: Some("niri.service".into()),
+                fix_applied: false,
+            }
+        } else if has_failed_units || !inactive_units.is_empty() {
+            DiagnosticItem {
+                category: "Systemd".into(),
+                name: "User Unit Status".into(),
+                status: DiagnosticStatus::Fail,
+                message: if has_failed_units {
+                    "One or more Shilpo user units are in a failed state".into()
+                } else {
+                    format!("Inactive Shilpo user units: {}", inactive_units.join(", "))
+                },
+                repair_command: Some("systemctl --user reset-failed && systemctl --user restart niri.service.wants/*".into()),
+                unit_identifier: Some("shilpo-shell.service".into()),
                 fix_applied: false,
             }
         } else {
             DiagnosticItem {
-                category: "Shell IPC".into(),
-                name: "Runtime Directory".into(),
+                category: "Systemd".into(),
+                name: "Session Services & Wants Links".into(),
+                status: DiagnosticStatus::Pass,
+                message: "All Shilpo user units are wired into niri.service.wants and operational"
+                    .into(),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        }
+    }
+
+    pub fn check_dbus_theme(&self) -> DiagnosticItem {
+        let data_home = std::env::var("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::env::var("HOME")
+                    .map(|h| PathBuf::from(h).join(".local/share"))
+                    .unwrap_or_else(|_| PathBuf::from(".local/share"))
+            });
+        let dbus_service = data_home.join("dbus-1/services/org.shilpo.Theme.service");
+
+        if dbus_service.exists()
+            || PathBuf::from("/usr/share/dbus-1/services/org.shilpo.Theme.service").exists()
+        {
+            DiagnosticItem {
+                category: "D-Bus".into(),
+                name: "Theme Activation Service".into(),
+                status: DiagnosticStatus::Pass,
+                message: "org.shilpo.Theme D-Bus service file detected".into(),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        } else {
+            DiagnosticItem {
+                category: "D-Bus".into(),
+                name: "Theme Activation Service".into(),
+                status: DiagnosticStatus::Fail,
+                message: "org.shilpo.Theme.service is missing from D-Bus service directory".into(),
+                repair_command: Some("./setup update".into()),
+                unit_identifier: Some("org.shilpo.Theme.service".into()),
+                fix_applied: false,
+            }
+        }
+    }
+
+    pub fn check_desktop_services(&self) -> DiagnosticItem {
+        let nm_ok = std::process::Command::new("nmcli")
+            .arg("general")
+            .output()
+            .is_ok_and(|o| o.status.success())
+            || std::process::Command::new("systemctl")
+                .args(["is-active", "NetworkManager.service"])
+                .output()
+                .is_ok_and(|o| o.status.success());
+
+        let bt_ok = std::process::Command::new("bluetoothctl")
+            .arg("show")
+            .output()
+            .is_ok_and(|o| o.status.success())
+            || std::process::Command::new("systemctl")
+                .args(["is-active", "bluetooth.service"])
+                .output()
+                .is_ok_and(|o| o.status.success());
+
+        let audio_ok = std::process::Command::new("wpctl")
+            .arg("status")
+            .output()
+            .is_ok_and(|o| o.status.success())
+            || std::process::Command::new("pactl")
+                .arg("info")
+                .output()
+                .is_ok_and(|o| o.status.success());
+
+        let dm_ok = std::process::Command::new("systemctl")
+            .args(["is-enabled", "sddm.service"])
+            .output()
+            .is_ok_and(|o| o.status.success())
+            || std::process::Command::new("systemctl")
+                .args(["is-enabled", "display-manager.service"])
+                .output()
+                .is_ok_and(|o| o.status.success());
+
+        let mut issues = Vec::new();
+        if !nm_ok {
+            issues.push("NetworkManager");
+        }
+        if !bt_ok {
+            issues.push("Bluetooth");
+        }
+        if !audio_ok {
+            issues.push("PipeWire/WirePlumber");
+        }
+        if !dm_ok {
+            issues.push("SDDM/DisplayManager");
+        }
+
+        if issues.is_empty() {
+            DiagnosticItem {
+                category: "Desktop Services".into(),
+                name: "Network, Bluetooth, Audio & DM".into(),
+                status: DiagnosticStatus::Pass,
+                message: "NetworkManager, Bluetooth, PipeWire, and SDDM are operational".into(),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        } else {
+            DiagnosticItem {
+                category: "Desktop Services".into(),
+                name: "Network, Bluetooth, Audio & DM".into(),
+                status: DiagnosticStatus::Warn,
+                message: format!(
+                    "Inactive or unverified desktop services: {}",
+                    issues.join(", ")
+                ),
+                repair_command: Some(
+                    "sudo systemctl enable --now NetworkManager bluetooth sddm".into(),
+                ),
+                unit_identifier: Some("sddm.service".into()),
+                fix_applied: false,
+            }
+        }
+    }
+
+    pub fn check_gpu_vulkan(&self) -> DiagnosticItem {
+        let vulkan_ok = std::process::Command::new("vulkaninfo")
+            .arg("--summary")
+            .output()
+            .is_ok_and(|o| o.status.success());
+
+        if vulkan_ok {
+            DiagnosticItem {
+                category: "Graphics & GPU".into(),
+                name: "Vulkan Driver Provider".into(),
+                status: DiagnosticStatus::Pass,
+                message: "Usable Vulkan ICD loader and GPU driver active".into(),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        } else {
+            DiagnosticItem {
+                category: "Graphics & GPU".into(),
+                name: "Vulkan Driver Provider".into(),
+                status: DiagnosticStatus::Fail,
+                message: "No active Vulkan driver found; run package resolution".into(),
+                repair_command: Some(
+                    "sudo pacman -S vulkan-tools mesa vulkan-intel vulkan-radeon nvidia-utils"
+                        .into(),
+                ),
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        }
+    }
+
+    pub fn check_wallpaper_daemon(&self, auto_fix: bool) -> DiagnosticItem {
+        let awww_ok = std::process::Command::new("awww")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success());
+
+        let wall_dir = shilpo_config::ShellConfig::load(Self::default_config_path())
+            .map(|config| expand_home_path(config.desktop.wallpaper_dir))
+            .unwrap_or_else(|_| expand_home_path(PathBuf::from("~/Pictures/Wallpapers")));
+        if !wall_dir.exists() && auto_fix {
+            let _ = std::fs::create_dir_all(&wall_dir);
+        }
+        let wall_exists = wall_dir.exists();
+
+        if awww_ok && wall_exists {
+            DiagnosticItem {
+                category: "Wallpaper".into(),
+                name: "awww Daemon & Wallpaper Directory".into(),
                 status: DiagnosticStatus::Pass,
                 message: format!(
-                    "Will be created automatically on startup at {}",
-                    shilpo_ipc_dir.display()
+                    "awww backend available and wallpapers folder ready at {}",
+                    wall_dir.display()
                 ),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: auto_fix,
+            }
+        } else if !awww_ok {
+            DiagnosticItem {
+                category: "Wallpaper".into(),
+                name: "awww Daemon & Wallpaper Directory".into(),
+                status: DiagnosticStatus::Warn,
+                message: "awww binary not found on $PATH".into(),
+                repair_command: Some("sudo pacman -S awww".into()),
+                unit_identifier: Some("shilpo-wallpaper.service".into()),
+                fix_applied: false,
+            }
+        } else {
+            DiagnosticItem {
+                category: "Wallpaper".into(),
+                name: "awww Daemon & Wallpaper Directory".into(),
+                status: DiagnosticStatus::Warn,
+                message: format!("Wallpaper directory missing at {}", wall_dir.display()),
+                repair_command: Some(format!("mkdir -p {}", wall_dir.display())),
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        }
+    }
+
+    pub fn check_niri_bindings(&self) -> DiagnosticItem {
+        let required_cmds = [
+            "kitty",
+            "nautilus",
+            "swaylock",
+            "swayidle",
+            "brightnessctl",
+            "playerctl",
+            "wpctl",
+        ];
+
+        let missing: Vec<&str> = required_cmds
+            .iter()
+            .copied()
+            .filter(|cmd| !is_command_available(cmd))
+            .collect();
+
+        if missing.is_empty() {
+            DiagnosticItem {
+                category: "Keybindings".into(),
+                name: "Bound Executables Availability".into(),
+                status: DiagnosticStatus::Pass,
+                message: "All Niri keybinding helper binaries (kitty, nautilus, swaylock, etc.) are installed".into(),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        } else {
+            DiagnosticItem {
+                category: "Keybindings".into(),
+                name: "Bound Executables Availability".into(),
+                status: DiagnosticStatus::Warn,
+                message: format!("Missing keybinding binaries: {}", missing.join(", ")),
+                repair_command: Some(format!("sudo pacman -S --needed {}", missing.join(" "))),
+                unit_identifier: None,
                 fix_applied: false,
             }
         }
@@ -111,16 +447,20 @@ impl DoctorChecker {
             match shilpo_config::ShellConfig::load_or_create(&config_path) {
                 Ok(_) => DiagnosticItem {
                     category: "Configuration".into(),
-                    name: "config.toml".into(),
+                    name: "Shilpo config.toml".into(),
                     status: DiagnosticStatus::Pass,
                     message: format!("Valid configuration at {}", config_path.display()),
+                    repair_command: None,
+                    unit_identifier: None,
                     fix_applied: false,
                 },
                 Err(err) => DiagnosticItem {
                     category: "Configuration".into(),
-                    name: "config.toml".into(),
+                    name: "Shilpo config.toml".into(),
                     status: DiagnosticStatus::Fail,
-                    message: format!("Configuration syntax error: {}", err),
+                    message: format!("Configuration syntax/schema error: {err}"),
+                    repair_command: Some("./setup update".into()),
+                    unit_identifier: None,
                     fix_applied: false,
                 },
             }
@@ -128,102 +468,144 @@ impl DoctorChecker {
             let _ = shilpo_config::ShellConfig::load_or_create(&config_path);
             DiagnosticItem {
                 category: "Configuration".into(),
-                name: "config.toml".into(),
+                name: "Shilpo config.toml".into(),
                 status: DiagnosticStatus::Pass,
                 message: format!("Created default config file at {}", config_path.display()),
+                repair_command: None,
+                unit_identifier: None,
                 fix_applied: true,
             }
         } else {
             DiagnosticItem {
                 category: "Configuration".into(),
-                name: "config.toml".into(),
+                name: "Shilpo config.toml".into(),
                 status: DiagnosticStatus::Warn,
                 message: format!(
                     "File missing at {}; defaults will be used",
                     config_path.display()
                 ),
+                repair_command: Some("./setup install".into()),
+                unit_identifier: None,
                 fix_applied: false,
             }
         }
     }
 
-    pub fn check_wallpaper_directory(&self, auto_fix: bool) -> DiagnosticItem {
-        let config_path = Self::default_config_path();
-        let wallpaper_dir = shilpo_config::ShellConfig::load(&config_path)
-            .unwrap_or_default()
-            .desktop
-            .wallpaper_dir;
-        let wallpaper_dir = expand_home_path(wallpaper_dir);
-        if wallpaper_dir.exists() {
-            let count = std::fs::read_dir(&wallpaper_dir)
-                .map(|entries| {
-                    entries
-                        .flatten()
-                        .filter(|entry| {
-                            let path = entry.path();
-                            path.is_file()
-                                && path.extension().and_then(|ext| ext.to_str()).is_some_and(
-                                    |ext| {
-                                        matches!(
-                                            ext.to_ascii_lowercase().as_str(),
-                                            "png" | "jpg" | "jpeg" | "webp"
-                                        )
-                                    },
-                                )
-                        })
-                        .count()
+    pub fn check_weather_extension(&self) -> DiagnosticItem {
+        let ext_dir = shilpo_config::data_dir().join("extensions/installed/org.shilpo.weather");
+        let wasm_file = std::fs::read_dir(&ext_dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path().join("extension.wasm"))
+            .find(|path| path.is_file());
+
+        if wasm_file.is_some() {
+            DiagnosticItem {
+                category: "Extensions".into(),
+                name: "Bundled Weather WASM Extension".into(),
+                status: DiagnosticStatus::Pass,
+                message: "Bundled weather WASM package installed and ready".into(),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        } else {
+            DiagnosticItem {
+                category: "Extensions".into(),
+                name: "Bundled Weather WASM Extension".into(),
+                status: DiagnosticStatus::Warn,
+                message: "Bundled weather extension WASM module is missing".into(),
+                repair_command: Some("./setup update".into()),
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        }
+    }
+
+    pub fn check_terminal_fonts_cursors(&self) -> DiagnosticItem {
+        let shell_ok = std::env::var("SHELL")
+            .is_ok_and(|shell| shell == "/usr/bin/fish" || shell.ends_with("/fish"))
+            || std::env::var("USER")
+                .ok()
+                .and_then(|user| {
+                    std::process::Command::new("getent")
+                        .args(["passwd", &user])
+                        .output()
+                        .ok()
                 })
-                .unwrap_or_default();
+                .is_some_and(|output| {
+                    output.status.success()
+                        && String::from_utf8_lossy(&output.stdout)
+                            .trim_end()
+                            .ends_with(":/usr/bin/fish")
+                });
+
+        let font_ok = std::process::Command::new("fc-match")
+            .arg("JetBrainsMono Nerd Font")
+            .output()
+            .is_ok_and(|o| {
+                o.status.success() && String::from_utf8_lossy(&o.stdout).contains("JetBrains")
+            });
+
+        let cursor_ok = PathBuf::from("/usr/share/icons/capitaine-cursors").exists()
+            || PathBuf::from("/usr/share/icons/breeze_cursors").exists();
+
+        if shell_ok && font_ok && cursor_ok {
             DiagnosticItem {
-                category: "Wallpaper".into(),
-                name: "Wallpapers Directory".into(),
+                category: "Appearance".into(),
+                name: "Shell, Fonts & Cursor Theme".into(),
                 status: DiagnosticStatus::Pass,
-                message: format!(
-                    "Found {} wallpaper(s) in {}",
-                    count,
-                    wallpaper_dir.display()
-                ),
+                message:
+                    "Fish shell, JetBrains Mono Nerd Font, and Capitaine cursor theme available"
+                        .into(),
+                repair_command: None,
+                unit_identifier: None,
                 fix_applied: false,
-            }
-        } else if auto_fix {
-            let _ = std::fs::create_dir_all(&wallpaper_dir);
-            DiagnosticItem {
-                category: "Wallpaper".into(),
-                name: "Wallpapers Directory".into(),
-                status: DiagnosticStatus::Pass,
-                message: format!("Created wallpaper directory at {}", wallpaper_dir.display()),
-                fix_applied: true,
             }
         } else {
             DiagnosticItem {
-                category: "Wallpaper".into(),
-                name: "Wallpapers Directory".into(),
+                category: "Appearance".into(),
+                name: "Shell, Fonts & Cursor Theme".into(),
                 status: DiagnosticStatus::Warn,
-                message: format!("Directory does not exist at {}", wallpaper_dir.display()),
+                message: "One or more desktop theme assets (Fish, JetBrains Mono, Capitaine cursors) need installation".into(),
+                repair_command: Some("sudo pacman -S fish ttf-jetbrains-mono-nerd capitaine-cursors".into()),
+                unit_identifier: None,
                 fix_applied: false,
             }
         }
     }
 
-    pub fn check_awww_backend(&self) -> DiagnosticItem {
-        let is_installed = std::process::Command::new("awww")
-            .arg("--version")
-            .output()
-            .is_ok();
-        if is_installed {
+    pub fn check_xdg_user_dirs(&self, auto_fix: bool) -> DiagnosticItem {
+        let screenshots = expand_home_path(PathBuf::from("~/Pictures/Screenshots"));
+        let wallpapers = expand_home_path(PathBuf::from("~/Pictures/Wallpapers"));
+
+        if auto_fix {
+            let _ = std::fs::create_dir_all(&screenshots);
+            let _ = std::fs::create_dir_all(&wallpapers);
+        }
+
+        if screenshots.exists() && wallpapers.exists() {
             DiagnosticItem {
-                category: "Wallpaper".into(),
-                name: "awww Daemon Backend".into(),
+                category: "XDG Paths".into(),
+                name: "User Media Directories".into(),
                 status: DiagnosticStatus::Pass,
-                message: "awww wallpaper daemon CLI client detected on $PATH".into(),
-                fix_applied: false,
+                message: "Screenshots and Wallpapers directories ready".into(),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: auto_fix,
             }
         } else {
             DiagnosticItem {
-                category: "Wallpaper".into(),
-                name: "awww Daemon Backend".into(),
+                category: "XDG Paths".into(),
+                name: "User Media Directories".into(),
                 status: DiagnosticStatus::Warn,
-                message: "awww binary not found on $PATH; wallpaper switching will fail until the backend is installed".into(),
+                message: "Pictures/Screenshots or Pictures/Wallpapers directory missing".into(),
+                repair_command: Some(
+                    "mkdir -p ~/Pictures/Screenshots ~/Pictures/Wallpapers".into(),
+                ),
+                unit_identifier: None,
                 fix_applied: false,
             }
         }
@@ -242,17 +624,42 @@ impl DoctorChecker {
             } else {
                 ""
             };
+            let repair_note = item
+                .repair_command
+                .as_ref()
+                .map(|cmd| format!("\n    Repair: {cmd}"))
+                .unwrap_or_default();
+            let unit_note = item
+                .unit_identifier
+                .as_ref()
+                .map(|u| format!(" [{u}]"))
+                .unwrap_or_default();
+
             out.push_str(&format!(
-                "{:10} {:22} {} {}{}\n",
+                "{:10} {:24} {}{} {}{}{}\n",
                 badge,
                 format!("[{}]", item.category),
                 item.name,
+                unit_note,
                 item.message,
-                fix_note
+                fix_note,
+                repair_note
             ));
         }
         out
     }
+}
+
+fn is_command_available(cmd: &str) -> bool {
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let p = dir.join(cmd);
+            if p.is_file() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn expand_home_path(path: PathBuf) -> PathBuf {

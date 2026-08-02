@@ -1,0 +1,10 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 80 — Layer rules
+// ─────────────────────────────────────────────────────────────────────────────
+// Backdrop surfaces for Shilpo wallpaper renderer.
+
+layer-rule {
+    match namespace="shilpo:wallpaper"
+    place-within-backdrop true
+    opacity 1.0
+}

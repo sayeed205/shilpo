@@ -1,5 +1,17 @@
 # Shilpo
 
+## Install from source
+
+Shilpo includes an automated source installer for its system dependencies, release binaries, user services, and bundled
+weather extension:
+
+```bash
+./setup install
+```
+
+See [the installation guide](docs/installation.md) for dependency lists, dry-run/update/uninstall commands, and the
+daily-driver cutover checklist.
+
 A modern, high-performance desktop UI component framework built on top of [GPUI](https://github.com/zed-industries/zed),
 featuring Material Design 3 (M3) & Material Expressive design inspirations.
 
@@ -11,7 +23,7 @@ featuring Material Design 3 (M3) & Material Expressive design inspirations.
 |:--------------------|:-------------------------------------------------------------------|:-----------------------------------|
 | **`shilpo-ui`**     | Core desktop UI component library for GPUI applications            | [`crates/ui`](crates/ui)           |
 | **`shilpo-macros`** | Procedural macros for icon generation and plot traits              | [`crates/macros`](crates/macros)   |
-| **`shilpo-assets`** | Internal SVG icon set and demo asset loader (*unpublished*) | [`crates/assets`](crates/assets)   |
+| **`shilpo-assets`** | Internal SVG icon set and demo asset loader (*unpublished*)        | [`crates/assets`](crates/assets)   |
 | **`storybook`**     | Interactive component gallery application for reviewing components | [`apps/storybook`](apps/storybook) |
 
 ---
@@ -28,7 +40,9 @@ cargo run -p storybook
 
 ## Guidelines for AI Assistants & Contributors
 
-If you are an AI coding assistant or open-source contributor working on this repository, please consult [`AGENTS.md`](AGENTS.md) for architecture layout, `rtk` command execution guidelines, clippy/nextest standards, and design system rules.
+If you are an AI coding assistant or open-source contributor working on this repository, please consult [
+`AGENTS.md`](AGENTS.md) for architecture layout, `rtk` command execution guidelines, clippy/nextest standards, and
+design system rules.
 
 ---
 

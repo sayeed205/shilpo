@@ -1,0 +1,50 @@
+# Shilpo Shell Master Configuration
+version = 1
+
+[theme]
+font_family = "sans-serif"
+mono_font_family = "JetBrainsMono Nerd Font"
+corner_radius_scale = 1.0
+high_contrast = false
+reduced_motion = false
+
+[bar]
+position = "Top"
+style = "Hug"
+height = 48
+padding = 8
+widget_spacing = 6
+opacity = 0.92
+
+[bar.margin]
+horizontal = 16
+vertical = 6
+
+[bar.widgets]
+start = [
+    "builtin:workspaces",
+    "builtin:running_apps"
+]
+center = [
+    "builtin:clock",
+    "builtin:date",
+    "builtin:media",
+    "ext:org.shilpo.weather/weather-bar"
+]
+end = [
+    "builtin:sysinfo",
+    "builtin:network",
+    "builtin:audio",
+    "builtin:battery",
+    "builtin:settings"
+]
+
+[desktop]
+wallpaper_dir = "~/Pictures/Wallpapers"
+
+[extensions.settings."org.shilpo.weather"]
+location_mode = "auto"
+
+[startup]
+autostart_apps = []
+compositor_wait_timeout_ms = 3000

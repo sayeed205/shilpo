@@ -6,14 +6,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 pub fn state_file_path() -> PathBuf {
-    let state_dir = dirs::state_dir()
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".local/state")
-        })
-        .join("shilpo");
-    state_dir.join("colors.json")
+    shilpo_config::state_dir().join("colors.json")
 }
 
 pub fn write_state_snapshot(state: &ThemeState) -> Result<PathBuf> {

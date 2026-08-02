@@ -1,8 +1,8 @@
 [Unit]
 Description=Shilpo Desktop Shell
 Documentation=man:shilpo-shell(1) https://github.com/sayeed205/shilpo
-PartOf=graphical-session.target
-After=graphical-session-pre.target
+PartOf=niri.service
+After=niri.service
 
 [Service]
 ExecStart=/usr/bin/shilpo-shell
@@ -13,4 +13,4 @@ TimeoutStopSec=5s
 Environment=XDG_CURRENT_DESKTOP=niri
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=niri.service

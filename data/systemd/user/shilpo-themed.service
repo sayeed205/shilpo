@@ -1,8 +1,8 @@
 [Unit]
 Description=Shilpo Theme Synchronization Engine Daemon
 Documentation=man:shilpo-themed(1)
-PartOf=graphical-session.target
-After=graphical-session-pre.target
+PartOf=niri.service
+After=niri.service
 
 [Service]
 Type=dbus
@@ -12,4 +12,4 @@ Restart=on-failure
 RestartSec=1s
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=niri.service
