@@ -62,7 +62,11 @@ pub struct BarView {
     media_info: Option<shilpo_services::MediaInfo>,
     time_str: String,
     date_str: String,
+    cpu_percent: u8,
+    ram_percent: u8,
+    cat_frame_index: usize,
     _datetime_task: Option<gpui::Task<()>>,
+    _sysinfo_task: Option<gpui::Task<()>>,
     extension_instance_prefix: Option<String>,
     output_name: Option<String>,
     last_error: Option<String>,
@@ -152,6 +156,49 @@ impl BarView {
             }
         }));
 
+        let _sysinfo_task = Some(cx.spawn(async move |this, cx| {
+            use sysinfo::System;
+            let mut sys = System::new();
+            let mut last_cpu_sample = std::time::Instant::now() - Duration::from_secs(2);
+            let mut cpu_pct: u8 = 0;
+            let mut ram_pct: u8 = 0;
+
+            loop {
+                if last_cpu_sample.elapsed() >= Duration::from_secs(1) {
+                    sys.refresh_cpu_usage();
+                    sys.refresh_memory();
+                    cpu_pct = sys.global_cpu_usage().round().clamp(0.0, 100.0) as u8;
+                    let total_mem = sys.total_memory();
+                    let used_mem = sys.used_memory();
+                    ram_pct = if total_mem > 0 {
+                        ((used_mem as f64 / total_mem as f64) * 100.0)
+                            .round()
+                            .clamp(0.0, 100.0) as u8
+                    } else {
+                        0
+                    };
+                    last_cpu_sample = std::time::Instant::now();
+                }
+
+                let speed = ((cpu_pct as f32) / 5.0).clamp(1.0, 20.0);
+                let interval_ms = (500.0 / speed) as u64;
+
+                cx.background_executor()
+                    .timer(Duration::from_millis(interval_ms))
+                    .await;
+
+                let res = this.update(cx, |view, cx| {
+                    view.cpu_percent = cpu_pct;
+                    view.ram_percent = ram_pct;
+                    view.cat_frame_index = (view.cat_frame_index + 1) % 5;
+                    cx.notify();
+                });
+                if res.is_err() {
+                    break;
+                }
+            }
+        }));
+
         Self {
             config,
             service_commands,
@@ -163,7 +210,11 @@ impl BarView {
             media_info: None,
             time_str,
             date_str,
+            cpu_percent: 0,
+            ram_percent: 0,
+            cat_frame_index: 0,
             _datetime_task,
+            _sysinfo_task,
             extension_instance_prefix: None,
             output_name: None,
             last_error: None,
@@ -382,6 +433,17 @@ impl BarView {
                             .into_any_element(),
                         );
                     }
+                }
+                BarWidget::Builtin(BuiltinBarWidget::Sysinfo) => {
+                    elements.push(
+                        super::widgets::SysInfoWidget::new(
+                            format!("sysinfo_{section_name}_{index}"),
+                            self.cat_frame_index,
+                            self.cpu_percent,
+                            self.ram_percent,
+                        )
+                        .into_any_element(),
+                    );
                 }
                 BarWidget::Extension(ext_ref) => {
                     if let Some(tree) = ShellRuntime::extension_view(cx, ext_ref) {
@@ -658,8 +720,16 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
     let bar_position = bar_config.position;
     let bar_h = bar_config.height as f32;
     let is_float = bar_config.style == shilpo_config::BarStyle::Float;
-    let float_margin_h = if is_float { bar_config.margin.horizontal as f32 } else { 0. };
-    let float_margin_v = if is_float { bar_config.margin.vertical as f32 } else { 0. };
+    let float_margin_h = if is_float {
+        bar_config.margin.horizontal as f32
+    } else {
+        0.
+    };
+    let float_margin_v = if is_float {
+        bar_config.margin.vertical as f32
+    } else {
+        0.
+    };
 
     let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
         (display.bounds(), Some(display.id()))
@@ -688,7 +758,10 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
             Some((px(0.), gap, gap, px(0.))),
             point(
                 display_bounds.origin.x + display_bounds.size.width - window_size.width - gap,
-                display_bounds.origin.y + display_bounds.size.height - window_size.height - px(bar_h + float_margin_v) - gap,
+                display_bounds.origin.y + display_bounds.size.height
+                    - window_size.height
+                    - px(bar_h + float_margin_v)
+                    - gap,
             ),
         ),
         BarPosition::Left => (
@@ -703,7 +776,10 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
             Anchor::TOP | Anchor::RIGHT,
             Some((gap, gap, px(0.), px(0.))),
             point(
-                display_bounds.origin.x + display_bounds.size.width - window_size.width - px(bar_h + float_margin_h) - gap,
+                display_bounds.origin.x + display_bounds.size.width
+                    - window_size.width
+                    - px(bar_h + float_margin_h)
+                    - gap,
                 display_bounds.origin.y + gap,
             ),
         ),

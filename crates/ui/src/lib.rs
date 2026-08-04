@@ -82,6 +82,7 @@ pub mod slider;
 pub mod status_bar;
 pub mod stepper;
 pub mod switch;
+pub mod sysinfo;
 pub mod tab;
 pub mod table;
 pub mod tag;
@@ -97,6 +98,7 @@ pub use navigation_rail::{
     NavigationRailItem, NavigationRailMenuButton,
 };
 pub use side_panel::{SidePanel, SidePanelPosition};
+pub use sysinfo::SysInfoWidget;
 
 pub use crate::Disableable;
 pub use element_ext::*;
