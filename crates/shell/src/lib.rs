@@ -2,6 +2,7 @@ pub mod actions;
 mod app_icons;
 pub mod bar;
 mod battery;
+pub mod capture;
 pub mod control_center;
 pub mod error;
 mod extension_http;
@@ -11,6 +12,7 @@ pub mod notification;
 pub mod osd;
 pub mod overview;
 pub mod overview_search;
+pub mod recording;
 pub mod runtime;
 
 pub use actions::{

@@ -47,6 +47,7 @@ impl DoctorChecker {
             self.check_weather_extension(),
             self.check_terminal_fonts_cursors(),
             self.check_xdg_user_dirs(auto_fix),
+            self.check_capture_and_recording(),
         ]
     }
 
@@ -160,10 +161,31 @@ impl DoctorChecker {
             .iter()
             .copied()
             .filter(|unit| {
-                !std::process::Command::new("systemctl")
+                let active = std::process::Command::new("systemctl")
                     .args(["--user", "is-active", "--quiet", unit])
                     .status()
-                    .is_ok_and(|status| status.success())
+                    .is_ok_and(|status| status.success());
+                if active {
+                    return false;
+                }
+
+                // `shilpo-first-login.service` is an intentional oneshot.
+                // After it completes successfully systemd reports it as
+                // inactive (or keeps it inactive when the marker exists).
+                // That is healthy and must not make doctor fail every login.
+                if *unit == "shilpo-first-login.service" {
+                    if shilpo_config::doctor_first_login_marker_path().exists() {
+                        return false;
+                    }
+                    return !std::process::Command::new("systemctl")
+                        .args(["--user", "show", "--property=Result", "--value", unit])
+                        .output()
+                        .is_ok_and(|output| {
+                            output.status.success()
+                                && String::from_utf8_lossy(&output.stdout).trim() == "success"
+                        });
+                }
+                true
             })
             .collect();
 
@@ -604,6 +626,50 @@ impl DoctorChecker {
                 message: "Pictures/Screenshots or Pictures/Wallpapers directory missing".into(),
                 repair_command: Some(
                     "mkdir -p ~/Pictures/Screenshots ~/Pictures/Wallpapers".into(),
+                ),
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        }
+    }
+
+    pub fn check_capture_and_recording(&self) -> DiagnosticItem {
+        let has_tesseract = std::process::Command::new("tesseract")
+            .arg("--version")
+            .output()
+            .is_ok();
+        let recording = shilpo_capture::recording_support();
+        let portal_available = shilpo_capture::WaylandCaptureBackend::connect().is_ok();
+
+        if has_tesseract && recording.available && portal_available {
+            DiagnosticItem {
+                category: "Media Capture".into(),
+                name: "Capture & Recording Suite".into(),
+                status: DiagnosticStatus::Pass,
+                message: format!(
+                    "XDG Screenshot portal, image clipboard, Tesseract OCR, and {} screen recording are operational{}",
+                    recording.encoder.unwrap_or("hardware-accelerated"),
+                    if recording.window_capture {
+                        " with window capture"
+                    } else {
+                        "; window capture is not advertised by the compositor"
+                    }
+                ),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        } else {
+            DiagnosticItem {
+                category: "Media Capture".into(),
+                name: "Capture & Recording Suite".into(),
+                status: DiagnosticStatus::Warn,
+                message: recording.reason.unwrap_or_else(|| {
+                    "Screenshot portal, Tesseract OCR, or VAAPI recording support is unavailable"
+                        .into()
+                }),
+                repair_command: Some(
+                    "sudo pacman -S tesseract tesseract-data-eng intel-media-driver mesa".into(),
                 ),
                 unit_identifier: None,
                 fix_applied: false,

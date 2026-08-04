@@ -31,7 +31,7 @@ layout {
         proportion 0.66667
     }
 
-// Heights cycled by switch-preset-window-height (Mod+Shift+R).
+// Window height can be reset with Mod+Ctrl+R.
 // Uncomment to define custom height presets.
 // preset-window-heights {
 //     proportion 0.33333

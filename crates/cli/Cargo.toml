@@ -23,3 +23,4 @@ shilpo-services = { path = "../services" }
 shilpo-config = { path = "../config" }
 shilpo-theme = { path = "../theme" }
 shilpo-ext = { path = "../ext" }
+shilpo-capture = { path = "../capture" }

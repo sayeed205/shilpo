@@ -82,6 +82,46 @@ pub enum Commands {
         #[command(subcommand)]
         command: ExtCommands,
     },
+    /// Native screen capture and annotation
+    Capture {
+        #[command(subcommand)]
+        action: CaptureAction,
+    },
+    /// Native screen recording pipeline and session control
+    Record {
+        #[command(subcommand)]
+        action: RecordAction,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureAction {
+    /// Select a region and copy PNG to clipboard immediately
+    Region,
+    /// Select a region and open the annotation editor
+    Edit,
+    /// Select a region and run OCR, copying recognized text
+    Ocr,
+    /// Open the capture menu (selection shape chooser)
+    Menu,
+}
+
+#[derive(Subcommand, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordAction {
+    /// Start recording, or stop and finalize the active recording
+    Toggle,
+    /// Choose a window or screen and start video recording
+    Start,
+    /// Pause the active recording
+    Pause,
+    /// Resume the paused recording
+    Resume,
+    /// Stop and finalize the recording
+    Stop,
+    /// Cancel and discard the recording
+    Cancel,
+    /// Query the current recording state
+    Status,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -273,12 +313,4 @@ pub enum ExtCommands {
     /// Refresh extension registry sources
     RefreshSources,
     /// Sign extension package with key
-    Sign {
-        package: PathBuf,
-        key: PathBuf,
-        #[arg(long)]
-        publisher: String,
-    },
-    /// Generate ed25519 signing keypair
-    Keygen { output: PathBuf },
-}
+    S

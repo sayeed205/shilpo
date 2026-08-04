@@ -272,6 +272,7 @@ pub struct ShellRuntime {
     bar_state: BarState,
     readiness: shilpo_services::ipc::ReadinessState,
     control_center: Option<WindowHandle<shilpo_ui::Root>>,
+    recording_chooser: Option<WindowHandle<shilpo_ui::Root>>,
     overview: Option<WindowHandle<shilpo_ui::Root>>,
     overview_entity: Option<Entity<crate::overview::WorkspaceOverview>>,
     overview_instance: u64,
@@ -311,6 +312,7 @@ pub struct ShellRuntime {
     session_path: PathBuf,
     pub heed_store: Option<Arc<shilpo_config::HeedSessionStore>>,
     start_time: std::time::Instant,
+    recording_controller: Arc<shilpo_capture::RecordingController>,
     service_hub: Option<ServiceHub>,
     _window_closed: Option<Subscription>,
     _ipc_task: gpui::Task<()>,
@@ -534,6 +536,7 @@ impl ShellRuntime {
         ipc_server.attach_broker(compositor.command_broker());
         let latest_snapshot = compositor.current();
         let mut rx = compositor.subscribe();
+        let recording_config = active_config.recording.clone();
 
         cx.set_global(Self {
             ipc_server,
@@ -543,6 +546,7 @@ impl ShellRuntime {
             bar_state: BarState::Starting,
             readiness: shilpo_services::ipc::ReadinessState::Starting,
             control_center: None,
+            recording_chooser: None,
             overview: None,
             overview_entity: None,
             overview_instance: 0,
@@ -567,6 +571,9 @@ impl ShellRuntime {
             session_path,
             heed_store,
             start_time: std::time::Instant::now(),
+            recording_controller: Arc::new(shilpo_capture::RecordingController::new(
+                recording_config,
+            )),
             service_hub: Some(hub),
             _window_closed: None,
             _ipc_task: gpui::Task::ready(()),
@@ -1236,7 +1243,11 @@ impl ShellRuntime {
                     crate::bar::service_worker::WorkerUpdate::Config(
                         crate::bar::service_worker::ConfigUpdate::Loaded(config),
                     ) => {
-                        cx.global_mut::<Self>().active_config = (**config).clone();
+                        let config = (**config).clone();
+                        cx.global::<Self>()
+                            .recording_controller
+                            .update_config(config.recording.clone());
+                        cx.global_mut::<Self>().active_config = config;
                         Self::sync_displays(cx);
                         // A settings-only config edit does not recreate the bar
                         // window. Reconcile mounted extension instances explicitly
@@ -1537,7 +1548,7 @@ impl ShellRuntime {
         }
     }
 
-    fn publish_status(&self) {
+    pub(crate) fn publish_status(&self) {
         let snapshot = &self.latest_snapshot;
         let (attempt, last_err) = match &snapshot.connection {
             CompositorConnection::Reconnecting {
@@ -1651,6 +1662,7 @@ impl ShellRuntime {
             bar: self.bar_state.clone(),
             overview_visible: self.overview.is_some(),
             control_center_visible: self.control_center.is_some(),
+            recording: self.recording_controller.state(),
             health,
             ..Default::default()
         });
@@ -1717,7 +1729,9 @@ impl ShellRuntime {
         }
 
         for handle in bar_handles {
-            let _ = handle.update(cx, |_, _window, cx| cx.notify());
+            if handle.read(cx).is_ok() {
+                let _ = handle.update(cx, |_, _window, cx| cx.notify());
+            }
         }
 
         if outputs_changed {
@@ -1811,15 +1825,13 @@ impl ShellRuntime {
                 | crate::bar::ReconciliationOp::Recreate(spec) => {
                     if let Some((handle, _)) = cx.global_mut::<Self>().bars.remove(&spec.display_id)
                     {
-                        let _ =
-                            cx.update_window(handle.into(), |_, window, _| window.remove_window());
+                        Self::remove_bar_window(cx, handle);
                     }
                     Self::open_bar_with_spec(cx, spec);
                 }
                 crate::bar::ReconciliationOp::Remove(display_id) => {
                     if let Some((handle, _)) = cx.global_mut::<Self>().bars.remove(&display_id) {
-                        let _ =
-                            cx.update_window(handle.into(), |_, window, _| window.remove_window());
+                        Self::remove_bar_window(cx, handle);
                     }
                 }
                 crate::bar::ReconciliationOp::Retain(_) => {}
@@ -1843,7 +1855,7 @@ impl ShellRuntime {
         };
         if !open_handles.is_empty() {
             for handle in open_handles {
-                let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+                Self::remove_bar_window(cx, handle);
             }
             let runtime = cx.global_mut::<Self>();
             runtime.bar_state = BarState::Hidden;
@@ -2554,6 +2566,301 @@ impl ShellRuntime {
         }
     }
 
+    fn open_capture_overlay(
+        cx: &mut App,
+        frame: image::RgbaImage,
+        intent: shilpo_capture::CaptureIntent,
+        config: shilpo_config::CaptureConfig,
+    ) {
+        let display_id = cx.primary_display().map(|display| display.id());
+        // Capture is a full-output surface. Unlike panels/overview, it must not
+        // participate in the bar's exclusive zone: doing so shifts the surface
+        // below the bar while the frozen frame still contains that same bar,
+        // producing a visibly duplicated shell header.
+        let options = fullscreen_overlay_options(display_id, "shilpo-capture", "capture-selector");
+        cx.defer(move |cx| {
+            if let Err(error) = cx.open_window(options, move |window, cx| {
+                crate::capture::CaptureOverlayView::view(frame, intent, config, window, cx)
+            }) {
+                tracing::warn!(error = %error, "cannot open capture selector window");
+            }
+        });
+    }
+
+    fn remove_bar_window(cx: &mut App, handle: WindowHandle<BarView>) {
+        // Window handles can outlive their Wayland surface when Niri removes an
+        // output. Probe the handle first so cleanup does not emit GPUI's
+        // "window not found" error for an already-closed bar.
+        if handle.read(cx).is_ok() {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+    }
+
+    pub(crate) fn recording_controller(&self) -> Arc<shilpo_capture::RecordingController> {
+        self.recording_controller.clone()
+    }
+
+    pub(crate) fn recording_state(cx: &App) -> shilpo_capture::RecordingState {
+        cx.global::<Self>().recording_controller.state()
+    }
+
+    pub(crate) fn stop_recording(cx: &mut App) {
+        Self::run_recording_command(cx, shilpo_capture::RecordingCommand::Stop, false);
+    }
+
+    pub(crate) fn pause_recording(cx: &mut App) {
+        Self::run_recording_command(cx, shilpo_capture::RecordingCommand::Pause, false);
+    }
+
+    pub(crate) fn resume_recording(cx: &mut App) {
+        Self::run_recording_command(cx, shilpo_capture::RecordingCommand::Resume, false);
+    }
+
+    pub(crate) fn toggle_recording(cx: &mut App) {
+        let state = Self::recording_state(cx);
+        if matches!(state, shilpo_capture::RecordingState::Selecting) {
+            if let Some(handle) = cx.global_mut::<Self>().recording_chooser.take() {
+                let _ = cx.update_window(handle.into(), |_, window, _| window.remove_window());
+            }
+            cx.global::<Self>().recording_controller.cancel_selection();
+            return;
+        }
+        if let Some(command) = state.toggle_command() {
+            Self::run_recording_command(cx, command, false);
+        } else if !state.is_busy() {
+            let audio = Self::configured_recording_audio(cx);
+            Self::open_recording_chooser(cx, audio);
+        }
+    }
+
+    pub(crate) fn configured_recording_audio(cx: &App) -> shilpo_capture::RecordingAudio {
+        let config = &cx.global::<Self>().active_config.recording;
+        match (config.desktop_audio, config.microphone) {
+            (false, false) => shilpo_capture::RecordingAudio::None,
+            (true, false) => shilpo_capture::RecordingAudio::Desktop,
+            (false, true) => shilpo_capture::RecordingAudio::Microphone,
+            (true, true) => shilpo_capture::RecordingAudio::DesktopAndMicrophone,
+        }
+    }
+
+    pub(crate) fn open_recording_chooser(cx: &mut App, audio: shilpo_capture::RecordingAudio) {
+        let existing = cx.global_mut::<Self>().recording_chooser.take();
+        if let Some(handle) = existing
+            && handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+        {
+            cx.global_mut::<Self>().recording_chooser = Some(handle);
+            return;
+        }
+        if !cx.global::<Self>().recording_controller.begin_selection() {
+            return;
+        }
+
+        let discovery = cx.background_spawn(async move {
+            let support = shilpo_capture::recording_support();
+            if !support.available {
+                return Err(support
+                    .reason
+                    .unwrap_or_else(|| "Required recording support is unavailable.".into()));
+            }
+            shilpo_capture::discover_recording_sources()
+        });
+        cx.spawn(async move |cx| {
+            let result = discovery.await;
+            cx.update(|cx| {
+                if !matches!(
+                    Self::recording_state(cx),
+                    shilpo_capture::RecordingState::Selecting
+                ) {
+                    return;
+                }
+                let catalog = match result {
+                    Ok(catalog) => catalog,
+                    Err(reason) => {
+                        cx.global::<Self>().recording_controller.cancel_selection();
+                        Self::show_recording_notification(
+                            cx,
+                            "Screen recording unavailable",
+                            &reason,
+                            true,
+                        );
+                        return;
+                    }
+                };
+                let display_id = cx.primary_display().map(|display| display.id());
+                let options = fullscreen_overlay_options(
+                    display_id,
+                    "shilpo-recording",
+                    "recording-source-chooser",
+                );
+                match cx.open_window(options, move |window, cx| {
+                    crate::recording::RecordingChooserView::view(catalog, audio, window, cx)
+                }) {
+                    Ok(handle) => cx.global_mut::<Self>().recording_chooser = Some(handle),
+                    Err(error) => {
+                        cx.global::<Self>().recording_controller.cancel_selection();
+                        tracing::error!(%error, "failed to open recording source chooser");
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn forget_recording_chooser(cx: &mut App) {
+        if cx.has_global::<Self>() {
+            cx.global_mut::<Self>().recording_chooser = None;
+            cx.global::<Self>().recording_controller.cancel_selection();
+        }
+    }
+
+    pub(crate) fn start_selected_recording(
+        cx: &mut App,
+        source: shilpo_capture::RecordingSource,
+        audio: shilpo_capture::RecordingAudio,
+    ) {
+        Self::run_recording_command(
+            cx,
+            shilpo_capture::RecordingCommand::Start(shilpo_capture::RecordingRequest {
+                source,
+                audio,
+                path: None,
+            }),
+            true,
+        );
+    }
+
+    fn run_recording_command(
+        cx: &mut App,
+        command: shilpo_capture::RecordingCommand,
+        report_start_failure: bool,
+    ) {
+        let controller = cx.global::<Self>().recording_controller.clone();
+        let command_controller = controller.clone();
+        let task = cx.background_spawn(async move { command_controller.handle_command(command) });
+        cx.spawn(async move |cx| {
+            let state = match task.await {
+                Ok(state) => state,
+                Err(error) => {
+                    cx.update(|cx| {
+                        tracing::warn!(%error, "invalid recording command");
+                        Self::show_recording_notification(
+                            cx,
+                            "Recording command unavailable",
+                            &error.to_string(),
+                            true,
+                        );
+                    });
+                    return;
+                }
+            };
+            cx.update(|cx| {
+                if report_start_failure
+                    && let shilpo_capture::RecordingState::Failed { reason, .. } = &state
+                {
+                    tracing::warn!(%reason, "recording did not start");
+                }
+                if cx.has_global::<Self>() {
+                    cx.global::<Self>().publish_status();
+                }
+            });
+            if state.is_busy() {
+                let mut previous_summary = state.summary();
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(250))
+                        .await;
+                    let state = controller.state();
+                    let finished = !state.is_busy();
+                    cx.update(|cx| {
+                        if state.summary() != previous_summary {
+                            Self::notify_recording_transition(cx, &state);
+                        }
+                        if cx.has_global::<Self>() {
+                            cx.global::<Self>().publish_status();
+                            Self::notify_recording_views(cx);
+                        }
+                    });
+                    previous_summary = state.summary();
+                    if finished {
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn notify_recording_transition(cx: &mut App, state: &shilpo_capture::RecordingState) {
+        match state {
+            shilpo_capture::RecordingState::Recording { .. } => {
+                Self::show_recording_notification(
+                    cx,
+                    "Screen recording started",
+                    "Use Super+Shift+R again to stop.",
+                    false,
+                );
+            }
+            shilpo_capture::RecordingState::Paused { .. } => {
+                Self::show_recording_notification(
+                    cx,
+                    "Screen recording paused",
+                    "Resume from Control Center or the command line.",
+                    false,
+                );
+            }
+            shilpo_capture::RecordingState::Finished { path, warning, .. } => {
+                let body = warning
+                    .as_deref()
+                    .map(|warning| format!("{}\n{warning}", path.display()))
+                    .unwrap_or_else(|| path.display().to_string());
+                Self::show_recording_notification(cx, "Screen recording saved", &body, false);
+            }
+            shilpo_capture::RecordingState::Cancelled => {
+                Self::show_recording_notification(
+                    cx,
+                    "Screen recording cancelled",
+                    "No video was saved.",
+                    false,
+                );
+            }
+            shilpo_capture::RecordingState::Failed { reason, .. } => {
+                tracing::warn!(%reason, "recording failed");
+                Self::show_recording_notification(cx, "Screen recording failed", reason, true);
+            }
+            _ => {}
+        }
+    }
+
+    fn show_recording_notification(cx: &mut App, title: &str, body: &str, critical: bool) {
+        let Some(service) = cx
+            .global::<Self>()
+            .service_hub
+            .as_ref()
+            .and_then(|hub| hub.notification.as_ref())
+        else {
+            return;
+        };
+        let mut notification = shilpo_services::Notification::new(title, body);
+        if critical {
+            notification.urgency = shilpo_services::NotificationUrgency::Critical;
+        }
+        service.push_notification(notification);
+    }
+
+    fn notify_recording_views(cx: &mut App) {
+        let bars: Vec<_> = cx
+            .global::<Self>()
+            .bars
+            .values()
+            .map(|(handle, _)| *handle)
+            .collect();
+        for handle in bars {
+            let _ = handle.update(cx, |_, _, cx| cx.notify());
+        }
+    }
+
     fn schedule_osd_dismiss(cx: &mut App, generation: u64) {
         cx.spawn(async move |cx| {
             cx.background_executor()
@@ -2956,9 +3263,7 @@ impl ShellRuntime {
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::RecordScreen => {
-                if let Ok(capture) = shilpo_services::ScreenCaptureService::new() {
-                    capture.toggle_recording(true, shilpo_services::RecordMode::Region);
-                }
+                Self::toggle_recording(cx);
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::Extension { id, payload } => {
@@ -3042,6 +3347,53 @@ impl ShellRuntime {
                 }
                 IpcRequest::GetStatus => {}
                 IpcRequest::GetTelemetry => {}
+                IpcRequest::Capture(intent) => {
+                    let config = cx.global::<Self>().active_config.capture.clone();
+                    let output_name = Self::compositor_snapshot(cx).focused_output.clone();
+                    cx.spawn(async move |cx| {
+                        let frame =
+                            shilpo_capture::capture_for_selector(output_name.as_deref()).await;
+                        match frame {
+                            Ok(frame) => {
+                                let config = config.clone();
+                                cx.update(|cx| {
+                                    Self::open_capture_overlay(cx, frame.image, intent, config);
+                                });
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "capture frame acquisition failed")
+                            }
+                        }
+                        Ok::<(), anyhow::Error>(())
+                    })
+                    .detach();
+                }
+                IpcRequest::Record(cmd) => match cmd {
+                    shilpo_capture::RecordingCommand::Start(request)
+                        if request.source == shilpo_capture::RecordingSource::primary() =>
+                    {
+                        Self::open_recording_chooser(cx, request.audio);
+                    }
+                    command @ shilpo_capture::RecordingCommand::Start(_) => {
+                        Self::run_recording_command(cx, command, true);
+                    }
+                    shilpo_capture::RecordingCommand::Cancel
+                        if matches!(
+                            Self::recording_state(cx),
+                            shilpo_capture::RecordingState::Selecting
+                        ) =>
+                    {
+                        if let Some(handle) = cx.global_mut::<Self>().recording_chooser.take() {
+                            let _ = cx.update_window(handle.into(), |_, window, _| {
+                                window.remove_window()
+                            });
+                        }
+                        cx.global::<Self>().recording_controller.cancel_selection();
+                    }
+                    command => {
+                        Self::run_recording_command(cx, command, false);
+                    }
+                },
             }
         }
         cx.global::<Self>().publish_status();
@@ -3057,8 +3409,13 @@ impl ShellRuntime {
                 std::time::Duration::from_millis(300),
             )
         });
+        let recording_controller = cx.global::<Self>().recording_controller();
+        let recording_shutdown = cx.background_spawn(async move {
+            recording_controller.shutdown();
+        });
 
         cx.spawn(async move |cx| {
+            recording_shutdown.await;
             if let Some(task) = shutdown_task {
                 let _ = task.await;
             }
@@ -3068,6 +3425,7 @@ impl ShellRuntime {
                     extension_surfaces,
                     extension_panel,
                     control_center,
+                    recording_chooser,
                     notification,
                     _service_hub,
                 ) = {
@@ -3077,6 +3435,7 @@ impl ShellRuntime {
                         std::mem::take(&mut runtime.extension_surfaces),
                         runtime.extension_panel.take(),
                         runtime.control_center.take(),
+                        runtime.recording_chooser.take(),
                         runtime.notification.take(),
                         runtime.service_hub.take(),
                     )
@@ -3091,6 +3450,9 @@ impl ShellRuntime {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
                 if let Some(handle) = control_center {
+                    let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+                }
+                if let Some(handle) = recording_chooser {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
                 if let Some((_, _, handle)) = notification {
@@ -3118,6 +3480,36 @@ impl ShellRuntime {
                     .map(|shortcut| (shortcut.to_spec(), desc.label))
             })
             .collect()
+    }
+}
+
+fn fullscreen_overlay_options(
+    display_id: Option<DisplayId>,
+    app_id: &str,
+    namespace: &str,
+) -> WindowOptions {
+    WindowOptions {
+        titlebar: None,
+        window_bounds: Some(WindowBounds::Windowed(Bounds {
+            origin: point(px(0.), px(0.)),
+            size: size(px(0.), px(0.)),
+        })),
+        display_id,
+        app_id: Some(app_id.to_string()),
+        window_background: WindowBackgroundAppearance::Transparent,
+        kind: WindowKind::LayerShell(LayerShellOptions {
+            namespace: namespace.to_string(),
+            layer: Layer::Overlay,
+            anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+            // The layer-shell protocol uses -1 for surfaces that must extend
+            // through other surfaces' exclusive zones. Leaving this unset
+            // defaults to 0, which makes Niri move the selector below the bar.
+            exclusive_zone: Some(px(-1.)),
+            exclusive_edge: None,
+            margin: Some((px(0.), px(0.), px(0.), px(0.))),
+            keyboard_interactivity: KeyboardInteractivity::Exclusive,
+        }),
+        ..Default::default()
     }
 }
 
@@ -3364,6 +3756,24 @@ mod tests {
             Some(1.0),
         );
         assert!(bar_geom.bounds.size.height >= px(config.bar.height as f32));
+    }
+
+    #[test]
+    fn capture_overlay_ignores_bar_exclusive_zone() {
+        let options = fullscreen_overlay_options(
+            Some(gpui::DisplayId::from(1u64)),
+            "shilpo-capture",
+            "capture-selector",
+        );
+        let WindowKind::LayerShell(layer_shell) = options.kind else {
+            panic!("capture selector must use layer shell");
+        };
+
+        assert_eq!(layer_shell.exclusive_zone, Some(px(-1.)));
+        assert_eq!(
+            layer_shell.anchor,
+            Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT
+        );
     }
 
     #[test]

@@ -45,3 +45,16 @@ end = ["builtin:sysinfo", "builtin:network", "builtin:audio", "builtin:battery",
 # y = 32
 # width = 320
 # height = 180
+
+[capture]
+screenshot_dir = "~/Pictures/Screenshots"
+show_pointer = true
+default_selection = "rectangle"
+
+[recording]
+directory = "~/Videos/recordings"
+framerate = 30
+delay_seconds = 0
+desktop_audio = true
+microphone = false
+show_pointer = true

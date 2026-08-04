@@ -22,6 +22,7 @@ uuid = { workspace = true, features = ["v4"] }
 libc = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 shilpo-config = { path = "../config" }
+shilpo-capture = { path = "../capture" }
 notify.workspace = true
 mcu-material-color.workspace = true
 image.workspace = true

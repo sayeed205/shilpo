@@ -43,7 +43,7 @@ pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_u
 pub use notifications::{Notification, NotificationService, NotificationUrgency};
 pub use palette::PaletteExtractor;
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
-pub use screen_capture::{RecordMode, ScreenCaptureInfo, ScreenCaptureService, ScreenshotMode};
+pub use screen_capture::{ScreenCaptureInfo, ScreenCaptureService, ScreenshotMode};
 pub use tray::{TrayItem, TrayMenuItem, TrayService};
 pub use upower::{BatteryInfo, BatteryService};
 
