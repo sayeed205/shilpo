@@ -579,7 +579,9 @@ impl DoctorChecker {
 
     pub fn check_xdg_user_dirs(&self, auto_fix: bool) -> DiagnosticItem {
         let screenshots = expand_home_path(PathBuf::from("~/Pictures/Screenshots"));
-        let wallpapers = expand_home_path(PathBuf::from("~/Pictures/Wallpapers"));
+        let wallpapers = shilpo_config::ShellConfig::load(Self::default_config_path())
+            .map(|config| expand_home_path(config.desktop.wallpaper_dir))
+            .unwrap_or_else(|_| expand_home_path(PathBuf::from("~/Pictures/Wallpapers")));
 
         if auto_fix {
             let _ = std::fs::create_dir_all(&screenshots);

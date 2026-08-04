@@ -537,8 +537,8 @@ impl Default for BarConfig {
             height: 48,
             padding: 8,
             margin: BarMargin {
-                horizontal: 16,
-                vertical: 6,
+                horizontal: 8,
+                vertical: 8,
             },
             widget_spacing: 6,
             opacity: 0.92,

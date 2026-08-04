@@ -43,9 +43,7 @@ impl ThemeDaemon {
         let (portal_tx, portal_rx) = mpsc::unbounded_channel();
         let (wp_tx, wp_rx) = mpsc::unbounded_channel();
 
-        let config_path = dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("~/.config"))
-            .join("shilpo/config.toml");
+        let config_path = shilpo_config::default_config_path();
 
         let (config_provider, gtk_light, gtk_dark, custom_argv, configured_wp_dir) =
             match ShellConfig::load_or_create(&config_path) {
@@ -136,9 +134,11 @@ impl ThemeDaemon {
     async fn handle_actor_message(&mut self, msg: ActorMessage) {
         match msg {
             ActorMessage::GetState(reply) => {
+                self.sync_wallpaper_dir_from_config();
                 let _ = reply.send(Ok(self.state.clone()));
             }
             ActorMessage::GetDiagnostics(reply) => {
+                self.sync_wallpaper_dir_from_config();
                 let diag = serde_json::json!({
                     "revision": self.state.revision,
                     "selected_mode": self.state.selected_mode,
@@ -363,7 +363,23 @@ impl ThemeDaemon {
         Ok(self.state.clone())
     }
 
-    fn pick_random_wallpaper(&self) -> Result<PathBuf, String> {
+    fn sync_wallpaper_dir_from_config(&mut self) {
+        if let Ok(cfg) = ShellConfig::load_or_create(&self.config_path) {
+            let config_dir = expand_tilde(&cfg.desktop.wallpaper_dir);
+            if config_dir != self.wallpaper_dir {
+                debug!(
+                    old = %self.wallpaper_dir.display(),
+                    new = %config_dir.display(),
+                    "Syncing daemon wallpaper_dir from config.toml"
+                );
+                self.wallpaper_dir = config_dir.clone();
+                self.state.wallpaper_dir = config_dir;
+            }
+        }
+    }
+
+    fn pick_random_wallpaper(&mut self) -> Result<PathBuf, String> {
+        self.sync_wallpaper_dir_from_config();
         let mut wallpapers = Vec::new();
         let entries = std::fs::read_dir(&self.wallpaper_dir).map_err(|error| {
             format!(

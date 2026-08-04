@@ -11,14 +11,14 @@ reduced_motion = false
 [bar]
 position = "Top"
 style = "Hug"
-height = 48
+height = 40
 padding = 8
 widget_spacing = 6
-opacity = 0.92
+opacity = 1
 
 [bar.margin]
-horizontal = 16
-vertical = 6
+horizontal = 8
+vertical = 8
 
 [bar.widgets]
 start = [

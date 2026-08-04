@@ -545,7 +545,11 @@ impl Render for BarView {
             self.config.bar.position,
             BarPosition::Left | BarPosition::Right
         );
-        let opacity = self.config.bar.opacity.clamp(0.0, 1.0);
+        let opacity = if style == BarStyle::Hug {
+            1.0
+        } else {
+            self.config.bar.opacity.clamp(0.0, 1.0)
+        };
         let compositor_stale = !ShellRuntime::compositor_snapshot(cx).connection.is_ready();
         let bg_color = cx
             .theme()

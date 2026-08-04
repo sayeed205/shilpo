@@ -12,7 +12,7 @@
 // Round every window's corners and clip content to match.
 // Works best with prefer-no-csd (set in config.kdl).
 window-rule {
-    geometry-corner-radius 16
+    geometry-corner-radius 24
     clip-to-geometry true
 }
 

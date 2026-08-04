@@ -2,7 +2,7 @@ use gpui::layer_shell::Anchor;
 use gpui::{Bounds, DisplayId, Pixels, point, px, size};
 use shilpo_config::{BarConfig, BarPosition, BarStyle};
 
-pub(crate) const HUG_CORNER_RADIUS: f32 = 18.0;
+pub(crate) const HUG_CORNER_RADIUS: f32 = 32.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BarGeometry {
@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn hug_reserves_an_eighteen_pixel_shoulder() {
+    fn hug_reserves_a_thirty_two_pixel_shoulder() {
         let display = Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.)));
         let geometry = BarGeometry::calculate(
             DisplayId::new(1),
@@ -252,7 +252,7 @@ mod tests {
             &config(BarPosition::Top, BarStyle::Hug),
         );
 
-        assert_eq!(geometry.bounds.size, size(px(1920.), px(58.)));
+        assert_eq!(geometry.bounds.size, size(px(1920.), px(72.)));
         assert_eq!(geometry.exclusive_zone, px(40.));
     }
 

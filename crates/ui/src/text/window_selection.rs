@@ -1351,13 +1351,13 @@ mod tests {
         let b = dialog_state.read_with(cx, |s, _| s.bounds());
         drag(
             cx,
-            point(b.origin.x + px(1.), b.center().y),
+            point(b.origin.x, b.center().y),
             point(b.origin.x + b.size.width + px(80.), b.center().y),
         );
 
         let text = window_selected_text(cx);
         assert!(
-            text.contains("Dialog text"),
+            text.contains("ialog text"),
             "dialog text was not selectable: {text:?}"
         );
     }

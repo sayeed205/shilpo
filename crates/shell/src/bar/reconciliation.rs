@@ -257,7 +257,7 @@ mod tests {
         let ops = reconcile_output_bars(&outputs, &config, &current_bars);
         assert_eq!(ops.len(), 1);
         if let ReconciliationOp::Create(spec) = &ops[0] {
-            assert_eq!(spec.geometry.bounds.size.height, px(120.0));
+            assert_eq!(spec.geometry.bounds.size.height, px(128.0));
         } else {
             panic!("expected ReconciliationOp::Create");
         }

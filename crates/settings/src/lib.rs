@@ -191,10 +191,14 @@ impl SettingsView {
         let page_registry = SettingsPageRegistry::discover();
         let extension_catalog = shilpo_ext::ExtensionCatalog::open_default();
         let extension_snapshot = extension_snapshot(&extension_catalog);
-        let custom_wallpaper_dir = shilpo_theme::ThemeState::default()
-            .wallpaper_dir
-            .display()
-            .to_string();
+        let custom_wallpaper_dir = shilpo_config::ShellConfig::load(shilpo_config::default_config_path())
+            .map(|c| c.desktop.wallpaper_dir.display().to_string())
+            .unwrap_or_else(|_| {
+                shilpo_theme::ThemeState::default()
+                    .wallpaper_dir
+                    .display()
+                    .to_string()
+            });
         Self {
             active_page: SettingsPageId::Builtin(SettingsCategory::default()),
             page_registry,

@@ -1629,6 +1629,15 @@ impl Render for WorkspaceOverview {
             .id("workspace_overview_root")
             .size_full()
             .relative()
+            .when(is_interactive, |s| {
+                s.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|view, _, _, cx| {
+                        cx.stop_propagation();
+                        view.begin_close(OverviewCloseReason::Cancel, cx);
+                    }),
+                )
+            })
             .child(scrim)
             .child(
                 div()
