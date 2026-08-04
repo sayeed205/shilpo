@@ -417,7 +417,7 @@ impl JsonSchema for BarWidget {
             object.insert(
                 "pattern".into(),
                 serde_json::Value::String(
-                    r"^(builtin:(workspaces|running_apps|clock|date|media|sysinfo|network|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
+                    r"^(builtin:(workspaces|running_apps|clock|date|media|sysinfo|network|bluetooth|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
                         .into(),
                 ),
             );
@@ -436,6 +436,7 @@ pub enum BuiltinBarWidget {
     Media,
     Sysinfo,
     Network,
+    Bluetooth,
     Audio,
     Battery,
     Settings,
@@ -451,6 +452,7 @@ impl BuiltinBarWidget {
             "Media" => Some(Self::Media),
             "Sysinfo" => Some(Self::Sysinfo),
             "Network" => Some(Self::Network),
+            "Bluetooth" => Some(Self::Bluetooth),
             "Audio" => Some(Self::Audio),
             "Battery" => Some(Self::Battery),
             "Settings" => Some(Self::Settings),
@@ -469,6 +471,7 @@ impl fmt::Display for BuiltinBarWidget {
             Self::Media => "media",
             Self::Sysinfo => "sysinfo",
             Self::Network => "network",
+            Self::Bluetooth => "bluetooth",
             Self::Audio => "audio",
             Self::Battery => "battery",
             Self::Settings => "settings",
@@ -489,6 +492,7 @@ impl FromStr for BuiltinBarWidget {
             "media" => Ok(Self::Media),
             "sysinfo" => Ok(Self::Sysinfo),
             "network" => Ok(Self::Network),
+            "bluetooth" => Ok(Self::Bluetooth),
             "audio" => Ok(Self::Audio),
             "battery" => Ok(Self::Battery),
             "settings" => Ok(Self::Settings),
@@ -556,6 +560,7 @@ impl Default for BarConfig {
                 end: vec![
                     BarWidget::Builtin(BuiltinBarWidget::Sysinfo),
                     BarWidget::Builtin(BuiltinBarWidget::Network),
+                    BarWidget::Builtin(BuiltinBarWidget::Bluetooth),
                     BarWidget::Builtin(BuiltinBarWidget::Audio),
                     BarWidget::Builtin(BuiltinBarWidget::Battery),
                     BarWidget::Builtin(BuiltinBarWidget::Settings),

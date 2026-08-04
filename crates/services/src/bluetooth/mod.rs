@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BluetoothInfo {
     pub powered: bool,
     pub available: bool,

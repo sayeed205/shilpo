@@ -1,15 +1,15 @@
 use gpui::{App, ElementId, IntoElement, RenderOnce, StyleRefinement, Styled, Window};
-use shilpo_services::NetworkInfo;
+use shilpo_services::BluetoothInfo;
 
 #[derive(IntoElement)]
-pub struct NetworkWidget {
+pub struct BluetoothWidget {
     id: ElementId,
-    info: NetworkInfo,
+    info: BluetoothInfo,
     style: StyleRefinement,
 }
 
-impl NetworkWidget {
-    pub fn new(id: impl Into<ElementId>, info: NetworkInfo) -> Self {
+impl BluetoothWidget {
+    pub fn new(id: impl Into<ElementId>, info: BluetoothInfo) -> Self {
         Self {
             id: id.into(),
             info,
@@ -18,15 +18,14 @@ impl NetworkWidget {
     }
 }
 
-impl Styled for NetworkWidget {
+impl Styled for BluetoothWidget {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
     }
 }
 
-impl RenderOnce for NetworkWidget {
+impl RenderOnce for BluetoothWidget {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        shilpo_ui::NetworkWidget::new(self.id, self.info.wifi_enabled, self.info.is_connected)
-            .render(window, cx)
+        shilpo_ui::BluetoothWidget::new(self.id, self.info.powered, false).render(window, cx)
     }
 }

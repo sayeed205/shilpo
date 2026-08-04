@@ -28,6 +28,7 @@ pub mod alert;
 pub mod animation;
 pub mod avatar;
 pub mod badge;
+pub mod bluetooth;
 pub mod breadcrumb;
 pub mod button;
 pub mod card;
@@ -59,6 +60,7 @@ pub mod menu;
 pub mod motion;
 pub mod native_menu;
 pub mod navigation_rail;
+pub mod network;
 pub mod notification;
 pub mod pagination;
 pub mod plot;
@@ -92,11 +94,13 @@ pub mod toggle_button;
 pub mod tooltip;
 pub mod tree;
 
+pub use bluetooth::BluetoothWidget;
 pub use media::MediaControl;
 pub use navigation_rail::{
     NavigationRail, NavigationRailArrangement, NavigationRailFooter, NavigationRailHeader,
     NavigationRailItem, NavigationRailMenuButton,
 };
+pub use network::NetworkWidget;
 pub use side_panel::{SidePanel, SidePanelPosition};
 pub use sysinfo::SysInfoWidget;
 

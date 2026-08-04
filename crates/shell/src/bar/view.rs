@@ -55,6 +55,7 @@ pub struct BarView {
     battery: BatteryInfo,
     audio: AudioInfo,
     network: NetworkInfo,
+    bluetooth: shilpo_services::BluetoothInfo,
     #[allow(dead_code)]
     app_id: String,
     #[allow(dead_code)]
@@ -124,6 +125,9 @@ impl BarView {
         let battery = BatteryInfo::default();
         let audio = AudioInfo::default();
         let network = NetworkInfo::default();
+        let bluetooth = shilpo_services::BluetoothService::new()
+            .map(|s| s.info())
+            .unwrap_or_default();
 
         window.on_window_should_close(cx, |_, cx| {
             ShellRuntime::forget_bar(cx);
@@ -205,6 +209,7 @@ impl BarView {
             battery,
             audio,
             network,
+            bluetooth,
             app_id: "shilpo.shell".into(),
             active_title: "Shilpo Shell".into(),
             media_info: None,
@@ -441,6 +446,24 @@ impl BarView {
                             self.cat_frame_index,
                             self.cpu_percent,
                             self.ram_percent,
+                        )
+                        .into_any_element(),
+                    );
+                }
+                BarWidget::Builtin(BuiltinBarWidget::Network) => {
+                    elements.push(
+                        super::widgets::NetworkWidget::new(
+                            format!("network_{section_name}_{index}"),
+                            self.network.clone(),
+                        )
+                        .into_any_element(),
+                    );
+                }
+                BarWidget::Builtin(BuiltinBarWidget::Bluetooth) => {
+                    elements.push(
+                        super::widgets::BluetoothWidget::new(
+                            format!("bluetooth_{section_name}_{index}"),
+                            self.bluetooth.clone(),
                         )
                         .into_any_element(),
                     );

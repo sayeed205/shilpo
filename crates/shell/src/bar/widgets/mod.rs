@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod bluetooth;
 pub mod clock;
 pub mod media;
 pub mod network;
@@ -12,6 +13,7 @@ pub mod window_info_capsule;
 pub mod workspaces;
 
 pub use audio::AudioWidget;
+pub use bluetooth::BluetoothWidget;
 pub use clock::{ClockWidget, DateWidget};
 pub use media::MediaWidget;
 pub use network::NetworkWidget;

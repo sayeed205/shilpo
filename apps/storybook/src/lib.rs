@@ -561,6 +561,7 @@ impl StoryState {
             "SidebarStory" => story!(SidebarStory),
             "FormStory" => story!(FormStory),
             "NotificationStory" => story!(NotificationStory),
+            "NetworkBluetoothStory" => story!(NetworkBluetoothStory),
             "SysInfoStory" => story!(SysInfoStory),
             "ThemeColorsStory" => story!(ThemeColorsStory),
             _ => {
