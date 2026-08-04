@@ -15,7 +15,7 @@ use gpui::{
 use image::imageops::FilterType;
 use shilpo_services::{CompositorSnapshot, WindowInfo, WorkspaceInfo};
 use shilpo_ui::{
-    ActiveTheme, FocusTrapElement, Icon, IconName, StyledExt,
+    ActiveTheme, Colorize, FocusTrapElement, Icon, IconName, StyledExt,
     animation::cubic_bezier,
     h_flex,
     input::{Input, InputEvent, InputState, InputVariant},
@@ -538,13 +538,13 @@ impl WorkspaceOverview {
         }
         self.search_results = results;
         self.search_state = LauncherSearchState::Ready { generation };
-        self.selected_result_index = if self.search_results.is_empty() {
-            None
+        if self.search_results.is_empty() {
+            self.selected_result_index = None;
         } else {
-            Some(0)
-        };
-        if !self.search_results.is_empty() {
-            self.result_scroll_handle.scroll_to_item(0);
+            let current = self.selected_result_index.unwrap_or(0);
+            let valid_index = current.min(self.search_results.len() - 1);
+            self.selected_result_index = Some(valid_index);
+            self.result_scroll_handle.scroll_to_item(valid_index);
         }
         cx.notify();
     }
@@ -563,9 +563,21 @@ impl WorkspaceOverview {
             return;
         }
 
-        self.search_state = LauncherSearchState::Pending {
-            generation: query_gen,
+        let immediate_results = if let Some(search) = &self.search {
+            search.search(&text)
+        } else {
+            Vec::new()
         };
+
+        if !immediate_results.is_empty() {
+            self.search_results = immediate_results;
+            self.selected_result_index = Some(0);
+            self.search_state = LauncherSearchState::Ready { generation: query_gen };
+        } else {
+            self.search_state = LauncherSearchState::Pending {
+                generation: query_gen,
+            };
+        }
         cx.notify();
 
         let task = cx.spawn(async move |this, cx| {
@@ -706,22 +718,14 @@ impl WorkspaceOverview {
                 }
             }
             "enter" => {
-                if self
-                    .search_state
-                    .is_ready_for_generation(self.query_generation)
-                    && !self.search_results.is_empty()
-                {
+                if !self.search_results.is_empty() {
                     cx.stop_propagation();
                     let idx = self.selected_result_index.unwrap_or(0);
                     self.activate_result(idx, window, cx);
                 }
             }
             "down" => {
-                if self
-                    .search_state
-                    .is_ready_for_generation(self.query_generation)
-                    && !self.search_results.is_empty()
-                {
+                if !self.search_results.is_empty() {
                     cx.stop_propagation();
                     let len = self.search_results.len();
                     let current = self.selected_result_index.unwrap_or(0);
@@ -732,11 +736,7 @@ impl WorkspaceOverview {
                 }
             }
             "up" => {
-                if self
-                    .search_state
-                    .is_ready_for_generation(self.query_generation)
-                    && !self.search_results.is_empty()
-                {
+                if !self.search_results.is_empty() {
                     cx.stop_propagation();
                     let current = self.selected_result_index.unwrap_or(0);
                     let next = current.saturating_sub(1);
@@ -1397,26 +1397,45 @@ impl Render for WorkspaceOverview {
                         INTER_WORKSPACE_RADIUS
                     });
                     let is_selected = self.selected_result_index == Some(index);
+                    let is_calculation = matches!(&result.intent, SearchIntent::CopyCalculation(_));
                     let is_suggestion = matches!(
                         &result.intent,
                         SearchIntent::ExecuteCommand(_) | SearchIntent::OpenWeb(_)
                     );
-                    let bg = if is_selected {
-                        theme.primary_container.opacity(0.12)
+                    let (bg, title_color, desc_color, border_color) = if is_selected {
+                        (
+                            theme.primary_container,
+                            theme.on_primary_container,
+                            theme.on_primary_container.opacity(0.8),
+                            theme.primary.opacity(0.4),
+                        )
                     } else {
-                        theme.surface_container_high.opacity(0.34)
+                        (
+                            theme.surface_container_high.opacity(0.34),
+                            theme.on_surface,
+                            theme.on_surface_variant,
+                            gpui::transparent_black(),
+                        )
                     };
                     let icon_element = match &result.icon {
                         SearchResultIcon::AppIcon(path) => app_icon(
                             path.clone(),
                             &result.title,
-                            px(28.),
+                            px(26.),
                             scale_factor,
-                            theme.surface_container_highest,
-                            theme.on_surface,
+                            if is_selected {
+                                theme.primary_container.darken(0.1)
+                            } else {
+                                theme.surface_container_highest
+                            },
+                            if is_selected {
+                                theme.on_primary_container
+                            } else {
+                                theme.on_surface
+                            },
                         ),
                         SearchResultIcon::Named(icon_name) => {
-                            Icon::new(*icon_name).size(px(26.)).into_any_element()
+                            Icon::new(*icon_name).size(px(22.)).into_any_element()
                         }
                         SearchResultIcon::Initial(ch) => {
                             div().child(ch.to_string()).into_any_element()
@@ -1429,13 +1448,15 @@ impl Render for WorkspaceOverview {
                             index as u64,
                         ))
                         .w_full()
-                        .px_1()
+                        .px_3()
                         .py_2()
                         .rounded_tl(result_top_radius)
                         .rounded_tr(result_top_radius)
                         .rounded_bl(result_bottom_radius)
                         .rounded_br(result_bottom_radius)
                         .bg(bg)
+                        .border_1()
+                        .border_color(border_color)
                         .gap_3()
                         .items_center()
                         .cursor_pointer()
@@ -1445,27 +1466,46 @@ impl Render for WorkspaceOverview {
                         .aria_label(format!("{}: {}", result.result_type, result.title))
                         .child(
                             div()
-                                .w(px(36.))
-                                .h(px(36.))
+                                .w(px(32.))
+                                .h(px(32.))
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .child(icon_element),
                         )
-                        .child(if is_suggestion {
+                        .child(if is_calculation {
+                            v_flex()
+                                .flex_1()
+                                .gap_0()
+                                .child(
+                                    div()
+                                        .text_base()
+                                        .font_bold()
+                                        .text_color(title_color)
+                                        .child(result.title.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(desc_color)
+                                        .child(result.description.clone()),
+                                )
+                                .into_any_element()
+                        } else if is_suggestion {
                             v_flex()
                                 .flex_1()
                                 .gap_0()
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(theme.on_surface_variant)
+                                        .text_color(desc_color)
                                         .child(result.description.clone()),
                                 )
                                 .child(
                                     div()
                                         .text_sm()
-                                        .text_color(theme.on_surface)
+                                        .font_semibold()
+                                        .text_color(title_color)
                                         .child(result.title.clone()),
                                 )
                                 .into_any_element()
@@ -1477,13 +1517,13 @@ impl Render for WorkspaceOverview {
                                     div()
                                         .text_sm()
                                         .font_semibold()
-                                        .text_color(theme.on_surface)
+                                        .text_color(title_color)
                                         .child(result.title.clone()),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(theme.on_surface_variant)
+                                        .text_color(desc_color)
                                         .child(result.description.clone()),
                                 )
                                 .into_any_element()

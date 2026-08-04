@@ -321,12 +321,14 @@ impl Render for NotificationToastView {
                 .w_full()
                 .h_full()
                 .when(is_bottom, |this| this.items_end())
+                .when(!is_bottom, |this| this.items_start())
                 .justify_end()
         } else {
             h_flex()
                 .w_full()
                 .h_full()
                 .when(is_bottom, |this| this.items_end())
+                .when(!is_bottom, |this| this.items_start())
                 .justify_start()
         };
 
