@@ -2,6 +2,7 @@ pub mod applications;
 pub mod audio;
 pub mod bluetooth;
 pub mod brightness;
+pub mod caffeine;
 pub mod clipboard;
 pub mod compositor;
 pub mod error;
@@ -24,6 +25,7 @@ pub use applications::{
 pub use audio::{AudioDevice, AudioInfo, AudioPort, AudioService, AudioStream};
 pub use bluetooth::{BluetoothInfo, BluetoothService};
 pub use brightness::{BrightnessInfo, BrightnessService};
+pub use caffeine::{CaffeineInfo, CaffeineService};
 pub use clipboard::ClipboardService;
 pub use compositor::{
     BrokerOptions, CancellationReason, CommandCancellation, CommandOutcome, CommandTicket,

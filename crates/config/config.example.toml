@@ -19,7 +19,7 @@ vertical = 8
 [bar.widgets]
 start = ["builtin:workspaces", "builtin:running_apps"]
 center = ["builtin:clock", "builtin:date", "builtin:media"]
-end = ["builtin:sysinfo", "builtin:network", "builtin:bluetooth", "builtin:audio", "builtin:battery", "builtin:settings"]
+end = ["builtin:sysinfo", "builtin:network", "builtin:bluetooth", "builtin:caffeine", "builtin:audio", "builtin:battery", "builtin:settings"]
 
 # Extension-wide settings are delivered to every contribution from that
 # extension. Add the contribution to a bar section after installing and

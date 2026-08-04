@@ -124,6 +124,11 @@ pub fn doctor_first_login_marker_path() -> PathBuf {
     state_dir().join("first-login-completed")
 }
 
+/// Path to caffeine active state persistence file (`$XDG_STATE_HOME/shilpo/caffeine.state`).
+pub fn caffeine_state_path() -> PathBuf {
+    state_dir().join("caffeine.state")
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DesktopWidgetConfig {
@@ -417,7 +422,7 @@ impl JsonSchema for BarWidget {
             object.insert(
                 "pattern".into(),
                 serde_json::Value::String(
-                    r"^(builtin:(workspaces|running_apps|clock|date|media|sysinfo|network|bluetooth|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
+                    r"^(builtin:(workspaces|running_apps|clock|date|media|sysinfo|network|bluetooth|caffeine|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
                         .into(),
                 ),
             );
@@ -437,6 +442,7 @@ pub enum BuiltinBarWidget {
     Sysinfo,
     Network,
     Bluetooth,
+    Caffeine,
     Audio,
     Battery,
     Settings,
@@ -453,6 +459,7 @@ impl BuiltinBarWidget {
             "Sysinfo" => Some(Self::Sysinfo),
             "Network" => Some(Self::Network),
             "Bluetooth" => Some(Self::Bluetooth),
+            "Caffeine" => Some(Self::Caffeine),
             "Audio" => Some(Self::Audio),
             "Battery" => Some(Self::Battery),
             "Settings" => Some(Self::Settings),
@@ -472,6 +479,7 @@ impl fmt::Display for BuiltinBarWidget {
             Self::Sysinfo => "sysinfo",
             Self::Network => "network",
             Self::Bluetooth => "bluetooth",
+            Self::Caffeine => "caffeine",
             Self::Audio => "audio",
             Self::Battery => "battery",
             Self::Settings => "settings",
@@ -493,6 +501,7 @@ impl FromStr for BuiltinBarWidget {
             "sysinfo" => Ok(Self::Sysinfo),
             "network" => Ok(Self::Network),
             "bluetooth" => Ok(Self::Bluetooth),
+            "caffeine" => Ok(Self::Caffeine),
             "audio" => Ok(Self::Audio),
             "battery" => Ok(Self::Battery),
             "settings" => Ok(Self::Settings),
@@ -561,6 +570,7 @@ impl Default for BarConfig {
                     BarWidget::Builtin(BuiltinBarWidget::Sysinfo),
                     BarWidget::Builtin(BuiltinBarWidget::Network),
                     BarWidget::Builtin(BuiltinBarWidget::Bluetooth),
+                    BarWidget::Builtin(BuiltinBarWidget::Caffeine),
                     BarWidget::Builtin(BuiltinBarWidget::Audio),
                     BarWidget::Builtin(BuiltinBarWidget::Battery),
                     BarWidget::Builtin(BuiltinBarWidget::Settings),

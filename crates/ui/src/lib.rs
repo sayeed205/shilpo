@@ -31,6 +31,7 @@ pub mod badge;
 pub mod bluetooth;
 pub mod breadcrumb;
 pub mod button;
+pub mod caffeine;
 pub mod card;
 pub mod carousel;
 pub mod chart;
@@ -95,6 +96,7 @@ pub mod tooltip;
 pub mod tree;
 
 pub use bluetooth::BluetoothWidget;
+pub use caffeine::CaffeineWidget;
 pub use media::MediaControl;
 pub use navigation_rail::{
     NavigationRail, NavigationRailArrangement, NavigationRailFooter, NavigationRailHeader,
