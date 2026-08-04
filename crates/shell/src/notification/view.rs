@@ -286,6 +286,7 @@ impl Render for NotificationToastView {
             return div().id("toast-empty-root");
         }
 
+        let is_bottom = self.bar_position == shilpo_config::BarPosition::Bottom;
         let slide_right = matches!(
             self.bar_position,
             shilpo_config::BarPosition::Top
@@ -316,9 +317,17 @@ impl Render for NotificationToastView {
         };
 
         let root_flex = if slide_right {
-            h_flex().w_full().justify_end()
+            h_flex()
+                .w_full()
+                .h_full()
+                .when(is_bottom, |this| this.items_end())
+                .justify_end()
         } else {
-            h_flex().w_full().justify_start()
+            h_flex()
+                .w_full()
+                .h_full()
+                .when(is_bottom, |this| this.items_end())
+                .justify_start()
         };
 
         // Group notifications strictly by application name
@@ -858,6 +867,7 @@ impl Render for NotificationToastView {
         div()
             .id("toast-notification-root")
             .w_full()
+            .h_full()
             .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                 if this.hovered != *hovered {
                     this.hovered = *hovered;

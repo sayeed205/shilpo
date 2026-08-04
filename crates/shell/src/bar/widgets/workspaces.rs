@@ -1,11 +1,12 @@
 use crate::actions::ActionInvocation;
+use crate::bar::widgets::pill_strip::PillOrientation;
 use crate::runtime::ShellRuntime;
 use gpui::{
     App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, RenderOnce, Role,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
 };
 use shilpo_services::{CompositorConnection, WorkspaceInfo};
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, tooltip::Tooltip};
+use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, tooltip::Tooltip, v_flex};
 
 fn workspace_actions_enabled(connection: &CompositorConnection) -> bool {
     matches!(connection, CompositorConnection::Ready)
@@ -26,10 +27,10 @@ const WORKSPACE_OVERVIEW_SPLIT_GAP: f32 = 2.;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct OccupiedBackgroundGeometry {
-    x: f32,
-    width: f32,
-    left_radius: f32,
-    right_radius: f32,
+    position: f32,
+    size: f32,
+    start_radius: f32,
+    end_radius: f32,
 }
 
 fn occupied_background_geometry(
@@ -56,15 +57,15 @@ fn occupied_background_geometry(
     } else {
         0.
     };
-    let width = WORKSPACE_SLOT_SIZE - left_inset - right_inset;
+    let size = WORKSPACE_SLOT_SIZE - left_inset - right_inset;
     let joined_left = occupied_left && !split_left;
     let joined_right = occupied_right && !split_right;
 
     OccupiedBackgroundGeometry {
-        x: index as f32 * WORKSPACE_SLOT_SIZE + left_inset,
-        width,
-        left_radius: if joined_left { 0. } else { width / 2. },
-        right_radius: if joined_right { 0. } else { width / 2. },
+        position: index as f32 * WORKSPACE_SLOT_SIZE + left_inset,
+        size,
+        start_radius: if joined_left { 0. } else { size / 2. },
+        end_radius: if joined_right { 0. } else { size / 2. },
     }
 }
 
@@ -74,6 +75,7 @@ pub struct WorkspacesWidget {
     id: ElementId,
     workspaces: Vec<WorkspaceInfo>,
     connection: CompositorConnection,
+    orientation: PillOrientation,
     style: StyleRefinement,
 }
 
@@ -82,11 +84,13 @@ impl WorkspacesWidget {
         id: impl Into<ElementId>,
         workspaces: Vec<WorkspaceInfo>,
         connection: CompositorConnection,
+        orientation: PillOrientation,
     ) -> Self {
         Self {
             id: id.into(),
             workspaces,
             connection,
+            orientation,
             style: StyleRefinement::default(),
         }
     }
@@ -164,68 +168,74 @@ impl RenderOnce for WorkspacesWidget {
         let mut active_workspace_index: Option<usize> = None;
 
         if is_connecting {
-            items.push(
-                div()
-                    .id("ws_connecting")
-                    .role(Role::Status)
-                    .aria_label("Compositor connecting")
-                    .h(px(24.))
-                    .px_2_5()
-                    .rounded_full()
-                    .bg(cx.theme().surface_container_highest.opacity(0.5))
-                    .text_color(cx.theme().on_surface_variant.opacity(0.6))
-                    .text_xs()
-                    .font_bold()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child("Connecting...")
-                    .into_any_element(),
-            );
+            let badge = div()
+                .id("ws_connecting")
+                .role(Role::Status)
+                .aria_label("Compositor connecting")
+                .rounded_full()
+                .bg(cx.theme().surface_container_highest.opacity(0.5))
+                .text_color(cx.theme().on_surface_variant.opacity(0.6))
+                .text_xs()
+                .font_bold()
+                .flex()
+                .items_center()
+                .justify_center();
+
+            let badge = if self.orientation == PillOrientation::Horizontal {
+                badge.h(px(24.)).px_2_5().child("Connecting...")
+            } else {
+                badge.w(px(24.)).py_2_5().child("...")
+            };
+
+            items.push(badge.into_any_element());
         } else if is_stopped {
             let last_err = match &self.connection {
                 CompositorConnection::Stopped => "Compositor is unavailable".to_string(),
                 _ => String::new(),
             };
-            items.push(
-                div()
-                    .id("ws_stopped")
-                    .role(Role::Status)
-                    .aria_label("Compositor unavailable")
-                    .tooltip(move |window, cx| Tooltip::new(last_err.clone()).build(window, cx))
-                    .h(px(24.))
-                    .px_2_5()
-                    .rounded_full()
-                    .bg(cx.theme().error_container)
-                    .text_color(cx.theme().on_error_container)
-                    .text_xs()
-                    .font_bold()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child("Compositor Unavailable")
-                    .into_any_element(),
-            );
+            let badge = div()
+                .id("ws_stopped")
+                .role(Role::Status)
+                .aria_label("Compositor unavailable")
+                .tooltip(move |window, cx| Tooltip::new(last_err.clone()).build(window, cx))
+                .rounded_full()
+                .bg(cx.theme().error_container)
+                .text_color(cx.theme().on_error_container)
+                .text_xs()
+                .font_bold()
+                .flex()
+                .items_center()
+                .justify_center();
+
+            let badge = if self.orientation == PillOrientation::Horizontal {
+                badge.h(px(24.)).px_2_5().child("Compositor Unavailable")
+            } else {
+                badge.w(px(24.)).py_2_5().child("!")
+            };
+
+            items.push(badge.into_any_element());
         } else if is_ready && self.workspaces.is_empty() {
-            items.push(
-                div()
-                    .id("ws_empty")
-                    .role(Role::Status)
-                    .aria_label("No workspaces available")
-                    .h(px(24.))
-                    .min_w(px(26.))
-                    .px_2()
-                    .rounded_full()
-                    .bg(cx.theme().surface_container_highest.opacity(0.5))
-                    .text_color(cx.theme().on_surface_variant.opacity(0.5))
-                    .text_xs()
-                    .font_bold()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child("1")
-                    .into_any_element(),
-            );
+            let badge = div()
+                .id("ws_empty")
+                .role(Role::Status)
+                .aria_label("No workspaces available")
+                .rounded_full()
+                .bg(cx.theme().surface_container_highest.opacity(0.5))
+                .text_color(cx.theme().on_surface_variant.opacity(0.5))
+                .text_xs()
+                .font_bold()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child("1");
+
+            let badge = if self.orientation == PillOrientation::Horizontal {
+                badge.h(px(24.)).min_w(px(26.)).px_2()
+            } else {
+                badge.w(px(24.)).min_h(px(26.)).py_2()
+            };
+
+            items.push(badge.into_any_element());
         } else if !self.workspaces.is_empty() {
             active_workspace_index = self
                 .workspaces
@@ -250,20 +260,37 @@ impl RenderOnce for WorkspacesWidget {
                     active_workspace_index,
                 );
 
-                occupied_backgrounds.push(
-                    div()
-                        .absolute()
-                        .top(px(0.))
-                        .left(px(geometry.x))
-                        .w(px(geometry.width))
-                        .h(px(WORKSPACE_SLOT_SIZE))
-                        .rounded_tl(px(geometry.left_radius))
-                        .rounded_bl(px(geometry.left_radius))
-                        .rounded_tr(px(geometry.right_radius))
-                        .rounded_br(px(geometry.right_radius))
-                        .bg(cx.theme().secondary_container.opacity(0.6))
-                        .into_any_element(),
-                );
+                if self.orientation == PillOrientation::Horizontal {
+                    occupied_backgrounds.push(
+                        div()
+                            .absolute()
+                            .top(px(0.))
+                            .left(px(geometry.position))
+                            .w(px(geometry.size))
+                            .h(px(WORKSPACE_SLOT_SIZE))
+                            .rounded_tl(px(geometry.start_radius))
+                            .rounded_bl(px(geometry.start_radius))
+                            .rounded_tr(px(geometry.end_radius))
+                            .rounded_br(px(geometry.end_radius))
+                            .bg(cx.theme().secondary_container.opacity(0.6))
+                            .into_any_element(),
+                    );
+                } else {
+                    occupied_backgrounds.push(
+                        div()
+                            .absolute()
+                            .left(px(0.))
+                            .top(px(geometry.position))
+                            .w(px(WORKSPACE_SLOT_SIZE))
+                            .h(px(geometry.size))
+                            .rounded_tl(px(geometry.start_radius))
+                            .rounded_tr(px(geometry.start_radius))
+                            .rounded_bl(px(geometry.end_radius))
+                            .rounded_br(px(geometry.end_radius))
+                            .bg(cx.theme().secondary_container.opacity(0.6))
+                            .into_any_element(),
+                    );
+                }
             }
 
             items.extend(
@@ -277,7 +304,7 @@ impl RenderOnce for WorkspacesWidget {
             crate::bar::widgets::pill_strip::render_active_pill_indicator(
                 &self.id,
                 active_workspace_index,
-                crate::bar::widgets::pill_strip::PillOrientation::Horizontal,
+                self.orientation,
                 false,
                 window,
                 cx,
@@ -291,36 +318,53 @@ impl RenderOnce for WorkspacesWidget {
             let error_msg = last_error
                 .clone()
                 .unwrap_or_else(|| "Attempting to reconnect to compositor...".into());
-            items.push(
-                div()
-                    .id("ws_reconnect_indicator")
-                    .role(Role::Status)
-                    .aria_label(format!("Compositor reconnecting attempt {}", attempt))
-                    .tooltip(move |window, cx| Tooltip::new(error_msg.clone()).build(window, cx))
-                    .flex()
+            let badge = div()
+                .id("ws_reconnect_indicator")
+                .role(Role::Status)
+                .aria_label(format!("Compositor reconnecting attempt {}", attempt))
+                .tooltip(move |window, cx| Tooltip::new(error_msg.clone()).build(window, cx))
+                .flex()
+                .items_center()
+                .rounded_full()
+                .bg(cx.theme().tertiary_container)
+                .text_color(cx.theme().on_tertiary_container)
+                .text_xs()
+                .child(Icon::new(IconName::Info).size(px(12.)));
+
+            let badge = if self.orientation == PillOrientation::Horizontal {
+                badge
                     .ml_1()
-                    .items_center()
                     .gap_1()
                     .px_2()
                     .h(px(24.))
-                    .rounded_full()
-                    .bg(cx.theme().tertiary_container)
-                    .text_color(cx.theme().on_tertiary_container)
-                    .text_xs()
-                    .child(Icon::new(IconName::Info).size(px(12.)))
                     .child(format!("Reconnecting ({})", attempt))
-                    .into_any_element(),
-            );
+            } else {
+                badge.mt_1().py_1().px_1().w(px(24.)).justify_center()
+            };
+
+            items.push(badge.into_any_element());
         }
 
-        div()
+        let items_layout = if self.orientation == PillOrientation::Horizontal {
+            h_flex().items_center().gap(px(0.)).children(items).into_any_element()
+        } else {
+            v_flex().items_center().gap(px(0.)).children(items).into_any_element()
+        };
+
+        let container = div()
             .id(self.id)
             .relative()
             .flex()
             .items_center()
             .children(occupied_backgrounds)
             .child(active_indicator_element)
-            .child(h_flex().items_center().gap(px(0.)).children(items))
+            .child(items_layout);
+
+        if self.orientation == PillOrientation::Horizontal {
+            container.flex_row().h(px(WORKSPACE_SLOT_SIZE)).into_any_element()
+        } else {
+            container.flex_col().w(px(WORKSPACE_SLOT_SIZE)).into_any_element()
+        }
     }
 }
 
@@ -397,42 +441,54 @@ mod tests {
     fn overview_only_splits_the_active_workspace_from_occupied_groups() {
         let occupied = [true, true, true, true, false];
         let joined_middle = occupied_background_geometry(1, &occupied, false, Some(1));
-        assert_eq!(joined_middle.x, WORKSPACE_SLOT_SIZE);
-        assert_eq!(joined_middle.width, WORKSPACE_SLOT_SIZE);
-        assert_eq!(joined_middle.left_radius, 0.);
-        assert_eq!(joined_middle.right_radius, 0.);
+        assert_eq!(joined_middle.position, WORKSPACE_SLOT_SIZE);
+        assert_eq!(joined_middle.size, WORKSPACE_SLOT_SIZE);
+        assert_eq!(joined_middle.start_radius, 0.);
+        assert_eq!(joined_middle.end_radius, 0.);
 
         let split_middle = occupied_background_geometry(1, &occupied, true, Some(1));
         assert_eq!(
-            split_middle.x,
+            split_middle.position,
             WORKSPACE_SLOT_SIZE + WORKSPACE_OVERVIEW_SPLIT_GAP / 2.
         );
         assert_eq!(
-            split_middle.width,
+            split_middle.size,
             WORKSPACE_SLOT_SIZE - WORKSPACE_OVERVIEW_SPLIT_GAP
         );
-        assert_eq!(split_middle.left_radius, split_middle.width / 2.);
-        assert_eq!(split_middle.right_radius, split_middle.width / 2.);
+        assert_eq!(split_middle.start_radius, split_middle.size / 2.);
+        assert_eq!(split_middle.end_radius, split_middle.size / 2.);
 
         let grouped_after_active = occupied_background_geometry(2, &occupied, true, Some(1));
         assert_eq!(
-            grouped_after_active.x,
+            grouped_after_active.position,
             2. * WORKSPACE_SLOT_SIZE + WORKSPACE_OVERVIEW_SPLIT_GAP / 2.
         );
         assert_eq!(
-            grouped_after_active.width,
+            grouped_after_active.size,
             WORKSPACE_SLOT_SIZE - WORKSPACE_OVERVIEW_SPLIT_GAP / 2.
         );
         assert_eq!(
-            grouped_after_active.left_radius,
-            grouped_after_active.width / 2.
+            grouped_after_active.start_radius,
+            grouped_after_active.size / 2.
         );
-        assert_eq!(grouped_after_active.right_radius, 0.);
+        assert_eq!(grouped_after_active.end_radius, 0.);
 
         let grouped_tail = occupied_background_geometry(3, &occupied, true, Some(1));
-        assert_eq!(grouped_tail.x, 3. * WORKSPACE_SLOT_SIZE);
-        assert_eq!(grouped_tail.width, WORKSPACE_SLOT_SIZE);
-        assert_eq!(grouped_tail.left_radius, 0.);
-        assert_eq!(grouped_tail.right_radius, WORKSPACE_SLOT_SIZE / 2.);
+        assert_eq!(grouped_tail.position, 3. * WORKSPACE_SLOT_SIZE);
+        assert_eq!(grouped_tail.size, WORKSPACE_SLOT_SIZE);
+        assert_eq!(grouped_tail.start_radius, 0.);
+        assert_eq!(grouped_tail.end_radius, WORKSPACE_SLOT_SIZE / 2.);
+    }
+
+    #[test]
+    fn workspace_vertical_orientation_geometry() {
+        let occupied = [true, false, true];
+        let geom_0 = occupied_background_geometry(0, &occupied, false, Some(0));
+        let geom_2 = occupied_background_geometry(2, &occupied, false, Some(0));
+
+        assert_eq!(geom_0.position, 0.);
+        assert_eq!(geom_0.size, WORKSPACE_SLOT_SIZE);
+        assert_eq!(geom_2.position, 2. * WORKSPACE_SLOT_SIZE);
+        assert_eq!(geom_2.size, WORKSPACE_SLOT_SIZE);
     }
 }

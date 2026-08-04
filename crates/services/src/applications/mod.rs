@@ -25,6 +25,49 @@ pub struct Application {
     pub try_exec: Option<String>,
 }
 
+fn spawn_scoped_command(
+    program: &str,
+    args: &[String],
+    working_dir: Option<&PathBuf>,
+    app_name: &str,
+) -> std::io::Result<std::process::Child> {
+    if binary_exists("systemd-run") {
+        let clean_name: String = app_name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let unit_name = format!("app-{}-{}", clean_name, timestamp);
+
+        let mut systemd_cmd = Command::new("systemd-run");
+        systemd_cmd
+            .arg("--user")
+            .arg("--scope")
+            .arg(format!("--unit={}", unit_name))
+            .arg("--")
+            .arg(program)
+            .args(args);
+
+        if let Some(dir) = working_dir {
+            systemd_cmd.current_dir(dir);
+        }
+
+        if let Ok(child) = systemd_cmd.spawn() {
+            return Ok(child);
+        }
+    }
+
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    if let Some(dir) = working_dir {
+        cmd.current_dir(dir);
+    }
+    cmd.spawn()
+}
+
 impl Application {
     /// Launches the application in a detached background thread.
     pub fn launch(&self) {
@@ -46,14 +89,8 @@ impl Application {
 
                 let program = &argv[0];
                 let args = &argv[1..];
-                let mut cmd = Command::new(program);
-                cmd.args(args);
 
-                if let Some(dir) = working_dir {
-                    cmd.current_dir(dir);
-                }
-
-                if let Err(err) = cmd.spawn() {
+                if let Err(err) = spawn_scoped_command(program, args, working_dir.as_ref(), &name) {
                     eprintln!(
                         "Failed to launch application '{}' ({}) via {:?}: {}",
                         name,
@@ -94,14 +131,8 @@ impl Application {
 
                 let program = &argv[0];
                 let args = &argv[1..];
-                let mut cmd = Command::new(program);
-                cmd.args(args);
 
-                if let Some(dir) = working_dir {
-                    cmd.current_dir(dir);
-                }
-
-                match cmd.spawn() {
+                match spawn_scoped_command(program, args, working_dir.as_ref(), &name) {
                     Ok(mut child) => {
                         thread::sleep(std::time::Duration::from_millis(400));
                         if let Ok(Some(status)) = child.try_wait()

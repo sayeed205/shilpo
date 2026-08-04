@@ -281,11 +281,21 @@ impl BarView {
             match name {
                 BarWidget::Builtin(BuiltinBarWidget::Workspaces) => {
                     let snapshot = ShellRuntime::compositor_snapshot(cx);
+                    let is_vertical = matches!(
+                        self.config.bar.position,
+                        shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
+                    );
+                    let pill_orientation = if is_vertical {
+                        super::widgets::pill_strip::PillOrientation::Vertical
+                    } else {
+                        super::widgets::pill_strip::PillOrientation::Horizontal
+                    };
                     elements.push(
                         super::widgets::WorkspacesWidget::new(
                             "workspaces",
                             snapshot.workspaces.clone(),
                             snapshot.connection.clone(),
+                            pill_orientation,
                         )
                         .into_any_element(),
                     );
@@ -316,19 +326,29 @@ impl BarView {
                     );
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Clock) => {
+                    let is_vertical = matches!(
+                        self.config.bar.position,
+                        shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
+                    );
                     elements.push(
                         super::widgets::ClockWidget::new(
                             format!("clock_{section_name}_{index}"),
                             self.time_str.clone(),
+                            is_vertical,
                         )
                         .into_any_element(),
                     );
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Date) => {
+                    let is_vertical = matches!(
+                        self.config.bar.position,
+                        shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
+                    );
                     elements.push(
                         super::widgets::DateWidget::new(
                             format!("date_{section_name}_{index}"),
                             self.date_str.clone(),
+                            is_vertical,
                         )
                         .into_any_element(),
                     );
@@ -634,7 +654,12 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
     let timeout = notification_timeout(&notification);
     let notification_id = notification.id;
 
-    let bar_position = ShellRuntime::active_config(cx).bar.position;
+    let bar_config = ShellRuntime::active_config(cx).bar;
+    let bar_position = bar_config.position;
+    let bar_h = bar_config.height as f32;
+    let is_float = bar_config.style == shilpo_config::BarStyle::Float;
+    let float_margin_h = if is_float { bar_config.margin.horizontal as f32 } else { 0. };
+    let float_margin_v = if is_float { bar_config.margin.vertical as f32 } else { 0. };
 
     let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
         (display.bounds(), Some(display.id()))
@@ -645,38 +670,41 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
         )
     };
     let window_size = size(px(376.), px(420.));
+    let gap = px(8.);
 
+    // Layer shell margins are evaluated relative to the bar's exclusive zone by Niri.
+    // Windowed origins include explicit bar height offsets.
     let (anchor, margin, origin) = match bar_position {
         BarPosition::Top => (
             Anchor::TOP | Anchor::RIGHT,
-            Some((px(8.), px(7.), px(0.), px(0.))),
+            Some((gap, gap, px(0.), px(0.))),
             point(
-                display_bounds.origin.x + (display_bounds.size.width - px(383.)),
-                display_bounds.origin.y + px(8.),
+                display_bounds.origin.x + display_bounds.size.width - window_size.width - gap,
+                display_bounds.origin.y + px(bar_h + float_margin_v) + gap,
             ),
         ),
         BarPosition::Bottom => (
             Anchor::BOTTOM | Anchor::RIGHT,
-            Some((px(0.), px(7.), px(8.), px(0.))),
+            Some((px(0.), gap, gap, px(0.))),
             point(
-                display_bounds.origin.x + (display_bounds.size.width - px(383.)),
-                display_bounds.origin.y + display_bounds.size.height - px(168.),
+                display_bounds.origin.x + display_bounds.size.width - window_size.width - gap,
+                display_bounds.origin.y + display_bounds.size.height - window_size.height - px(bar_h + float_margin_v) - gap,
             ),
         ),
         BarPosition::Left => (
-            Anchor::BOTTOM | Anchor::LEFT,
-            Some((px(0.), px(0.), px(8.), px(7.))),
+            Anchor::TOP | Anchor::LEFT,
+            Some((gap, px(0.), px(0.), gap)),
             point(
-                display_bounds.origin.x + px(7.),
-                display_bounds.origin.y + display_bounds.size.height - px(168.),
+                display_bounds.origin.x + px(bar_h + float_margin_h) + gap,
+                display_bounds.origin.y + gap,
             ),
         ),
         BarPosition::Right => (
-            Anchor::BOTTOM | Anchor::RIGHT,
-            Some((px(0.), px(7.), px(8.), px(0.))),
+            Anchor::TOP | Anchor::RIGHT,
+            Some((gap, gap, px(0.), px(0.))),
             point(
-                display_bounds.origin.x + (display_bounds.size.width - px(383.)),
-                display_bounds.origin.y + display_bounds.size.height - px(168.),
+                display_bounds.origin.x + display_bounds.size.width - window_size.width - px(bar_h + float_margin_h) - gap,
+                display_bounds.origin.y + gap,
             ),
         ),
     };

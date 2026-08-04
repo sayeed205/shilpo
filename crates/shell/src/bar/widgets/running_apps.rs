@@ -382,13 +382,13 @@ impl RenderOnce for RunningAppsWidget {
                 }
             })
             .child(active_indicator)
-            .h(px(PILL_SLOT_SIZE))
             .rounded_full()
             .bg(cx.theme().secondary_container.opacity(0.6));
 
         match self.orientation {
             PillOrientation::Horizontal => container
                 .flex_row()
+                .h(px(PILL_SLOT_SIZE))
                 .children(window_elements)
                 .into_any_element(),
             PillOrientation::Vertical => container
