@@ -28,38 +28,100 @@ pub fn lookup_icon(name: &str) -> Option<PathBuf> {
         return None;
     }
 
-    let path = Path::new(name);
+    let clean_name = name.strip_prefix("file://").unwrap_or(name);
+    let path = Path::new(clean_name);
     if path.is_absolute() {
         return path.exists().then(|| path.to_path_buf());
     }
 
     if let Ok(cache) = ICON_CACHE.lock()
-        && let Some(cached) = cache.get(name)
+        && let Some(cached) = cache.get(clean_name)
     {
         return cached.clone();
     }
 
+    let mut search_names = vec![
+        clean_name.to_string(),
+        clean_name.to_lowercase(),
+        clean_name.to_lowercase().replace(' ', "-"),
+        format!("{}-stable", clean_name.to_lowercase().replace(' ', "-")),
+    ];
+    if clean_name.to_lowercase().contains("chrome") {
+        search_names.push("google-chrome".to_string());
+        search_names.push("google-chrome-stable".to_string());
+    }
+    if clean_name.to_lowercase().contains("niri") {
+        search_names.push("niri".to_string());
+        search_names.push("org.freedesktop.impl.portal.desktop.niri".to_string());
+    }
+
     let theme = freedesktop_icons::default_theme_gtk();
-    let resolved = theme
-        .as_deref()
-        .and_then(|theme| {
-            freedesktop_icons::lookup(name)
-                .with_theme(theme)
-                .with_size(APP_ICON_SOURCE_SIZE)
-                .force_svg()
-                .with_cache()
-                .find()
-        })
-        .or_else(|| {
-            freedesktop_icons::lookup(name)
-                .with_size(APP_ICON_SOURCE_SIZE)
-                .force_svg()
-                .with_cache()
-                .find()
-        });
+    let mut resolved = None;
+
+    for s_name in &search_names {
+        resolved = theme
+            .as_deref()
+            .and_then(|t| {
+                freedesktop_icons::lookup(s_name)
+                    .with_theme(t)
+                    .with_size(APP_ICON_SOURCE_SIZE)
+                    .force_svg()
+                    .with_cache()
+                    .find()
+                    .or_else(|| {
+                        freedesktop_icons::lookup(s_name)
+                            .with_theme(t)
+                            .with_size(APP_ICON_SOURCE_SIZE)
+                            .with_cache()
+                            .find()
+                    })
+            })
+            .or_else(|| {
+                freedesktop_icons::lookup(s_name)
+                    .with_size(APP_ICON_SOURCE_SIZE)
+                    .with_cache()
+                    .find()
+            });
+
+        if resolved.is_some() {
+            break;
+        }
+    }
+
+    if resolved.is_none()
+        && let Ok(apps) = super::list_applications()
+    {
+        let search_clean = clean_name.to_lowercase().replace(' ', "-");
+        for app in apps {
+            let name_clean = app.name.to_lowercase().replace(' ', "-");
+            let stem_clean = app
+                .desktop_file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase()
+                .replace(' ', "-");
+            let icon_hint = app.icon.as_deref().unwrap_or("").to_lowercase();
+
+            if name_clean == search_clean || stem_clean == search_clean || icon_hint == search_clean
+            {
+                if let Some(path) = app.icon_path {
+                    resolved = Some(path);
+                    break;
+                }
+                if let Some(ref icon) = app.icon
+                    && icon.to_lowercase() != search_clean
+                    && let Some(path) = lookup_icon(icon)
+                {
+                    resolved = Some(path);
+                    break;
+                }
+            }
+        }
+    }
 
     if let Ok(mut cache) = ICON_CACHE.lock() {
-        cache.insert(name.to_string(), resolved.clone());
+        cache.insert(clean_name.to_string(), resolved.clone());
     }
     resolved
 }

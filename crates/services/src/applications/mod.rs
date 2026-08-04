@@ -511,6 +511,24 @@ impl AppScanner {
     }
 }
 
+pub fn list_applications() -> Result<Vec<Application>> {
+    let mut apps = Vec::new();
+    for dir in application_directories() {
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("desktop")
+                && let Ok(app) = parse_desktop_file(&path)
+            {
+                apps.push(app);
+            }
+        }
+    }
+    Ok(apps)
+}
+
 fn application_directories() -> Vec<PathBuf> {
     let mut directories = vec![
         PathBuf::from("/usr/share/applications"),

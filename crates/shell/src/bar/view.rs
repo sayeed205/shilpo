@@ -625,9 +625,12 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
         layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
         point, px, size,
     };
+    use shilpo_config::BarPosition;
 
     let timeout = notification_timeout(&notification);
     let notification_id = notification.id;
+
+    let bar_position = ShellRuntime::active_config(cx).bar.position;
 
     let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
         (display.bounds(), Some(display.id()))
@@ -637,11 +640,43 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
             None,
         )
     };
-    let window_size = size(px(320.), px(80.));
-    let origin = point(
-        display_bounds.origin.x + (display_bounds.size.width - px(340.)),
-        display_bounds.origin.y + px(54.),
-    );
+    let window_size = size(px(376.), px(420.));
+
+    let (anchor, margin, origin) = match bar_position {
+        BarPosition::Top => (
+            Anchor::TOP | Anchor::RIGHT,
+            Some((px(8.), px(7.), px(0.), px(0.))),
+            point(
+                display_bounds.origin.x + (display_bounds.size.width - px(383.)),
+                display_bounds.origin.y + px(8.),
+            ),
+        ),
+        BarPosition::Bottom => (
+            Anchor::BOTTOM | Anchor::RIGHT,
+            Some((px(0.), px(7.), px(8.), px(0.))),
+            point(
+                display_bounds.origin.x + (display_bounds.size.width - px(383.)),
+                display_bounds.origin.y + display_bounds.size.height - px(168.),
+            ),
+        ),
+        BarPosition::Left => (
+            Anchor::BOTTOM | Anchor::LEFT,
+            Some((px(0.), px(0.), px(8.), px(7.))),
+            point(
+                display_bounds.origin.x + px(7.),
+                display_bounds.origin.y + display_bounds.size.height - px(168.),
+            ),
+        ),
+        BarPosition::Right => (
+            Anchor::BOTTOM | Anchor::RIGHT,
+            Some((px(0.), px(7.), px(8.), px(0.))),
+            point(
+                display_bounds.origin.x + (display_bounds.size.width - px(383.)),
+                display_bounds.origin.y + display_bounds.size.height - px(168.),
+            ),
+        ),
+    };
+
     let options = WindowOptions {
         titlebar: None,
         window_bounds: Some(WindowBounds::Windowed(Bounds {
@@ -654,25 +689,39 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
         kind: WindowKind::LayerShell(LayerShellOptions {
             namespace: "notification".to_string(),
             layer: Layer::Overlay,
-            anchor: Anchor::TOP | Anchor::RIGHT,
+            anchor,
+            margin,
             keyboard_interactivity: KeyboardInteractivity::None,
             ..Default::default()
         }),
         ..Default::default()
     };
 
+    if let Some(handle) = ShellRuntime::active_notification_handle(cx) {
+        let generation = ShellRuntime::reserve_notification_generation(cx);
+        if handle
+            .update(cx, |view, window, cx| {
+                view.push(notification.clone(), generation, timeout, window, cx);
+            })
+            .is_ok()
+        {
+            ShellRuntime::register_notification(cx, generation, notification_id, handle);
+            return;
+        }
+    }
+
     let generation = ShellRuntime::reserve_notification_generation(cx);
     if let Ok(handle) = cx.open_window(options, move |window, cx| {
-        NotificationToastView::view(notification.clone(), generation, window, cx)
+        NotificationToastView::view(
+            notification.clone(),
+            generation,
+            timeout,
+            bar_position,
+            window,
+            cx,
+        )
     }) {
         ShellRuntime::register_notification(cx, generation, notification_id, handle);
-        if let Some(timeout) = timeout {
-            cx.spawn(async move |cx| {
-                cx.background_executor().timer(timeout).await;
-                cx.update(|cx| ShellRuntime::expire_notification(cx, generation));
-            })
-            .detach();
-        }
     }
 }
 

@@ -1007,44 +1007,57 @@ impl Render for ControlCenterView {
                                         .text_color(cx.theme().on_surface_variant)
                                         .child("No recent notifications")
                                 } else {
-                                    v_flex()
-                                        .gap_1_5()
-                                        .children(history.iter().rev().take(4).map(|n| {
+                                    v_flex().gap_2().children(history.iter().rev().take(4).map(
+                                        |n| {
                                             h_flex()
-                                                .px_2p5()
-                                                .py_2()
-                                                .rounded_xl()
-                                                .bg(cx.theme().surface_container)
+                                                .px_3()
+                                                .py_2p5()
+                                                .rounded_2xl()
+                                                .bg(cx.theme().surface_container_high)
+                                                .border_1()
+                                                .border_color(
+                                                    cx.theme().outline_variant.opacity(0.3),
+                                                )
                                                 .justify_between()
-                                                .items_center()
+                                                .items_start()
+                                                .gap_2()
                                                 .child(
                                                     v_flex()
+                                                        .flex_1()
                                                         .gap_0p5()
                                                         .child(
                                                             div()
                                                                 .text_xs()
-                                                                .font_bold()
+                                                                .font_semibold()
                                                                 .text_color(cx.theme().on_surface)
                                                                 .child(n.summary.clone()),
                                                         )
-                                                        .child(
-                                                            div()
-                                                                .text_xs()
-                                                                .text_color(
-                                                                    cx.theme().on_surface_variant,
-                                                                )
-                                                                .child(n.body.clone()),
-                                                        ),
+                                                        .when(!n.body.is_empty(), |this| {
+                                                            this.child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .text_color(
+                                                                        cx.theme()
+                                                                            .on_surface_variant,
+                                                                    )
+                                                                    .child(n.body.clone()),
+                                                            )
+                                                        }),
                                                 )
                                                 .child(
                                                     div()
                                                         .text_xs()
-                                                        .text_color(cx.theme().outline_variant)
+                                                        .text_color(
+                                                            cx.theme()
+                                                                .on_surface_variant
+                                                                .opacity(0.7),
+                                                        )
                                                         .child(
                                                             n.timestamp.format("%H:%M").to_string(),
                                                         ),
                                                 )
-                                        }))
+                                        },
+                                    ))
                                 }
                             }),
                     )

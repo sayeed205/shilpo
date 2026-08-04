@@ -15,9 +15,7 @@ use gpui::{
 
 use crate::{
     ActiveTheme as _, Edges, Icon, IconName, Sizable as _, StyledExt, TITLE_BAR_HEIGHT,
-    animation::cubic_bezier,
-    button::{Button, ButtonVariants as _},
-    h_flex, v_flex,
+    animation::cubic_bezier, button::Button, h_flex, v_flex,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -30,7 +28,7 @@ pub enum NotificationType {
 }
 
 impl NotificationType {
-    fn icon(&self, cx: &App) -> Icon {
+    pub fn icon(&self, cx: &App) -> Icon {
         match self {
             Self::Info => Icon::new(IconName::Info).text_color(cx.theme().primary),
             Self::Success => Icon::new(IconName::CircleCheck).text_color(cx.theme().tertiary),
@@ -78,6 +76,7 @@ pub struct Notification {
     closing: bool,
     use_native: bool,
     only_native: bool,
+    expanded: bool,
 }
 
 impl From<String> for Notification {
@@ -138,6 +137,7 @@ impl Notification {
             closing: false,
             use_native: false,
             only_native: false,
+            expanded: false,
         }
     }
 
@@ -322,11 +322,29 @@ impl Render for Notification {
             .map(|builder| builder(self, window, cx).small().mr_3p5());
 
         let closing = self.closing;
-        let icon = match self.type_ {
-            None => self.icon.clone(),
-            Some(type_) => Some(type_.icon(cx)),
+        let icon_badge = match self.type_ {
+            Some(NotificationType::Info) => Some((
+                Icon::new(IconName::Info).text_color(cx.theme().primary),
+                cx.theme().primary_container,
+            )),
+            Some(NotificationType::Success) => Some((
+                Icon::new(IconName::CircleCheck).text_color(cx.theme().tertiary),
+                cx.theme().tertiary_container,
+            )),
+            Some(NotificationType::Warning) => Some((
+                Icon::new(IconName::Info).text_color(cx.theme().tertiary),
+                cx.theme().tertiary_container,
+            )),
+            Some(NotificationType::Error) => Some((
+                Icon::new(IconName::Cancel).text_color(cx.theme().error),
+                cx.theme().error_container,
+            )),
+            None => self
+                .icon
+                .clone()
+                .map(|ic| (ic, cx.theme().primary_container)),
         };
-        let has_icon = icon.is_some();
+
         let placement = cx.theme().notification.placement;
 
         h_flex()
@@ -336,49 +354,78 @@ impl Render for Notification {
             .relative()
             .w_112()
             .border_1()
-            .border_color(cx.theme().outline_variant)
-            .bg(cx.theme().surface_container)
-            .rounded(cx.theme().radius_lg)
-            .shadow_md()
+            .border_color(cx.theme().outline_variant.opacity(0.3))
+            .bg(cx.theme().surface_container_high)
+            .rounded_3xl()
+            .shadow_xl()
             .py_3p5()
             .px_4()
-            .gap_3()
+            .gap_3p5()
+            .items_start()
             .refine_style(&self.style)
-            .when_some(icon, |this, icon| {
-                this.child(div().absolute().top(px(18.)).left_4().child(icon))
+            .when_some(icon_badge, |this, (icon, badge_bg)| {
+                this.child(
+                    div()
+                        .w(px(36.))
+                        .h(px(36.))
+                        .rounded_2xl()
+                        .bg(badge_bg)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .flex_shrink_0()
+                        .child(icon),
+                )
             })
             .child(
                 v_flex()
                     .flex_1()
                     .overflow_hidden()
-                    .when(has_icon, |this| this.pl_6())
+                    .gap_0p5()
                     .when_some(self.title.clone(), |this, title| {
-                        this.child(div().text_sm().font_semibold().child(title))
+                        this.child(
+                            div()
+                                .text_sm()
+                                .font_semibold()
+                                .text_color(cx.theme().on_surface)
+                                .child(title),
+                        )
                     })
                     .when_some(self.message.clone(), |this, message| {
-                        this.child(div().text_sm().child(message))
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().on_surface_variant)
+                                .child(message),
+                        )
                     })
-                    .when_some(content, |this, content| this.child(content)),
+                    .when_some(content, |this, content| this.child(content))
+                    .when(self.expanded, |this| {
+                        this.when_some(action, |this, action| {
+                            this.child(h_flex().gap_2().pt_2().child(action))
+                        })
+                    }),
             )
-            .when_some(action, |this, action| this.child(action))
-            .child(
+            .child({
+                let toggle_icon = if self.expanded {
+                    IconName::KeyboardArrowUp
+                } else {
+                    IconName::KeyboardArrowDown
+                };
+
                 div()
-                    .absolute()
-                    .top_1()
-                    .right_1()
-                    .invisible()
-                    .group_hover("", |this| this.visible())
-                    .child(
-                        Button::new("close")
-                            .icon(IconName::Close)
-                            .text()
-                            .xsmall()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.dismiss(window, cx);
-                            })),
-                    ),
-            )
+                    .id("notification-expand-toggle")
+                    .cursor_pointer()
+                    .p_1()
+                    .rounded_full()
+                    .hover(|s| s.bg(cx.theme().surface_container_highest))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.expanded = !this.expanded;
+                        cx.notify();
+                    }))
+                    .child(Icon::new(toggle_icon).size(px(18.)))
+            })
             .when_some(self.on_click.clone(), |this, on_click| {
                 this.on_click(cx.listener(move |view, event, window, cx| {
                     view.dismiss(window, cx);

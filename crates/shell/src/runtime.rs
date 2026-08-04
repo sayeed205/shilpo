@@ -319,6 +319,14 @@ pub struct ShellRuntime {
 impl Global for ShellRuntime {}
 
 impl ShellRuntime {
+    pub fn active_config(cx: &App) -> shilpo_config::ShellConfig {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>().active_config.clone()
+        } else {
+            shilpo_config::ShellConfig::default()
+        }
+    }
+
     fn output_name_for_bounds(
         bounds: Bounds<Pixels>,
         compositor_outputs: &[CompositorOutput],
@@ -2461,21 +2469,27 @@ impl ShellRuntime {
         runtime.notification_generation
     }
 
+    pub fn active_notification_handle(
+        cx: &App,
+    ) -> Option<WindowHandle<crate::notification::NotificationToastView>> {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>()
+                .notification
+                .as_ref()
+                .map(|(_, _, handle)| *handle)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn register_notification(
         cx: &mut App,
         generation: u64,
         notification_id: u32,
         handle: WindowHandle<crate::notification::NotificationToastView>,
     ) {
-        let prev = {
-            let runtime = cx.global_mut::<Self>();
-            let prev = runtime.notification.take();
-            runtime.notification = Some((generation, notification_id, handle));
-            prev
-        };
-        if let Some((_, _, prev_handle)) = prev {
-            let _ = cx.update_window(*prev_handle, |_, window, _| window.remove_window());
-        }
+        let runtime = cx.global_mut::<Self>();
+        runtime.notification = Some((generation, notification_id, handle));
     }
 
     pub fn invoke_notification_action(cx: &App, id: u32, action_key: &str) {

@@ -81,6 +81,8 @@ pub struct Notification {
     pub summary: String,
     pub body: String,
     pub app_icon: Option<String>,
+    pub desktop_entry: Option<String>,
+    pub image_path: Option<String>,
     pub urgency: NotificationUrgency,
     pub actions: Vec<(String, String)>,
     pub expire_timeout_ms: i32,
@@ -95,6 +97,8 @@ impl Notification {
             summary: summary.into(),
             body: body.into(),
             app_icon: None,
+            desktop_entry: None,
+            image_path: None,
             urgency: NotificationUrgency::Normal,
             actions: Vec::new(),
             expire_timeout_ms: 5000,
@@ -425,6 +429,23 @@ impl NotificationServer {
             },
         };
 
+        let desktop_entry = hints
+            .get("desktop-entry")
+            .or_else(|| hints.get("desktop_entry"))
+            .and_then(|v| match v {
+                zbus::zvariant::Value::Str(s) => Some(s.to_string()),
+                _ => None,
+            });
+
+        let image_path = hints
+            .get("image-path")
+            .or_else(|| hints.get("image_path"))
+            .or_else(|| hints.get("image-path-url"))
+            .and_then(|v| match v {
+                zbus::zvariant::Value::Str(s) => Some(s.to_string()),
+                _ => None,
+            });
+
         let notification = Notification {
             id,
             app_name,
@@ -435,6 +456,8 @@ impl NotificationServer {
             } else {
                 Some(app_icon)
             },
+            desktop_entry,
+            image_path,
             urgency,
             actions,
             expire_timeout_ms,
@@ -494,7 +517,14 @@ impl NotificationServer {
     }
 
     fn get_capabilities(&self) -> Vec<String> {
-        vec!["actions".to_string(), "body".to_string()]
+        vec![
+            "actions".to_string(),
+            "body".to_string(),
+            "body-markup".to_string(),
+            "icon-static".to_string(),
+            "persistence".to_string(),
+            "image-path".to_string(),
+        ]
     }
 
     fn get_server_information(&self) -> (String, String, String, String) {
@@ -934,7 +964,17 @@ mod tests {
             new_notif_sender: Arc::new(Mutex::new(None)),
             dnd_enabled: Arc::new(Mutex::new(false)),
         };
-        assert_eq!(server.get_capabilities(), vec!["actions", "body"]);
+        assert_eq!(
+            server.get_capabilities(),
+            vec![
+                "actions",
+                "body",
+                "body-markup",
+                "icon-static",
+                "persistence",
+                "image-path"
+            ]
+        );
         assert_eq!(NotificationCloseReason::ClosedByRequest as u32, 3);
         assert_eq!(NotificationCloseReason::Undefined as u32, 4);
     }
