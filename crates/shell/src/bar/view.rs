@@ -548,7 +548,7 @@ impl BarView {
 
                 match position {
                     BarPosition::Top => {
-                        let y0 = bounds.origin.y.as_f32() + bar_height.as_f32();
+                        let y0 = bounds.origin.y.as_f32() + bar_height.as_f32() - 0.5;
 
                         let x0 = bounds.origin.x.as_f32();
                         if let Some(path) = build_hug_corner(
@@ -574,7 +574,8 @@ impl BarView {
                     }
                     BarPosition::Bottom => {
                         let y0 = bounds.origin.y.as_f32() + bounds.size.height.as_f32()
-                            - bar_height.as_f32();
+                            - bar_height.as_f32()
+                            + 0.5;
 
                         let x0 = bounds.origin.x.as_f32();
                         if let Some(path) = build_hug_corner(
@@ -599,7 +600,7 @@ impl BarView {
                         }
                     }
                     BarPosition::Left => {
-                        let x0 = bounds.origin.x.as_f32() + bar_height.as_f32();
+                        let x0 = bounds.origin.x.as_f32() + bar_height.as_f32() - 0.5;
                         let y0 = bounds.origin.y.as_f32();
                         let y1 = bounds.origin.y.as_f32() + bounds.size.height.as_f32();
 
@@ -625,7 +626,8 @@ impl BarView {
                     }
                     BarPosition::Right => {
                         let x0 = bounds.origin.x.as_f32() + bounds.size.width.as_f32()
-                            - bar_height.as_f32();
+                            - bar_height.as_f32()
+                            + 0.5;
                         let y0 = bounds.origin.y.as_f32();
                         let y1 = bounds.origin.y.as_f32() + bounds.size.height.as_f32();
 

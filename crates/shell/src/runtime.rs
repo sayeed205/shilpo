@@ -3181,7 +3181,7 @@ fn bar_window_options(geometry: &BarGeometry, with_display_geometry: bool) -> Wi
         window_background: WindowBackgroundAppearance::Transparent,
         kind: WindowKind::LayerShell(LayerShellOptions {
             namespace: "bar".to_string(),
-            layer: Layer::Overlay,
+            layer: Layer::Top,
             anchor: geometry.anchor,
             exclusive_zone: Some(geometry.exclusive_zone),
             exclusive_edge: Some(geometry.exclusive_edge),

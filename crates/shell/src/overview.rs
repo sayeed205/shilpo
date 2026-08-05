@@ -572,7 +572,9 @@ impl WorkspaceOverview {
         if !immediate_results.is_empty() {
             self.search_results = immediate_results;
             self.selected_result_index = Some(0);
-            self.search_state = LauncherSearchState::Ready { generation: query_gen };
+            self.search_state = LauncherSearchState::Ready {
+                generation: query_gen,
+            };
         } else {
             self.search_state = LauncherSearchState::Pending {
                 generation: query_gen,
@@ -921,8 +923,7 @@ impl Render for WorkspaceOverview {
         let generation = self.generation;
         let phase = self.phase;
 
-        // M3 scrim at ~48% opacity
-        let scrim_color = theme.scrim.opacity(0.48);
+        let scrim_color = gpui::transparent_black();
         let card_bg = theme.surface_container_high;
         let border_color = theme.outline_variant;
         let viewport = window.viewport_size();

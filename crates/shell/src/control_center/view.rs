@@ -439,7 +439,7 @@ impl Render for ControlCenterView {
             .flex()
             .items_center()
             .justify_center()
-            .bg(cx.theme().scrim.opacity(0.4))
+            .bg(cx.theme().transparent)
             .id("control-center-backdrop")
             .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
                 ShellRuntime::forget_control_center(cx);
