@@ -187,20 +187,31 @@ impl RenderOnce for ButtonGroup {
                     .enumerate()
                     .map(|(child_index, child)| {
                         let state = Rc::clone(&state);
+                        let selected = child.selected;
                         let child = child
                             .corner_radii(button_group_tokens::corner_radii(
                                 self.mode,
                                 self.layout,
                                 child_index,
                                 children_len,
+                                selected,
                             ))
                             .when_some(self.size, |this, size| this.with_size(size))
                             .when(self.size.is_none(), |this| {
                                 this.with_size(Size::Size(tokens.height))
                             })
-                            .when_some(self.variant, |this, variant| this.with_variant(variant))
+                            .when(selected && self.variant.is_none(), |this| {
+                                this.filled_tonal()
+                            })
+                            .when_some(self.variant, |this, variant| {
+                                if selected {
+                                    this.with_variant(ButtonVariant::Filled)
+                                } else {
+                                    this.with_variant(variant)
+                                }
+                            })
                             .when(self.compact, |this| this.compact())
-                            .when(self.outline, |this| this.outline())
+                            .when(self.outline && !selected, |this| this.outline())
                             .when(self.on_click.is_some(), |this| {
                                 this.on_click(move |_, _, _| {
                                     state.set(Some(child_index));

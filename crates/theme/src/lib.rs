@@ -8,4 +8,6 @@ pub mod state;
 
 pub use client::ThemeClient;
 pub use persistence::{read_state_snapshot, state_file_path, write_state_snapshot};
-pub use state::{ColorSource, SideEffect, ThemeCommand, ThemeMode, ThemeState, reduce};
+pub use state::{
+    ColorSource, SchemeVariant, SideEffect, ThemeCommand, ThemeMode, ThemeState, reduce,
+};

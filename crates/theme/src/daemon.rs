@@ -45,17 +45,27 @@ impl ThemeDaemon {
 
         let config_path = shilpo_config::default_config_path();
 
-        let (config_provider, gtk_light, gtk_dark, custom_argv, configured_wp_dir) =
-            match ShellConfig::load_or_create(&config_path) {
-                Ok(cfg) => (
-                    cfg.theme.provider,
-                    cfg.theme.gtk_theme_light,
-                    cfg.theme.gtk_theme_dark,
-                    cfg.theme.custom_adapter_cmd,
-                    Some(cfg.desktop.wallpaper_dir),
-                ),
-                Err(_) => (None, None, None, None, None),
-            };
+        let (
+            config_provider,
+            gtk_light,
+            gtk_dark,
+            custom_argv,
+            configured_wp_dir,
+            configured_variant,
+        ) = match ShellConfig::load_or_create(&config_path) {
+            Ok(cfg) => (
+                cfg.theme.provider,
+                cfg.theme.gtk_theme_light,
+                cfg.theme.gtk_theme_dark,
+                cfg.theme.custom_adapter_cmd,
+                Some(cfg.desktop.wallpaper_dir),
+                cfg.theme
+                    .scheme_variant
+                    .as_deref()
+                    .map(crate::state::SchemeVariant::from_str),
+            ),
+            Err(_) => (None, None, None, None, None, None),
+        };
 
         let adapter: Arc<dyn DesktopAdapter> = Arc::from(select_desktop_adapter(
             config_provider.as_deref(),
@@ -64,7 +74,11 @@ impl ThemeDaemon {
             custom_argv,
         ));
 
-        let initial_state = initial_state(read_state_snapshot(), configured_wp_dir.as_deref());
+        let initial_state = initial_state(
+            read_state_snapshot(),
+            configured_wp_dir.as_deref(),
+            configured_variant,
+        );
 
         let service = ThemeDbusService::new(actor_tx);
         let conn = Builder::session()?
@@ -161,6 +175,19 @@ impl ThemeDaemon {
                     self.process_command(ThemeCommand::SetColorSource(source))
                         .await,
                 );
+            }
+            ActorMessage::SetSchemeVariant(variant, reply) => {
+                let res = self
+                    .process_command(ThemeCommand::SetSchemeVariant(variant))
+                    .await;
+                let config_path = self.config_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Ok(mut config) = ShellConfig::load_or_create(&config_path) {
+                        config.theme.scheme_variant = Some(variant.as_str().to_string());
+                        let _ = config.save(&config_path);
+                    }
+                });
+                let _ = reply.send(res);
             }
             ActorMessage::SetCustomSeed(seed, reply) => {
                 let _ = reply.send(
@@ -329,22 +356,8 @@ impl ThemeDaemon {
         let prev_rev = next_state.revision;
         let effects = reduce(&mut next_state, command);
 
-        for effect in effects {
-            match effect {
-                SideEffect::DispatchDesktopAdapter(mode) => {
-                    let adapter = Arc::clone(&self.adapter);
-                    tokio::task::spawn_blocking(move || adapter.set_mode(mode))
-                        .await
-                        .map_err(|error| error.to_string())?
-                        .map_err(|error| error.to_string())?;
-                }
-            }
-        }
-
         if next_state.revision > prev_rev {
-            let path = write_state_snapshot(&next_state).map_err(|error| error.to_string())?;
             self.state = next_state;
-            debug!(revision = self.state.revision, path = %path.display(), "Persisted ThemeState snapshot");
 
             let raw_state =
                 serde_json::to_string(&self.state).map_err(|error| error.to_string())?;
@@ -358,6 +371,24 @@ impl ThemeDaemon {
                     &raw_state,
                 )
                 .await;
+
+            let state_to_save = self.state.clone();
+            tokio::task::spawn_blocking(move || {
+                let _ = write_state_snapshot(&state_to_save);
+            });
+        }
+
+        for effect in effects {
+            match effect {
+                SideEffect::DispatchDesktopAdapter(mode) => {
+                    let adapter = Arc::clone(&self.adapter);
+                    tokio::task::spawn_blocking(move || {
+                        if let Err(error) = adapter.set_mode(mode) {
+                            tracing::warn!(%error, provider = adapter.name(), "Desktop adapter set_mode failed");
+                        }
+                    });
+                }
+            }
         }
 
         Ok(self.state.clone())
@@ -421,12 +452,22 @@ fn expand_tilde(path: &Path) -> PathBuf {
     }
 }
 
-fn initial_state(persisted: Option<ThemeState>, configured_wp_dir: Option<&Path>) -> ThemeState {
+fn initial_state(
+    persisted: Option<ThemeState>,
+    configured_wp_dir: Option<&Path>,
+    configured_variant: Option<crate::state::SchemeVariant>,
+) -> ThemeState {
     let mut state = persisted.unwrap_or_default();
     if let Some(configured_wp_dir) = configured_wp_dir {
         state.wallpaper_dir = expand_tilde(configured_wp_dir);
     } else {
         state.wallpaper_dir = expand_tilde(&state.wallpaper_dir);
+    }
+    if let Some(variant) = configured_variant {
+        state.scheme_variant = variant;
+        let (light, dark) = crate::state::generate_m3_palettes(state.source_argb, variant);
+        state.light = light;
+        state.dark = dark;
     }
     state
 }
@@ -471,7 +512,11 @@ mod tests {
             ..ThemeState::default()
         };
 
-        let state = initial_state(Some(persisted), Some(Path::new("/configured/wallpapers")));
+        let state = initial_state(
+            Some(persisted),
+            Some(Path::new("/configured/wallpapers")),
+            None,
+        );
 
         assert_eq!(state.wallpaper_dir, Path::new("/configured/wallpapers"));
     }

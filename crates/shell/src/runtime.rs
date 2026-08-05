@@ -415,22 +415,34 @@ impl ShellRuntime {
                 };
                 cx.update(|cx: &mut gpui::App| {
                     shilpo_ui::Theme::global_mut(cx).apply_state(&state);
-                    let overview = if cx.has_global::<Self>() {
+                    if cx.has_global::<Self>() {
                         let runtime = cx.global_mut::<Self>();
                         if let Some(path) =
                             state.wallpaper_path.clone().filter(|path| path.is_file())
                         {
                             runtime.current_wallpaper_path = Some(path);
                         }
-                        runtime.overview_entity.clone()
-                    } else {
-                        None
-                    };
-                    if let Some(overview) = overview {
-                        let wallpaper_path = cx.global::<Self>().current_wallpaper_path.clone();
-                        overview.update(cx, |view, cx| {
-                            view.update_wallpaper_path(wallpaper_path, cx);
-                        });
+                        let overview_entity = runtime.overview_entity.clone();
+                        let wallpaper_path = runtime.current_wallpaper_path.clone();
+                        let bar_handles: Vec<_> =
+                            runtime.bars.values().map(|(handle, _)| *handle).collect();
+                        let cc_handle = runtime.control_center;
+                        let ov_handle = runtime.overview;
+
+                        if let Some(overview) = overview_entity {
+                            overview.update(cx, |view, cx| {
+                                view.update_wallpaper_path(wallpaper_path, cx);
+                            });
+                        }
+                        for handle in bar_handles {
+                            let _ = handle.update(cx, |_, _, cx| cx.notify());
+                        }
+                        if let Some(cc) = cc_handle {
+                            let _ = cc.update(cx, |_, _, cx| cx.notify());
+                        }
+                        if let Some(ov) = ov_handle {
+                            let _ = ov.update(cx, |_, _, cx| cx.notify());
+                        }
                     }
                     cx.refresh_windows();
                 });

@@ -284,6 +284,8 @@ pub struct ThemeConfig {
     pub gtk_theme_dark: Option<String>,
     #[serde(default)]
     pub custom_adapter_cmd: Option<Vec<String>>,
+    #[serde(default)]
+    pub scheme_variant: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -539,6 +541,7 @@ impl Default for ThemeConfig {
             gtk_theme_light: None,
             gtk_theme_dark: None,
             custom_adapter_cmd: None,
+            scheme_variant: None,
         }
     }
 }

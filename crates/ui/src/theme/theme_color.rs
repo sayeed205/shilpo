@@ -1,5 +1,5 @@
 use gpui::Hsla;
-use mcu_material_color::{Hct, MaterialDynamicColors, SchemeTonalSpot};
+use mcu_material_color::{Hct, MaterialDynamicColors};
 
 /// Material 3 dynamic color roles.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -56,7 +56,7 @@ pub struct ThemeColor {
 macro_rules! roles {
     ($($field:ident),+ $(,)?) => {
         impl ThemeColor {
-            fn from_scheme(scheme: &SchemeTonalSpot) -> Self {
+            fn from_scheme(scheme: &mcu_material_color::DynamicScheme) -> Self {
                 Self { $($field: argb_to_hsla(MaterialDynamicColors::$field().get_argb(scheme)),)+ }
             }
         }
@@ -209,8 +209,58 @@ pub fn hsla_to_hex(hsla: Hsla) -> String {
     format!("#{:02X}{:02X}{:02X}", r, g, b)
 }
 
+pub fn material_theme_with_variant(
+    source_argb: u32,
+    variant: shilpo_theme::SchemeVariant,
+    dark: bool,
+) -> ThemeColor {
+    use mcu_material_color::{
+        SchemeContent, SchemeExpressive, SchemeFidelity, SchemeFruitSalad, SchemeMonochrome,
+        SchemeNeutral, SchemeRainbow, SchemeTonalSpot,
+    };
+    let hct = Hct::from_int(source_argb);
+    match variant {
+        shilpo_theme::SchemeVariant::Auto => {
+            let chroma = hct.chroma();
+            if chroma < 6.0 {
+                ThemeColor::from_scheme(&SchemeMonochrome::new(hct, dark, 0.0))
+            } else if chroma < 20.0 {
+                ThemeColor::from_scheme(&SchemeNeutral::new(hct, dark, 0.0))
+            } else if chroma >= 70.0 {
+                ThemeColor::from_scheme(&SchemeExpressive::new(hct, dark, 0.0))
+            } else {
+                ThemeColor::from_scheme(&SchemeTonalSpot::new(hct, dark, 0.0))
+            }
+        }
+        shilpo_theme::SchemeVariant::TonalSpot => {
+            ThemeColor::from_scheme(&SchemeTonalSpot::new(hct, dark, 0.0))
+        }
+        shilpo_theme::SchemeVariant::Content => {
+            ThemeColor::from_scheme(&SchemeContent::new(hct, dark, 0.0))
+        }
+        shilpo_theme::SchemeVariant::Expressive => {
+            ThemeColor::from_scheme(&SchemeExpressive::new(hct, dark, 0.0))
+        }
+        shilpo_theme::SchemeVariant::Fidelity => {
+            ThemeColor::from_scheme(&SchemeFidelity::new(hct, dark, 0.0))
+        }
+        shilpo_theme::SchemeVariant::FruitSalad => {
+            ThemeColor::from_scheme(&SchemeFruitSalad::new(hct, dark, 0.0))
+        }
+        shilpo_theme::SchemeVariant::Monochrome => {
+            ThemeColor::from_scheme(&SchemeMonochrome::new(hct, dark, 0.0))
+        }
+        shilpo_theme::SchemeVariant::Neutral => {
+            ThemeColor::from_scheme(&SchemeNeutral::new(hct, dark, 0.0))
+        }
+        shilpo_theme::SchemeVariant::Rainbow => {
+            ThemeColor::from_scheme(&SchemeRainbow::new(hct, dark, 0.0))
+        }
+    }
+}
+
 pub fn material_theme(source_argb: u32, dark: bool) -> ThemeColor {
-    ThemeColor::from_scheme(&SchemeTonalSpot::new(Hct::from_int(source_argb), dark, 0.0))
+    material_theme_with_variant(source_argb, shilpo_theme::SchemeVariant::Auto, dark)
 }
 
 #[cfg(test)]

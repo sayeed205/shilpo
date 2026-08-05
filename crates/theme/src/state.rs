@@ -1,5 +1,4 @@
 use chrono::Utc;
-use mcu_material_color::SchemeTonalSpot;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashMap;
@@ -7,7 +6,6 @@ use std::fmt;
 use std::path::PathBuf;
 
 const DEFAULT_SOURCE_ARGB: u32 = 0xff006c4c;
-const PALETTE_ALGORITHM_M3: &str = "Material3-TonalSpot";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, JsonSchema)]
 pub enum ThemeMode {
@@ -84,12 +82,91 @@ impl zbus::zvariant::Type for ColorSource {
     const SIGNATURE: &'static zbus::zvariant::Signature = &zbus::zvariant::Signature::Str;
 }
 
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum SchemeVariant {
+    #[default]
+    Auto,
+    TonalSpot,
+    Content,
+    Expressive,
+    Fidelity,
+    FruitSalad,
+    Monochrome,
+    Neutral,
+    Rainbow,
+}
+
+impl SchemeVariant {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::TonalSpot => "tonal-spot",
+            Self::Content => "content",
+            Self::Expressive => "expressive",
+            Self::Fidelity => "fidelity",
+            Self::FruitSalad => "fruit-salad",
+            Self::Monochrome => "monochrome",
+            Self::Neutral => "neutral",
+            Self::Rainbow => "rainbow",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::TonalSpot => "Tonal Spot",
+            Self::Content => "Content",
+            Self::Expressive => "Expressive",
+            Self::Fidelity => "Fidelity",
+            Self::FruitSalad => "Fruit Salad",
+            Self::Monochrome => "Monochrome",
+            Self::Neutral => "Neutral",
+            Self::Rainbow => "Rainbow",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().replace(' ', "-").as_str() {
+            "auto" => Self::Auto,
+            "tonal-spot" | "tonal_spot" | "tonal" => Self::TonalSpot,
+            "content" => Self::Content,
+            "expressive" => Self::Expressive,
+            "fidelity" => Self::Fidelity,
+            "fruit-salad" | "fruit_salad" => Self::FruitSalad,
+            "monochrome" => Self::Monochrome,
+            "neutral" => Self::Neutral,
+            "rainbow" => Self::Rainbow,
+            _ => Self::Auto,
+        }
+    }
+}
+
+impl zbus::zvariant::Type for SchemeVariant {
+    const SIGNATURE: &'static zbus::zvariant::Signature = &zbus::zvariant::Signature::Str;
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct ThemeState {
     pub revision: u64,
     pub selected_mode: ThemeMode,
     pub resolved_mode: ThemeMode,
     pub color_source: ColorSource,
+    #[serde(default)]
+    pub scheme_variant: SchemeVariant,
     pub custom_seed: Option<u32>,
     pub wallpaper_path: Option<PathBuf>,
     pub wallpaper_seed: Option<u32>,
@@ -97,20 +174,29 @@ pub struct ThemeState {
     pub source_argb: u32,
     pub light: HashMap<String, String>,
     pub dark: HashMap<String, String>,
-    pub palette_algorithm: String,
     pub updated_at: String,
     pub palette_generated_at: String,
+}
+
+impl ThemeState {
+    pub fn palette_algorithm(&self) -> String {
+        format!(
+            "Material3-{}",
+            self.scheme_variant.display_name().replace(' ', "")
+        )
+    }
 }
 
 impl Default for ThemeState {
     fn default() -> Self {
         let now = Utc::now().to_rfc3339();
-        let (light, dark) = generate_m3_palettes(DEFAULT_SOURCE_ARGB);
+        let (light, dark) = generate_m3_palettes(DEFAULT_SOURCE_ARGB, SchemeVariant::Auto);
         Self {
             revision: 1,
             selected_mode: ThemeMode::System,
             resolved_mode: ThemeMode::Light,
             color_source: ColorSource::Wallpaper,
+            scheme_variant: SchemeVariant::Auto,
             custom_seed: None,
             wallpaper_path: None,
             wallpaper_seed: None,
@@ -118,7 +204,6 @@ impl Default for ThemeState {
             source_argb: DEFAULT_SOURCE_ARGB,
             light,
             dark,
-            palette_algorithm: PALETTE_ALGORITHM_M3.to_string(),
             updated_at: now.clone(),
             palette_generated_at: now,
         }
@@ -131,13 +216,16 @@ pub fn argb_to_hex(argb: u32) -> String {
 
 pub fn generate_m3_palettes(
     source_argb: u32,
+    variant: SchemeVariant,
 ) -> (HashMap<String, String>, HashMap<String, String>) {
-    let light_scheme =
-        SchemeTonalSpot::new(mcu_material_color::Hct::from_int(source_argb), false, 0.0);
-    let dark_scheme =
-        SchemeTonalSpot::new(mcu_material_color::Hct::from_int(source_argb), true, 0.0);
+    use mcu_material_color::{
+        Hct, SchemeContent, SchemeExpressive, SchemeFidelity, SchemeFruitSalad, SchemeMonochrome,
+        SchemeNeutral, SchemeRainbow, SchemeTonalSpot,
+    };
 
-    fn build_palette(scheme: &SchemeTonalSpot) -> HashMap<String, String> {
+    let hct = Hct::from_int(source_argb);
+
+    fn build_palette(scheme: &mcu_material_color::DynamicScheme) -> HashMap<String, String> {
         let mut map = HashMap::new();
         let tokens: &[(&str, u32)] = &[
             (
@@ -342,7 +430,36 @@ pub fn generate_m3_palettes(
         map
     }
 
-    (build_palette(&light_scheme), build_palette(&dark_scheme))
+    macro_rules! gen_pair {
+        ($scheme_ty:ident) => {{
+            let light = $scheme_ty::new(hct, false, 0.0);
+            let dark = $scheme_ty::new(hct, true, 0.0);
+            (build_palette(&light), build_palette(&dark))
+        }};
+    }
+
+    match variant {
+        SchemeVariant::Auto => {
+            let chroma = hct.chroma();
+            if chroma < 6.0 {
+                gen_pair!(SchemeMonochrome)
+            } else if chroma < 20.0 {
+                gen_pair!(SchemeNeutral)
+            } else if chroma >= 70.0 {
+                gen_pair!(SchemeExpressive)
+            } else {
+                gen_pair!(SchemeTonalSpot)
+            }
+        }
+        SchemeVariant::TonalSpot => gen_pair!(SchemeTonalSpot),
+        SchemeVariant::Content => gen_pair!(SchemeContent),
+        SchemeVariant::Expressive => gen_pair!(SchemeExpressive),
+        SchemeVariant::Fidelity => gen_pair!(SchemeFidelity),
+        SchemeVariant::FruitSalad => gen_pair!(SchemeFruitSalad),
+        SchemeVariant::Monochrome => gen_pair!(SchemeMonochrome),
+        SchemeVariant::Neutral => gen_pair!(SchemeNeutral),
+        SchemeVariant::Rainbow => gen_pair!(SchemeRainbow),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -350,6 +467,7 @@ pub enum ThemeCommand {
     SetMode(ThemeMode),
     ToggleMode,
     SetColorSource(ColorSource),
+    SetSchemeVariant(SchemeVariant),
     SetCustomSeed(u32),
     SetWallpaperDirectory(PathBuf),
     SetWallpaper { path: PathBuf, seed: u32 },
@@ -406,11 +524,21 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand) -> Vec<SideEffect> 
 
                 if let Some(seed) = target_seed.filter(|&seed| seed != state.source_argb) {
                     state.source_argb = seed;
-                    let (light, dark) = generate_m3_palettes(seed);
+                    let (light, dark) = generate_m3_palettes(seed, state.scheme_variant);
                     state.light = light;
                     state.dark = dark;
                     state.palette_generated_at = Utc::now().to_rfc3339();
                 }
+            }
+        }
+        ThemeCommand::SetSchemeVariant(variant) => {
+            if state.scheme_variant != variant {
+                state.scheme_variant = variant;
+                changed = true;
+                let (light, dark) = generate_m3_palettes(state.source_argb, variant);
+                state.light = light;
+                state.dark = dark;
+                state.palette_generated_at = Utc::now().to_rfc3339();
             }
         }
         ThemeCommand::SetCustomSeed(seed) => {
@@ -420,7 +548,7 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand) -> Vec<SideEffect> 
             }
             if state.color_source == ColorSource::Custom && state.source_argb != seed {
                 state.source_argb = seed;
-                let (light, dark) = generate_m3_palettes(seed);
+                let (light, dark) = generate_m3_palettes(seed, state.scheme_variant);
                 state.light = light;
                 state.dark = dark;
                 state.palette_generated_at = Utc::now().to_rfc3339();
@@ -444,7 +572,7 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand) -> Vec<SideEffect> 
             }
             if state.color_source == ColorSource::Wallpaper && state.source_argb != seed {
                 state.source_argb = seed;
-                let (light, dark) = generate_m3_palettes(seed);
+                let (light, dark) = generate_m3_palettes(seed, state.scheme_variant);
                 state.light = light;
                 state.dark = dark;
                 state.palette_generated_at = Utc::now().to_rfc3339();
@@ -523,6 +651,22 @@ mod tests {
         assert!(effects.is_empty());
         assert_eq!(state.selected_mode, ThemeMode::Dark);
         assert_eq!(state.resolved_mode, ThemeMode::Dark);
+    }
+
+    #[test]
+    fn test_all_scheme_variants_produce_distinct_colors() {
+        let seed = 0xffe63946;
+        let (light_tonal, _) = generate_m3_palettes(seed, SchemeVariant::TonalSpot);
+        let (light_expressive, _) = generate_m3_palettes(seed, SchemeVariant::Expressive);
+        let (light_fruit, _) = generate_m3_palettes(seed, SchemeVariant::FruitSalad);
+        let (light_mono, _) = generate_m3_palettes(seed, SchemeVariant::Monochrome);
+
+        assert_ne!(light_tonal.get("primary"), light_expressive.get("primary"));
+        assert_ne!(
+            light_tonal.get("primary_container"),
+            light_fruit.get("primary_container")
+        );
+        assert_ne!(light_tonal.get("secondary"), light_mono.get("secondary"));
     }
 
     #[test]

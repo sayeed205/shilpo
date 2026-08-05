@@ -1,4 +1,4 @@
-use crate::state::{ColorSource, ThemeMode, ThemeState};
+use crate::state::{ColorSource, SchemeVariant, ThemeMode, ThemeState};
 use tokio::sync::mpsc;
 use zbus::object_server::SignalEmitter;
 
@@ -12,6 +12,10 @@ pub enum ActorMessage {
     ToggleMode(tokio::sync::oneshot::Sender<Result<ThemeState, String>>),
     SetColorSource(
         ColorSource,
+        tokio::sync::oneshot::Sender<Result<ThemeState, String>>,
+    ),
+    SetSchemeVariant(
+        SchemeVariant,
         tokio::sync::oneshot::Sender<Result<ThemeState, String>>,
     ),
     SetCustomSeed(
@@ -90,6 +94,17 @@ impl ThemeDbusService {
         )
     }
 
+    async fn set_scheme_variant(&self, variant: SchemeVariant) -> zbus::fdo::Result<String> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.actor_tx
+            .send(ActorMessage::SetSchemeVariant(variant, tx))
+            .map_err(|_| zbus::fdo::Error::Failed("Actor connection closed".into()))?;
+        state_result_to_json(
+            rx.await
+                .map_err(|_| zbus::fdo::Error::Failed("Actor request dropped".into()))?,
+        )
+    }
+
     async fn set_custom_seed(&self, argb: u32) -> zbus::fdo::Result<String> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.actor_tx
@@ -153,6 +168,7 @@ pub trait ThemeDbus {
     fn set_mode(&self, mode: ThemeMode) -> zbus::Result<String>;
     fn toggle_mode(&self) -> zbus::Result<String>;
     fn set_color_source(&self, source: ColorSource) -> zbus::Result<String>;
+    fn set_scheme_variant(&self, variant: SchemeVariant) -> zbus::Result<String>;
     fn set_custom_seed(&self, argb: u32) -> zbus::Result<String>;
     fn set_wallpaper(&self, path: &str) -> zbus::Result<String>;
     fn set_wallpaper_directory(&self, dir: &str) -> zbus::Result<String>;

@@ -132,9 +132,17 @@ impl ThemeClient {
         });
     }
 
+    fn force_update_state(&self, new_state: ThemeState) {
+        let mut cur = self.current_state.lock().unwrap();
+        if cur.revision != new_state.revision || *cur != new_state {
+            *cur = new_state.clone();
+            let _ = self.tx.send(new_state);
+        }
+    }
+
     fn update_state_if_newer(&self, new_state: ThemeState) {
         let mut cur = self.current_state.lock().unwrap();
-        if new_state.revision > cur.revision {
+        if new_state.revision != cur.revision {
             *cur = new_state.clone();
             let _ = self.tx.send(new_state);
         }
@@ -142,7 +150,7 @@ impl ThemeClient {
 
     fn apply_response(&self, raw_state: String) -> Result<()> {
         let state = serde_json::from_str(&raw_state).context("Invalid ThemeState response")?;
-        self.update_state_if_newer(state);
+        self.force_update_state(state);
         Ok(())
     }
 
@@ -165,34 +173,60 @@ impl ThemeClient {
             .context("Failed to build ThemeDbusProxy")
     }
 
+    pub async fn sync_state(&self) -> Result<()> {
+        let proxy = self.proxy().await?;
+        let raw = proxy
+            .get_state()
+            .await
+            .map_err(|e| anyhow!("get_state failed: {e}"))?;
+        let state: ThemeState =
+            serde_json::from_str(&raw).context("Invalid ThemeState from get_state")?;
+        self.update_state_if_newer(state);
+        Ok(())
+    }
+
     pub async fn set_mode(&self, mode: ThemeMode) -> Result<()> {
         let proxy = self.proxy().await?;
-        self.apply_response(
-            proxy
-                .set_mode(mode)
-                .await
-                .map_err(|error| anyhow!("D-Bus SetMode failed: {error}"))?,
-        )
+        match proxy.set_mode(mode).await {
+            Ok(raw) => self.apply_response(raw),
+            Err(err) => {
+                let _ = self.sync_state().await;
+                Err(anyhow!("D-Bus SetMode failed: {err}"))
+            }
+        }
     }
 
     pub async fn toggle_mode(&self) -> Result<()> {
         let proxy = self.proxy().await?;
-        self.apply_response(
-            proxy
-                .toggle_mode()
-                .await
-                .map_err(|error| anyhow!("D-Bus ToggleMode failed: {error}"))?,
-        )
+        match proxy.toggle_mode().await {
+            Ok(raw) => self.apply_response(raw),
+            Err(err) => {
+                let _ = self.sync_state().await;
+                Err(anyhow!("D-Bus ToggleMode failed: {err}"))
+            }
+        }
     }
 
     pub async fn set_color_source(&self, source: ColorSource) -> Result<()> {
         let proxy = self.proxy().await?;
-        self.apply_response(
-            proxy
-                .set_color_source(source)
-                .await
-                .map_err(|error| anyhow!("D-Bus SetColorSource failed: {error}"))?,
-        )
+        match proxy.set_color_source(source).await {
+            Ok(raw) => self.apply_response(raw),
+            Err(err) => {
+                let _ = self.sync_state().await;
+                Err(anyhow!("D-Bus SetColorSource failed: {err}"))
+            }
+        }
+    }
+
+    pub async fn set_scheme_variant(&self, variant: crate::state::SchemeVariant) -> Result<()> {
+        let proxy = self.proxy().await?;
+        match proxy.set_scheme_variant(variant).await {
+            Ok(raw) => self.apply_response(raw),
+            Err(err) => {
+                let _ = self.sync_state().await;
+                Err(anyhow!("D-Bus SetSchemeVariant failed: {err}"))
+            }
+        }
     }
 
     pub async fn set_custom_seed(&self, argb: u32) -> Result<()> {

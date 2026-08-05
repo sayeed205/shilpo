@@ -43,6 +43,7 @@ pub struct Theme {
     /// Resolved scheme used to build `colors`. Never `System`.
     effective_mode: ThemeMode,
     pub source_argb: u32,
+    pub scheme_variant: shilpo_theme::SchemeVariant,
     pub font_family: SharedString,
     pub font_size: Pixels,
     pub mono_font_family: SharedString,
@@ -89,6 +90,7 @@ impl Theme {
             mode: ThemeMode::System,
             effective_mode: ThemeMode::Light,
             source_argb,
+            scheme_variant: shilpo_theme::SchemeVariant::Auto,
             font_family: ".SystemUIFont".into(),
             font_size: px(16.),
             mono_font_family: if cfg!(target_os = "macos") {
@@ -115,9 +117,14 @@ impl Theme {
 
     pub fn apply_state(&mut self, state: &ThemeState) {
         self.source_argb = state.source_argb;
+        self.scheme_variant = state.scheme_variant;
         self.mode = state.selected_mode;
         self.effective_mode = state.resolved_mode;
-        self.colors = material_theme(state.source_argb, state.resolved_mode.is_dark());
+        self.colors = material_theme_with_variant(
+            state.source_argb,
+            state.scheme_variant,
+            state.resolved_mode.is_dark(),
+        );
         self.highlight_theme = if state.resolved_mode.is_dark() {
             HighlightTheme::default_dark()
         } else {
@@ -127,7 +134,11 @@ impl Theme {
 
     pub fn set_source_argb(&mut self, source_argb: u32) {
         self.source_argb = source_argb;
-        self.colors = material_theme(source_argb, self.effective_mode.is_dark());
+        self.colors = material_theme_with_variant(
+            source_argb,
+            self.scheme_variant,
+            self.effective_mode.is_dark(),
+        );
     }
 
     pub fn global(cx: &App) -> &Theme {

@@ -102,42 +102,44 @@ impl SettingsPageRegistry {
     }
 }
 
+mod quick_page;
+
 /// Standalone Settings Application View.
 pub struct SettingsView {
     pub active_category: SettingsCategory,
     pub page_registry: SettingsPageRegistry,
     pub rail_collapsed: bool,
+    pub theme_client: shilpo_theme::ThemeClient,
 }
 
 impl SettingsView {
-    pub fn new() -> Self {
+    pub fn new(theme_client: shilpo_theme::ThemeClient) -> Self {
         let page_registry = SettingsPageRegistry::discover();
         Self {
             active_category: SettingsCategory::default(),
             page_registry,
             rail_collapsed: false,
+            theme_client,
         }
     }
 
-    pub fn view(window: &mut Window, cx: &mut App) -> Entity<shilpo_ui::Root> {
+    pub fn view(
+        theme_client: shilpo_theme::ThemeClient,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<shilpo_ui::Root> {
         #[cfg(target_os = "linux")]
         {
             register_desktop_entry();
             update_desktop_icon_for_theme(cx);
         }
 
-        let view = cx.new(|_| Self::new());
+        let view = cx.new(|_| Self::new(theme_client));
         cx.new(|cx| {
             shilpo_ui::Root::new(view, window, cx)
                 .bordered(true)
                 .bg(cx.theme().surface)
         })
-    }
-}
-
-impl Default for SettingsView {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -193,9 +195,11 @@ impl Render for SettingsView {
                 div()
                     .flex_1()
                     .h_full()
+                    .min_w_0()
+                    .overflow_hidden()
                     .py_3()
                     .pr_3()
-                    .pl_1()
+                    .pl_2()
                     .child(
                         v_flex()
                             .id(gpui::ElementId::Name(gpui::SharedString::from(format!(
@@ -203,6 +207,7 @@ impl Render for SettingsView {
                                 active
                             ))))
                             .size_full()
+                            .min_w_0()
                             .bg(cx.theme().surface_container_low)
                             .rounded_2xl()
                             .p_6()
@@ -233,7 +238,9 @@ impl Render for SettingsView {
                                         active_label
                                     )),
                             )
-                            .child(
+                            .child(if active == SettingsCategory::Quick {
+                                quick_page::QuickPage::render(&self.theme_client, _window, cx).into_any_element()
+                            } else {
                                 v_flex()
                                     .flex_1()
                                     .items_center()
@@ -263,8 +270,9 @@ impl Render for SettingsView {
                                             .child(
                                                 "Settings page options will be added here in future updates.",
                                             ),
-                                    ),
-                            ),
+                                    )
+                                    .into_any_element()
+                            }),
                     ),
             )
     }

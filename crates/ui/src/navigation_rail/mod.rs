@@ -198,6 +198,7 @@ impl RenderOnce for NavigationRail {
 
         let rail_container = v_flex()
             .id(self.id)
+            .flex_none()
             .w(target_geometry.rail_width)
             .h_full()
             .py_4()
