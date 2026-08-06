@@ -1,15 +1,21 @@
 [workspace]
 members = [
-    "crates/theme",
-    "crates/ui",
-    "crates/macros",
-    "crates/assets",
-    "crates/services",
-    "crates/config",
-    "crates/ext",
-    "crates/shell",
-    "crates/settings",
-    "crates/cli",
+    # Cross-platform core crates
+    "core/theme",
+    "core/ui",
+    "core/macros",
+    "core/assets",
+
+    # Linux desktop shell crates
+    "desktop/services",
+    "desktop/config",
+    "desktop/ext",
+    "desktop/theme-daemon",
+    "desktop/shell",
+    "desktop/settings",
+    "desktop/cli",
+
+    # Other
     "dotfiles/shilpo-dotfiles",
     "apps/storybook",
 ]
@@ -20,13 +26,14 @@ publish = false
 edition = "2024"
 
 [workspace.dependencies]
-shilpo-theme = { path = "crates/theme" }
-shilpo-ui = { path = "crates/ui" }
-shilpo-assets = { path = "crates/assets" }
-shilpo-macros = { path = "crates/macros" }
-shilpo-services = { path = "crates/services" }
-shilpo-config = { path = "crates/config" }
-shilpo-ext = { path = "crates/ext" }
+shilpo-theme = { path = "core/theme" }
+shilpo-ui = { path = "core/ui" }
+shilpo-assets = { path = "core/assets" }
+shilpo-macros = { path = "core/macros" }
+shilpo-services = { path = "desktop/services" }
+shilpo-config = { path = "desktop/config" }
+shilpo-ext = { path = "desktop/ext" }
+shilpo-theme-daemon = { path = "desktop/theme-daemon" }
 
 niri-ipc = "26"
 zbus = "5"

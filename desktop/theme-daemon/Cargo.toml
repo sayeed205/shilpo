@@ -1,0 +1,28 @@
+[package]
+name = "shilpo-theme-daemon"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+shilpo-theme = { workspace = true }
+shilpo-config = { workspace = true }
+
+zbus = { workspace = true }
+ashpd = { workspace = true }
+futures-lite = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+mcu-material-color = { workspace = true }
+image = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+dirs = { workspace = true }
+chrono = { workspace = true }
+
+[[bin]]
+name = "shilpo-themed"
+path = "src/bin/shilpo-themed.rs"
