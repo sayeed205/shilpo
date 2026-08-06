@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use gpui::{
@@ -9,7 +10,9 @@ use gpui::{
     layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
     point, px, size,
 };
-use shilpo_services::{BarState, CompositorOutput};
+use shilpo_services::{
+    BarState, CompositorAdapter, CompositorOutput, CompositorSnapshot, ShellIpcServer,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -94,6 +97,27 @@ pub(crate) fn query_awww_wallpaper_path() -> Option<PathBuf> {
     }
     let path = parse_awww_wallpaper_path(&String::from_utf8_lossy(&output.stdout))?;
     path.is_file().then_some(path)
+}
+
+pub(super) fn attach_compositor_stream(
+    ipc_server: &ShellIpcServer,
+    compositor: &Arc<dyn CompositorAdapter>,
+) -> Arc<CompositorSnapshot> {
+    ipc_server.attach_broker(compositor.command_broker());
+    compositor.current()
+}
+
+pub(super) fn spawn_compositor_stream_loop(cx: &mut App, compositor: &Arc<dyn CompositorAdapter>) {
+    let mut rx = compositor.subscribe();
+    cx.spawn(async move |cx| {
+        while rx.changed().await.is_ok() {
+            let snapshot = rx.borrow().clone();
+            cx.update(|cx: &mut gpui::App| {
+                ShellRuntime::on_compositor_snapshot_changed(cx, snapshot);
+            });
+        }
+    })
+    .detach();
 }
 
 fn discovered_wallpaper_needs_theme_sync(

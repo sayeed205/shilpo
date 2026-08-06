@@ -8,7 +8,6 @@ pub mod theme_manager;
 
 pub use service_hub::ServiceHub;
 pub use session::SessionContext;
-pub use theme_manager::ThemeManager;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
@@ -99,20 +98,13 @@ impl ShellRuntime {
     }
 
     pub fn install(cx: &mut App, ipc_server: ShellIpcServer) {
+        let initial_wallpaper_path = theme_manager::init(cx);
         let session = session::SessionContext::init();
-        let initial_wallpaper_path = theme_manager::ThemeManager::init(cx);
-        let hub = ServiceHub::start(
-            cx.background_executor().clone(),
-            session.config_path,
-            session.heed_store.clone(),
-            session.session_state.dnd_active,
-        );
+        let hub = ServiceHub::start(cx.background_executor().clone(), &session);
         let extensions = ExtensionCoordinator::init(cx.background_executor().clone());
 
         let compositor = hub.compositor.clone();
-        ipc_server.attach_broker(compositor.command_broker());
-        let latest_snapshot = compositor.current();
-        let mut rx = compositor.subscribe();
+        let latest_snapshot = surface_manager::attach_compositor_stream(&ipc_server, &compositor);
 
         cx.set_global(Self {
             ipc_server,
@@ -151,19 +143,16 @@ impl ShellRuntime {
             _ipc_task: gpui::Task::ready(()),
         });
 
-        theme_manager::ThemeManager::sync_wallpaper(cx, initial_wallpaper_path);
+        surface_manager::spawn_compositor_stream_loop(cx, &compositor);
+        theme_manager::sync_wallpaper(cx, initial_wallpaper_path);
         Self::on_compositor_snapshot_changed(cx, latest_snapshot);
+        Self::spawn_window_closed_watch(cx);
+        Self::sync_extension_actions(cx);
+        Self::spawn_drain_loop(cx);
+        cx.global::<Self>().publish_status();
+    }
 
-        cx.spawn(async move |cx| {
-            while rx.changed().await.is_ok() {
-                let snapshot = rx.borrow().clone();
-                cx.update(|cx: &mut gpui::App| {
-                    Self::on_compositor_snapshot_changed(cx, snapshot);
-                });
-            }
-        })
-        .detach();
-
+    fn spawn_window_closed_watch(cx: &mut App) {
         let subscription = cx.on_window_closed(|cx, window_id| {
             if !cx.has_global::<ShellRuntime>() {
                 return;
@@ -225,8 +214,9 @@ impl ShellRuntime {
             }
         });
         cx.global_mut::<Self>()._window_closed = Some(subscription);
-        Self::sync_extension_actions(cx);
+    }
 
+    fn spawn_drain_loop(cx: &mut App) {
         let task = cx.spawn(async move |cx| {
             loop {
                 cx.background_executor()
@@ -239,7 +229,6 @@ impl ShellRuntime {
             }
         });
         cx.global_mut::<Self>()._ipc_task = task;
-        cx.global::<Self>().publish_status();
     }
 
     pub fn on_compositor_snapshot_changed(cx: &mut App, snapshot: Arc<CompositorSnapshot>) {
@@ -291,20 +280,11 @@ impl ShellRuntime {
             (outputs_changed, runtime.overview_entity.clone())
         };
 
-        let bar_handles: Vec<_> = cx
-            .global::<Self>()
-            .bars
-            .values()
-            .map(|(handle, _)| *handle)
-            .collect();
-
         if let Some(overview) = overview_entity {
             overview.update(cx, |view, cx| view.update_snapshot(snapshot, cx));
         }
 
-        for handle in bar_handles {
-            let _ = handle.update(cx, |_, _window, cx| cx.notify());
-        }
+        Self::refresh_bars(cx);
 
         if outputs_changed {
             Self::reconcile_bars(cx);
