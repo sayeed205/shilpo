@@ -354,7 +354,8 @@ impl ThemeDaemon {
 
         let mut next_state = self.state.clone();
         let prev_rev = next_state.revision;
-        let effects = reduce(&mut next_state, command);
+        let now = chrono::Utc::now().to_rfc3339();
+        let effects = reduce(&mut next_state, command, &now);
 
         if next_state.revision > prev_rev {
             self.state = next_state;
