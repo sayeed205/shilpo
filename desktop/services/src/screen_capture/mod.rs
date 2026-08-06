@@ -21,33 +21,45 @@ pub struct ScreenCaptureInfo {
     pub available: bool,
 }
 
+use crate::polled::PolledService;
+use std::time::Duration;
 use tokio::sync::watch;
 
 pub struct ScreenCaptureService {
-    tx: watch::Sender<ScreenCaptureInfo>,
+    polled: PolledService<ScreenCaptureInfo>,
     recording_process: Arc<Mutex<Option<std::process::Child>>>,
 }
 
 impl ScreenCaptureService {
     pub fn new() -> Result<Self> {
         let available = Self::detect_backend();
-        let (tx, _) = watch::channel(ScreenCaptureInfo {
+        let initial = ScreenCaptureInfo {
             is_recording: false,
             available,
-        });
+        };
+        let polled = PolledService::new(
+            initial,
+            Duration::from_secs(3),
+            None,
+            |current: &ScreenCaptureInfo| -> Result<ScreenCaptureInfo, std::convert::Infallible> {
+                let available = Self::detect_backend();
+                let mut updated = current.clone();
+                updated.available = available;
+                Ok(updated)
+            },
+        );
         Ok(Self {
-            tx,
+            polled,
             recording_process: Arc::new(Mutex::new(None)),
         })
     }
 
     pub fn new_offline() -> Self {
-        let (tx, _) = watch::channel(ScreenCaptureInfo {
-            is_recording: false,
-            available: false,
-        });
         Self {
-            tx,
+            polled: PolledService::new_offline(ScreenCaptureInfo {
+                is_recording: false,
+                available: false,
+            }),
             recording_process: Arc::new(Mutex::new(None)),
         }
     }
@@ -58,15 +70,15 @@ impl ScreenCaptureService {
     }
 
     pub fn subscribe(&self) -> watch::Receiver<ScreenCaptureInfo> {
-        self.tx.subscribe()
+        self.polled.subscribe()
     }
 
     pub fn info(&self) -> ScreenCaptureInfo {
-        self.tx.borrow().clone()
+        self.polled.get()
     }
 
     pub fn take_screenshot(&self, mode: ScreenshotMode, output_path: Option<PathBuf>) -> bool {
-        let info_state = self.tx.borrow();
+        let info_state = self.polled.get();
         if !info_state.available {
             return false;
         }
@@ -95,7 +107,7 @@ impl ScreenCaptureService {
     }
 
     pub fn toggle_recording(&self, audio: bool, mode: RecordMode) -> bool {
-        let mut info_state = self.tx.borrow().clone();
+        let mut info_state = self.polled.get();
         let mut proc_lock = self.recording_process.lock().unwrap();
 
         if !info_state.available {
@@ -133,7 +145,7 @@ impl ScreenCaptureService {
             }
         }
         let is_rec = info_state.is_recording;
-        let _ = self.tx.send_replace(info_state);
+        self.polled.send_replace(info_state);
         is_rec
     }
 }

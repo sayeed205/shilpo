@@ -7,25 +7,37 @@ pub struct BluetoothInfo {
     pub available: bool,
 }
 
+use crate::polled::PolledService;
+use std::time::Duration;
 use tokio::sync::watch;
 
 pub struct BluetoothService {
-    tx: watch::Sender<BluetoothInfo>,
+    polled: PolledService<BluetoothInfo>,
 }
 
 impl BluetoothService {
     pub fn new() -> Result<Self> {
         let (available, powered) = Self::query_system();
-        let (tx, _) = watch::channel(BluetoothInfo { powered, available });
-        Ok(Self { tx })
+        let initial = BluetoothInfo { powered, available };
+        let polled = PolledService::new(
+            initial,
+            Duration::from_secs(3),
+            None,
+            |_curr| -> Result<BluetoothInfo, std::convert::Infallible> {
+                let (available, powered) = Self::query_system();
+                Ok(BluetoothInfo { powered, available })
+            },
+        );
+        Ok(Self { polled })
     }
 
     pub fn new_offline() -> Self {
-        let (tx, _) = watch::channel(BluetoothInfo {
-            powered: false,
-            available: false,
-        });
-        Self { tx }
+        Self {
+            polled: PolledService::new_offline(BluetoothInfo {
+                powered: false,
+                available: false,
+            }),
+        }
     }
 
     fn query_system() -> (bool, bool) {
@@ -47,15 +59,15 @@ impl BluetoothService {
     }
 
     pub fn subscribe(&self) -> watch::Receiver<BluetoothInfo> {
-        self.tx.subscribe()
+        self.polled.subscribe()
     }
 
     pub fn info(&self) -> BluetoothInfo {
-        self.tx.borrow().clone()
+        self.polled.get()
     }
 
     pub fn set_powered(&self, powered: bool) -> bool {
-        let mut current = self.tx.borrow().clone();
+        let mut current = self.polled.get();
         if !current.available {
             return false;
         }
@@ -67,7 +79,7 @@ impl BluetoothService {
             .is_ok_and(|s| s.success())
         {
             current.powered = powered;
-            let _ = self.tx.send_replace(current);
+            self.polled.send_replace(current);
             true
         } else {
             let rf_arg = if powered { "unblock" } else { "block" };
@@ -77,7 +89,7 @@ impl BluetoothService {
                 .is_ok_and(|s| s.success())
             {
                 current.powered = powered;
-                let _ = self.tx.send_replace(current);
+                self.polled.send_replace(current);
                 true
             } else {
                 false
@@ -86,7 +98,7 @@ impl BluetoothService {
     }
 
     pub fn toggle(&self) -> bool {
-        let current = self.tx.borrow().powered;
+        let current = self.polled.get().powered;
         self.set_powered(!current)
     }
 }

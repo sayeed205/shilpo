@@ -26,6 +26,8 @@ impl PowerProfile {
     }
 }
 
+use crate::polled::PolledService;
+use std::time::Duration;
 use tokio::sync::watch;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,25 +37,38 @@ pub struct PowerProfileInfo {
 }
 
 pub struct PowerProfileService {
-    tx: watch::Sender<PowerProfileInfo>,
+    polled: PolledService<PowerProfileInfo>,
 }
 
 impl PowerProfileService {
     pub fn new() -> Result<Self> {
         let (available, active_profile) = Self::query_system();
-        let (tx, _) = watch::channel(PowerProfileInfo {
+        let initial = PowerProfileInfo {
             active_profile,
             available,
-        });
-        Ok(Self { tx })
+        };
+        let polled = PolledService::new(
+            initial,
+            Duration::from_secs(3),
+            None,
+            |_curr| -> Result<PowerProfileInfo, std::convert::Infallible> {
+                let (available, active_profile) = Self::query_system();
+                Ok(PowerProfileInfo {
+                    active_profile,
+                    available,
+                })
+            },
+        );
+        Ok(Self { polled })
     }
 
     pub fn new_offline() -> Self {
-        let (tx, _) = watch::channel(PowerProfileInfo {
-            active_profile: PowerProfile::Balanced,
-            available: false,
-        });
-        Self { tx }
+        Self {
+            polled: PolledService::new_offline(PowerProfileInfo {
+                active_profile: PowerProfile::Balanced,
+                available: false,
+            }),
+        }
     }
 
     fn query_system() -> (bool, PowerProfile) {
@@ -68,15 +83,15 @@ impl PowerProfileService {
     }
 
     pub fn subscribe(&self) -> watch::Receiver<PowerProfileInfo> {
-        self.tx.subscribe()
+        self.polled.subscribe()
     }
 
     pub fn info(&self) -> PowerProfileInfo {
-        self.tx.borrow().clone()
+        self.polled.get()
     }
 
     pub fn set_profile(&self, profile: PowerProfile) -> bool {
-        let mut current = self.tx.borrow().clone();
+        let mut current = self.polled.get();
         if !current.available {
             return false;
         }
@@ -87,7 +102,7 @@ impl PowerProfileService {
             .is_ok_and(|s| s.success())
         {
             current.active_profile = profile;
-            let _ = self.tx.send_replace(current);
+            self.polled.send_replace(current);
             true
         } else {
             false
