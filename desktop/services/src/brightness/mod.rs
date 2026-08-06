@@ -1,8 +1,5 @@
 use anyhow::Result;
-use std::{
-    process::Command,
-    sync::{Arc, Mutex},
-};
+use std::process::Command;
 
 /// Screen brightness status.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -27,9 +24,11 @@ impl BrightnessInfo {
     }
 }
 
+use tokio::sync::watch;
+
 /// System screen brightness service.
 pub struct BrightnessService {
-    info: Arc<Mutex<BrightnessInfo>>,
+    tx: watch::Sender<BrightnessInfo>,
     _task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -43,9 +42,9 @@ impl Drop for BrightnessService {
 
 impl BrightnessService {
     pub fn new() -> Result<Self> {
-        let info = Arc::new(Mutex::new(BrightnessInfo::default()));
+        let (tx, _rx) = watch::channel(BrightnessInfo::default());
 
-        let info_clone = info.clone();
+        let tx_clone = tx.clone();
         let task = tokio::spawn(async move {
             loop {
                 let info = query_brightness()
@@ -54,31 +53,35 @@ impl BrightnessService {
                         available: true,
                     })
                     .unwrap_or_default();
-                *info_clone.lock().unwrap() = info;
+                let _ = tx_clone.send_replace(info);
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
             }
         });
 
         Ok(Self {
-            info,
+            tx,
             _task: Some(task),
         })
     }
 
+    pub fn subscribe(&self) -> watch::Receiver<BrightnessInfo> {
+        self.tx.subscribe()
+    }
+
     pub fn brightness_info(&self) -> BrightnessInfo {
-        self.info.lock().unwrap().clone()
+        self.tx.borrow().clone()
     }
 
     pub fn set_brightness(&self, percentage: u8) {
         let percentage = percentage.min(100);
-        {
-            let mut lock = self.info.lock().unwrap();
-            if !lock.available {
-                tracing::warn!("brightness backend unavailable; ignoring brightness change");
-                return;
-            }
-            lock.percentage = percentage;
+        let mut current = self.tx.borrow().clone();
+        if !current.available {
+            tracing::warn!("brightness backend unavailable; ignoring brightness change");
+            return;
         }
+        current.percentage = percentage;
+        let _ = self.tx.send_replace(current);
+
         let _ = Command::new("brightnessctl")
             .args(["set", &format!("{}%", percentage)])
             .spawn();
@@ -142,8 +145,9 @@ mod tests {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
         });
 
+        let (watch_tx, _) = tokio::sync::watch::channel(BrightnessInfo::default());
         let service = BrightnessService {
-            info: Arc::new(Mutex::new(BrightnessInfo::default())),
+            tx: watch_tx,
             _task: Some(task),
         };
 

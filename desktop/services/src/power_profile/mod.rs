@@ -1,6 +1,5 @@
 use anyhow::Result;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PowerProfile {
@@ -27,6 +26,8 @@ impl PowerProfile {
     }
 }
 
+use tokio::sync::watch;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PowerProfileInfo {
     pub active_profile: PowerProfile,
@@ -34,27 +35,25 @@ pub struct PowerProfileInfo {
 }
 
 pub struct PowerProfileService {
-    info: Arc<Mutex<PowerProfileInfo>>,
+    tx: watch::Sender<PowerProfileInfo>,
 }
 
 impl PowerProfileService {
     pub fn new() -> Result<Self> {
         let (available, active_profile) = Self::query_system();
-        Ok(Self {
-            info: Arc::new(Mutex::new(PowerProfileInfo {
-                active_profile,
-                available,
-            })),
-        })
+        let (tx, _) = watch::channel(PowerProfileInfo {
+            active_profile,
+            available,
+        });
+        Ok(Self { tx })
     }
 
     pub fn new_offline() -> Self {
-        Self {
-            info: Arc::new(Mutex::new(PowerProfileInfo {
-                active_profile: PowerProfile::Balanced,
-                available: false,
-            })),
-        }
+        let (tx, _) = watch::channel(PowerProfileInfo {
+            active_profile: PowerProfile::Balanced,
+            available: false,
+        });
+        Self { tx }
     }
 
     fn query_system() -> (bool, PowerProfile) {
@@ -68,13 +67,17 @@ impl PowerProfileService {
         }
     }
 
+    pub fn subscribe(&self) -> watch::Receiver<PowerProfileInfo> {
+        self.tx.subscribe()
+    }
+
     pub fn info(&self) -> PowerProfileInfo {
-        self.info.lock().unwrap().clone()
+        self.tx.borrow().clone()
     }
 
     pub fn set_profile(&self, profile: PowerProfile) -> bool {
-        let mut lock = self.info.lock().unwrap();
-        if !lock.available {
+        let mut current = self.tx.borrow().clone();
+        if !current.available {
             return false;
         }
 
@@ -83,7 +86,8 @@ impl PowerProfileService {
             .status()
             .is_ok_and(|s| s.success())
         {
-            lock.active_profile = profile;
+            current.active_profile = profile;
+            let _ = self.tx.send_replace(current);
             true
         } else {
             false

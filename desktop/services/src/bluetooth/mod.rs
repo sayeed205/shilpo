@@ -1,6 +1,5 @@
 use anyhow::Result;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BluetoothInfo {
@@ -8,25 +7,25 @@ pub struct BluetoothInfo {
     pub available: bool,
 }
 
+use tokio::sync::watch;
+
 pub struct BluetoothService {
-    info: Arc<Mutex<BluetoothInfo>>,
+    tx: watch::Sender<BluetoothInfo>,
 }
 
 impl BluetoothService {
     pub fn new() -> Result<Self> {
         let (available, powered) = Self::query_system();
-        Ok(Self {
-            info: Arc::new(Mutex::new(BluetoothInfo { powered, available })),
-        })
+        let (tx, _) = watch::channel(BluetoothInfo { powered, available });
+        Ok(Self { tx })
     }
 
     pub fn new_offline() -> Self {
-        Self {
-            info: Arc::new(Mutex::new(BluetoothInfo {
-                powered: false,
-                available: false,
-            })),
-        }
+        let (tx, _) = watch::channel(BluetoothInfo {
+            powered: false,
+            available: false,
+        });
+        Self { tx }
     }
 
     fn query_system() -> (bool, bool) {
@@ -47,13 +46,17 @@ impl BluetoothService {
         }
     }
 
+    pub fn subscribe(&self) -> watch::Receiver<BluetoothInfo> {
+        self.tx.subscribe()
+    }
+
     pub fn info(&self) -> BluetoothInfo {
-        self.info.lock().unwrap().clone()
+        self.tx.borrow().clone()
     }
 
     pub fn set_powered(&self, powered: bool) -> bool {
-        let mut lock = self.info.lock().unwrap();
-        if !lock.available {
+        let mut current = self.tx.borrow().clone();
+        if !current.available {
             return false;
         }
 
@@ -63,7 +66,8 @@ impl BluetoothService {
             .status()
             .is_ok_and(|s| s.success())
         {
-            lock.powered = powered;
+            current.powered = powered;
+            let _ = self.tx.send_replace(current);
             true
         } else {
             let rf_arg = if powered { "unblock" } else { "block" };
@@ -72,7 +76,8 @@ impl BluetoothService {
                 .status()
                 .is_ok_and(|s| s.success())
             {
-                lock.powered = powered;
+                current.powered = powered;
+                let _ = self.tx.send_replace(current);
                 true
             } else {
                 false
@@ -81,7 +86,7 @@ impl BluetoothService {
     }
 
     pub fn toggle(&self) -> bool {
-        let current = self.info.lock().unwrap().powered;
+        let current = self.tx.borrow().powered;
         self.set_powered(!current)
     }
 }

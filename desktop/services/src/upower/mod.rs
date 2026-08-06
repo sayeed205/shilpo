@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
 use zbus::{Connection, proxy};
 
 #[proxy(
@@ -36,9 +35,11 @@ impl BatteryInfo {
     }
 }
 
+use tokio::sync::watch;
+
 /// UPower battery service for tracking battery percentage and charging state.
 pub struct BatteryService {
-    info: Arc<Mutex<BatteryInfo>>,
+    tx: watch::Sender<BatteryInfo>,
     _task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -52,10 +53,10 @@ impl Drop for BatteryService {
 
 impl BatteryService {
     pub fn new() -> Result<Self> {
-        let info = Arc::new(Mutex::new(BatteryInfo::default()));
+        let (tx, _rx) = watch::channel(BatteryInfo::default());
 
         // Attempt async connection and polling of UPower D-Bus
-        let info_clone = info.clone();
+        let tx_clone = tx.clone();
         let task = tokio::spawn(async move {
             if let Ok(connection) = Connection::system().await
                 && let Ok(proxy) = UPowerDisplayDeviceProxy::new(&connection).await
@@ -66,27 +67,31 @@ impl BatteryService {
                         proxy.state().await,
                         proxy.is_present().await,
                     ) {
-                        (Ok(percentage), Ok(state), Ok(is_present)) => Some(BatteryInfo {
+                        (Ok(percentage), Ok(state), Ok(is_present)) => BatteryInfo {
                             percentage: percentage.clamp(0.0, 100.0) as u8,
                             is_charging: state == 1,
                             is_present,
-                        }),
-                        _ => None,
+                        },
+                        _ => BatteryInfo::default(),
                     };
-                    *info_clone.lock().unwrap() = next_info.unwrap_or_default();
+                    let _ = tx_clone.send_replace(next_info);
                     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                 }
             }
         });
 
         Ok(Self {
-            info,
+            tx,
             _task: Some(task),
         })
     }
 
+    pub fn subscribe(&self) -> watch::Receiver<BatteryInfo> {
+        self.tx.subscribe()
+    }
+
     pub fn battery_info(&self) -> BatteryInfo {
-        self.info.lock().unwrap().clone()
+        self.tx.borrow().clone()
     }
 }
 

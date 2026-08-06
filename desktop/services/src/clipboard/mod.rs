@@ -58,9 +58,12 @@ impl ClipboardStore for HeedClipboardStore {
     }
 }
 
+use tokio::sync::watch;
+
 /// Desktop Clipboard Service supporting persistent history via LMDB and arboard.
 pub struct ClipboardService {
     history: Arc<Mutex<Vec<ClipboardItem>>>,
+    tx: watch::Sender<Vec<ClipboardItem>>,
     store: Option<Arc<dyn ClipboardStore>>,
     last_error: Arc<Mutex<Option<String>>>,
 }
@@ -88,10 +91,12 @@ impl ClipboardService {
             }
         }
 
+        let (tx, _) = watch::channel(initial_history.clone());
         let history = Arc::new(Mutex::new(initial_history));
 
         let service = Self {
             history: history.clone(),
+            tx,
             store,
             last_error,
         };
@@ -100,12 +105,17 @@ impl ClipboardService {
         service
     }
 
+    pub fn subscribe(&self) -> watch::Receiver<Vec<ClipboardItem>> {
+        self.tx.subscribe()
+    }
+
     pub fn last_error(&self) -> Option<String> {
         self.last_error.lock().unwrap().clone()
     }
 
     fn start_monitoring(&self) {
         let history = self.history.clone();
+        let tx = self.tx.clone();
         let store = self.store.clone();
         let last_error = self.last_error.clone();
 
@@ -137,6 +147,7 @@ impl ClipboardService {
                             if lock.len() > DEFAULT_CLIPBOARD_HISTORY_LIMIT {
                                 lock.pop();
                             }
+                            let _ = tx.send_replace(lock.clone());
 
                             if let Some(ref store) = store
                                 && let Err(err) =
@@ -174,6 +185,7 @@ impl ClipboardService {
         }
         let mut lock = self.history.lock().unwrap();
         lock.clear();
+        let _ = self.tx.send_replace(Vec::new());
         Ok(())
     }
 }

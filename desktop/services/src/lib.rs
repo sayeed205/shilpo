@@ -96,4 +96,49 @@ mod tests {
         let caps = platform_capabilities();
         assert!(caps.contains(&"compositor"));
     }
+
+    #[test]
+    fn test_all_services_watch_subscribe_pattern() {
+        let bluetooth = BluetoothService::new_offline();
+        assert_eq!(bluetooth.subscribe().borrow().clone(), BluetoothInfo::default());
+
+        let caffeine = CaffeineService::new();
+        assert_eq!(caffeine.subscribe().borrow().clone(), CaffeineInfo::default());
+
+        let location = LocationService::new();
+        assert_eq!(location.subscribe().borrow().clone(), None);
+
+        let media = MediaService::new_offline();
+        assert_eq!(media.subscribe().borrow().clone(), MediaInfo::default());
+
+        let network = NetworkService::new_offline();
+        assert_eq!(network.subscribe().borrow().clone(), NetworkInfo::default());
+
+        let night_light = NightLightService::new_offline();
+        assert_eq!(night_light.subscribe().borrow().clone(), NightLightInfo::default());
+
+        let power_profile = PowerProfileService::new_offline();
+        assert_eq!(
+            power_profile.subscribe().borrow().clone(),
+            PowerProfileInfo {
+                active_profile: PowerProfile::Balanced,
+                available: false,
+            }
+        );
+
+        let screen_capture = ScreenCaptureService::new_offline();
+        assert_eq!(
+            screen_capture.subscribe().borrow().clone(),
+            ScreenCaptureInfo::default()
+        );
+
+        let tray = TrayService::new_offline();
+        assert!(tray.subscribe().borrow().is_empty());
+
+        let notif = NotificationService::new_offline();
+        assert!(notif.subscribe().borrow().is_empty());
+
+        let clipboard = ClipboardService::with_custom_store(None);
+        assert!(clipboard.subscribe().borrow().is_empty());
+    }
 }

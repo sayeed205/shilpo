@@ -50,31 +50,34 @@ impl Default for NightLightInfo {
     }
 }
 
+use tokio::sync::watch;
+
 /// Service managing Wayland night light color temperature via sunsetr / wlsunset / gammastep.
 pub struct NightLightService {
-    info: Arc<Mutex<NightLightInfo>>,
+    tx: watch::Sender<NightLightInfo>,
     _child_process: Arc<Mutex<Option<std::process::Child>>>,
 }
 
 impl NightLightService {
     pub fn new() -> Result<Self> {
         let (available, backend_name) = Self::detect_backend();
-        let info = Arc::new(Mutex::new(NightLightInfo {
+        let (tx, _) = watch::channel(NightLightInfo {
             is_active: false,
             temperature_kelvin: 6500,
             available,
             backend_name,
-        }));
+        });
 
         Ok(Self {
-            info,
+            tx,
             _child_process: Arc::new(Mutex::new(None)),
         })
     }
 
     pub fn new_offline() -> Self {
+        let (tx, _) = watch::channel(NightLightInfo::default());
         Self {
-            info: Arc::new(Mutex::new(NightLightInfo::default())),
+            tx,
             _child_process: Arc::new(Mutex::new(None)),
         }
     }
@@ -91,20 +94,24 @@ impl NightLightService {
         }
     }
 
+    pub fn subscribe(&self) -> watch::Receiver<NightLightInfo> {
+        self.tx.subscribe()
+    }
+
     pub fn info(&self) -> NightLightInfo {
-        self.info.lock().unwrap().clone()
+        self.tx.borrow().clone()
     }
 
     pub fn set_active(&self, active: bool) -> bool {
-        let mut info_lock = self.info.lock().unwrap();
+        let mut info_state = self.tx.borrow().clone();
         let mut process_lock = self._child_process.lock().unwrap();
 
-        if !info_lock.available {
+        if !info_state.available {
             return false;
         }
 
         if active {
-            match info_lock.backend_name.as_str() {
+            match info_state.backend_name.as_str() {
                 "sunsetr" => {
                     let _ = Command::new("sunsetr").args(["set", "3500"]).spawn();
                 }
@@ -124,10 +131,10 @@ impl NightLightService {
                 }
                 _ => {}
             }
-            info_lock.is_active = true;
-            info_lock.temperature_kelvin = 3500;
+            info_state.is_active = true;
+            info_state.temperature_kelvin = 3500;
         } else {
-            match info_lock.backend_name.as_str() {
+            match info_state.backend_name.as_str() {
                 "sunsetr" => {
                     let _ = Command::new("sunsetr").args(["set", "6500"]).spawn();
                 }
@@ -141,14 +148,15 @@ impl NightLightService {
                 }
                 _ => {}
             }
-            info_lock.is_active = false;
-            info_lock.temperature_kelvin = 6500;
+            info_state.is_active = false;
+            info_state.temperature_kelvin = 6500;
         }
+        let _ = self.tx.send_replace(info_state);
         true
     }
 
     pub fn toggle(&self) -> bool {
-        let active = self.info.lock().unwrap().is_active;
+        let active = self.tx.borrow().is_active;
         self.set_active(!active)
     }
 }
