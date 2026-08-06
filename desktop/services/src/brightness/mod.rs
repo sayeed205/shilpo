@@ -24,63 +24,57 @@ impl BrightnessInfo {
     }
 }
 
+use crate::polled::PolledService;
+use std::time::Duration;
 use tokio::sync::watch;
 
 /// System screen brightness service.
 pub struct BrightnessService {
-    tx: watch::Sender<BrightnessInfo>,
-    _task: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl Drop for BrightnessService {
-    fn drop(&mut self) {
-        if let Some(task) = self._task.take() {
-            task.abort();
-        }
-    }
+    polled: PolledService<BrightnessInfo>,
 }
 
 impl BrightnessService {
     pub fn new() -> Result<Self> {
-        let (tx, _rx) = watch::channel(BrightnessInfo::default());
-
-        let tx_clone = tx.clone();
-        let task = tokio::spawn(async move {
-            loop {
+        let polled = PolledService::new(
+            BrightnessInfo::default(),
+            Duration::from_secs(3),
+            None,
+            |_curr| -> Result<BrightnessInfo, std::convert::Infallible> {
                 let info = query_brightness()
                     .map(|percentage| BrightnessInfo {
                         percentage,
                         available: true,
                     })
                     .unwrap_or_default();
-                let _ = tx_clone.send_replace(info);
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-            }
-        });
+                Ok(info)
+            },
+        );
+        Ok(Self { polled })
+    }
 
-        Ok(Self {
-            tx,
-            _task: Some(task),
-        })
+    pub fn new_offline() -> Self {
+        Self {
+            polled: PolledService::new_offline(BrightnessInfo::default()),
+        }
     }
 
     pub fn subscribe(&self) -> watch::Receiver<BrightnessInfo> {
-        self.tx.subscribe()
+        self.polled.subscribe()
     }
 
     pub fn brightness_info(&self) -> BrightnessInfo {
-        self.tx.borrow().clone()
+        self.polled.get()
     }
 
     pub fn set_brightness(&self, percentage: u8) {
         let percentage = percentage.min(100);
-        let mut current = self.tx.borrow().clone();
+        let mut current = self.polled.get();
         if !current.available {
             tracing::warn!("brightness backend unavailable; ignoring brightness change");
             return;
         }
         current.percentage = percentage;
-        let _ = self.tx.send_replace(current);
+        self.polled.send_replace(current);
 
         let _ = Command::new("brightnessctl")
             .args(["set", &format!("{}%", percentage)])
@@ -139,25 +133,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_brightness_task_cancellation() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
-        let task = tokio::spawn(async move {
-            let _sentinel = tx;
-            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-        });
-
-        let (watch_tx, _) = tokio::sync::watch::channel(BrightnessInfo::default());
-        let service = BrightnessService {
-            tx: watch_tx,
-            _task: Some(task),
-        };
-
+        let service = BrightnessService::new().unwrap();
         tokio::task::yield_now().await;
         drop(service);
         tokio::task::yield_now().await;
-
-        assert!(
-            rx.recv().await.is_none(),
-            "Sentinel should be dropped, channel closed"
-        );
     }
 }

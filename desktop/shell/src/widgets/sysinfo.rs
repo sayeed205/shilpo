@@ -1,8 +1,8 @@
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt};
 use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
     Styled, Window, div, px,
 };
+use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt};
 
 pub fn get_cat_icon(frame: usize) -> IconName {
     match frame % 5 {

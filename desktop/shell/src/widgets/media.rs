@@ -1,10 +1,10 @@
-use shilpo_ui::progress::ProgressCircle;
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
 use gpui::{
     AnimationExt as _, App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, ObjectFit,
     ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
     StyleRefinement, Styled, StyledImage as _, Window, div, img, prelude::FluentBuilder as _, px,
 };
+use shilpo_ui::progress::ProgressCircle;
+use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
 use std::{io::Read, path::PathBuf, time::Duration};
 
 const MAX_ARTWORK_BYTES: usize = 4 * 1024 * 1024;
@@ -338,7 +338,9 @@ impl RenderOnce for MediaControl {
                 )
             });
 
-        if self.can_play_pause && let Some(on_play_pause) = self.on_play_pause {
+        if self.can_play_pause
+            && let Some(on_play_pause) = self.on_play_pause
+        {
             artwork_element = artwork_element.on_click(on_play_pause);
         }
 
@@ -423,7 +425,9 @@ impl RenderOnce for MediaControl {
                     .text_color(next_fg),
             );
 
-        if self.can_go_next && let Some(on_next) = self.on_next {
+        if self.can_go_next
+            && let Some(on_next) = self.on_next
+        {
             next_btn = next_btn.on_click(on_next);
         }
 

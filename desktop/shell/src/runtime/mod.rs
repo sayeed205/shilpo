@@ -6,18 +6,10 @@ pub mod surface_manager;
 
 pub use service_hub::ServiceHub;
 
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use gpui::{
-    App, AppContext, DisplayId, Entity, Global, Subscription, WindowHandle,
-};
-use shilpo_services::{
-    BarState, CompositorConnection, CompositorSnapshot, ShellIpcServer,
-};
+use gpui::{App, AppContext, DisplayId, Entity, Global, Subscription, WindowHandle};
+use shilpo_services::{BarState, CompositorConnection, CompositorSnapshot, ShellIpcServer};
 
 use crate::{
     actions::{ActionId, ActionRegistry},
@@ -56,7 +48,8 @@ pub struct ShellRuntime {
     )>,
     pub(super) _osd_generation: u64,
     pub(super) extensions: Option<ExtensionCoordinator>,
-    pub(super) extension_surfaces: HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
+    pub(super) extension_surfaces:
+        HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
     pub(super) extension_panel: Option<(WindowHandle<shilpo_ui::Root>, shilpo_ext::CanonicalId)>,
     pub(super) extension_output_ids: std::collections::HashSet<DisplayId>,
     pub(super) extension_tasks: std::collections::HashMap<
@@ -303,7 +296,8 @@ impl ShellRuntime {
             _window_closed: None,
             _ipc_task: gpui::Task::ready(()),
         });
-        let wallpaper_probe = cx.background_spawn(async { surface_manager::query_awww_wallpaper_path() });
+        let wallpaper_probe =
+            cx.background_spawn(async { surface_manager::query_awww_wallpaper_path() });
         let theme_wallpaper_path = initial_wallpaper_path;
         shilpo_theme_daemon::ThemeClient::spawn_task(async move {
             let client = shilpo_theme_daemon::ThemeClient::new().await;

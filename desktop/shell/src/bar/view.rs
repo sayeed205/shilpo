@@ -250,7 +250,6 @@ impl BarView {
     }
 }
 
-
 impl BarView {
     fn build_section(
         &self,

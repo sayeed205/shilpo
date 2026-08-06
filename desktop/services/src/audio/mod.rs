@@ -37,29 +37,22 @@ pub struct AudioPort {
     pub is_active: bool,
 }
 
+use crate::polled::PolledService;
+use std::time::Duration;
 use tokio::sync::watch;
 
 /// System audio service for volume, mute status, and device switching.
 pub struct AudioService {
-    tx: watch::Sender<AudioInfo>,
-    _task: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl Drop for AudioService {
-    fn drop(&mut self) {
-        if let Some(task) = self._task.take() {
-            task.abort();
-        }
-    }
+    polled: PolledService<AudioInfo>,
 }
 
 impl AudioService {
     pub fn new() -> Result<Self> {
-        let (tx, _rx) = watch::channel(AudioInfo::default());
-
-        let tx_clone = tx.clone();
-        let task = tokio::spawn(async move {
-            loop {
+        let polled = PolledService::new(
+            AudioInfo::default(),
+            Duration::from_secs(3),
+            None,
+            |_curr| -> Result<AudioInfo, std::convert::Infallible> {
                 let info = match (query_volume(), query_mute()) {
                     (Some(volume), Some(is_muted)) => AudioInfo {
                         volume,
@@ -69,23 +62,24 @@ impl AudioService {
                     },
                     _ => AudioInfo::default(),
                 };
-                let _ = tx_clone.send_replace(info);
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-            }
-        });
+                Ok(info)
+            },
+        );
+        Ok(Self { polled })
+    }
 
-        Ok(Self {
-            tx,
-            _task: Some(task),
-        })
+    pub fn new_offline() -> Self {
+        Self {
+            polled: PolledService::new_offline(AudioInfo::default()),
+        }
     }
 
     pub fn subscribe(&self) -> watch::Receiver<AudioInfo> {
-        self.tx.subscribe()
+        self.polled.subscribe()
     }
 
     pub fn audio_info(&self) -> AudioInfo {
-        self.tx.borrow().clone()
+        self.polled.get()
     }
 
     pub fn list_devices(&self) -> Vec<AudioDevice> {

@@ -1,8 +1,8 @@
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt};
 use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
     Styled, Window, div, px,
 };
+use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt};
 
 pub fn get_bluetooth_icon(powered: bool, connected: bool) -> IconName {
     if !powered {
