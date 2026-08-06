@@ -37,9 +37,12 @@ impl TrayItem {
     }
 }
 
+use tokio::sync::watch;
+
 /// System Tray Daemon implementing org.kde.StatusNotifierWatcher.
 pub struct TrayService {
     items: Arc<Mutex<Vec<String>>>,
+    tx: watch::Sender<Vec<TrayItem>>,
     _connection: Option<Connection>,
 }
 
@@ -61,20 +64,24 @@ impl TrayService {
     }
 
     pub fn new_offline() -> Self {
+        let (tx, _) = watch::channel(Vec::new());
         Self {
             items: Arc::new(Mutex::new(Vec::new())),
+            tx,
             _connection: None,
         }
     }
 
     pub async fn new_with_connection(connection: Connection) -> Result<Self> {
         let items = Arc::new(Mutex::new(Vec::new()));
+        let (tx, _) = watch::channel(Vec::new());
         let service = Self {
             items: items.clone(),
+            tx: tx.clone(),
             _connection: Some(connection.clone()),
         };
 
-        let server = StatusNotifierWatcherServer { items };
+        let server = StatusNotifierWatcherServer { items, tx };
 
         connection
             .object_server()
@@ -86,6 +93,10 @@ impl TrayService {
             .await?;
 
         Ok(service)
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<Vec<TrayItem>> {
+        self.tx.subscribe()
     }
 
     pub fn is_dbus_connected(&self) -> bool {
@@ -100,6 +111,7 @@ impl TrayService {
 
 struct StatusNotifierWatcherServer {
     items: Arc<Mutex<Vec<String>>>,
+    tx: watch::Sender<Vec<TrayItem>>,
 }
 
 #[interface(name = "org.kde.StatusNotifierWatcher")]
@@ -108,6 +120,8 @@ impl StatusNotifierWatcherServer {
         let mut lock = self.items.lock().unwrap();
         if !lock.contains(&service) {
             lock.push(service);
+            let tray_items = lock.iter().map(|s| TrayItem::new(s, s)).collect();
+            let _ = self.tx.send_replace(tray_items);
         }
     }
 
@@ -145,6 +159,7 @@ mod tests {
         let service = TrayService::new_offline();
         let server = StatusNotifierWatcherServer {
             items: service.items.clone(),
+            tx: service.tx.clone(),
         };
 
         server.register_status_notifier_item("org.kde.StatusNotifierItem-1234-1".to_string());

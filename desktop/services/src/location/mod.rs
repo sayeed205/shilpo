@@ -60,10 +60,13 @@ impl LocationInfo {
     }
 }
 
+use tokio::sync::watch;
+
 /// System Location service for querying desktop GeoClue / D-Bus coordinates.
 #[derive(Clone)]
 pub struct LocationService {
     cached: Arc<Mutex<Option<LocationInfo>>>,
+    tx: watch::Sender<Option<LocationInfo>>,
 }
 
 impl Default for LocationService {
@@ -74,9 +77,15 @@ impl Default for LocationService {
 
 impl LocationService {
     pub fn new() -> Self {
+        let (tx, _) = watch::channel(None);
         Self {
             cached: Arc::new(Mutex::new(None)),
+            tx,
         }
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<Option<LocationInfo>> {
+        self.tx.subscribe()
     }
 
     /// Reads location coordinates from cache, environment, or GeoClue D-Bus service.
@@ -97,7 +106,7 @@ impl LocationService {
                 longitude: lon,
                 accuracy_meters: 1000.0,
             };
-            *self.cached.lock().unwrap() = Some(info.clone());
+            self.set_cached_location(info.clone());
             return Ok(info);
         }
 
@@ -105,7 +114,7 @@ impl LocationService {
         #[cfg(target_os = "linux")]
         {
             if let Ok(info) = self.fetch_geoclue_sync() {
-                *self.cached.lock().unwrap() = Some(info.clone());
+                self.set_cached_location(info.clone());
                 return Ok(info);
             }
         }
@@ -172,7 +181,8 @@ impl LocationService {
     }
 
     pub fn set_cached_location(&self, location: LocationInfo) {
-        *self.cached.lock().unwrap() = Some(location);
+        *self.cached.lock().unwrap() = Some(location.clone());
+        let _ = self.tx.send_replace(Some(location));
     }
 
     pub fn cached_location(&self) -> Option<LocationInfo> {

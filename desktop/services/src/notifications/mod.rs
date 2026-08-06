@@ -107,12 +107,15 @@ impl Notification {
     }
 }
 
+use tokio::sync::watch;
+
 /// Dynamic Notification Daemon Service implementing org.freedesktop.Notifications.
 pub struct NotificationService {
     notifications: Arc<Mutex<Vec<Notification>>>,
     history: Arc<Mutex<Vec<Notification>>>,
     new_notif_sender: Arc<Mutex<Option<std::sync::mpsc::Sender<Notification>>>>,
     dnd_enabled: Arc<Mutex<bool>>,
+    tx: watch::Sender<Vec<Notification>>,
     _connection: Option<Connection>,
     signal_sink: Option<Arc<dyn NotificationSignalSink>>,
 }
@@ -139,11 +142,13 @@ impl NotificationService {
 
     /// Creates an offline NotificationService without a D-Bus connection (useful for testing or fallback).
     pub fn new_offline() -> Self {
+        let (tx, _) = watch::channel(Vec::new());
         Self {
             notifications: Arc::new(Mutex::new(Vec::new())),
             history: Arc::new(Mutex::new(Vec::new())),
             new_notif_sender: Arc::new(Mutex::new(None)),
             dnd_enabled: Arc::new(Mutex::new(false)),
+            tx,
             _connection: None,
             signal_sink: None,
         }
@@ -156,6 +161,7 @@ impl NotificationService {
         let next_id = Arc::new(Mutex::new(0));
         let new_notif_sender = Arc::new(Mutex::new(None));
         let dnd_enabled = Arc::new(Mutex::new(false));
+        let (tx, _) = watch::channel(Vec::new());
 
         let server = NotificationServer {
             notifications: notifications.clone(),
@@ -163,6 +169,7 @@ impl NotificationService {
             next_id,
             new_notif_sender: new_notif_sender.clone(),
             dnd_enabled: dnd_enabled.clone(),
+            tx: tx.clone(),
         };
 
         connection
@@ -182,11 +189,16 @@ impl NotificationService {
             history,
             new_notif_sender,
             dnd_enabled,
+            tx,
             _connection: Some(connection),
             signal_sink: Some(Arc::new(DbusNotificationSignalSink {
                 emitter: signal_emitter,
             })),
         })
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<Vec<Notification>> {
+        self.tx.subscribe()
     }
 
     /// Returns true if this service is connected to a live D-Bus session.
@@ -366,6 +378,7 @@ struct NotificationServer {
     next_id: Arc<Mutex<u32>>,
     new_notif_sender: Arc<Mutex<Option<std::sync::mpsc::Sender<Notification>>>>,
     dnd_enabled: Arc<Mutex<bool>>,
+    tx: watch::Sender<Vec<Notification>>,
 }
 
 #[interface(name = "org.freedesktop.Notifications")]
@@ -473,6 +486,7 @@ impl NotificationServer {
             } else {
                 list.push(notification.clone());
             }
+            let _ = self.tx.send_replace(list.clone());
         }
 
         {
@@ -596,6 +610,7 @@ mod tests {
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
+            tx: service.tx.clone(),
         };
 
         let id = server.notify(
@@ -627,12 +642,14 @@ mod tests {
 
     #[test]
     fn test_notification_urgency_and_action_parsing() {
+        let (watch_tx, _) = watch::channel(Vec::new());
         let server = NotificationServer {
             notifications: Arc::new(Mutex::new(Vec::new())),
             history: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: Arc::new(Mutex::new(None)),
             dnd_enabled: Arc::new(Mutex::new(false)),
+            tx: watch_tx,
         };
 
         let mut hints = HashMap::new();
@@ -668,6 +685,7 @@ mod tests {
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
+            tx: service.tx.clone(),
         };
 
         server.notify(
@@ -705,6 +723,7 @@ mod tests {
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
+            tx: service.tx.clone(),
         };
 
         let id1 = server.notify(
@@ -748,6 +767,7 @@ mod tests {
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
+            tx: service.tx.clone(),
         };
 
         server.notify(
@@ -788,6 +808,7 @@ mod tests {
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
+            tx: service.tx.clone(),
         };
 
         let id = server.notify(
@@ -818,6 +839,7 @@ mod tests {
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
+            tx: service.tx.clone(),
         };
 
         server.notify(
@@ -862,6 +884,7 @@ mod tests {
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
+            tx: service.tx.clone(),
         };
 
         // Low urgency - suppressed from rx toast channel
@@ -957,12 +980,14 @@ mod tests {
             ]
         );
 
+        let (watch_tx, _) = watch::channel(Vec::new());
         let server = NotificationServer {
             notifications: Arc::new(Mutex::new(Vec::new())),
             history: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: Arc::new(Mutex::new(None)),
             dnd_enabled: Arc::new(Mutex::new(false)),
+            tx: watch_tx,
         };
         assert_eq!(
             server.get_capabilities(),
@@ -1066,6 +1091,7 @@ mod tests {
             next_id: Arc::new(Mutex::new(0)),
             new_notif_sender: service.new_notif_sender.clone(),
             dnd_enabled: service.dnd_enabled.clone(),
+            tx: service.tx.clone(),
         };
         assert!(service.history().is_empty());
 

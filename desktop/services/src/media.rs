@@ -2,10 +2,7 @@ use anyhow::Result;
 #[cfg(target_os = "linux")]
 use futures_lite::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::collections::HashMap;
 
 #[cfg(target_os = "linux")]
 use zbus::proxy;
@@ -219,9 +216,11 @@ pub fn select_best_player(candidates: Vec<MediaInfo>) -> MediaInfo {
         .unwrap_or_default()
 }
 
+use tokio::sync::watch;
+
 /// MPRIS session D-Bus service for controlling and observing media playback.
 pub struct MediaService {
-    info: Arc<Mutex<MediaInfo>>,
+    tx: watch::Sender<MediaInfo>,
     command_tx: Option<tokio::sync::mpsc::UnboundedSender<MediaCommand>>,
     _task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -235,20 +234,29 @@ impl Drop for MediaService {
 }
 
 impl MediaService {
+    pub fn new_offline() -> Self {
+        let (tx, _) = watch::channel(MediaInfo::default());
+        Self {
+            tx,
+            command_tx: None,
+            _task: None,
+        }
+    }
+
     pub fn new() -> Result<Self> {
-        let info = Arc::new(Mutex::new(MediaInfo::default()));
+        let (tx, _) = watch::channel(MediaInfo::default());
 
         #[cfg(target_os = "linux")]
         {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<MediaCommand>();
-            let info_clone = info.clone();
+            let (cmd_tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<MediaCommand>();
+            let tx_clone = tx.clone();
 
             let task = tokio::spawn(async move {
                 loop {
                     let connection = match zbus::Connection::session().await {
                         Ok(conn) => conn,
                         Err(_) => {
-                            *info_clone.lock().unwrap() = MediaInfo::default();
+                            let _ = tx_clone.send_replace(MediaInfo::default());
                             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                             continue;
                         }
@@ -257,7 +265,7 @@ impl MediaService {
                     let daemon_proxy = match DBusDaemonProxy::new(&connection).await {
                         Ok(proxy) => proxy,
                         Err(_) => {
-                            *info_clone.lock().unwrap() = MediaInfo::default();
+                            let _ = tx_clone.send_replace(MediaInfo::default());
                             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                             continue;
                         }
@@ -350,7 +358,7 @@ impl MediaService {
                             }
                         }
 
-                        let previous = info_clone.lock().unwrap().clone();
+                        let previous = tx_clone.borrow().clone();
                         let mut best = select_best_player(candidates);
                         if best.is_empty()
                             && player_names.iter().any(|name| name == &previous.player_id)
@@ -363,7 +371,7 @@ impl MediaService {
                             Some(best.player_id.clone())
                         };
 
-                        *info_clone.lock().unwrap() = best;
+                        let _ = tx_clone.send_replace(best);
 
                         let refresh = tokio::time::sleep(tokio::time::Duration::from_millis(500));
                         tokio::pin!(refresh);
@@ -393,15 +401,15 @@ impl MediaService {
                     }
 
                     if connection_lost {
-                        *info_clone.lock().unwrap() = MediaInfo::default();
+                        let _ = tx_clone.send_replace(MediaInfo::default());
                         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                     }
                 }
             });
 
             Ok(Self {
-                info,
-                command_tx: Some(tx),
+                tx,
+                command_tx: Some(cmd_tx),
                 _task: Some(task),
             })
         }
@@ -409,15 +417,19 @@ impl MediaService {
         #[cfg(not(target_os = "linux"))]
         {
             Ok(Self {
-                info,
+                tx,
                 command_tx: None,
                 _task: None,
             })
         }
     }
 
+    pub fn subscribe(&self) -> watch::Receiver<MediaInfo> {
+        self.tx.subscribe()
+    }
+
     pub fn media_info(&self) -> MediaInfo {
-        self.info.lock().unwrap().clone()
+        self.tx.borrow().clone()
     }
 
     pub fn send_command(&self, command: MediaCommand) {

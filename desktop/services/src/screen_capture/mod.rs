@@ -15,35 +15,39 @@ pub enum RecordMode {
     Region,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScreenCaptureInfo {
     pub is_recording: bool,
     pub available: bool,
 }
 
+use tokio::sync::watch;
+
 pub struct ScreenCaptureService {
-    info: Arc<Mutex<ScreenCaptureInfo>>,
+    tx: watch::Sender<ScreenCaptureInfo>,
     recording_process: Arc<Mutex<Option<std::process::Child>>>,
 }
 
 impl ScreenCaptureService {
     pub fn new() -> Result<Self> {
         let available = Self::detect_backend();
+        let (tx, _) = watch::channel(ScreenCaptureInfo {
+            is_recording: false,
+            available,
+        });
         Ok(Self {
-            info: Arc::new(Mutex::new(ScreenCaptureInfo {
-                is_recording: false,
-                available,
-            })),
+            tx,
             recording_process: Arc::new(Mutex::new(None)),
         })
     }
 
     pub fn new_offline() -> Self {
+        let (tx, _) = watch::channel(ScreenCaptureInfo {
+            is_recording: false,
+            available: false,
+        });
         Self {
-            info: Arc::new(Mutex::new(ScreenCaptureInfo {
-                is_recording: false,
-                available: false,
-            })),
+            tx,
             recording_process: Arc::new(Mutex::new(None)),
         }
     }
@@ -53,13 +57,17 @@ impl ScreenCaptureService {
             || Command::new("wf-recorder").arg("-h").output().is_ok()
     }
 
+    pub fn subscribe(&self) -> watch::Receiver<ScreenCaptureInfo> {
+        self.tx.subscribe()
+    }
+
     pub fn info(&self) -> ScreenCaptureInfo {
-        self.info.lock().unwrap().clone()
+        self.tx.borrow().clone()
     }
 
     pub fn take_screenshot(&self, mode: ScreenshotMode, output_path: Option<PathBuf>) -> bool {
-        let info_lock = self.info.lock().unwrap();
-        if !info_lock.available {
+        let info_state = self.tx.borrow();
+        if !info_state.available {
             return false;
         }
 
@@ -87,18 +95,18 @@ impl ScreenCaptureService {
     }
 
     pub fn toggle_recording(&self, audio: bool, mode: RecordMode) -> bool {
-        let mut info_lock = self.info.lock().unwrap();
+        let mut info_state = self.tx.borrow().clone();
         let mut proc_lock = self.recording_process.lock().unwrap();
 
-        if !info_lock.available {
+        if !info_state.available {
             return false;
         }
 
-        if info_lock.is_recording {
+        if info_state.is_recording {
             if let Some(mut child) = proc_lock.take() {
                 let _ = child.kill();
             }
-            info_lock.is_recording = false;
+            info_state.is_recording = false;
         } else {
             let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
             let default_path = std::env::var("HOME")
@@ -121,10 +129,12 @@ impl ScreenCaptureService {
 
             if let Ok(child) = Command::new("sh").args(["-c", &cmd]).spawn() {
                 *proc_lock = Some(child);
-                info_lock.is_recording = true;
+                info_state.is_recording = true;
             }
         }
-        info_lock.is_recording
+        let is_rec = info_state.is_recording;
+        let _ = self.tx.send_replace(info_state);
+        is_rec
     }
 }
 

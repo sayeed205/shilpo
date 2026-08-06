@@ -1,8 +1,5 @@
 use anyhow::Result;
-use std::{
-    process::Command,
-    sync::{Arc, Mutex},
-};
+use std::process::Command;
 
 /// Metadata describing an individual application audio playback stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,9 +37,11 @@ pub struct AudioPort {
     pub is_active: bool,
 }
 
+use tokio::sync::watch;
+
 /// System audio service for volume, mute status, and device switching.
 pub struct AudioService {
-    info: Arc<Mutex<AudioInfo>>,
+    tx: watch::Sender<AudioInfo>,
     _task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -56,9 +55,9 @@ impl Drop for AudioService {
 
 impl AudioService {
     pub fn new() -> Result<Self> {
-        let info = Arc::new(Mutex::new(AudioInfo::default()));
+        let (tx, _rx) = watch::channel(AudioInfo::default());
 
-        let info_clone = info.clone();
+        let tx_clone = tx.clone();
         let task = tokio::spawn(async move {
             loop {
                 let info = match (query_volume(), query_mute()) {
@@ -70,19 +69,23 @@ impl AudioService {
                     },
                     _ => AudioInfo::default(),
                 };
-                *info_clone.lock().unwrap() = info;
+                let _ = tx_clone.send_replace(info);
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
             }
         });
 
         Ok(Self {
-            info,
+            tx,
             _task: Some(task),
         })
     }
 
+    pub fn subscribe(&self) -> watch::Receiver<AudioInfo> {
+        self.tx.subscribe()
+    }
+
     pub fn audio_info(&self) -> AudioInfo {
-        self.info.lock().unwrap().clone()
+        self.tx.borrow().clone()
     }
 
     pub fn list_devices(&self) -> Vec<AudioDevice> {

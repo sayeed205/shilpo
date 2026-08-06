@@ -1,13 +1,15 @@
 use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
 
+use tokio::sync::watch;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CaffeineInfo {
     pub active: bool,
 }
 
 pub struct CaffeineService {
-    info: Arc<Mutex<CaffeineInfo>>,
+    tx: watch::Sender<CaffeineInfo>,
     process: Arc<Mutex<Option<Child>>>,
 }
 
@@ -19,8 +21,9 @@ impl Default for CaffeineService {
 
 impl CaffeineService {
     pub fn new() -> Self {
+        let (tx, _) = watch::channel(CaffeineInfo { active: false });
         let service = Self {
-            info: Arc::new(Mutex::new(CaffeineInfo { active: false })),
+            tx,
             process: Arc::new(Mutex::new(None)),
         };
 
@@ -34,23 +37,27 @@ impl CaffeineService {
         service
     }
 
+    pub fn subscribe(&self) -> watch::Receiver<CaffeineInfo> {
+        self.tx.subscribe()
+    }
+
     pub fn is_active(&self) -> bool {
-        self.info.lock().unwrap().active
+        self.tx.borrow().active
     }
 
     pub fn info(&self) -> CaffeineInfo {
-        self.info.lock().unwrap().clone()
+        self.tx.borrow().clone()
     }
 
     pub fn set_active(&self, active: bool) -> bool {
-        let mut info_lock = self.info.lock().unwrap();
+        let current_active = self.tx.borrow().active;
         let mut proc_lock = self.process.lock().unwrap();
 
-        if active == info_lock.active {
-            return info_lock.active;
+        if active == current_active {
+            return current_active;
         }
 
-        if active {
+        let new_active = if active {
             if let Ok(child) = Command::new("systemd-inhibit")
                 .args([
                     "--what=idle:sleep:handle-lid-switch",
@@ -62,26 +69,28 @@ impl CaffeineService {
                 .spawn()
             {
                 *proc_lock = Some(child);
-                info_lock.active = true;
+                true
             } else {
                 tracing::warn!("systemd-inhibit unavailable, caffeine active state fallback");
-                info_lock.active = true;
+                true
             }
         } else {
             if let Some(mut child) = proc_lock.take() {
                 let _ = child.kill();
                 let _ = child.wait();
             }
-            info_lock.active = false;
-        }
+            false
+        };
+
+        let _ = self.tx.send_replace(CaffeineInfo { active: new_active });
 
         let state_path = shilpo_config::caffeine_state_path();
         if let Some(parent) = state_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(&state_path, if info_lock.active { "true" } else { "false" });
+        let _ = std::fs::write(&state_path, if new_active { "true" } else { "false" });
 
-        info_lock.active
+        new_active
     }
 
     pub fn toggle(&self) -> bool {

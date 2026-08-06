@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
 use zbus::Connection;
 
 /// Active VPN connection status.
@@ -33,9 +32,11 @@ enum NetworkCommand {
     SetAirplaneModeEnabled(bool),
 }
 
+use tokio::sync::watch;
+
 /// NetworkManager service for network status tracking and zbus control.
 pub struct NetworkService {
-    info: Arc<Mutex<NetworkInfo>>,
+    tx: watch::Sender<NetworkInfo>,
     _task: Option<tokio::task::JoinHandle<()>>,
     command_tx: Option<mpsc::Sender<NetworkCommand>>,
 }
@@ -50,18 +51,19 @@ impl Drop for NetworkService {
 
 impl NetworkService {
     pub fn new_offline() -> Self {
+        let (tx, _) = watch::channel(NetworkInfo::default());
         Self {
-            info: Arc::new(Mutex::new(NetworkInfo::default())),
+            tx,
             _task: None,
             command_tx: None,
         }
     }
 
     pub fn new() -> Result<Self> {
-        let info = Arc::new(Mutex::new(NetworkInfo::default()));
+        let (tx, _) = watch::channel(NetworkInfo::default());
         let (command_tx, mut command_rx) = mpsc::channel::<NetworkCommand>(32);
 
-        let info_clone = info.clone();
+        let tx_clone = tx.clone();
         let task = tokio::spawn(async move {
             let connection_opt = Connection::system().await.ok();
 
@@ -185,9 +187,7 @@ impl NetworkService {
                                 wifi_enabled = enabled;
                             }
 
-                            let airplane_mode = {
-                                info_clone.lock().unwrap().airplane_mode
-                            };
+                            let airplane_mode = tx_clone.borrow().airplane_mode;
 
                             let info = NetworkInfo {
                                 is_connected,
@@ -197,7 +197,7 @@ impl NetworkService {
                                 active_vpns,
                                 available: true,
                             };
-                            *info_clone.lock().unwrap() = info;
+                            let _ = tx_clone.send_replace(info);
                         }
                     }
                 }
@@ -205,14 +205,18 @@ impl NetworkService {
         });
 
         Ok(Self {
-            info,
+            tx,
             _task: Some(task),
             command_tx: Some(command_tx),
         })
     }
 
+    pub fn subscribe(&self) -> watch::Receiver<NetworkInfo> {
+        self.tx.subscribe()
+    }
+
     pub fn network_info(&self) -> NetworkInfo {
-        self.info.lock().unwrap().clone()
+        self.tx.borrow().clone()
     }
 
     pub fn set_wifi_enabled(&self, enabled: bool) -> Result<()> {
@@ -255,11 +259,12 @@ impl NetworkService {
             tx.try_send(NetworkCommand::SetAirplaneModeEnabled(enabled))
                 .map_err(|e| anyhow::anyhow!("Failed to send command: {}", e))?;
         }
-        let mut lock = self.info.lock().unwrap();
-        lock.airplane_mode = enabled;
+        let mut current = self.tx.borrow().clone();
+        current.airplane_mode = enabled;
         if enabled {
-            lock.wifi_enabled = false;
+            current.wifi_enabled = false;
         }
+        let _ = self.tx.send_replace(current);
         Ok(())
     }
 }
@@ -317,8 +322,9 @@ mod tests {
     #[test]
     fn test_network_commands_enqueued() {
         let (command_tx, mut command_rx) = mpsc::channel::<NetworkCommand>(32);
+        let (watch_tx, _) = watch::channel(NetworkInfo::default());
         let service = NetworkService {
-            info: Arc::new(Mutex::new(NetworkInfo::default())),
+            tx: watch_tx,
             _task: None,
             command_tx: Some(command_tx),
         };
@@ -366,8 +372,9 @@ mod tests {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
         });
 
+        let (watch_tx, _) = watch::channel(NetworkInfo::default());
         let service = NetworkService {
-            info: Arc::new(Mutex::new(NetworkInfo::default())),
+            tx: watch_tx,
             _task: Some(task),
             command_tx: None,
         };
