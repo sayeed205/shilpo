@@ -4,6 +4,10 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
+/// Deterministic placeholder timestamp used by `ThemeState::default()` so the pure
+/// default carries no hidden clock I/O (ADR-0002). System-boundary callers (e.g.
+/// `shilpo-theme-daemon`) must replace it with a real clock time when constructing
+/// live state.
 pub const DEFAULT_TIMESTAMP: &str = "1970-01-01T00:00:00Z";
 
 const DEFAULT_SOURCE_ARGB: u32 = 0xff006c4c;
@@ -169,8 +173,7 @@ pub struct ThemeState {
 }
 
 impl ThemeState {
-    pub fn new(timestamp: impl Into<String>) -> Self {
-        let ts = timestamp.into();
+    pub fn new(timestamp: &str) -> Self {
         let (light, dark) = generate_m3_palettes(DEFAULT_SOURCE_ARGB, SchemeVariant::Auto);
         Self {
             revision: 1,
@@ -185,8 +188,8 @@ impl ThemeState {
             source_argb: DEFAULT_SOURCE_ARGB,
             light,
             dark,
-            updated_at: ts.clone(),
-            palette_generated_at: ts,
+            updated_at: timestamp.to_string(),
+            palette_generated_at: timestamp.to_string(),
         }
     }
 
@@ -473,6 +476,18 @@ pub enum SideEffect {
     DispatchDesktopAdapter(ThemeMode),
 }
 
+fn regenerate_palette(
+    state: &mut ThemeState,
+    seed: u32,
+    variant: SchemeVariant,
+    timestamp: &str,
+) {
+    let (light, dark) = generate_m3_palettes(seed, variant);
+    state.light = light;
+    state.dark = dark;
+    state.palette_generated_at = timestamp.to_string();
+}
+
 pub fn reduce(
     state: &mut ThemeState,
     command: ThemeCommand,
@@ -521,22 +536,18 @@ pub fn reduce(
                 changed = true;
 
                 if let Some(seed) = target_seed.filter(|&seed| seed != state.source_argb) {
+                    let variant = state.scheme_variant;
                     state.source_argb = seed;
-                    let (light, dark) = generate_m3_palettes(seed, state.scheme_variant);
-                    state.light = light;
-                    state.dark = dark;
-                    state.palette_generated_at = timestamp.to_string();
+                    regenerate_palette(state, seed, variant, timestamp);
                 }
             }
         }
         ThemeCommand::SetSchemeVariant(variant) => {
             if state.scheme_variant != variant {
+                let seed = state.source_argb;
                 state.scheme_variant = variant;
                 changed = true;
-                let (light, dark) = generate_m3_palettes(state.source_argb, variant);
-                state.light = light;
-                state.dark = dark;
-                state.palette_generated_at = timestamp.to_string();
+                regenerate_palette(state, seed, variant, timestamp);
             }
         }
         ThemeCommand::SetCustomSeed(seed) => {
@@ -545,12 +556,10 @@ pub fn reduce(
                 changed = true;
             }
             if state.color_source == ColorSource::Custom && state.source_argb != seed {
+                let variant = state.scheme_variant;
                 state.source_argb = seed;
-                let (light, dark) = generate_m3_palettes(seed, state.scheme_variant);
-                state.light = light;
-                state.dark = dark;
-                state.palette_generated_at = timestamp.to_string();
                 changed = true;
+                regenerate_palette(state, seed, variant, timestamp);
             }
         }
         ThemeCommand::SetWallpaperDirectory(dir) => {
@@ -569,12 +578,10 @@ pub fn reduce(
                 changed = true;
             }
             if state.color_source == ColorSource::Wallpaper && state.source_argb != seed {
+                let variant = state.scheme_variant;
                 state.source_argb = seed;
-                let (light, dark) = generate_m3_palettes(seed, state.scheme_variant);
-                state.light = light;
-                state.dark = dark;
-                state.palette_generated_at = timestamp.to_string();
                 changed = true;
+                regenerate_palette(state, seed, variant, timestamp);
             }
         }
         ThemeCommand::PortalAppearanceChanged(portal_mode) => {
