@@ -1,15 +1,20 @@
 use crate::actions::ActionInvocation;
-use crate::bar::service_worker::{self, WorkerCommand, WorkerUpdate};
+use crate::bar::service_worker::{self, ConfigUpdate, WorkerCommand, WorkerUpdate};
+use crate::bar::widgets::clock::{format_clock, format_date};
 use crate::battery::BatteryIndicator;
+use crate::osd::OsdKind;
 use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Path, PathBuilder, Pixels, Point,
     Render, Styled, Window, div, prelude::*, px,
 };
 use shilpo_config::{BarPosition, BarWidget, ShellConfig};
-use shilpo_services::Notification;
+use shilpo_services::{
+    AudioInfo, BatteryInfo, BluetoothInfo, MediaInfo, NetworkInfo, Notification,
+};
 use shilpo_ui::{ActiveTheme, h_flex, v_flex};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use super::geometry::HUG_CORNER_RADIUS;
 
@@ -46,11 +51,39 @@ pub fn apply_config_theme(_config: &ShellConfig, _window: Option<&mut Window>, c
     }
 }
 
-/// Status Bar GPUI View (Multi-Capsule Segmented Bar with IPC integration).
-use super::state::{BarState, BarStateEffect};
+#[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
+enum BarViewEffect {
+    ShowOsd(OsdKind),
+    ShowNotificationToast(Notification),
+    ApplyConfigTheme(ShellConfig),
+}
 
+#[derive(Debug, Clone, PartialEq, Default)]
+struct BarUpdateResult {
+    changed: bool,
+    effects: Vec<BarViewEffect>,
+}
+
+/// Status Bar GPUI View (Multi-Capsule Segmented Bar with IPC integration).
 pub struct BarView {
-    pub state: BarState,
+    pub config: ShellConfig,
+    pub battery: BatteryInfo,
+    pub audio: AudioInfo,
+    pub network: NetworkInfo,
+    pub bluetooth: BluetoothInfo,
+    pub caffeine_service: Arc<shilpo_services::CaffeineService>,
+    pub app_id: String,
+    pub active_title: String,
+    pub media_info: Option<MediaInfo>,
+    pub time_str: String,
+    pub date_str: String,
+    pub cpu_percent: u8,
+    pub ram_percent: u8,
+    pub cat_frame_index: usize,
+    pub last_error: Option<String>,
+    pub last_service_update: Instant,
+
     service_commands: service_worker::CommandSender,
     _datetime_task: Option<gpui::Task<()>>,
     _sysinfo_task: Option<gpui::Task<()>>,
@@ -59,12 +92,68 @@ pub struct BarView {
 }
 
 impl BarView {
+    fn new_with_commands(
+        config: ShellConfig,
+        service_commands: service_worker::CommandSender,
+    ) -> Self {
+        let battery = BatteryInfo::default();
+        let audio = AudioInfo::default();
+        let network = NetworkInfo::default();
+        let bluetooth = shilpo_services::BluetoothService::new()
+            .map(|s| s.info())
+            .unwrap_or_default();
+        let caffeine_service = Arc::new(shilpo_services::CaffeineService::new());
+
+        let now = chrono::Local::now();
+        let time_str = format_clock(&now, config.clock_format.as_deref());
+        let date_str = format_date(&now);
+
+        Self {
+            config,
+            battery,
+            audio,
+            network,
+            bluetooth,
+            caffeine_service,
+            app_id: "shilpo.shell".into(),
+            active_title: "Shilpo Shell".into(),
+            media_info: None,
+            time_str,
+            date_str,
+            cpu_percent: 0,
+            ram_percent: 0,
+            cat_frame_index: 0,
+            last_error: None,
+            last_service_update: Instant::now(),
+            service_commands,
+            _datetime_task: None,
+            _sysinfo_task: None,
+            extension_instance_prefix: None,
+            output_name: None,
+        }
+    }
+
     pub fn update_datetime(&mut self) -> bool {
-        self.state.update_datetime()
+        let now = chrono::Local::now();
+        let fmt = self.config.clock_format.as_deref();
+        let new_time = format_clock(&now, fmt);
+        let new_date = format_date(&now);
+        let mut changed = false;
+
+        if self.time_str != new_time {
+            self.time_str = new_time;
+            changed = true;
+        }
+        if self.date_str != new_date {
+            self.date_str = new_date;
+            changed = true;
+        }
+
+        changed
     }
 
     pub fn is_stale(&self) -> bool {
-        self.state.is_stale()
+        self.last_service_update.elapsed() > Duration::from_secs(30)
     }
 
     pub fn enqueue_request(
@@ -104,13 +193,13 @@ impl BarView {
             tx
         });
 
-        let state = BarState::new(config);
+        let mut view = Self::new_with_commands(config, service_commands);
 
         let _datetime_task = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 let res = this.update(cx, |view, cx| {
-                    if view.state.update_datetime() {
+                    if view.update_datetime() {
                         cx.notify();
                     }
                 });
@@ -123,7 +212,7 @@ impl BarView {
         let _sysinfo_task = Some(cx.spawn(async move |this, cx| {
             use sysinfo::System;
             let mut sys = System::new();
-            let mut last_cpu_sample = std::time::Instant::now() - Duration::from_secs(2);
+            let mut last_cpu_sample = Instant::now() - Duration::from_secs(2);
             let mut cpu_pct: u8 = 0;
             let mut ram_pct: u8 = 0;
 
@@ -141,7 +230,7 @@ impl BarView {
                     } else {
                         0
                     };
-                    last_cpu_sample = std::time::Instant::now();
+                    last_cpu_sample = Instant::now();
                 }
 
                 let speed = ((cpu_pct as f32) / 5.0).clamp(1.0, 20.0);
@@ -152,9 +241,9 @@ impl BarView {
                     .await;
 
                 let res = this.update(cx, |view, cx| {
-                    view.state.cpu_percent = cpu_pct;
-                    view.state.ram_percent = ram_pct;
-                    view.state.cat_frame_index = (view.state.cat_frame_index + 1) % 5;
+                    view.cpu_percent = cpu_pct;
+                    view.ram_percent = ram_pct;
+                    view.cat_frame_index = (view.cat_frame_index + 1) % 5;
                     cx.notify();
                 });
                 if res.is_err() {
@@ -163,14 +252,9 @@ impl BarView {
             }
         }));
 
-        Self {
-            state,
-            service_commands,
-            _datetime_task,
-            _sysinfo_task,
-            extension_instance_prefix: None,
-            output_name: None,
-        }
+        view._datetime_task = _datetime_task;
+        view._sysinfo_task = _sysinfo_task;
+        view
     }
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -213,17 +297,70 @@ impl BarView {
         })
     }
 
+    fn compute_worker_update(&mut self, update: &WorkerUpdate) -> BarUpdateResult {
+        self.last_service_update = Instant::now();
+        let mut changed = false;
+        let mut effects = Vec::new();
+
+        match update {
+            WorkerUpdate::Battery(value) if &self.battery != value => {
+                self.battery = value.clone();
+                changed = true;
+            }
+            WorkerUpdate::Audio(value) if &self.audio != value => {
+                let show_osd = self.audio.available
+                    && value.available
+                    && (self.audio.volume != value.volume || self.audio.is_muted != value.is_muted);
+                self.audio = value.clone();
+                if show_osd {
+                    effects.push(BarViewEffect::ShowOsd(OsdKind::Volume {
+                        level: value.volume as u32,
+                        muted: value.is_muted,
+                    }));
+                }
+                changed = true;
+            }
+            WorkerUpdate::Network(value) if &self.network != value => {
+                self.network = value.clone();
+                changed = true;
+            }
+            WorkerUpdate::Media(value) if self.media_info.as_ref() != Some(value) => {
+                self.media_info = Some(value.clone());
+                changed = true;
+            }
+            WorkerUpdate::Config(ConfigUpdate::Loaded(config)) => {
+                self.config = (**config).clone();
+                self.last_error = None;
+                effects.push(BarViewEffect::ApplyConfigTheme(self.config.clone()));
+                self.update_datetime();
+                changed = true;
+            }
+            WorkerUpdate::Config(ConfigUpdate::Failed(error)) => {
+                tracing::error!(error = %error, "config reload failed");
+                self.last_error = Some(error.clone());
+                effects.push(BarViewEffect::ShowNotificationToast(Notification::new(
+                    "Configuration Warning",
+                    error,
+                )));
+                changed = true;
+            }
+            _ => {}
+        }
+
+        BarUpdateResult { changed, effects }
+    }
+
     pub fn apply_worker_update(&mut self, update: &WorkerUpdate, cx: &mut Context<Self>) {
-        let result = self.state.apply_worker_update(update);
+        let result = self.compute_worker_update(update);
         for effect in result.effects {
             match effect {
-                BarStateEffect::ShowOsd(kind) => {
+                BarViewEffect::ShowOsd(kind) => {
                     ShellRuntime::show_osd(cx, kind);
                 }
-                BarStateEffect::ShowNotificationToast(notification) => {
+                BarViewEffect::ShowNotificationToast(notification) => {
                     open_notification_toast(cx, notification);
                 }
-                BarStateEffect::ApplyConfigTheme(config) => {
+                BarViewEffect::ApplyConfigTheme(config) => {
                     apply_config_theme(&config, None, cx);
                 }
             }
@@ -235,7 +372,7 @@ impl BarView {
 
     pub fn build(spec: crate::bar::BarSpec, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut view = Self::new_with_config(window, cx, ShellConfig::default());
-        view.state.config.bar = spec.config;
+        view.config.bar = spec.config;
         view.extension_instance_prefix = Some(format!("bar:{:?}", spec.display_id));
         view.output_name = spec.output_name;
         view
@@ -268,7 +405,7 @@ impl BarView {
                 BarWidget::Builtin(BuiltinBarWidget::Workspaces) => {
                     let snapshot = ShellRuntime::compositor_snapshot(cx);
                     let is_vertical = matches!(
-                        self.state.config.bar.position,
+                        self.config.bar.position,
                         shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
                     );
                     let pill_orientation = if is_vertical {
@@ -293,7 +430,7 @@ impl BarView {
                     ));
                     let reduced_motion = ShellRuntime::overview_reduced_motion(cx);
                     let is_vertical = matches!(
-                        self.state.config.bar.position,
+                        self.config.bar.position,
                         shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
                     );
                     let pill_orientation = if is_vertical {
@@ -315,13 +452,13 @@ impl BarView {
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Clock) => {
                     let is_vertical = matches!(
-                        self.state.config.bar.position,
+                        self.config.bar.position,
                         shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
                     );
                     elements.push(
                         super::widgets::ClockWidget::new(
                             format!("clock_{section_name}_{index}"),
-                            self.state.time_str.clone(),
+                            self.time_str.clone(),
                             is_vertical,
                         )
                         .into_any_element(),
@@ -329,24 +466,24 @@ impl BarView {
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Date) => {
                     let is_vertical = matches!(
-                        self.state.config.bar.position,
+                        self.config.bar.position,
                         shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
                     );
                     elements.push(
                         super::widgets::DateWidget::new(
                             format!("date_{section_name}_{index}"),
-                            self.state.date_str.clone(),
+                            self.date_str.clone(),
                             is_vertical,
                         )
                         .into_any_element(),
                     );
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Media) => {
-                    if let Some(info) = &self.state.media_info
+                    if let Some(info) = &self.media_info
                         && !info.is_empty()
                     {
                         let is_vertical = matches!(
-                            self.state.config.bar.position,
+                            self.config.bar.position,
                             shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
                         );
                         elements.push(
@@ -361,11 +498,11 @@ impl BarView {
                     }
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Battery) => {
-                    if self.state.battery.is_present {
+                    if self.battery.is_present {
                         elements.push(
                             BatteryIndicator::new(
                                 format!("battery_{section_name}_{index}"),
-                                self.state.battery.clone(),
+                                self.battery.clone(),
                             )
                             .into_any_element(),
                         );
@@ -375,9 +512,9 @@ impl BarView {
                     elements.push(
                         super::widgets::SysInfoWidget::new(
                             format!("sysinfo_{section_name}_{index}"),
-                            self.state.cat_frame_index,
-                            self.state.cpu_percent,
-                            self.state.ram_percent,
+                            self.cat_frame_index,
+                            self.cpu_percent,
+                            self.ram_percent,
                         )
                         .into_any_element(),
                     );
@@ -386,7 +523,7 @@ impl BarView {
                     elements.push(
                         super::widgets::NetworkWidget::new(
                             format!("network_{section_name}_{index}"),
-                            self.state.network.clone(),
+                            self.network.clone(),
                         )
                         .into_any_element(),
                     );
@@ -395,13 +532,13 @@ impl BarView {
                     elements.push(
                         super::widgets::BluetoothWidget::new(
                             format!("bluetooth_{section_name}_{index}"),
-                            self.state.bluetooth.clone(),
+                            self.bluetooth.clone(),
                         )
                         .into_any_element(),
                     );
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Caffeine) => {
-                    let caffeine_svc = self.state.caffeine_service.clone();
+                    let caffeine_svc = self.caffeine_service.clone();
                     let is_active = caffeine_svc.is_active();
                     elements.push(
                         crate::widgets::CaffeineWidget::new(
@@ -439,7 +576,7 @@ impl BarView {
 
         let flex = if side { v_flex() } else { h_flex() };
         let section = flex
-            .gap(px(self.state.config.bar.widget_spacing as f32))
+            .gap(px(self.config.bar.widget_spacing as f32))
             .items_center()
             .children(elements);
 
@@ -467,7 +604,7 @@ impl BarView {
     ) -> impl IntoElement {
         use gpui::{canvas, point};
 
-        let bar_height = px(self.state.config.bar.height as f32);
+        let bar_height = px(self.config.bar.height as f32);
 
         canvas(
             move |_, _, _| {},
@@ -606,15 +743,15 @@ impl Render for BarView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use shilpo_config::BarStyle;
 
-        let style = self.state.config.bar.style;
+        let style = self.config.bar.style;
         let side = matches!(
-            self.state.config.bar.position,
+            self.config.bar.position,
             BarPosition::Left | BarPosition::Right
         );
         let opacity = if style == BarStyle::Hug {
             1.0
         } else {
-            self.state.config.bar.opacity.clamp(0.0, 1.0)
+            self.config.bar.opacity.clamp(0.0, 1.0)
         };
         let compositor_stale = !ShellRuntime::compositor_snapshot(cx).connection.is_ready();
         let bg_color = cx
@@ -625,7 +762,7 @@ impl Render for BarView {
             } else {
                 opacity
             });
-        let widgets = self.state.config.bar.widgets.clone();
+        let widgets = self.config.bar.widgets.clone();
         let is_floating = style == BarStyle::Float;
         let start = self.build_section("start", &widgets.start, side, is_floating, window, cx);
         let center = self.build_section("center", &widgets.center, side, is_floating, window, cx);
@@ -633,13 +770,13 @@ impl Render for BarView {
 
         let bar_container = div()
             .when(side, |this| {
-                this.w(px(self.state.config.bar.height as f32))
+                this.w(px(self.config.bar.height as f32))
                     .h_full()
                     .flex_col()
             })
             .when(!side, |this| {
                 this.w_full()
-                    .h(px(self.state.config.bar.height as f32))
+                    .h(px(self.config.bar.height as f32))
                     .flex_row()
             })
             .flex()
@@ -663,12 +800,12 @@ impl Render for BarView {
         match style {
             BarStyle::Hug => {
                 let hug_corners = self.render_hug_corners(
-                    self.state.config.bar.position,
+                    self.config.bar.position,
                     px(HUG_CORNER_RADIUS),
                     bg_color,
                 );
                 let main_bar = bar_container;
-                let aligned_bar = match self.state.config.bar.position {
+                let aligned_bar = match self.config.bar.position {
                     BarPosition::Top => div().absolute().top_0().w_full().child(main_bar),
                     BarPosition::Bottom => div().absolute().bottom_0().w_full().child(main_bar),
                     BarPosition::Left => div().absolute().left_0().h_full().child(main_bar),
@@ -689,8 +826,8 @@ impl Render for BarView {
                 .on_children_prepainted(set_bar_input_region)
                 .child(
                     bar_container
-                        .px(px(self.state.config.bar.margin.horizontal as f32))
-                        .py(px(self.state.config.bar.margin.vertical as f32))
+                        .px(px(self.config.bar.margin.horizontal as f32))
+                        .py(px(self.config.bar.margin.vertical as f32))
                         .rounded_2xl()
                         .shadow_md(),
                 )
@@ -895,5 +1032,142 @@ mod bar_input_region_tests {
     #[test]
     fn returns_none_when_child_bounds_empty() {
         assert_eq!(compute_bar_input_region(&[]), None);
+    }
+}
+
+#[cfg(test)]
+mod bar_view_tests {
+    use super::*;
+
+    /// Builds a `BarView` with a live command channel so the sender is genuinely connected.
+    fn test_view(config: ShellConfig) -> (BarView, service_worker::CommandReceiver) {
+        let (_, _, commands_tx, commands_rx) = service_worker::channels();
+        (BarView::new_with_commands(config, commands_tx), commands_rx)
+    }
+
+    #[test]
+    fn test_bar_view_default_construction() {
+        let (view, _commands_rx) = test_view(ShellConfig::default());
+        assert_eq!(view.app_id, "shilpo.shell");
+        assert_eq!(view.active_title, "Shilpo Shell");
+        assert_eq!(view.cpu_percent, 0);
+        assert_eq!(view.ram_percent, 0);
+        assert_eq!(view.cat_frame_index, 0);
+        assert_eq!(view.media_info, None);
+        assert_eq!(view.last_error, None);
+        assert!(!view.is_stale());
+    }
+
+    #[test]
+    fn test_apply_worker_update_battery() {
+        let (mut view, _commands_rx) = test_view(ShellConfig::default());
+        let battery = BatteryInfo {
+            is_present: true,
+            percentage: 85,
+            ..Default::default()
+        };
+
+        let result = view.compute_worker_update(&WorkerUpdate::Battery(battery.clone()));
+        assert!(result.changed);
+        assert_eq!(view.battery.percentage, 85);
+        assert!(result.effects.is_empty());
+    }
+
+    #[test]
+    fn test_apply_worker_update_audio_triggers_osd() {
+        let (mut view, _commands_rx) = test_view(ShellConfig::default());
+        view.audio = AudioInfo {
+            available: true,
+            volume: 50,
+            is_muted: false,
+            ..Default::default()
+        };
+
+        let new_audio = AudioInfo {
+            volume: 70,
+            ..view.audio.clone()
+        };
+
+        let result = view.compute_worker_update(&WorkerUpdate::Audio(new_audio));
+        assert!(result.changed);
+        assert_eq!(view.audio.volume, 70);
+        assert_eq!(
+            result.effects,
+            vec![BarViewEffect::ShowOsd(OsdKind::Volume {
+                level: 70,
+                muted: false,
+            })]
+        );
+    }
+
+    #[test]
+    fn test_apply_worker_update_network() {
+        let (mut view, _commands_rx) = test_view(ShellConfig::default());
+        let net = NetworkInfo {
+            is_connected: true,
+            ssid: Some("WiFi-Home".into()),
+            ..Default::default()
+        };
+
+        let result = view.compute_worker_update(&WorkerUpdate::Network(net.clone()));
+        assert!(result.changed);
+        assert_eq!(view.network.ssid.as_deref(), Some("WiFi-Home"));
+    }
+
+    #[test]
+    fn test_apply_worker_update_media() {
+        let (mut view, _commands_rx) = test_view(ShellConfig::default());
+        let media = MediaInfo {
+            player_id: "spotify".into(),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            art_url: "".into(),
+            playback_state: shilpo_services::PlaybackState::Playing,
+            can_play_pause: true,
+            can_go_next: true,
+            position_secs: 0.0,
+            length_secs: 180.0,
+        };
+
+        let result = view.compute_worker_update(&WorkerUpdate::Media(media.clone()));
+        assert!(result.changed);
+        assert_eq!(view.media_info, Some(media));
+    }
+
+    #[test]
+    fn test_apply_worker_update_config_loaded() {
+        let (mut view, _commands_rx) = test_view(ShellConfig::default());
+        let new_config = ShellConfig {
+            clock_format: Some("%H:%M".into()),
+            ..Default::default()
+        };
+
+        let result = view.compute_worker_update(&WorkerUpdate::Config(ConfigUpdate::Loaded(
+            Box::new(new_config.clone()),
+        )));
+        assert!(result.changed);
+        assert_eq!(view.config.clock_format.as_deref(), Some("%H:%M"));
+        assert_eq!(
+            result.effects,
+            vec![BarViewEffect::ApplyConfigTheme(new_config)]
+        );
+    }
+
+    #[test]
+    fn test_apply_worker_update_config_failed() {
+        let (mut view, _commands_rx) = test_view(ShellConfig::default());
+        let err_msg = "Invalid TOML syntax".to_string();
+
+        let result =
+            view.compute_worker_update(&WorkerUpdate::Config(ConfigUpdate::Failed(err_msg.clone())));
+        assert!(result.changed);
+        assert_eq!(view.last_error, Some(err_msg.clone()));
+        assert_eq!(result.effects.len(), 1);
+        if let BarViewEffect::ShowNotificationToast(notif) = &result.effects[0] {
+            assert_eq!(notif.summary, "Configuration Warning");
+            assert_eq!(notif.body, err_msg);
+        } else {
+            panic!("expected ShowNotificationToast effect");
+        }
     }
 }
