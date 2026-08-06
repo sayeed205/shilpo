@@ -21,7 +21,7 @@ Multi-context repo (one `CONTEXT.md` per crate/app):
 /
 ├── CONTEXT-MAP.md                        ← maps contexts to crates
 ├── docs/adr/                             ← workspace-wide decisions
-├── crates/
+├── core/
 │   ├── ui/
 │   │   ├── CONTEXT.md
 │   │   └── docs/adr/
@@ -31,7 +31,14 @@ Multi-context repo (one `CONTEXT.md` per crate/app):
 │   ├── macros/
 │   │   ├── CONTEXT.md
 │   │   └── docs/adr/
-│   ├── assets/
+│   └── assets/
+│       ├── CONTEXT.md
+│       └── docs/adr/
+├── desktop/
+│   ├── shell/
+│   │   ├── CONTEXT.md
+│   │   └── docs/adr/
+│   ├── settings/
 │   │   ├── CONTEXT.md
 │   │   └── docs/adr/
 │   ├── services/
@@ -43,19 +50,13 @@ Multi-context repo (one `CONTEXT.md` per crate/app):
 │   ├── ext/
 │   │   ├── CONTEXT.md
 │   │   └── docs/adr/
-│   ├── shell/
-│   │   ├── CONTEXT.md
-│   │   └── docs/adr/
-│   ├── settings/
+│   ├── theme-daemon/
 │   │   ├── CONTEXT.md
 │   │   └── docs/adr/
 │   └── cli/
 │       ├── CONTEXT.md
 │       └── docs/adr/
-├── apps/storybook/
-│   ├── CONTEXT.md
-│   └── docs/adr/
-└── dotfiles/shilpo-dotfiles/
+└── apps/storybook/
     ├── CONTEXT.md
     └── docs/adr/
 ```

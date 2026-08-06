@@ -19,12 +19,20 @@ featuring Material Design 3 (M3) & Material Expressive design inspirations.
 
 ## Workspace Crates
 
-| Crate               | Description                                                        | Directory                          |
-|:--------------------|:-------------------------------------------------------------------|:-----------------------------------|
-| **`shilpo-ui`**     | Core desktop UI component library for GPUI applications            | [`crates/ui`](crates/ui)           |
-| **`shilpo-macros`** | Procedural macros for icon generation and plot traits              | [`crates/macros`](crates/macros)   |
-| **`shilpo-assets`** | Internal SVG icon set and demo asset loader (*unpublished*)        | [`crates/assets`](crates/assets)   |
-| **`storybook`**     | Interactive component gallery application for reviewing components | [`apps/storybook`](apps/storybook) |
+| Crate | Description | Directory |
+|:---|:---|:---|
+| **`shilpo-ui`** | Core desktop UI component library for GPUI applications | [`core/ui`](core/ui) |
+| **`shilpo-theme`** | M3 color math & data types (*cross-platform core*) | [`core/theme`](core/theme) |
+| **`shilpo-macros`** | Procedural macros for icon generation and plot traits | [`core/macros`](core/macros) |
+| **`shilpo-assets`** | Internal SVG icon set and demo asset loader (*unpublished*) | [`core/assets`](core/assets) |
+| **`shilpo-shell`** | Desktop shell daemon | [`desktop/shell`](desktop/shell) |
+| **`shilpo-settings`** | Control panel application | [`desktop/settings`](desktop/settings) |
+| **`shilpo-services`** | Linux system service integrations | [`desktop/services`](desktop/services) |
+| **`shilpo-config`** | Shell configuration management | [`desktop/config`](desktop/config) |
+| **`shilpo-ext`** | Wasmtime extension runtime | [`desktop/ext`](desktop/ext) |
+| **`shilpo-theme-daemon`** | Theme DBus daemon & system sync | [`desktop/theme-daemon`](desktop/theme-daemon) |
+| **`shilpo-cli`** | CLI tool | [`desktop/cli`](desktop/cli) |
+| **`storybook`** | Interactive component gallery application | [`apps/storybook`](apps/storybook) |
 
 ---
 
