@@ -33,6 +33,18 @@ pub struct ServiceHub {
 }
 
 impl ServiceHub {
+    pub fn start(
+        executor: gpui::BackgroundExecutor,
+        config_path: PathBuf,
+        session_store: Option<Arc<shilpo_config::HeedSessionStore>>,
+        dnd_active: bool,
+    ) -> Self {
+        let mut hub = Self::new(executor, config_path, session_store);
+        hub.notification_dnd = dnd_active;
+        apply_notification_dnd(hub.notification.as_ref(), dnd_active);
+        hub
+    }
+
     pub fn new(
         executor: gpui::BackgroundExecutor,
         config_path: PathBuf,
@@ -360,5 +372,15 @@ mod tests {
         apply_notification_dnd(Some(&notification), true);
 
         assert!(notification.is_dnd_enabled());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn service_hub_start_initializes_with_dnd() {
+        let temp_dir = std::env::temp_dir().join(format!("shilpo_service_test_{}", uuid::Uuid::new_v4()));
+        let config_path = temp_dir.join("config.toml");
+        let executor = gpui::TestAppContext::single().executor().clone();
+        let hub = ServiceHub::start(executor, config_path, None, true);
+        assert!(hub.notification_dnd);
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }

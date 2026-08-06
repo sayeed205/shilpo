@@ -2,9 +2,13 @@ pub mod action_dispatcher;
 pub mod extension_host;
 pub mod ipc;
 pub mod service_hub;
+pub mod session;
 pub mod surface_manager;
+pub mod theme_manager;
 
 pub use service_hub::ServiceHub;
+pub use session::SessionContext;
+pub use theme_manager::ThemeManager;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
@@ -95,165 +99,15 @@ impl ShellRuntime {
     }
 
     pub fn install(cx: &mut App, ipc_server: ShellIpcServer) {
-        let config_path = std::env::var("HOME")
-            .map(|home| std::path::PathBuf::from(home).join(".config/shilpo/config.toml"))
-            .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));
-        let active_config = shilpo_config::ShellConfig::load_or_create(&config_path)
-            .unwrap_or_else(|_| shilpo_config::ShellConfig::default());
-        let theme_client = futures_lite::future::block_on(shilpo_theme_daemon::ThemeClient::new());
-        let initial_theme_state = theme_client.current_state();
-        let initial_wallpaper_path = initial_theme_state
-            .wallpaper_path
-            .clone()
-            .filter(|path| path.is_file());
-        shilpo_ui::Theme::global_mut(cx).apply_state(&initial_theme_state);
-        let mut rx = theme_client.subscribe();
-        let theme_client_for_task = theme_client.clone();
-        cx.spawn(async move |cx| {
-            loop {
-                let state = match rx.recv().await {
-                    Ok(state) => state,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        theme_client_for_task.current_state()
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                };
-                cx.update(|cx: &mut gpui::App| {
-                    shilpo_ui::Theme::global_mut(cx).apply_state(&state);
-                    if cx.has_global::<Self>() {
-                        let runtime = cx.global_mut::<Self>();
-                        if let Some(path) =
-                            state.wallpaper_path.clone().filter(|path| path.is_file())
-                        {
-                            runtime.current_wallpaper_path = Some(path);
-                        }
-                        let overview_entity = runtime.overview_entity.clone();
-                        let wallpaper_path = runtime.current_wallpaper_path.clone();
-                        let bar_handles: Vec<_> =
-                            runtime.bars.values().map(|(handle, _)| *handle).collect();
-                        let cc_handle = runtime.control_center;
-                        let ov_handle = runtime.overview;
-
-                        if let Some(overview) = overview_entity {
-                            overview.update(cx, |view, cx| {
-                                view.update_wallpaper_path(wallpaper_path, cx);
-                            });
-                        }
-                        for handle in bar_handles {
-                            let _ = handle.update(cx, |_, _, cx| cx.notify());
-                        }
-                        if let Some(cc) = cc_handle {
-                            let _ = cc.update(cx, |_, _, cx| cx.notify());
-                        }
-                        if let Some(ov) = ov_handle {
-                            let _ = ov.update(cx, |_, _, cx| cx.notify());
-                        }
-                    }
-                    cx.refresh_windows();
-                });
-            }
-        })
-        .detach();
-        let session_path = shilpo_config::ShellSessionState::default_session_path();
-        let (session_state, _restored_fallback) =
-            shilpo_config::ShellSessionState::restore_with_fallback(&session_path);
-        let heed_dir = shilpo_config::HeedSessionStore::default_db_dir();
-        let heed_store = match shilpo_config::HeedSessionStore::open_with_recovery(&heed_dir) {
-            Ok(opened) => {
-                if let shilpo_config::RecoveryOutcome::Quarantined { ref path } = opened.recovery {
-                    tracing::warn!(
-                        quarantine_path = %path.display(),
-                        "LMDB session store was corrupted and has been quarantined"
-                    );
-                }
-                Some(Arc::new(opened.store))
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "LMDB session store open failed; session features running unpersisted");
-                None
-            }
-        };
-        let mut hub = ServiceHub::new(
+        let session = session::SessionContext::init();
+        let initial_wallpaper_path = theme_manager::ThemeManager::init(cx);
+        let hub = ServiceHub::start(
             cx.background_executor().clone(),
-            config_path,
-            heed_store.clone(),
+            session.config_path,
+            session.heed_store.clone(),
+            session.session_state.dnd_active,
         );
-        hub.notification_dnd = session_state.dnd_active;
-        service_hub::apply_notification_dnd(hub.notification.as_ref(), session_state.dnd_active);
-        let extensions = match shilpo_ext::WasmRuntime::new() {
-            Ok(runtime) => {
-                let paths = shilpo_ext::CatalogPaths::platform_default();
-                match crate::extensions::ExtensionEngine::new(runtime, paths.clone()) {
-                    Ok(engine) => {
-                        let (command_tx, command_rx) = std::sync::mpsc::sync_channel(64);
-                        let (update_tx, update_rx) = std::sync::mpsc::sync_channel(64);
-                        let snapshot = std::sync::Arc::new(std::sync::RwLock::new(
-                            crate::extensions::ExtensionSnapshot::default(),
-                        ));
-
-                        let watch_paths = vec![
-                            shilpo_ext::default_extension_state_dir().join("dev"),
-                            paths.data_dir.join("installed"),
-                            paths.data_dir.join("activated"),
-                        ];
-                        let mut watcher = None;
-                        let mut fallback_scan = None;
-                        match crate::extensions::ExtensionWatcher::new(
-                            command_tx.clone(),
-                            watch_paths,
-                        ) {
-                            Ok(w) => watcher = Some(w),
-                            Err(error) => {
-                                tracing::warn!(%error, "ExtensionWatcher failed, falling back to 30s background scan");
-                                let fallback_tx = command_tx.clone();
-                                let executor = cx.background_executor().clone();
-                                let executor_inner = executor.clone();
-                                fallback_scan = Some(executor.clone().spawn(async move {
-                                    loop {
-                                        executor_inner
-                                            .timer(std::time::Duration::from_secs(30))
-                                            .await;
-                                        if fallback_tx
-                                            .send(
-                                                crate::extensions::ExtensionCommand::SourcesChanged,
-                                            )
-                                            .is_err()
-                                        {
-                                            break;
-                                        }
-                                    }
-                                }));
-                            }
-                        }
-
-                        let worker_task = engine.run_worker_loop(
-                            cx.background_executor().clone(),
-                            command_rx,
-                            update_tx,
-                            snapshot.clone(),
-                        );
-
-                        Some(crate::extensions::ExtensionCoordinator::new_with_executor(
-                            Some(cx.background_executor().clone()),
-                            snapshot,
-                            command_tx,
-                            update_rx,
-                            Some(worker_task),
-                            watcher,
-                            fallback_scan,
-                        ))
-                    }
-                    Err(error) => {
-                        tracing::warn!(error = %error, "extension engine load failed");
-                        None
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::warn!(error = %error, "extension runtime is unavailable");
-                None
-            }
-        };
+        let extensions = ExtensionCoordinator::init(cx.background_executor().clone());
 
         let compositor = hub.compositor.clone();
         ipc_server.attach_broker(compositor.command_broker());
@@ -262,7 +116,7 @@ impl ShellRuntime {
 
         cx.set_global(Self {
             ipc_server,
-            active_config,
+            active_config: session.active_config,
             bars: HashMap::new(),
             last_bar_specs: Vec::new(),
             bar_state: BarState::Starting,
@@ -288,29 +142,16 @@ impl ShellRuntime {
             extension_location_service: shilpo_services::LocationService::new(),
             actions: ActionRegistry::default(),
             keybindings: crate::actions::KeybindingManager::with_defaults(),
-            session_state,
-            session_path,
-            heed_store,
+            session_state: session.session_state,
+            session_path: session.session_path,
+            heed_store: session.heed_store,
             _start_time: std::time::Instant::now(),
             service_hub: Some(hub),
             _window_closed: None,
             _ipc_task: gpui::Task::ready(()),
         });
-        let wallpaper_probe =
-            cx.background_spawn(async { surface_manager::query_awww_wallpaper_path() });
-        let theme_wallpaper_path = initial_wallpaper_path;
-        shilpo_theme_daemon::ThemeClient::spawn_task(async move {
-            let client = shilpo_theme_daemon::ThemeClient::new().await;
-            if let Some(wallpaper_path) = wallpaper_probe.await {
-                let _ = client
-                    .set_wallpaper(&wallpaper_path.to_string_lossy())
-                    .await;
-            } else if let Some(wallpaper_path) = theme_wallpaper_path {
-                let _ = client
-                    .set_wallpaper(&wallpaper_path.to_string_lossy())
-                    .await;
-            }
-        });
+
+        theme_manager::ThemeManager::sync_wallpaper(cx, initial_wallpaper_path);
         Self::on_compositor_snapshot_changed(cx, latest_snapshot);
 
         cx.spawn(async move |cx| {

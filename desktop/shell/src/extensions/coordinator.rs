@@ -138,6 +138,85 @@ pub struct ExtensionCoordinator {
 }
 
 impl ExtensionCoordinator {
+    pub fn init(executor: gpui::BackgroundExecutor) -> Option<Self> {
+        let paths = shilpo_ext::CatalogPaths::platform_default();
+        Self::init_with_paths(executor, paths)
+    }
+
+    pub fn init_with_paths(
+        executor: gpui::BackgroundExecutor,
+        paths: shilpo_ext::CatalogPaths,
+    ) -> Option<Self> {
+        match shilpo_ext::WasmRuntime::new() {
+            Ok(runtime) => match super::engine::ExtensionEngine::new(runtime, paths.clone()) {
+                Ok(engine) => {
+                    let (command_tx, command_rx) = std::sync::mpsc::sync_channel(64);
+                    let (update_tx, update_rx) = std::sync::mpsc::sync_channel(64);
+                    let snapshot = std::sync::Arc::new(std::sync::RwLock::new(
+                        ExtensionSnapshot::default(),
+                    ));
+
+                    let watch_paths = vec![
+                        shilpo_ext::default_extension_state_dir().join("dev"),
+                        paths.data_dir.join("installed"),
+                        paths.data_dir.join("activated"),
+                    ];
+                    let mut watcher = None;
+                    let mut fallback_scan = None;
+                    match super::watcher::ExtensionWatcher::new(
+                        command_tx.clone(),
+                        watch_paths,
+                    ) {
+                        Ok(w) => watcher = Some(w),
+                        Err(error) => {
+                            tracing::warn!(%error, "ExtensionWatcher failed, falling back to 30s background scan");
+                            let fallback_tx = command_tx.clone();
+                            let executor_inner = executor.clone();
+                            fallback_scan = Some(executor.clone().spawn(async move {
+                                loop {
+                                    executor_inner
+                                        .timer(Duration::from_secs(30))
+                                        .await;
+                                    if fallback_tx
+                                        .send(ExtensionCommand::SourcesChanged)
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                            }));
+                        }
+                    }
+
+                    let worker_task = engine.run_worker_loop(
+                        executor.clone(),
+                        command_rx,
+                        update_tx,
+                        snapshot.clone(),
+                    );
+
+                    Some(Self::new_with_executor(
+                        Some(executor.clone()),
+                        snapshot,
+                        command_tx,
+                        update_rx,
+                        Some(worker_task),
+                        watcher,
+                        fallback_scan,
+                    ))
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "extension engine load failed");
+                    None
+                }
+            },
+            Err(error) => {
+                tracing::warn!(error = %error, "extension runtime is unavailable");
+                None
+            }
+        }
+    }
+
     pub fn new(
         snapshot: Arc<RwLock<ExtensionSnapshot>>,
         command_tx: mpsc::SyncSender<ExtensionCommand>,
