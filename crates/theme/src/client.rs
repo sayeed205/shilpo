@@ -35,7 +35,7 @@ fn tokio_handle() -> tokio::runtime::Handle {
 
 impl ThemeClient {
     pub async fn new() -> Self {
-        let (tx, _) = broadcast::channel(32);
+        let (tx, _) = broadcast::channel(64);
         let initial_state = read_state_snapshot().unwrap_or_default();
         let current_state = Arc::new(Mutex::new(initial_state));
         let dbus_conn = Arc::new(tokio::sync::RwLock::new(None));
@@ -134,15 +134,13 @@ impl ThemeClient {
 
     fn force_update_state(&self, new_state: ThemeState) {
         let mut cur = self.current_state.lock().unwrap();
-        if cur.revision != new_state.revision || *cur != new_state {
-            *cur = new_state.clone();
-            let _ = self.tx.send(new_state);
-        }
+        *cur = new_state.clone();
+        let _ = self.tx.send(new_state);
     }
 
     fn update_state_if_newer(&self, new_state: ThemeState) {
         let mut cur = self.current_state.lock().unwrap();
-        if new_state.revision != cur.revision {
+        if new_state.revision >= cur.revision {
             *cur = new_state.clone();
             let _ = self.tx.send(new_state);
         }

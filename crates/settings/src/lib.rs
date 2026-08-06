@@ -113,8 +113,42 @@ pub struct SettingsView {
 }
 
 impl SettingsView {
-    pub fn new(theme_client: shilpo_theme::ThemeClient) -> Self {
+    pub fn new(theme_client: shilpo_theme::ThemeClient, cx: &mut Context<Self>) -> Self {
         let page_registry = SettingsPageRegistry::discover();
+
+        // 1. Immediately apply current theme state to GPUI Theme
+        let current_theme = theme_client.current_state();
+        shilpo_ui::Theme::global_mut(cx).apply_state(&current_theme);
+
+        // 2. Subscribe to theme updates and notify SettingsView on change
+        let mut rx = theme_client.subscribe();
+        let client_clone = theme_client.clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                let state = match rx.recv().await {
+                    Ok(state) => state,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        client_clone.current_state()
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+                let mut latest = state;
+                while let Ok(newer) = rx.try_recv() {
+                    latest = newer;
+                }
+                cx.update(|cx: &mut App| {
+                    shilpo_ui::Theme::global_mut(cx).apply_state(&latest);
+                    cx.refresh_windows();
+                });
+                if let Some(this) = this.upgrade() {
+                    this.update(cx, |_, cx| {
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
+
         Self {
             active_category: SettingsCategory::default(),
             page_registry,
@@ -134,7 +168,7 @@ impl SettingsView {
             update_desktop_icon_for_theme(cx);
         }
 
-        let view = cx.new(|_| Self::new(theme_client));
+        let view = cx.new(|cx| Self::new(theme_client, cx));
         cx.new(|cx| {
             shilpo_ui::Root::new(view, window, cx)
                 .bordered(true)

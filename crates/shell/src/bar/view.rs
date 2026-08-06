@@ -950,6 +950,7 @@ mod hug_corner_tests {
 
 #[cfg(test)]
 mod bar_input_region_tests {
+    use crate::bar::view::compute_bar_input_region;
     use gpui::{Bounds, point, px, size};
 
     #[test]

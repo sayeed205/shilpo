@@ -88,8 +88,7 @@ async fn main() {
             ..Default::default()
         };
 
-        // Pass the shared ThemeClient so SettingsView uses the same instance
-        // that main.rs subscribes to for D-Bus state changes.
+        // Pass the shared ThemeClient so SettingsView uses the same instance.
         let tc = theme_client.clone();
         let window_handle = match cx.open_window(options, move |window, cx| {
             SettingsView::view(tc, window, cx)
@@ -100,26 +99,6 @@ async fn main() {
                 return;
             }
         };
-
-        let mut rx = theme_client.subscribe();
-        let theme_client_for_task = theme_client.clone();
-        cx.spawn(async move |cx| {
-            loop {
-                let state = match rx.recv().await {
-                    Ok(state) => state,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        theme_client_for_task.current_state()
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                };
-                cx.update(|cx| {
-                    shilpo_ui::Theme::global_mut(cx).apply_state(&state);
-                    let _ = window_handle.update(cx, |_, _, cx| cx.notify());
-                    cx.refresh_windows();
-                });
-            }
-        })
-        .detach();
 
         if let Some(listener) = listener {
             listener.set_nonblocking(true).ok();
