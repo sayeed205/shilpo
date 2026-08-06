@@ -354,7 +354,8 @@ impl ThemeDaemon {
 
         let mut next_state = self.state.clone();
         let prev_rev = next_state.revision;
-        let effects = reduce(&mut next_state, command);
+        let now = chrono::Utc::now().to_rfc3339();
+        let effects = reduce(&mut next_state, command, &now);
 
         if next_state.revision > prev_rev {
             self.state = next_state;
@@ -458,6 +459,11 @@ fn initial_state(
     configured_variant: Option<shilpo_theme::SchemeVariant>,
 ) -> ThemeState {
     let mut state = persisted.unwrap_or_default();
+    if state.updated_at == shilpo_theme::state::DEFAULT_TIMESTAMP {
+        let now = chrono::Utc::now().to_rfc3339();
+        state.updated_at = now.clone();
+        state.palette_generated_at = now;
+    }
     if let Some(configured_wp_dir) = configured_wp_dir {
         state.wallpaper_dir = expand_tilde(configured_wp_dir);
     } else {
@@ -519,5 +525,12 @@ mod tests {
         );
 
         assert_eq!(state.wallpaper_dir, Path::new("/configured/wallpapers"));
+    }
+
+    #[test]
+    fn fresh_start_stamps_real_timestamp() {
+        let state = initial_state(None, None, None);
+        assert_ne!(state.updated_at, shilpo_theme::state::DEFAULT_TIMESTAMP);
+        assert_eq!(state.updated_at, state.palette_generated_at);
     }
 }

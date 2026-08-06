@@ -8157,7 +8157,6 @@ dependencies = [
 name = "shilpo-theme"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "mcu-material-color",
  "schemars",
  "serde",

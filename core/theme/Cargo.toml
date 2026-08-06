@@ -9,4 +9,3 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
 mcu-material-color = { workspace = true }
-chrono = { workspace = true }

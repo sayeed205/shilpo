@@ -1,9 +1,14 @@
-use chrono::Utc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
+
+/// Deterministic placeholder timestamp used by `ThemeState::default()` so the pure
+/// default carries no hidden clock I/O (ADR-0002). System-boundary callers (e.g.
+/// `shilpo-theme-daemon`) must replace it with a real clock time when constructing
+/// live state.
+pub const DEFAULT_TIMESTAMP: &str = "1970-01-01T00:00:00Z";
 
 const DEFAULT_SOURCE_ARGB: u32 = 0xff006c4c;
 
@@ -168,17 +173,7 @@ pub struct ThemeState {
 }
 
 impl ThemeState {
-    pub fn palette_algorithm(&self) -> String {
-        format!(
-            "Material3-{}",
-            self.scheme_variant.display_name().replace(' ', "")
-        )
-    }
-}
-
-impl Default for ThemeState {
-    fn default() -> Self {
-        let now = Utc::now().to_rfc3339();
+    pub fn new(timestamp: &str) -> Self {
         let (light, dark) = generate_m3_palettes(DEFAULT_SOURCE_ARGB, SchemeVariant::Auto);
         Self {
             revision: 1,
@@ -193,9 +188,22 @@ impl Default for ThemeState {
             source_argb: DEFAULT_SOURCE_ARGB,
             light,
             dark,
-            updated_at: now.clone(),
-            palette_generated_at: now,
+            updated_at: timestamp.to_string(),
+            palette_generated_at: timestamp.to_string(),
         }
+    }
+
+    pub fn palette_algorithm(&self) -> String {
+        format!(
+            "Material3-{}",
+            self.scheme_variant.display_name().replace(' ', "")
+        )
+    }
+}
+
+impl Default for ThemeState {
+    fn default() -> Self {
+        Self::new(DEFAULT_TIMESTAMP)
     }
 }
 
@@ -468,7 +476,23 @@ pub enum SideEffect {
     DispatchDesktopAdapter(ThemeMode),
 }
 
-pub fn reduce(state: &mut ThemeState, command: ThemeCommand) -> Vec<SideEffect> {
+fn regenerate_palette(
+    state: &mut ThemeState,
+    seed: u32,
+    variant: SchemeVariant,
+    timestamp: &str,
+) {
+    let (light, dark) = generate_m3_palettes(seed, variant);
+    state.light = light;
+    state.dark = dark;
+    state.palette_generated_at = timestamp.to_string();
+}
+
+pub fn reduce(
+    state: &mut ThemeState,
+    command: ThemeCommand,
+    timestamp: &str,
+) -> Vec<SideEffect> {
     let mut effects = Vec::new();
     let mut changed = false;
 
@@ -512,22 +536,18 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand) -> Vec<SideEffect> 
                 changed = true;
 
                 if let Some(seed) = target_seed.filter(|&seed| seed != state.source_argb) {
+                    let variant = state.scheme_variant;
                     state.source_argb = seed;
-                    let (light, dark) = generate_m3_palettes(seed, state.scheme_variant);
-                    state.light = light;
-                    state.dark = dark;
-                    state.palette_generated_at = Utc::now().to_rfc3339();
+                    regenerate_palette(state, seed, variant, timestamp);
                 }
             }
         }
         ThemeCommand::SetSchemeVariant(variant) => {
             if state.scheme_variant != variant {
+                let seed = state.source_argb;
                 state.scheme_variant = variant;
                 changed = true;
-                let (light, dark) = generate_m3_palettes(state.source_argb, variant);
-                state.light = light;
-                state.dark = dark;
-                state.palette_generated_at = Utc::now().to_rfc3339();
+                regenerate_palette(state, seed, variant, timestamp);
             }
         }
         ThemeCommand::SetCustomSeed(seed) => {
@@ -536,12 +556,10 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand) -> Vec<SideEffect> 
                 changed = true;
             }
             if state.color_source == ColorSource::Custom && state.source_argb != seed {
+                let variant = state.scheme_variant;
                 state.source_argb = seed;
-                let (light, dark) = generate_m3_palettes(seed, state.scheme_variant);
-                state.light = light;
-                state.dark = dark;
-                state.palette_generated_at = Utc::now().to_rfc3339();
                 changed = true;
+                regenerate_palette(state, seed, variant, timestamp);
             }
         }
         ThemeCommand::SetWallpaperDirectory(dir) => {
@@ -560,12 +578,10 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand) -> Vec<SideEffect> 
                 changed = true;
             }
             if state.color_source == ColorSource::Wallpaper && state.source_argb != seed {
+                let variant = state.scheme_variant;
                 state.source_argb = seed;
-                let (light, dark) = generate_m3_palettes(seed, state.scheme_variant);
-                state.light = light;
-                state.dark = dark;
-                state.palette_generated_at = Utc::now().to_rfc3339();
                 changed = true;
+                regenerate_palette(state, seed, variant, timestamp);
             }
         }
         ThemeCommand::PortalAppearanceChanged(portal_mode) => {
@@ -581,7 +597,7 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand) -> Vec<SideEffect> 
 
     if changed {
         state.revision += 1;
-        state.updated_at = Utc::now().to_rfc3339();
+        state.updated_at = timestamp.to_string();
     }
 
     effects
@@ -590,6 +606,8 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand) -> Vec<SideEffect> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_TIMESTAMP: &str = "2026-08-06T20:00:00Z";
 
     #[test]
     fn test_theme_mode_serde_validation() {
@@ -613,18 +631,25 @@ mod tests {
         let mut state = ThemeState::default();
         assert_eq!(state.selected_mode, ThemeMode::System);
         assert_eq!(state.resolved_mode, ThemeMode::Light);
+        assert_eq!(state.updated_at, DEFAULT_TIMESTAMP);
 
         // Portal appearance changes to Dark while in System mode
         let effects = reduce(
             &mut state,
             ThemeCommand::PortalAppearanceChanged(Some(ThemeMode::Dark)),
+            TEST_TIMESTAMP,
         );
         assert!(effects.is_empty());
         assert_eq!(state.selected_mode, ThemeMode::System);
         assert_eq!(state.resolved_mode, ThemeMode::Dark);
+        assert_eq!(state.updated_at, TEST_TIMESTAMP);
 
         // Fixed Dark mode command
-        let effects = reduce(&mut state, ThemeCommand::SetMode(ThemeMode::Dark));
+        let effects = reduce(
+            &mut state,
+            ThemeCommand::SetMode(ThemeMode::Dark),
+            TEST_TIMESTAMP,
+        );
         assert_eq!(
             effects,
             vec![SideEffect::DispatchDesktopAdapter(ThemeMode::Dark)]
@@ -636,6 +661,7 @@ mod tests {
         let effects = reduce(
             &mut state,
             ThemeCommand::PortalAppearanceChanged(Some(ThemeMode::Light)),
+            TEST_TIMESTAMP,
         );
         assert!(effects.is_empty());
         assert_eq!(state.selected_mode, ThemeMode::Dark);
@@ -667,12 +693,17 @@ mod tests {
         let effects = reduce(
             &mut state,
             ThemeCommand::PortalAppearanceChanged(Some(ThemeMode::Light)),
+            TEST_TIMESTAMP,
         );
         assert!(effects.is_empty());
         assert_eq!(state.revision, initial_rev);
 
         // No preference
-        let effects = reduce(&mut state, ThemeCommand::PortalAppearanceChanged(None));
+        let effects = reduce(
+            &mut state,
+            ThemeCommand::PortalAppearanceChanged(None),
+            TEST_TIMESTAMP,
+        );
         assert!(effects.is_empty());
         assert_eq!(state.revision, initial_rev);
         assert_eq!(state.resolved_mode, ThemeMode::Light);
@@ -685,15 +716,16 @@ mod tests {
             ..Default::default()
         };
 
-        let effects = reduce(&mut state, ThemeCommand::ToggleMode);
+        let effects = reduce(&mut state, ThemeCommand::ToggleMode, TEST_TIMESTAMP);
         assert_eq!(
             effects,
             vec![SideEffect::DispatchDesktopAdapter(ThemeMode::Dark)]
         );
         assert_eq!(state.selected_mode, ThemeMode::Dark);
         assert_eq!(state.resolved_mode, ThemeMode::Dark);
+        assert_eq!(state.updated_at, TEST_TIMESTAMP);
 
-        let effects = reduce(&mut state, ThemeCommand::ToggleMode);
+        let effects = reduce(&mut state, ThemeCommand::ToggleMode, TEST_TIMESTAMP);
         assert_eq!(
             effects,
             vec![SideEffect::DispatchDesktopAdapter(ThemeMode::Light)]
@@ -707,17 +739,42 @@ mod tests {
         let mut state = ThemeState::default();
         let seed = 0xff123456;
 
-        let _ = reduce(&mut state, ThemeCommand::SetCustomSeed(seed));
+        let _ = reduce(
+            &mut state,
+            ThemeCommand::SetCustomSeed(seed),
+            TEST_TIMESTAMP,
+        );
         assert_eq!(state.custom_seed, Some(seed));
 
         let _ = reduce(
             &mut state,
             ThemeCommand::SetColorSource(ColorSource::Custom),
+            TEST_TIMESTAMP,
         );
         assert_eq!(state.color_source, ColorSource::Custom);
         assert_eq!(state.source_argb, seed);
 
         assert!(state.light.contains_key("primary"));
         assert!(state.dark.contains_key("primary"));
+        assert_eq!(state.palette_generated_at, TEST_TIMESTAMP);
+    }
+
+    #[test]
+    fn test_reduce_is_deterministic_with_timestamp() {
+        let mut state = ThemeState::new("2026-01-01T00:00:00Z");
+        assert_eq!(state.updated_at, "2026-01-01T00:00:00Z");
+        assert_eq!(state.palette_generated_at, "2026-01-01T00:00:00Z");
+
+        let ts = "2026-08-06T12:34:56Z";
+        reduce(&mut state, ThemeCommand::SetMode(ThemeMode::Dark), ts);
+        assert_eq!(state.updated_at, ts);
+
+        reduce(
+            &mut state,
+            ThemeCommand::SetSchemeVariant(SchemeVariant::Expressive),
+            "2026-08-06T13:00:00Z",
+        );
+        assert_eq!(state.updated_at, "2026-08-06T13:00:00Z");
+        assert_eq!(state.palette_generated_at, "2026-08-06T13:00:00Z");
     }
 }
