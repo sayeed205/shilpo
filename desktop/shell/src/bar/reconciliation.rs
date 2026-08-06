@@ -24,11 +24,7 @@ pub struct BarSpec {
 }
 
 impl BarSpec {
-    pub fn new(
-        geometry: BarGeometry,
-        config: BarConfig,
-        with_display_geometry: bool,
-    ) -> Self {
+    pub fn new(geometry: BarGeometry, config: BarConfig, with_display_geometry: bool) -> Self {
         Self {
             display_id: geometry.display_id,
             output_name: None,

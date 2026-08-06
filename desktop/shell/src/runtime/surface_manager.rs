@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::{Path, PathBuf}};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use gpui::{
     App, Bounds, DisplayId, Entity, Pixels, Point, Size, WindowBackgroundAppearance, WindowBounds,
@@ -199,10 +202,7 @@ impl ShellRuntime {
             .collect::<std::collections::HashSet<_>>();
         if output_ids != cx.global::<Self>().extension_output_ids {
             cx.global_mut::<Self>().extension_output_ids = output_ids;
-            Self::dispatch_extension_event(
-                cx,
-                shilpo_ext::ExtensionEvent::OutputsChanged,
-            );
+            Self::dispatch_extension_event(cx, shilpo_ext::ExtensionEvent::OutputsChanged);
         }
 
         Self::reconcile_extension_surfaces(cx, &current_outputs);
@@ -429,10 +429,7 @@ impl ShellRuntime {
     }
 
     pub fn overview_focus_window(cx: &mut App, window_id: u64) -> Result<(), ShellError> {
-        Self::dispatch_action(
-            cx,
-            crate::actions::ActionInvocation::FocusWindow(window_id),
-        )
+        Self::dispatch_action(cx, crate::actions::ActionInvocation::FocusWindow(window_id))
     }
 
     pub fn overview_reduced_motion(cx: &App) -> bool {
@@ -509,7 +506,9 @@ impl ShellRuntime {
 
                 shilpo_theme_daemon::ThemeClient::spawn_task(async move {
                     let client = shilpo_theme_daemon::ThemeClient::new().await;
-                    let _ = client.set_wallpaper(discovered_wallpaper_path.to_str().unwrap_or_default()).await;
+                    let _ = client
+                        .set_wallpaper(discovered_wallpaper_path.to_str().unwrap_or_default())
+                        .await;
                 });
 
                 Self::refresh_bars(cx);
@@ -553,7 +552,13 @@ impl ShellRuntime {
             Ok(handle) => {
                 let runtime = cx.global_mut::<Self>();
                 runtime.overview = Some(handle);
-                Self::dispatch_surface_lifecycle(cx, ContributionSurface::Launcher, true, 1280., 720.);
+                Self::dispatch_surface_lifecycle(
+                    cx,
+                    ContributionSurface::Launcher,
+                    true,
+                    1280.,
+                    720.,
+                );
                 cx.global::<Self>().publish_status();
             }
             Err(error) => tracing::warn!(error = %error, "failed to open overview overlay"),

@@ -98,7 +98,10 @@ impl ShellRuntime {
         }
     }
 
-    pub(super) fn show_compositor_error_toast(cx: &mut App, error: &shilpo_services::CompositorCommandError) {
+    pub(super) fn show_compositor_error_toast(
+        cx: &mut App,
+        error: &shilpo_services::CompositorCommandError,
+    ) {
         let concise = format!("{error}");
         Self::show_compositor_error_message_toast(cx, &concise);
     }

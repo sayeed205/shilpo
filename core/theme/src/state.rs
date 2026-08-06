@@ -66,7 +66,6 @@ impl<'de> Deserialize<'de> for ThemeMode {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ColorSource {
@@ -74,7 +73,6 @@ pub enum ColorSource {
     Wallpaper,
     Custom,
 }
-
 
 #[derive(
     Debug,
@@ -149,7 +147,6 @@ impl SchemeVariant {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct ThemeState {

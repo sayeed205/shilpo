@@ -346,9 +346,17 @@ impl RenderOnce for WorkspacesWidget {
         }
 
         let items_layout = if self.orientation == PillOrientation::Horizontal {
-            h_flex().items_center().gap(px(0.)).children(items).into_any_element()
+            h_flex()
+                .items_center()
+                .gap(px(0.))
+                .children(items)
+                .into_any_element()
         } else {
-            v_flex().items_center().gap(px(0.)).children(items).into_any_element()
+            v_flex()
+                .items_center()
+                .gap(px(0.))
+                .children(items)
+                .into_any_element()
         };
 
         let container = div()
@@ -361,9 +369,15 @@ impl RenderOnce for WorkspacesWidget {
             .child(items_layout);
 
         if self.orientation == PillOrientation::Horizontal {
-            container.flex_row().h(px(WORKSPACE_SLOT_SIZE)).into_any_element()
+            container
+                .flex_row()
+                .h(px(WORKSPACE_SLOT_SIZE))
+                .into_any_element()
         } else {
-            container.flex_col().w(px(WORKSPACE_SLOT_SIZE)).into_any_element()
+            container
+                .flex_col()
+                .w(px(WORKSPACE_SLOT_SIZE))
+                .into_any_element()
         }
     }
 }

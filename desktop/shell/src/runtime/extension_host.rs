@@ -1,12 +1,14 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use gpui::{
-    App, AppContext, Bounds, DisplayId, Pixels, WindowBackgroundAppearance, WindowBounds, WindowKind,
-    WindowOptions, layer_shell::{KeyboardInteractivity, Layer, LayerShellOptions}, point, px, size,
-};
 use crate::{
     actions::{ActionId, ActionInvocation},
     extensions::{ContributionDescriptor, ContributionSurface, ExtensionGeneration},
+};
+use gpui::{
+    App, AppContext, Bounds, DisplayId, Pixels, WindowBackgroundAppearance, WindowBounds,
+    WindowKind, WindowOptions,
+    layer_shell::{KeyboardInteractivity, Layer, LayerShellOptions},
+    point, px, size,
 };
 
 use super::{ShellRuntime, surface_manager::overlay_options};

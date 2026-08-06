@@ -6,7 +6,9 @@ use shilpo_services::{
 };
 
 use crate::{
-    actions::ActionInvocation, bar::service_worker::{self, WorkerCommand}, error::ShellError,
+    actions::ActionInvocation,
+    bar::service_worker::{self, WorkerCommand},
+    error::ShellError,
 };
 
 use super::ShellRuntime;

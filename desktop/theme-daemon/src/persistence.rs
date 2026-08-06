@@ -1,5 +1,5 @@
-use shilpo_theme::ThemeState;
 use anyhow::{Context, Result};
+use shilpo_theme::ThemeState;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;

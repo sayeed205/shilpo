@@ -1,8 +1,8 @@
 use crate::dbus::ThemeDbusProxy;
 use crate::persistence::read_state_snapshot;
-use shilpo_theme::{ColorSource, ThemeMode, ThemeState};
 use anyhow::{Context, Result, anyhow};
 use futures_lite::stream::StreamExt;
+use shilpo_theme::{ColorSource, ThemeMode, ThemeState};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -185,7 +185,10 @@ impl ThemeClient {
 
     pub async fn set_mode(&self, mode: ThemeMode) -> Result<()> {
         let proxy = self.proxy().await?;
-        let mode_str = serde_json::to_string(&mode).unwrap_or_default().trim_matches('"').to_string();
+        let mode_str = serde_json::to_string(&mode)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
         match proxy.set_mode(&mode_str).await {
             Ok(raw) => self.apply_response(raw),
             Err(err) => {
@@ -208,7 +211,10 @@ impl ThemeClient {
 
     pub async fn set_color_source(&self, source: ColorSource) -> Result<()> {
         let proxy = self.proxy().await?;
-        let source_str = serde_json::to_string(&source).unwrap_or_default().trim_matches('"').to_string();
+        let source_str = serde_json::to_string(&source)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
         match proxy.set_color_source(&source_str).await {
             Ok(raw) => self.apply_response(raw),
             Err(err) => {

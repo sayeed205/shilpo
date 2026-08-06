@@ -2,7 +2,9 @@ use crate::bar::service_worker::{ConfigUpdate, WorkerUpdate};
 use crate::bar::widgets::clock::{format_clock, format_date};
 use crate::osd::OsdKind;
 use shilpo_config::ShellConfig;
-use shilpo_services::{AudioInfo, BatteryInfo, BluetoothInfo, MediaInfo, NetworkInfo, Notification};
+use shilpo_services::{
+    AudioInfo, BatteryInfo, BluetoothInfo, MediaInfo, NetworkInfo, Notification,
+};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -274,9 +276,8 @@ mod tests {
         let mut state = BarState::default();
         let err_msg = "Invalid TOML syntax".to_string();
 
-        let result = state.apply_worker_update(&WorkerUpdate::Config(ConfigUpdate::Failed(
-            err_msg.clone(),
-        )));
+        let result =
+            state.apply_worker_update(&WorkerUpdate::Config(ConfigUpdate::Failed(err_msg.clone())));
         assert!(result.changed);
         assert_eq!(state.last_error, Some(err_msg.clone()));
         assert_eq!(result.effects.len(), 1);
