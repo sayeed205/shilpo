@@ -36,7 +36,8 @@ uninstall_shilpo() {
   run rm -f \
     "$bin_dir/shilpo" \
     "$bin_dir/shilpo-shell" \
-    "$bin_dir/shilpo-themed"
+    "$bin_dir/shilpo-themed" \
+    "$bin_dir/shilpo-settings"
 
   if command -v systemctl >/dev/null 2>&1; then
     run systemctl --user daemon-reload

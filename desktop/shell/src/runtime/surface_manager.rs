@@ -206,6 +206,7 @@ impl ShellRuntime {
         }
 
         Self::reconcile_extension_surfaces(cx, &current_outputs);
+        Self::reconcile_bars(cx);
     }
 
     pub fn open_bar_with_spec(cx: &mut App, spec: crate::bar::BarSpec) -> bool {

@@ -30,7 +30,7 @@ build_release() {
 
   log "Building Shilpo release workspace binaries"
   run env CARGO_TARGET_DIR="$build_dir" cargo +stable build --locked --release \
-    -p shilpo-shell -p shilpo-cli -p shilpo-theme -p shilpo-settings
+    -p shilpo-shell -p shilpo-cli -p shilpo-theme-daemon -p shilpo-settings
 
   log "Building bundled weather WASM extension"
   run env CARGO_TARGET_DIR="$extension_target_dir" cargo +stable build --locked --manifest-path extensions/Cargo.toml \

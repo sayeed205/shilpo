@@ -24,11 +24,23 @@ use std::{
 };
 use tokio::sync::watch;
 
-/// Resolves `NIRI_SOCKET`, then `NIRI_SOCKET_PATH`.
+/// Resolves `NIRI_SOCKET`, then `NIRI_SOCKET_PATH`, falling back to scanning `XDG_RUNTIME_DIR`.
 pub fn resolve_niri_socket_path() -> Option<PathBuf> {
     env::var_os("NIRI_SOCKET")
         .or_else(|| env::var_os("NIRI_SOCKET_PATH"))
         .map(PathBuf::from)
+        .or_else(|| {
+            let runtime_dir = dirs::runtime_dir()?;
+            let entries = std::fs::read_dir(&runtime_dir).ok()?;
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with("niri") && name_str.ends_with(".sock") {
+                    return Some(entry.path());
+                }
+            }
+            None
+        })
 }
 
 /// Niri Compositor IPC service for publishing revisioned, deterministic snapshots and managing reconnection.

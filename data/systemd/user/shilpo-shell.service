@@ -5,8 +5,9 @@ PartOf=niri.service
 After=niri.service
 
 [Service]
+ExecStartPre=/usr/bin/sleep 1
 ExecStart=/usr/bin/shilpo-shell
-Restart=on-failure
+Restart=always
 RestartSec=2s
 KillSignal=SIGTERM
 TimeoutStopSec=5s

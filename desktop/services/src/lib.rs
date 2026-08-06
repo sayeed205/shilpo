@@ -102,10 +102,16 @@ mod tests {
     #[test]
     fn test_all_services_watch_subscribe_pattern() {
         let bluetooth = BluetoothService::new_offline();
-        assert_eq!(bluetooth.subscribe().borrow().clone(), BluetoothInfo::default());
+        assert_eq!(
+            bluetooth.subscribe().borrow().clone(),
+            BluetoothInfo::default()
+        );
 
         let caffeine = CaffeineService::new();
-        assert_eq!(caffeine.subscribe().borrow().clone(), CaffeineInfo::default());
+        assert_eq!(
+            caffeine.subscribe().borrow().clone(),
+            CaffeineInfo::default()
+        );
 
         let location = LocationService::new();
         assert_eq!(location.subscribe().borrow().clone(), None);
@@ -117,7 +123,10 @@ mod tests {
         assert_eq!(network.subscribe().borrow().clone(), NetworkInfo::default());
 
         let night_light = NightLightService::new_offline();
-        assert_eq!(night_light.subscribe().borrow().clone(), NightLightInfo::default());
+        assert_eq!(
+            night_light.subscribe().borrow().clone(),
+            NightLightInfo::default()
+        );
 
         let power_profile = PowerProfileService::new_offline();
         assert_eq!(

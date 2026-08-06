@@ -65,7 +65,8 @@ stage_and_commit_files() {
 
   # Render the absolute Shilpo binary path without shell/sed interpolation.
   render_template "$staging_dir/niri/config.d/70-binds.kdl" "$staging_dir/niri/config.d/70-binds.kdl" \
-    'spawn "shilpo"' "spawn \"$bin_dir/shilpo\""
+    'spawn "shilpo"' "spawn \"$bin_dir/shilpo\"" \
+    'spawn "shilpo-settings"' "spawn \"$bin_dir/shilpo-settings\""
 
   # Stage Kitty, Starship, Swaylock, Swayidle, Fish, Shilpo configs
   mkdir -p "$staging_dir/kitty" "$staging_dir/starship" "$staging_dir/swaylock" "$staging_dir/swayidle" "$staging_dir/fish" "$staging_dir/shilpo" "$staging_dir/wallpapers"
