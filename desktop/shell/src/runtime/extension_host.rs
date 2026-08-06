@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui::{
-    App, Bounds, DisplayId, Pixels, WindowBackgroundAppearance, WindowBounds, WindowKind,
+    App, AppContext, Bounds, DisplayId, Pixels, WindowBackgroundAppearance, WindowBounds, WindowKind,
     WindowOptions, layer_shell::{KeyboardInteractivity, Layer, LayerShellOptions}, point, px, size,
 };
 use crate::{
@@ -12,10 +12,10 @@ use crate::{
 use super::{ShellRuntime, surface_manager::overlay_options};
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct ExtensionSurfaceSpec {
-    pub(super) contribution: shilpo_ext::CanonicalId,
-    pub(super) display_id: DisplayId,
-    pub(super) bounds: Bounds<Pixels>,
+pub struct ExtensionSurfaceSpec {
+    pub contribution: shilpo_ext::CanonicalId,
+    pub display_id: DisplayId,
+    pub bounds: Bounds<Pixels>,
 }
 
 pub(super) fn extension_settings(

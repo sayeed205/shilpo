@@ -23,6 +23,22 @@ pub struct BarSpec {
     pub with_display_geometry: bool,
 }
 
+impl BarSpec {
+    pub fn new(
+        geometry: BarGeometry,
+        config: BarConfig,
+        with_display_geometry: bool,
+    ) -> Self {
+        Self {
+            display_id: geometry.display_id,
+            output_name: None,
+            geometry,
+            config,
+            with_display_geometry,
+        }
+    }
+}
+
 /// Reconciliation operation to transition current bar instances to desired state.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReconciliationOp {

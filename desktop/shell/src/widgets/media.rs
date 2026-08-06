@@ -1,11 +1,11 @@
-use crate::progress::ProgressCircle;
-use crate::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
+use shilpo_ui::progress::ProgressCircle;
+use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
 use gpui::{
     AnimationExt as _, App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, ObjectFit,
     ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
     StyleRefinement, Styled, StyledImage as _, Window, div, img, prelude::FluentBuilder as _, px,
 };
-use std::{io::Read, path::PathBuf};
+use std::{io::Read, path::PathBuf, time::Duration};
 
 const MAX_ARTWORK_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CACHED_ARTWORKS: usize = 32;
@@ -122,7 +122,9 @@ pub struct MediaControl {
     progress: f32,
     vertical: bool,
     reduced_motion: bool,
+    #[allow(clippy::type_complexity)]
     on_play_pause: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+    #[allow(clippy::type_complexity)]
     on_next: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     style: StyleRefinement,
 }
@@ -234,26 +236,25 @@ impl RenderOnce for MediaControl {
             });
             if local_path.is_none()
                 && (art_url.starts_with("http://") || art_url.starts_with("https://"))
+                && let Some(target) = cached_artwork_path(&art_url)
             {
-                if let Some(target) = cached_artwork_path(&art_url) {
-                    let state = artwork_state.clone();
-                    let requested_url = art_url.clone();
-                    cx.spawn(async move |cx| {
-                        let download_url = requested_url.clone();
-                        let downloaded = cx
-                            .background_executor()
-                            .spawn(async move { download_artwork(download_url, target) })
-                            .await;
-                        _ = state.update(cx, |state, cx| {
-                            if state.url == requested_url {
-                                state.loading = false;
-                                state.path = downloaded;
-                                cx.notify();
-                            }
-                        });
-                    })
-                    .detach();
-                }
+                let state = artwork_state.clone();
+                let requested_url = art_url.clone();
+                cx.spawn(async move |cx| {
+                    let download_url = requested_url.clone();
+                    let downloaded = cx
+                        .background_executor()
+                        .spawn(async move { download_artwork(download_url, target) })
+                        .await;
+                    state.update(cx, |state, cx| {
+                        if state.url == requested_url {
+                            state.loading = false;
+                            state.path = downloaded;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
             }
         }
         let artwork_path = artwork_snapshot.path;
@@ -337,10 +338,8 @@ impl RenderOnce for MediaControl {
                 )
             });
 
-        if self.can_play_pause {
-            if let Some(on_play_pause) = self.on_play_pause {
-                artwork_element = artwork_element.on_click(on_play_pause);
-            }
+        if self.can_play_pause && let Some(on_play_pause) = self.on_play_pause {
+            artwork_element = artwork_element.on_click(on_play_pause);
         }
 
         if self.vertical {
@@ -378,14 +377,14 @@ impl RenderOnce for MediaControl {
                         .child(full_text)
                         .with_animation(
                             format!("media-title-marquee-{}", self.id),
-                            gpui::Animation::new(instant::Duration::from_secs(22)).repeat(),
+                            gpui::Animation::new(Duration::from_secs(22)).repeat(),
                             move |this, delta| {
                                 let shift = if delta < 0.25 {
                                     0.0
                                 } else {
                                     let p = (delta - 0.25) / 0.75;
                                     let ease =
-                                        crate::animation::cubic_bezier(0.25, 0.1, 0.25, 1.0)(p);
+                                        shilpo_ui::animation::cubic_bezier(0.25, 0.1, 0.25, 1.0)(p);
                                     ease * scroll_dist
                                 };
                                 this.ml(px(-shift))
@@ -424,10 +423,8 @@ impl RenderOnce for MediaControl {
                     .text_color(next_fg),
             );
 
-        if self.can_go_next {
-            if let Some(on_next) = self.on_next {
-                next_btn = next_btn.on_click(on_next);
-            }
+        if self.can_go_next && let Some(on_next) = self.on_next {
+            next_btn = next_btn.on_click(on_next);
         }
 
         let metadata_column = v_flex()

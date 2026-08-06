@@ -1,4 +1,4 @@
-use crate::{ActiveTheme, Icon, IconName};
+use shilpo_ui::{ActiveTheme, Icon, IconName};
 use gpui::{
     App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     StatefulInteractiveElement as _, Styled, Window, div, px,
@@ -17,6 +17,7 @@ pub fn get_caffeine_icon(active: bool) -> IconName {
 pub struct CaffeineWidget {
     id: ElementId,
     active: bool,
+    #[allow(clippy::type_complexity)]
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
