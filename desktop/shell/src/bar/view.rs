@@ -1,5 +1,5 @@
 use crate::actions::ActionInvocation;
-use crate::bar::service_worker::{self, ConfigUpdate, WorkerCommand, WorkerUpdate};
+use crate::bar::service_worker::{self, WorkerCommand, WorkerUpdate};
 use crate::battery::BatteryIndicator;
 use crate::runtime::ShellRuntime;
 use gpui::{
@@ -7,7 +7,7 @@ use gpui::{
     Render, Styled, Window, div, prelude::*, px,
 };
 use shilpo_config::{BarPosition, BarWidget, ShellConfig};
-use shilpo_services::{AudioInfo, BatteryInfo, NetworkInfo, Notification};
+use shilpo_services::Notification;
 use shilpo_ui::{ActiveTheme, h_flex, v_flex};
 use std::time::Duration;
 
@@ -47,56 +47,24 @@ pub fn apply_config_theme(_config: &ShellConfig, _window: Option<&mut Window>, c
 }
 
 /// Status Bar GPUI View (Multi-Capsule Segmented Bar with IPC integration).
-use super::widgets::clock::{format_clock, format_date};
+use super::state::{BarState, BarStateEffect};
 
 pub struct BarView {
-    pub config: ShellConfig,
+    pub state: BarState,
     service_commands: service_worker::CommandSender,
-    battery: BatteryInfo,
-    audio: AudioInfo,
-    network: NetworkInfo,
-    bluetooth: shilpo_services::BluetoothInfo,
-    caffeine_service: std::sync::Arc<shilpo_services::CaffeineService>,
-    #[allow(dead_code)]
-    app_id: String,
-    #[allow(dead_code)]
-    active_title: String,
-    media_info: Option<shilpo_services::MediaInfo>,
-    time_str: String,
-    date_str: String,
-    cpu_percent: u8,
-    ram_percent: u8,
-    cat_frame_index: usize,
     _datetime_task: Option<gpui::Task<()>>,
     _sysinfo_task: Option<gpui::Task<()>>,
     extension_instance_prefix: Option<String>,
     output_name: Option<String>,
-    last_error: Option<String>,
-    last_service_update: std::time::Instant,
 }
 
 impl BarView {
-    fn update_datetime(&mut self) -> bool {
-        let now = chrono::Local::now();
-        let fmt = self.config.clock_format.as_deref();
-        let new_time = format_clock(&now, fmt);
-        let new_date = format_date(&now);
-        let mut changed = false;
-
-        if self.time_str != new_time {
-            self.time_str = new_time;
-            changed = true;
-        }
-        if self.date_str != new_date {
-            self.date_str = new_date;
-            changed = true;
-        }
-
-        changed
+    pub fn update_datetime(&mut self) -> bool {
+        self.state.update_datetime()
     }
 
     pub fn is_stale(&self) -> bool {
-        self.last_service_update.elapsed() > std::time::Duration::from_secs(30)
+        self.state.is_stale()
     }
 
     pub fn enqueue_request(
@@ -123,14 +91,6 @@ impl BarView {
         cx: &mut Context<Self>,
         config: ShellConfig,
     ) -> Self {
-        let battery = BatteryInfo::default();
-        let audio = AudioInfo::default();
-        let network = NetworkInfo::default();
-        let bluetooth = shilpo_services::BluetoothService::new()
-            .map(|s| s.info())
-            .unwrap_or_default();
-        let caffeine_service = std::sync::Arc::new(shilpo_services::CaffeineService::new());
-
         window.on_window_should_close(cx, |_, cx| {
             ShellRuntime::forget_bar(cx);
             true
@@ -144,15 +104,13 @@ impl BarView {
             tx
         });
 
-        let now = chrono::Local::now();
-        let time_str = format_clock(&now, config.clock_format.as_deref());
-        let date_str = format_date(&now);
+        let state = BarState::new(config);
 
         let _datetime_task = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 let res = this.update(cx, |view, cx| {
-                    if view.update_datetime() {
+                    if view.state.update_datetime() {
                         cx.notify();
                     }
                 });
@@ -194,9 +152,9 @@ impl BarView {
                     .await;
 
                 let res = this.update(cx, |view, cx| {
-                    view.cpu_percent = cpu_pct;
-                    view.ram_percent = ram_pct;
-                    view.cat_frame_index = (view.cat_frame_index + 1) % 5;
+                    view.state.cpu_percent = cpu_pct;
+                    view.state.ram_percent = ram_pct;
+                    view.state.cat_frame_index = (view.state.cat_frame_index + 1) % 5;
                     cx.notify();
                 });
                 if res.is_err() {
@@ -206,27 +164,12 @@ impl BarView {
         }));
 
         Self {
-            config,
+            state,
             service_commands,
-            battery,
-            audio,
-            network,
-            bluetooth,
-            caffeine_service,
-            app_id: "shilpo.shell".into(),
-            active_title: "Shilpo Shell".into(),
-            media_info: None,
-            time_str,
-            date_str,
-            cpu_percent: 0,
-            ram_percent: 0,
-            cat_frame_index: 0,
             _datetime_task,
             _sysinfo_task,
             extension_instance_prefix: None,
             output_name: None,
-            last_error: None,
-            last_service_update: std::time::Instant::now(),
         }
     }
 
@@ -271,57 +214,42 @@ impl BarView {
     }
 
     pub fn apply_worker_update(&mut self, update: &WorkerUpdate, cx: &mut Context<Self>) {
-        self.last_service_update = std::time::Instant::now();
-        let mut changed = false;
-        match update {
-            WorkerUpdate::Battery(value) if &self.battery != value => {
-                self.battery = value.clone();
-                changed = true;
-            }
-            WorkerUpdate::Audio(value) if &self.audio != value => {
-                let show_osd = self.audio.available
-                    && value.available
-                    && (self.audio.volume != value.volume || self.audio.is_muted != value.is_muted);
-                self.audio = value.clone();
-                if show_osd {
-                    ShellRuntime::show_osd(
-                        cx,
-                        crate::osd::OsdKind::Volume {
-                            level: value.volume as u32,
-                            muted: value.is_muted,
-                        },
-                    );
+        let result = self.state.apply_worker_update(update);
+        for effect in result.effects {
+            match effect {
+                BarStateEffect::ShowOsd(kind) => {
+                    ShellRuntime::show_osd(cx, kind);
                 }
-                changed = true;
+                BarStateEffect::ShowNotificationToast(notification) => {
+                    open_notification_toast(cx, notification);
+                }
+                BarStateEffect::ApplyConfigTheme(config) => {
+                    apply_config_theme(&config, None, cx);
+                }
             }
-            WorkerUpdate::Network(value) if &self.network != value => {
-                self.network = value.clone();
-                changed = true;
-            }
-            WorkerUpdate::Media(value) if self.media_info.as_ref() != Some(value) => {
-                self.media_info = Some(value.clone());
-                changed = true;
-            }
-            WorkerUpdate::Config(ConfigUpdate::Loaded(config)) => {
-                self.config = (**config).clone();
-                self.last_error = None;
-                apply_config_theme(&self.config, None, cx);
-                changed = self.update_datetime();
-            }
-            WorkerUpdate::Config(ConfigUpdate::Failed(error)) => {
-                tracing::error!(error = %error, "config reload failed");
-                self.last_error = Some(error.clone());
-                open_notification_toast(cx, Notification::new("Configuration Warning", error));
-                changed = true;
-            }
-            _ => {}
         }
-
-        if changed {
+        if result.changed {
             cx.notify();
         }
     }
+
+    pub fn build(spec: crate::bar::BarSpec, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut view = Self::new_with_config(window, cx, ShellConfig::default());
+        view.state.config.bar = spec.config;
+        view.extension_instance_prefix = Some(format!("bar:{:?}", spec.display_id));
+        view.output_name = spec.output_name;
+        view
+    }
+
+    pub fn view_with_spec(
+        spec: crate::bar::BarSpec,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        cx.new(|cx| Self::build(spec, window, cx))
+    }
 }
+
 
 impl BarView {
     fn build_section(
@@ -341,7 +269,7 @@ impl BarView {
                 BarWidget::Builtin(BuiltinBarWidget::Workspaces) => {
                     let snapshot = ShellRuntime::compositor_snapshot(cx);
                     let is_vertical = matches!(
-                        self.config.bar.position,
+                        self.state.config.bar.position,
                         shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
                     );
                     let pill_orientation = if is_vertical {
@@ -361,10 +289,12 @@ impl BarView {
                 }
                 BarWidget::Builtin(BuiltinBarWidget::RunningApps) => {
                     let snapshot = ShellRuntime::compositor_snapshot(cx);
-                    let app_icons = ShellRuntime::app_icon_index(cx);
+                    let app_icons = std::sync::Arc::new(crate::app_icons::build_app_icon_index(
+                        ShellRuntime::overview_applications(cx),
+                    ));
                     let reduced_motion = ShellRuntime::overview_reduced_motion(cx);
                     let is_vertical = matches!(
-                        self.config.bar.position,
+                        self.state.config.bar.position,
                         shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
                     );
                     let pill_orientation = if is_vertical {
@@ -386,13 +316,13 @@ impl BarView {
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Clock) => {
                     let is_vertical = matches!(
-                        self.config.bar.position,
+                        self.state.config.bar.position,
                         shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
                     );
                     elements.push(
                         super::widgets::ClockWidget::new(
                             format!("clock_{section_name}_{index}"),
-                            self.time_str.clone(),
+                            self.state.time_str.clone(),
                             is_vertical,
                         )
                         .into_any_element(),
@@ -400,24 +330,24 @@ impl BarView {
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Date) => {
                     let is_vertical = matches!(
-                        self.config.bar.position,
+                        self.state.config.bar.position,
                         shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
                     );
                     elements.push(
                         super::widgets::DateWidget::new(
                             format!("date_{section_name}_{index}"),
-                            self.date_str.clone(),
+                            self.state.date_str.clone(),
                             is_vertical,
                         )
                         .into_any_element(),
                     );
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Media) => {
-                    if let Some(info) = &self.media_info
+                    if let Some(info) = &self.state.media_info
                         && !info.is_empty()
                     {
                         let is_vertical = matches!(
-                            self.config.bar.position,
+                            self.state.config.bar.position,
                             shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
                         );
                         elements.push(
@@ -432,11 +362,11 @@ impl BarView {
                     }
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Battery) => {
-                    if self.battery.is_present {
+                    if self.state.battery.is_present {
                         elements.push(
                             BatteryIndicator::new(
                                 format!("battery_{section_name}_{index}"),
-                                self.battery.clone(),
+                                self.state.battery.clone(),
                             )
                             .into_any_element(),
                         );
@@ -446,9 +376,9 @@ impl BarView {
                     elements.push(
                         super::widgets::SysInfoWidget::new(
                             format!("sysinfo_{section_name}_{index}"),
-                            self.cat_frame_index,
-                            self.cpu_percent,
-                            self.ram_percent,
+                            self.state.cat_frame_index,
+                            self.state.cpu_percent,
+                            self.state.ram_percent,
                         )
                         .into_any_element(),
                     );
@@ -457,7 +387,7 @@ impl BarView {
                     elements.push(
                         super::widgets::NetworkWidget::new(
                             format!("network_{section_name}_{index}"),
-                            self.network.clone(),
+                            self.state.network.clone(),
                         )
                         .into_any_element(),
                     );
@@ -466,13 +396,13 @@ impl BarView {
                     elements.push(
                         super::widgets::BluetoothWidget::new(
                             format!("bluetooth_{section_name}_{index}"),
-                            self.bluetooth.clone(),
+                            self.state.bluetooth.clone(),
                         )
                         .into_any_element(),
                     );
                 }
                 BarWidget::Builtin(BuiltinBarWidget::Caffeine) => {
-                    let caffeine_svc = self.caffeine_service.clone();
+                    let caffeine_svc = self.state.caffeine_service.clone();
                     let is_active = caffeine_svc.is_active();
                     elements.push(
                         crate::widgets::CaffeineWidget::new(
@@ -510,7 +440,7 @@ impl BarView {
 
         let flex = if side { v_flex() } else { h_flex() };
         let section = flex
-            .gap(px(self.config.bar.widget_spacing as f32))
+            .gap(px(self.state.config.bar.widget_spacing as f32))
             .items_center()
             .children(elements);
 
@@ -538,7 +468,7 @@ impl BarView {
     ) -> impl IntoElement {
         use gpui::{canvas, point};
 
-        let bar_height = px(self.config.bar.height as f32);
+        let bar_height = px(self.state.config.bar.height as f32);
 
         canvas(
             move |_, _, _| {},
@@ -677,15 +607,15 @@ impl Render for BarView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use shilpo_config::BarStyle;
 
-        let style = self.config.bar.style;
+        let style = self.state.config.bar.style;
         let side = matches!(
-            self.config.bar.position,
+            self.state.config.bar.position,
             BarPosition::Left | BarPosition::Right
         );
         let opacity = if style == BarStyle::Hug {
             1.0
         } else {
-            self.config.bar.opacity.clamp(0.0, 1.0)
+            self.state.config.bar.opacity.clamp(0.0, 1.0)
         };
         let compositor_stale = !ShellRuntime::compositor_snapshot(cx).connection.is_ready();
         let bg_color = cx
@@ -696,7 +626,7 @@ impl Render for BarView {
             } else {
                 opacity
             });
-        let widgets = self.config.bar.widgets.clone();
+        let widgets = self.state.config.bar.widgets.clone();
         let is_floating = style == BarStyle::Float;
         let start = self.build_section("start", &widgets.start, side, is_floating, window, cx);
         let center = self.build_section("center", &widgets.center, side, is_floating, window, cx);
@@ -704,13 +634,13 @@ impl Render for BarView {
 
         let bar_container = div()
             .when(side, |this| {
-                this.w(px(self.config.bar.height as f32))
+                this.w(px(self.state.config.bar.height as f32))
                     .h_full()
                     .flex_col()
             })
             .when(!side, |this| {
                 this.w_full()
-                    .h(px(self.config.bar.height as f32))
+                    .h(px(self.state.config.bar.height as f32))
                     .flex_row()
             })
             .flex()
@@ -734,12 +664,12 @@ impl Render for BarView {
         match style {
             BarStyle::Hug => {
                 let hug_corners = self.render_hug_corners(
-                    self.config.bar.position,
+                    self.state.config.bar.position,
                     px(HUG_CORNER_RADIUS),
                     bg_color,
                 );
                 let main_bar = bar_container;
-                let aligned_bar = match self.config.bar.position {
+                let aligned_bar = match self.state.config.bar.position {
                     BarPosition::Top => div().absolute().top_0().w_full().child(main_bar),
                     BarPosition::Bottom => div().absolute().bottom_0().w_full().child(main_bar),
                     BarPosition::Left => div().absolute().left_0().h_full().child(main_bar),
@@ -760,8 +690,8 @@ impl Render for BarView {
                 .on_children_prepainted(set_bar_input_region)
                 .child(
                     bar_container
-                        .px(px(self.config.bar.margin.horizontal as f32))
-                        .py(px(self.config.bar.margin.vertical as f32))
+                        .px(px(self.state.config.bar.margin.horizontal as f32))
+                        .py(px(self.state.config.bar.margin.vertical as f32))
                         .rounded_2xl()
                         .shadow_md(),
                 )

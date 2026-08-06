@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gpui::App;
 use shilpo_services::{
-    BarState, CompositorAdapter, CompositorCommand, CompositorSnapshot, IpcRequest, IpcStatus,
+    CompositorAdapter, CompositorCommand, CompositorSnapshot, IpcRequest, IpcStatus,
 };
 
 use crate::{
@@ -301,110 +301,25 @@ impl ShellRuntime {
     }
 
     pub(super) fn publish_status(&self) {
-        let (notification, notification_last_error) = match self.service_hub.as_ref() {
-            Some(hub) => (hub.notification_state, hub.notification_last_error.clone()),
-            None => (
-                shilpo_services::ServiceLifecycle::Stopped,
-                Some("service hub not initialized".into()),
-            ),
-        };
-        let (
-            battery,
-            audio,
-            network,
-            media,
-            brightness,
-            battery_last_error,
-            audio_last_error,
-            network_last_error,
-            media_last_error,
-            brightness_last_error,
-        ) = match self.service_hub.as_ref() {
-            Some(hub) => (
-                hub.availability.battery_state,
-                hub.availability.audio_state,
-                hub.availability.network_state,
-                hub.availability.media_state,
-                hub.availability.brightness_state,
-                hub.availability.battery_last_error.clone(),
-                hub.availability.audio_last_error.clone(),
-                hub.availability.network_last_error.clone(),
-                hub.availability.media_last_error.clone(),
-                hub.availability.brightness_last_error.clone(),
-            ),
-            None => (
-                shilpo_services::ServiceLifecycle::Stopped,
-                shilpo_services::ServiceLifecycle::Stopped,
-                shilpo_services::ServiceLifecycle::Stopped,
-                shilpo_services::ServiceLifecycle::Stopped,
-                shilpo_services::ServiceLifecycle::Stopped,
-                None,
-                None,
-                None,
-                None,
-                None,
-            ),
-        };
-
-        let active_count = self
-            .extensions
-            .as_ref()
-            .map_or(0, |ext| ext.active_count());
-        let total_count = self
-            .extensions
-            .as_ref()
-            .map_or(0, |ext| ext.total_count());
-        let extension_state = if self.extensions.is_some() {
-            shilpo_services::ServiceLifecycle::Ready
-        } else {
-            shilpo_services::ServiceLifecycle::Stopped
-        };
-
         let status = IpcStatus {
+            running: self.readiness != shilpo_services::ReadinessState::Failed,
+            instance_id: std::process::id().to_string(),
+            pid: std::process::id(),
             readiness: self.readiness,
-            running: self.readiness != shilpo_services::ipc::ReadinessState::ShuttingDown,
-            bar: self.bar_state,
-            control_center: if self.control_center.is_some() {
-                shilpo_services::OverlayState::Open
-            } else {
-                shilpo_services::OverlayState::Closed
-            },
-            overview: if self.overview.is_some() {
-                shilpo_services::OverlayState::Open
-            } else {
-                shilpo_services::OverlayState::Closed
-            },
-            dnd: self.session_state.dnd_active,
-            services: shilpo_services::ServicesStatus {
-                compositor: self.latest_snapshot.connection.state.clone(),
-                compositor_last_error: self.latest_snapshot.connection.last_error.clone(),
-                notification,
-                notification_last_error,
-                battery,
-                battery_last_error,
-                audio,
-                audio_last_error,
-                network,
-                network_last_error,
-                media,
-                media_last_error,
-                brightness,
-                brightness_last_error,
-                extension: extension_state,
-                extension_last_error: None,
-                extension_active_count: active_count,
-                extension_total_count: total_count,
-            },
-            uptime_secs: self.start_time.elapsed().as_secs(),
+            bar: self.bar_state.clone(),
+            overview_visible: self.overview.is_some(),
+            control_center_visible: self.control_center.is_some(),
+            health: shilpo_services::ServiceHealth::default(),
         };
 
-        self.ipc_server.publish_status(status);
+        self.ipc_server.update_status(status);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shilpo_services::BarState;
     use shilpo_services::ipc::ReadinessState;
 
     #[test]

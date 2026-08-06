@@ -13,7 +13,7 @@ use std::{
 };
 
 use gpui::{
-    App, DisplayId, Entity, Global, Subscription, WindowHandle,
+    App, AppContext, DisplayId, Entity, Global, Subscription, WindowHandle,
 };
 use shilpo_services::{
     BarState, CompositorConnection, CompositorSnapshot, ShellIpcServer,
@@ -73,7 +73,7 @@ pub struct ShellRuntime {
     pub(super) session_state: shilpo_config::ShellSessionState,
     pub(super) session_path: PathBuf,
     pub heed_store: Option<Arc<shilpo_config::HeedSessionStore>>,
-    pub(super) start_time: std::time::Instant,
+    pub(super) _start_time: std::time::Instant,
     pub(super) service_hub: Option<ServiceHub>,
     pub(super) _window_closed: Option<Subscription>,
     pub(super) _ipc_task: gpui::Task<()>,
@@ -298,7 +298,7 @@ impl ShellRuntime {
             session_state,
             session_path,
             heed_store,
-            start_time: std::time::Instant::now(),
+            _start_time: std::time::Instant::now(),
             service_hub: Some(hub),
             _window_closed: None,
             _ipc_task: gpui::Task::ready(()),

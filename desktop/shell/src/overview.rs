@@ -513,7 +513,7 @@ impl WorkspaceOverview {
                     && entity.read(cx).generation == gen_id
                 {
                     let instance_id = entity.read(cx).instance_id;
-                    ShellRuntime::finish_overview_close(cx, reason, instance_id);
+                    ShellRuntime::finish_overview_close(cx, instance_id, reason);
                 }
             });
         })
