@@ -33,3 +33,6 @@ image.workspace = true
 resvg.workspace = true
 sysinfo.workspace = true
 fasteval = "0.2"
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

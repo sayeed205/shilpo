@@ -9,7 +9,7 @@ use shilpo_services::NotificationService;
 
 use crate::bar::service_worker::{self, CommandSender, UpdateReceiver, WorkerCommand};
 
-use super::ShellRuntime;
+use super::{SessionContext, ShellRuntime};
 
 pub struct ServiceHub {
     pub compositor: Arc<dyn shilpo_services::CompositorAdapter>,
@@ -33,7 +33,18 @@ pub struct ServiceHub {
 }
 
 impl ServiceHub {
-    pub fn new(
+    pub fn start(executor: gpui::BackgroundExecutor, session: &SessionContext) -> Self {
+        let mut hub = Self::new(
+            executor,
+            session.config_path.clone(),
+            session.heed_store.clone(),
+        );
+        hub.notification_dnd = session.session_state.dnd_active;
+        apply_notification_dnd(hub.notification.as_ref(), session.session_state.dnd_active);
+        hub
+    }
+
+    fn new(
         executor: gpui::BackgroundExecutor,
         config_path: PathBuf,
         session_store: Option<Arc<shilpo_config::HeedSessionStore>>,
@@ -360,5 +371,34 @@ mod tests {
         apply_notification_dnd(Some(&notification), true);
 
         assert!(notification.is_dnd_enabled());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn service_hub_start_initializes_with_dnd() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("shilpo_service_test_{}", uuid::Uuid::new_v4()));
+        let session = SessionContext {
+            config_path: temp_dir.join("config.toml"),
+            active_config: shilpo_config::ShellConfig::default(),
+            session_path: temp_dir.join("session.toml"),
+            session_state: shilpo_config::ShellSessionState {
+                dnd_active: true,
+                ..Default::default()
+            },
+            heed_store: None,
+        };
+        let executor = gpui::TestAppContext::single().executor().clone();
+        let hub = ServiceHub::start(executor, &session);
+
+        // The restored DND flag is applied to the hub lifecycle.
+        assert!(hub.notification_dnd);
+        // The hub is fully wired: the service worker owns the command receiver.
+        assert!(
+            service_worker::try_send_command(&hub.service_commands, WorkerCommand::ReloadConfig)
+                .is_ok()
+        );
+
+        drop(hub);
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }
