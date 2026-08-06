@@ -8040,10 +8040,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shilpo-dotfiles"
-version = "0.1.0"
-
-[[package]]
 name = "shilpo-ext"
 version = "0.1.0"
 dependencies = [

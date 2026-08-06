@@ -48,10 +48,6 @@ library at its core.
 - **Storybook** (`apps/storybook`) — Interactive desktop gallery for exploring and testing core UI components.
   Cross-platform. Demos the generic M3 component library only, not shell-specific widgets.
 
-### Dotfiles
-
-- **Shilpo Dotfiles** (`dotfiles/shilpo-dotfiles`) — Minimal default dotfile configuration paths.
-
 ## Relationships
 
 - **UI → Theme**: UI imports `ThemeMode`, `SchemeVariant`, `ThemeState` as pure data types. UI owns the GPUI `Theme`

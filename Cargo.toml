@@ -16,7 +16,6 @@ members = [
     "desktop/cli",
 
     # Other
-    "dotfiles/shilpo-dotfiles",
     "apps/storybook",
 ]
 resolver = "2"
