@@ -1,4 +1,4 @@
-# Agent Guidelines for Shilpo (`shilpo-ui`)
+# Agent Guidelines for Shilpo
 
 Welcome! This document serves as a guide for AI agents and coding assistants working on the `Shilpo` codebase.
 
@@ -6,18 +6,42 @@ Welcome! This document serves as a guide for AI agents and coding assistants wor
 
 ## 1. Project Architecture Overview
 
-`Shilpo` is a modern, high-performance desktop UI component library built
-for [GPUI](https://github.com/zed-industries/zed), inspired by **Material Design 3 (M3 Expressive / Material You)**
-design systems.
+`Shilpo` is a Linux desktop environment ecosystem built on [GPUI](https://github.com/zed-industries/zed), inspired by
+**Material Design 3 (M3 Expressive / Material You)**
+design systems. It includes a cross-platform UI component library (`shilpo-ui`), a Linux desktop shell, a settings app,
+system services, a theme daemon, an extension runtime, and a CLI.
+
+See `CONTEXT-MAP.md` for the full context map and inter-crate relationships, and `docs/adr/` for architectural decision
+records.
 
 ### Workspace Structure
 
-- **[`shilpo-ui`](crates/ui)**: Core desktop UI component library (`crates/ui`).
-- **[`shilpo-macros`](crates/macros)**: Procedural macros (`icon_named!`, plot traits, etc.) (`crates/macros`).
-- **[`shilpo-assets`](crates/assets)**: Internal demo SVG icons and asset loader primitives (`crates/assets`). **Note**:
-  This crate is unpublished; applications bring their own asset loader.
-- **[`storybook`](apps/storybook)**: Interactive desktop gallery app for exploring and testing UI components (
-  `apps/storybook`).
+The workspace is split into two tiers (see [ADR-0001](docs/adr/0001-cross-platform-linux-split.md)):
+
+#### Cross-Platform (`core/` — eventually published)
+
+- **[`shilpo-ui`](core/ui)**: M3 GPUI component library. Generic, publishable UI primitives.
+- **[`shilpo-theme`](core/theme)**: M3 color math, scheme generation, and theme data types. Pure computation, no I/O.
+- **[`shilpo-macros`](core/macros)**: Procedural macros (`icon_named!`, `#[derive(IntoPlot)]`).
+- **[`shilpo-assets`](core/assets)**: Asset loader primitives and bundled demo SVG icons. **Note**: Unpublished;
+  applications bring their own asset loader.
+
+#### Linux Desktop (`desktop/` — internal, never published)
+
+- **[`shilpo-shell`](desktop/shell)**: Desktop shell daemon — bar, control center, workspace overview, notifications,
+  OSD, extension surfaces, shell-specific widgets.
+- **[`shilpo-settings`](desktop/settings)**: Control panel application — same product as shell, separate binary.
+- **[`shilpo-services`](desktop/services)**: System service integrations — Wayland/Niri, audio, bluetooth, brightness,
+  network, notifications, media, tray, upower, IPC.
+- **[`shilpo-config`](desktop/config)**: TOML configuration, XDG directory resolution, LMDB session storage.
+- **[`shilpo-ext`](desktop/ext)**: Wasmtime-sandboxed extension runtime with capability-based security.
+- **[`shilpo-theme-daemon`](desktop/theme-daemon)**: Theme DBus daemon, XDG portal sync, persistence, third-party
+  adapters (see [ADR-0002](docs/adr/0002-theme-crate-split.md)).
+- **[`shilpo-cli`](desktop/cli)**: CLI tool for controlling the shell, themes, and extensions.
+
+#### Applications (`apps/`)
+
+- **[`storybook`](apps/storybook)**: Interactive desktop gallery for exploring and testing core UI components.
 
 ---
 
@@ -93,3 +117,20 @@ with `rtk`**.
   `cargo run -p storybook`).
 - Do not add `rtk` prefixes to public `README.md` files; keep `rtk` instructions internal to `AGENTS.md` and agent
   workflows.
+
+---
+
+## 6. Agent Skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues on `sayeed205/shilpo`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default label vocabulary — `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Multi-context layout — root `CONTEXT-MAP.md` + per-crate `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
