@@ -660,6 +660,19 @@ impl BarView {
     }
 }
 
+pub(crate) fn compute_bar_input_region(
+    child_bounds: &[gpui::Bounds<gpui::Pixels>],
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    let mut region: Option<gpui::Bounds<gpui::Pixels>> = None;
+    for bounds in child_bounds {
+        region = match region {
+            Some(acc) => Some(acc.union(bounds)),
+            None => Some(*bounds),
+        };
+    }
+    region
+}
+
 impl Render for BarView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use shilpo_config::BarStyle;
@@ -708,6 +721,16 @@ impl Render for BarView {
             .child(center)
             .child(end);
 
+        let set_bar_input_region = move |child_bounds: Vec<gpui::Bounds<gpui::Pixels>>,
+                                         window: &mut Window,
+                                         _: &mut App| {
+            if let Some(region) = compute_bar_input_region(&child_bounds) {
+                window.set_input_region(Some(&[region]));
+            } else {
+                window.set_input_region(Some(&[]));
+            }
+        };
+
         match style {
             BarStyle::Hug => {
                 let hug_corners = self.render_hug_corners(
@@ -721,7 +744,8 @@ impl Render for BarView {
                     BarPosition::Bottom => div().absolute().bottom_0().w_full().child(main_bar),
                     BarPosition::Left => div().absolute().left_0().h_full().child(main_bar),
                     BarPosition::Right => div().absolute().right_0().h_full().child(main_bar),
-                };
+                }
+                .on_children_prepainted(set_bar_input_region);
 
                 div()
                     .relative()
@@ -730,13 +754,24 @@ impl Render for BarView {
                     .child(hug_corners)
                     .into_any_element()
             }
-            BarStyle::Float => bar_container
-                .px(px(self.config.bar.margin.horizontal as f32))
-                .py(px(self.config.bar.margin.vertical as f32))
-                .rounded_2xl()
-                .shadow_md()
+            BarStyle::Float => div()
+                .relative()
+                .size_full()
+                .on_children_prepainted(set_bar_input_region)
+                .child(
+                    bar_container
+                        .px(px(self.config.bar.margin.horizontal as f32))
+                        .py(px(self.config.bar.margin.vertical as f32))
+                        .rounded_2xl()
+                        .shadow_md(),
+                )
                 .into_any_element(),
-            BarStyle::Rect => bar_container.rounded_none().shadow_sm().into_any_element(),
+            BarStyle::Rect => div()
+                .relative()
+                .size_full()
+                .on_children_prepainted(set_bar_input_region)
+                .child(bar_container.rounded_none().shadow_sm())
+                .into_any_element(),
         }
     }
 }
@@ -781,8 +816,9 @@ pub fn open_notification_toast(cx: &mut App, notification: Notification) {
             None,
         )
     };
-    let window_size = size(px(376.), px(420.));
     let gap = px(8.);
+    let window_height = display_bounds.size.height - px(bar_h + float_margin_v) - gap - gap;
+    let window_size = size(px(376.), window_height);
 
     // Layer shell margins are evaluated relative to the bar's exclusive zone by Niri.
     // Windowed origins include explicit bar height offsets.
@@ -909,5 +945,25 @@ mod hug_corner_tests {
         assert_eq!(path.bounds.origin, point(px(0.0), px(0.0)));
         assert_eq!(path.bounds.size.width, px(radius));
         assert_eq!(path.bounds.size.height, px(radius));
+    }
+}
+
+#[cfg(test)]
+mod bar_input_region_tests {
+    use gpui::{Bounds, point, px, size};
+
+    #[test]
+    fn calculates_union_of_child_bounds_for_input_region() {
+        let child1 = Bounds::new(point(px(0.0), px(0.0)), size(px(100.0), px(48.0)));
+        let child2 = Bounds::new(point(px(200.0), px(0.0)), size(px(100.0), px(48.0)));
+
+        let region = compute_bar_input_region(&[child1, child2]).unwrap();
+        assert_eq!(region.origin, point(px(0.0), px(0.0)));
+        assert_eq!(region.size, size(px(300.0), px(48.0)));
+    }
+
+    #[test]
+    fn returns_none_when_child_bounds_empty() {
+        assert_eq!(compute_bar_input_region(&[]), None);
     }
 }

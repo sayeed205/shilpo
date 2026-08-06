@@ -63,7 +63,12 @@ impl NotificationToastView {
             autohide_task: None,
         };
         this.reset_autohide_timer(window, cx);
+        this.schedule_enter_completion(window, cx);
 
+        this
+    }
+
+    fn schedule_enter_completion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |view, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(250))
@@ -74,8 +79,6 @@ impl NotificationToastView {
             });
         })
         .detach();
-
-        this
     }
 
     pub fn view(
@@ -97,11 +100,31 @@ impl NotificationToastView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A dismissal may still be animating the window out (closing == true).
+        // A notification pushed in that window must restore normal motion, or
+        // the toast renders transparent but the window keeps eating pointer
+        // input over the top-right corner, and autohide stays disabled. The
+        // stale removal task is harmless: its generation no longer matches,
+        // so it will not tear the window down. clearing also drops the entry
+        // that was already dismissed.
+        if self.closing {
+            self.stack.clear();
+            self.unfolded_apps.clear();
+            self.closing = false;
+            self.entering = true;
+            self.schedule_enter_completion(window, cx);
+            tracing::warn!("[NOTIFTRACE] push while closing -> reset flags");
+        }
+
         self.stack.push_front(ToastEntry {
             notification,
             generation,
             timeout,
         });
+        tracing::warn!(
+            "[NOTIFTRACE] push gen={generation} stack_len={}",
+            self.stack.len()
+        );
         self.reset_autohide_timer(window, cx);
         cx.notify();
     }
@@ -146,12 +169,17 @@ impl NotificationToastView {
 
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing {
+            tracing::warn!("[NOTIFTRACE] dismiss rejected: already closing");
             return;
         }
 
         if self.stack.len() > 1
             && let Some(popped) = self.stack.pop_front()
         {
+            tracing::warn!(
+                "[NOTIFTRACE] dismiss popped gen={} (stack>1)",
+                popped.generation
+            );
             ShellRuntime::forget_notification(cx, popped.generation);
             if self.stack.len() <= 1 {
                 self.unfolded_apps.clear();
@@ -161,6 +189,7 @@ impl NotificationToastView {
             return;
         }
 
+        tracing::warn!("[NOTIFTRACE] dismiss last -> closing=true");
         self.closing = true;
         self.autohide_task = None;
         cx.notify();
@@ -281,7 +310,7 @@ fn render_icon_badge(
 }
 
 impl Render for NotificationToastView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.stack.is_empty() {
             return div().id("toast-empty-root");
         }
@@ -858,18 +887,38 @@ impl Render for NotificationToastView {
         });
 
         let main_card_container = v_flex()
+            // This layer-shell window is a transparent 376x420 surface in the
+            // corner; by default the whole surface swallows pointer input even
+            // where nothing is drawn. Constrain the input region to the cards
+            // (plus the fold/peek cards that hang below them) so clicks over
+            // the empty part of the window pass through to apps underneath.
+            //
+            // When closing, clear the input region immediately so the fading-
+            // out window no longer blocks pointer events in the corner.
+            .on_children_prepainted(move |child_bounds, window, _| {
+                if closing {
+                    window.set_input_region(Some(&[]));
+                    return;
+                }
+                let mut region: Option<gpui::Bounds<gpui::Pixels>> = None;
+                for bounds in child_bounds {
+                    region = match region {
+                        Some(acc) => Some(acc.union(&bounds)),
+                        None => Some(bounds),
+                    };
+                }
+                let Some(region) = region else {
+                    window.set_input_region(Some(&[]));
+                    return;
+                };
+                window.set_input_region(Some(&[region.dilate(px(18.))]));
+            })
             .id("toast-scroll-container")
             .w(px(368.))
-            .max_h(px(400.))
+            .max_h(window.bounds().size.height)
             .overflow_y_scroll()
             .pr_0()
             .gap_3p5()
-            .children(group_cards);
-
-        div()
-            .id("toast-notification-root")
-            .w_full()
-            .h_full()
             .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                 if this.hovered != *hovered {
                     this.hovered = *hovered;
@@ -877,6 +926,12 @@ impl Render for NotificationToastView {
                     cx.notify();
                 }
             }))
+            .children(group_cards);
+
+        div()
+            .id("toast-notification-root")
+            .w_full()
+            .h_full()
             .child(root_flex.child(main_card_container.with_animation(
                 anim_id,
                 Animation::new(duration).with_easing(easing),

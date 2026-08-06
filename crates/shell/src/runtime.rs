@@ -2502,6 +2502,7 @@ impl ShellRuntime {
     ) {
         let runtime = cx.global_mut::<Self>();
         runtime.notification = Some((generation, notification_id, handle));
+        tracing::warn!("[NOTIFTRACE] register_notification gen={generation} id={notification_id}");
     }
 
     pub fn invoke_notification_action(cx: &App, id: u32, action_key: &str) {
@@ -2516,21 +2517,35 @@ impl ShellRuntime {
     pub fn close_active_notification(cx: &mut App) {
         let entry = cx.global_mut::<Self>().notification.take();
         if let Some((_, notification_id, handle)) = entry {
+            tracing::warn!(
+                "[NOTIFTRACE] close_active_notification id={notification_id} removing window"
+            );
             Self::dismiss_notification(cx, notification_id);
             let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+        } else {
+            tracing::warn!("[NOTIFTRACE] close_active_notification no active entry");
         }
     }
 
     pub fn expire_notification(cx: &mut App, generation: u64) {
         let entry = cx.global_mut::<Self>().notification.take();
         let Some((current_generation, notification_id, handle)) = entry else {
+            tracing::warn!(
+                "[NOTIFTRACE] expire_notification(gen={generation}) no active entry; window NOT removed"
+            );
             return;
         };
         if current_generation != generation {
             cx.global_mut::<Self>().notification =
                 Some((current_generation, notification_id, handle));
+            tracing::warn!(
+                "[NOTIFTRACE] expire_notification stale gen={generation} current={current_generation}; window NOT removed"
+            );
             return;
         }
+        tracing::warn!(
+            "[NOTIFTRACE] expire_notification(gen={generation}) id={notification_id} removing window"
+        );
         // Generation check above makes delayed expiry harmless after replacement.
         // Entry is taken before close so stale expiry cannot retain registry state.
         Self::expire_notification_id(cx, notification_id);
@@ -2546,7 +2561,14 @@ impl ShellRuntime {
         if is_current
             && let Some((_, notification_id, _)) = cx.global_mut::<Self>().notification.take()
         {
+            tracing::warn!(
+                "[NOTIFTRACE] forget_notification gen={generation} id={notification_id} entry dropped"
+            );
             Self::dismiss_notification(cx, notification_id);
+        } else {
+            tracing::warn!(
+                "[NOTIFTRACE] forget_notification gen={generation} mismatch/none; no-op"
+            );
         }
     }
 
