@@ -59,6 +59,12 @@ enum BarViewEffect {
     ApplyConfigTheme(ShellConfig),
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+struct BarUpdateResult {
+    changed: bool,
+    effects: Vec<BarViewEffect>,
+}
+
 /// Status Bar GPUI View (Multi-Capsule Segmented Bar with IPC integration).
 pub struct BarView {
     pub config: ShellConfig,
@@ -86,7 +92,10 @@ pub struct BarView {
 }
 
 impl BarView {
-    pub fn new_standalone(config: ShellConfig) -> Self {
+    fn new_with_commands(
+        config: ShellConfig,
+        service_commands: service_worker::CommandSender,
+    ) -> Self {
         let battery = BatteryInfo::default();
         let audio = AudioInfo::default();
         let network = NetworkInfo::default();
@@ -98,7 +107,6 @@ impl BarView {
         let now = chrono::Local::now();
         let time_str = format_clock(&now, config.clock_format.as_deref());
         let date_str = format_date(&now);
-        let (_, _, service_commands, _) = service_worker::channels();
 
         Self {
             config,
@@ -185,8 +193,7 @@ impl BarView {
             tx
         });
 
-        let mut view = Self::new_standalone(config);
-        view.service_commands = service_commands;
+        let mut view = Self::new_with_commands(config, service_commands);
 
         let _datetime_task = Some(cx.spawn(async move |this, cx| {
             loop {
@@ -290,7 +297,7 @@ impl BarView {
         })
     }
 
-    fn apply_worker_update_state(&mut self, update: &WorkerUpdate) -> (bool, Vec<BarViewEffect>) {
+    fn compute_worker_update(&mut self, update: &WorkerUpdate) -> BarUpdateResult {
         self.last_service_update = Instant::now();
         let mut changed = false;
         let mut effects = Vec::new();
@@ -325,7 +332,8 @@ impl BarView {
                 self.config = (**config).clone();
                 self.last_error = None;
                 effects.push(BarViewEffect::ApplyConfigTheme(self.config.clone()));
-                changed = self.update_datetime() || true;
+                self.update_datetime();
+                changed = true;
             }
             WorkerUpdate::Config(ConfigUpdate::Failed(error)) => {
                 tracing::error!(error = %error, "config reload failed");
@@ -339,12 +347,12 @@ impl BarView {
             _ => {}
         }
 
-        (changed, effects)
+        BarUpdateResult { changed, effects }
     }
 
     pub fn apply_worker_update(&mut self, update: &WorkerUpdate, cx: &mut Context<Self>) {
-        let (changed, effects) = self.apply_worker_update_state(update);
-        for effect in effects {
+        let result = self.compute_worker_update(update);
+        for effect in result.effects {
             match effect {
                 BarViewEffect::ShowOsd(kind) => {
                     ShellRuntime::show_osd(cx, kind);
@@ -357,7 +365,7 @@ impl BarView {
                 }
             }
         }
-        if changed {
+        if result.changed {
             cx.notify();
         }
     }
@@ -378,7 +386,6 @@ impl BarView {
         cx.new(|cx| Self::build(spec, window, cx))
     }
 }
-
 
 impl BarView {
     fn build_section(
@@ -1029,12 +1036,18 @@ mod bar_input_region_tests {
 }
 
 #[cfg(test)]
-mod state_tests {
+mod bar_view_tests {
     use super::*;
+
+    /// Builds a `BarView` with a live command channel so the sender is genuinely connected.
+    fn test_view(config: ShellConfig) -> (BarView, service_worker::CommandReceiver) {
+        let (_, _, commands_tx, commands_rx) = service_worker::channels();
+        (BarView::new_with_commands(config, commands_tx), commands_rx)
+    }
 
     #[test]
     fn test_bar_view_default_construction() {
-        let view = BarView::new_standalone(ShellConfig::default());
+        let (view, _commands_rx) = test_view(ShellConfig::default());
         assert_eq!(view.app_id, "shilpo.shell");
         assert_eq!(view.active_title, "Shilpo Shell");
         assert_eq!(view.cpu_percent, 0);
@@ -1047,23 +1060,22 @@ mod state_tests {
 
     #[test]
     fn test_apply_worker_update_battery() {
-        let mut view = BarView::new_standalone(ShellConfig::default());
+        let (mut view, _commands_rx) = test_view(ShellConfig::default());
         let battery = BatteryInfo {
             is_present: true,
             percentage: 85,
             ..Default::default()
         };
 
-        let (changed, effects) =
-            view.apply_worker_update_state(&WorkerUpdate::Battery(battery.clone()));
-        assert!(changed);
+        let result = view.compute_worker_update(&WorkerUpdate::Battery(battery.clone()));
+        assert!(result.changed);
         assert_eq!(view.battery.percentage, 85);
-        assert!(effects.is_empty());
+        assert!(result.effects.is_empty());
     }
 
     #[test]
     fn test_apply_worker_update_audio_triggers_osd() {
-        let mut view = BarView::new_standalone(ShellConfig::default());
+        let (mut view, _commands_rx) = test_view(ShellConfig::default());
         view.audio = AudioInfo {
             available: true,
             volume: 50,
@@ -1076,12 +1088,11 @@ mod state_tests {
             ..view.audio.clone()
         };
 
-        let (changed, effects) =
-            view.apply_worker_update_state(&WorkerUpdate::Audio(new_audio));
-        assert!(changed);
+        let result = view.compute_worker_update(&WorkerUpdate::Audio(new_audio));
+        assert!(result.changed);
         assert_eq!(view.audio.volume, 70);
         assert_eq!(
-            effects,
+            result.effects,
             vec![BarViewEffect::ShowOsd(OsdKind::Volume {
                 level: 70,
                 muted: false,
@@ -1091,21 +1102,21 @@ mod state_tests {
 
     #[test]
     fn test_apply_worker_update_network() {
-        let mut view = BarView::new_standalone(ShellConfig::default());
+        let (mut view, _commands_rx) = test_view(ShellConfig::default());
         let net = NetworkInfo {
             is_connected: true,
             ssid: Some("WiFi-Home".into()),
             ..Default::default()
         };
 
-        let (changed, _) = view.apply_worker_update_state(&WorkerUpdate::Network(net.clone()));
-        assert!(changed);
+        let result = view.compute_worker_update(&WorkerUpdate::Network(net.clone()));
+        assert!(result.changed);
         assert_eq!(view.network.ssid.as_deref(), Some("WiFi-Home"));
     }
 
     #[test]
     fn test_apply_worker_update_media() {
-        let mut view = BarView::new_standalone(ShellConfig::default());
+        let (mut view, _commands_rx) = test_view(ShellConfig::default());
         let media = MediaInfo {
             player_id: "spotify".into(),
             title: "Song".into(),
@@ -1118,42 +1129,41 @@ mod state_tests {
             length_secs: 180.0,
         };
 
-        let (changed, _) = view.apply_worker_update_state(&WorkerUpdate::Media(media.clone()));
-        assert!(changed);
+        let result = view.compute_worker_update(&WorkerUpdate::Media(media.clone()));
+        assert!(result.changed);
         assert_eq!(view.media_info, Some(media));
     }
 
     #[test]
     fn test_apply_worker_update_config_loaded() {
-        let mut view = BarView::new_standalone(ShellConfig::default());
+        let (mut view, _commands_rx) = test_view(ShellConfig::default());
         let new_config = ShellConfig {
             clock_format: Some("%H:%M".into()),
             ..Default::default()
         };
 
-        let (changed, effects) = view.apply_worker_update_state(&WorkerUpdate::Config(
-            ConfigUpdate::Loaded(Box::new(new_config.clone())),
-        ));
-        assert!(changed);
+        let result = view.compute_worker_update(&WorkerUpdate::Config(ConfigUpdate::Loaded(
+            Box::new(new_config.clone()),
+        )));
+        assert!(result.changed);
         assert_eq!(view.config.clock_format.as_deref(), Some("%H:%M"));
         assert_eq!(
-            effects,
+            result.effects,
             vec![BarViewEffect::ApplyConfigTheme(new_config)]
         );
     }
 
     #[test]
     fn test_apply_worker_update_config_failed() {
-        let mut view = BarView::new_standalone(ShellConfig::default());
+        let (mut view, _commands_rx) = test_view(ShellConfig::default());
         let err_msg = "Invalid TOML syntax".to_string();
 
-        let (changed, effects) = view.apply_worker_update_state(&WorkerUpdate::Config(
-            ConfigUpdate::Failed(err_msg.clone()),
-        ));
-        assert!(changed);
+        let result =
+            view.compute_worker_update(&WorkerUpdate::Config(ConfigUpdate::Failed(err_msg.clone())));
+        assert!(result.changed);
         assert_eq!(view.last_error, Some(err_msg.clone()));
-        assert_eq!(effects.len(), 1);
-        if let BarViewEffect::ShowNotificationToast(notif) = &effects[0] {
+        assert_eq!(result.effects.len(), 1);
+        if let BarViewEffect::ShowNotificationToast(notif) = &result.effects[0] {
             assert_eq!(notif.summary, "Configuration Warning");
             assert_eq!(notif.body, err_msg);
         } else {
@@ -1161,4 +1171,3 @@ mod state_tests {
         }
     }
 }
-
