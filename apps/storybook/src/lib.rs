@@ -196,9 +196,9 @@ pub fn init(cx: &mut App) {
     themes::init(cx);
     stories::init(cx);
 
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(target_os = "linux")]
     {
-        let theme_client = futures_lite::future::block_on(shilpo_theme::ThemeClient::new());
+        let theme_client = futures_lite::future::block_on(shilpo_theme_daemon::ThemeClient::new());
         shilpo_ui::Theme::global_mut(cx).apply_state(&theme_client.current_state());
         let mut rx = theme_client.subscribe();
         let theme_client_for_task = theme_client.clone();
@@ -540,7 +540,6 @@ impl StoryState {
         match self.story_klass.to_string().as_str() {
             "BreadcrumbStory" => story!(BreadcrumbStory),
             "ButtonStory" => story!(ButtonStory),
-            "CaffeineStory" => story!(CaffeineStory),
             "CalendarStory" => story!(CalendarStory),
             "SelectStory" => story!(SelectStory),
             "IconStory" => story!(IconStory),
@@ -562,8 +561,6 @@ impl StoryState {
             "SidebarStory" => story!(SidebarStory),
             "FormStory" => story!(FormStory),
             "NotificationStory" => story!(NotificationStory),
-            "NetworkBluetoothStory" => story!(NetworkBluetoothStory),
-            "SysInfoStory" => story!(SysInfoStory),
             "ThemeColorsStory" => story!(ThemeColorsStory),
             _ => {
                 unreachable!("Invalid story klass: {}", self.story_klass)

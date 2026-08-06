@@ -8020,6 +8020,7 @@ dependencies = [
  "shilpo-ext",
  "shilpo-services",
  "shilpo-theme",
+ "shilpo-theme-daemon",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -8037,10 +8038,6 @@ dependencies = [
  "shilpo-ext",
  "toml 1.1.3+spec-1.1.0",
 ]
-
-[[package]]
-name = "shilpo-dotfiles"
-version = "0.1.0"
 
 [[package]]
 name = "shilpo-ext"
@@ -8117,6 +8114,7 @@ dependencies = [
  "shilpo-ext",
  "shilpo-services",
  "shilpo-theme",
+ "shilpo-theme-daemon",
  "shilpo-ui",
  "tokio",
  "tracing",
@@ -8128,6 +8126,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dirs 6.0.0",
  "fasteval",
  "futures-lite",
  "gpui",
@@ -8144,6 +8143,7 @@ dependencies = [
  "shilpo-ext",
  "shilpo-services",
  "shilpo-theme",
+ "shilpo-theme-daemon",
  "shilpo-ui",
  "sysinfo 0.39.6",
  "tokio",
@@ -8157,6 +8157,17 @@ dependencies = [
 name = "shilpo-theme"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "mcu-material-color",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "shilpo-theme-daemon"
+version = "0.1.0"
+dependencies = [
  "anyhow",
  "ashpd",
  "chrono",
@@ -8168,6 +8179,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shilpo-config",
+ "shilpo-theme",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -8512,6 +8524,7 @@ dependencies = [
  "serde_json",
  "shilpo-assets",
  "shilpo-theme",
+ "shilpo-theme-daemon",
  "shilpo-ui",
  "smol",
  "tokio",
