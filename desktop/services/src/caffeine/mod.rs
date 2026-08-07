@@ -126,6 +126,7 @@ mod tests {
 
     #[test]
     fn test_caffeine_state_persistence() {
+        let _guard = crate::test_support::serial_guard();
         let service = CaffeineService::new();
         service.set_active(true);
         assert!(service.is_active());
