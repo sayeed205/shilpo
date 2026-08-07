@@ -459,11 +459,11 @@ pub enum ThemeCommand {
     SetColorSource(ColorSource),
     SetSchemeVariant(SchemeVariant),
     SetCustomSeed(u32),
+    /// Set the ARGB seed driving the palette while [`ColorSource::Wallpaper`] is
+    /// active. The daemon forwards the extracted wallpaper seed through this
+    /// command; it is a no-op for any other color source.
     SetWallpaperSeed(u32),
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SideEffect {}
 
 fn regenerate_palette(state: &mut ThemeState, seed: u32, variant: SchemeVariant, timestamp: &str) {
     let (light, dark) = generate_m3_palettes(seed, variant);
@@ -472,8 +472,14 @@ fn regenerate_palette(state: &mut ThemeState, seed: u32, variant: SchemeVariant,
     state.palette_generated_at = timestamp.to_string();
 }
 
-pub fn reduce(state: &mut ThemeState, command: ThemeCommand, timestamp: &str) -> Vec<SideEffect> {
-    let effects = Vec::new();
+/// Apply a pure `ThemeCommand` transition, returning whether the state changed.
+///
+/// The core crate is pure computation with zero I/O (ADR-0002), so `reduce`
+/// produces no effects: a `false` return means the command was a no-op and no
+/// `revision`/`updated_at` bump was recorded. This is the seam `shilpo-theme-daemon`
+/// uses to apply wallpaper seeds and mode toggles without mocking system
+/// dependencies.
+pub fn reduce(state: &mut ThemeState, command: ThemeCommand, timestamp: &str) -> bool {
     let mut changed = false;
 
     match command {
@@ -551,7 +557,7 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand, timestamp: &str) ->
         state.updated_at = timestamp.to_string();
     }
 
-    effects
+    changed
 }
 
 #[cfg(test)]
@@ -585,12 +591,12 @@ mod tests {
         assert_eq!(state.updated_at, DEFAULT_TIMESTAMP);
 
         // Fixed Dark mode command
-        let effects = reduce(
+        let changed = reduce(
             &mut state,
             ThemeCommand::SetMode(ThemeMode::Dark),
             TEST_TIMESTAMP,
         );
-        assert!(effects.is_empty());
+        assert!(changed);
         assert_eq!(state.selected_mode, ThemeMode::Dark);
         assert_eq!(state.resolved_mode, ThemeMode::Dark);
         assert_eq!(state.updated_at, TEST_TIMESTAMP);
@@ -619,14 +625,14 @@ mod tests {
             ..Default::default()
         };
 
-        let effects = reduce(&mut state, ThemeCommand::ToggleMode, TEST_TIMESTAMP);
-        assert!(effects.is_empty());
+        let changed = reduce(&mut state, ThemeCommand::ToggleMode, TEST_TIMESTAMP);
+        assert!(changed);
         assert_eq!(state.selected_mode, ThemeMode::Dark);
         assert_eq!(state.resolved_mode, ThemeMode::Dark);
         assert_eq!(state.updated_at, TEST_TIMESTAMP);
 
-        let effects = reduce(&mut state, ThemeCommand::ToggleMode, TEST_TIMESTAMP);
-        assert!(effects.is_empty());
+        let changed = reduce(&mut state, ThemeCommand::ToggleMode, TEST_TIMESTAMP);
+        assert!(changed);
         assert_eq!(state.selected_mode, ThemeMode::Light);
         assert_eq!(state.resolved_mode, ThemeMode::Light);
     }
@@ -662,13 +668,47 @@ mod tests {
         assert_eq!(state.color_source, ColorSource::Wallpaper);
         let seed = 0xffab12cd;
 
-        let _ = reduce(
+        let changed = reduce(
             &mut state,
             ThemeCommand::SetWallpaperSeed(seed),
             TEST_TIMESTAMP,
         );
+        assert!(changed);
         assert_eq!(state.source_argb, seed);
         assert_eq!(state.palette_generated_at, TEST_TIMESTAMP);
+    }
+
+    #[test]
+    fn test_wallpaper_seed_is_ignored_for_custom_source() {
+        let mut state = ThemeState {
+            color_source: ColorSource::Custom,
+            ..Default::default()
+        };
+        let revision = state.revision;
+        let source_argb = state.source_argb;
+
+        let changed = reduce(
+            &mut state,
+            ThemeCommand::SetWallpaperSeed(0xffab12cd),
+            TEST_TIMESTAMP,
+        );
+        assert!(!changed);
+        assert_eq!(state.source_argb, source_argb);
+        assert_eq!(state.revision, revision);
+    }
+
+    #[test]
+    fn test_reduce_reports_noop_as_unchanged() {
+        let mut state = ThemeState::default();
+        let revision = state.revision;
+
+        let changed = reduce(
+            &mut state,
+            ThemeCommand::SetMode(ThemeMode::System),
+            TEST_TIMESTAMP,
+        );
+        assert!(!changed);
+        assert_eq!(state.revision, revision);
     }
 
     #[test]

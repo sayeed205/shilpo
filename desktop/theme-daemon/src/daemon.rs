@@ -7,7 +7,7 @@ use image::imageops::FilterType;
 use mcu_material_color::{Hct, QuantizerCelebi, Score};
 use serde::{Deserialize, Serialize};
 use shilpo_config::ShellConfig;
-use shilpo_theme::{ThemeCommand, ThemeMode, ThemeState, generate_m3_palettes, reduce};
+use shilpo_theme::{ColorSource, ThemeCommand, ThemeMode, ThemeState, generate_m3_palettes, reduce};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -56,13 +56,14 @@ impl std::ops::DerefMut for DaemonState {
     }
 }
 
+/// A command handled by the theme daemon.
+///
+/// Pure core transitions are carried as [`DaemonCommand::Theme`] and forwarded
+/// unchanged to `shilpo_theme::reduce`; wallpaper and portal concerns stay at
+/// this (daemon) layer, never leaking into `core/theme`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonCommand {
-    SetMode(ThemeMode),
-    ToggleMode,
-    SetColorSource(shilpo_theme::ColorSource),
-    SetSchemeVariant(shilpo_theme::SchemeVariant),
-    SetCustomSeed(u32),
+    Theme(ThemeCommand),
     SetWallpaperDirectory(PathBuf),
     SetWallpaper { path: PathBuf, seed: u32 },
     PortalAppearanceChanged(Option<ThemeMode>),
@@ -214,20 +215,26 @@ impl ThemeDaemon {
                 let _ = reply.send(diag.to_string());
             }
             ActorMessage::SetMode(mode, reply) => {
-                let _ = reply.send(self.process_command(DaemonCommand::SetMode(mode)).await);
+                let _ = reply.send(
+                    self.process_command(DaemonCommand::Theme(ThemeCommand::SetMode(mode)))
+                        .await,
+                );
             }
             ActorMessage::ToggleMode(reply) => {
-                let _ = reply.send(self.process_command(DaemonCommand::ToggleMode).await);
+                let _ = reply.send(
+                    self.process_command(DaemonCommand::Theme(ThemeCommand::ToggleMode))
+                        .await,
+                );
             }
             ActorMessage::SetColorSource(source, reply) => {
                 let _ = reply.send(
-                    self.process_command(DaemonCommand::SetColorSource(source))
+                    self.process_command(DaemonCommand::Theme(ThemeCommand::SetColorSource(source)))
                         .await,
                 );
             }
             ActorMessage::SetSchemeVariant(variant, reply) => {
                 let res = self
-                    .process_command(DaemonCommand::SetSchemeVariant(variant))
+                    .process_command(DaemonCommand::Theme(ThemeCommand::SetSchemeVariant(variant)))
                     .await;
                 let config_path = self.config_path.clone();
                 tokio::task::spawn_blocking(move || {
@@ -240,7 +247,7 @@ impl ThemeDaemon {
             }
             ActorMessage::SetCustomSeed(seed, reply) => {
                 let _ = reply.send(
-                    self.process_command(DaemonCommand::SetCustomSeed(seed))
+                    self.process_command(DaemonCommand::Theme(ThemeCommand::SetCustomSeed(seed)))
                         .await,
                 );
             }
@@ -387,112 +394,11 @@ impl ThemeDaemon {
 
     async fn process_command(&mut self, command: DaemonCommand) -> Result<DaemonState, String> {
         let now = chrono::Utc::now().to_rfc3339();
+        let previous_revision = self.state.theme.revision;
         let mut next_state = self.state.clone();
-        let prev_rev = next_state.theme.revision;
-        let mut dispatch_adapter_mode: Option<ThemeMode> = None;
+        let outcome = apply_command(&mut next_state, command, &now)?;
 
-        match command {
-            DaemonCommand::SetMode(mode) => {
-                let prev_resolved = next_state.theme.resolved_mode;
-                reduce(&mut next_state.theme, ThemeCommand::SetMode(mode), &now);
-                if mode != ThemeMode::System {
-                    if next_state.theme.resolved_mode != prev_resolved {
-                        dispatch_adapter_mode = Some(next_state.theme.resolved_mode);
-                    } else if next_state.theme.selected_mode == mode {
-                        dispatch_adapter_mode = Some(mode);
-                    }
-                }
-            }
-            DaemonCommand::ToggleMode => {
-                reduce(&mut next_state.theme, ThemeCommand::ToggleMode, &now);
-                dispatch_adapter_mode = Some(next_state.theme.resolved_mode);
-            }
-            DaemonCommand::SetColorSource(source) => {
-                let available = match source {
-                    shilpo_theme::ColorSource::Custom => next_state.custom_seed.is_some(),
-                    shilpo_theme::ColorSource::Wallpaper => next_state.wallpaper_seed.is_some(),
-                };
-                if !available {
-                    return Err(format!("No seed is available for color source {source:?}"));
-                }
-                if source == shilpo_theme::ColorSource::Wallpaper
-                    && let Some(seed) = next_state.wallpaper_seed
-                {
-                    reduce(
-                        &mut next_state.theme,
-                        ThemeCommand::SetWallpaperSeed(seed),
-                        &now,
-                    );
-                }
-                reduce(
-                    &mut next_state.theme,
-                    ThemeCommand::SetColorSource(source),
-                    &now,
-                );
-            }
-            DaemonCommand::SetSchemeVariant(variant) => {
-                reduce(
-                    &mut next_state.theme,
-                    ThemeCommand::SetSchemeVariant(variant),
-                    &now,
-                );
-            }
-            DaemonCommand::SetCustomSeed(seed) => {
-                reduce(
-                    &mut next_state.theme,
-                    ThemeCommand::SetCustomSeed(seed),
-                    &now,
-                );
-            }
-            DaemonCommand::SetWallpaperDirectory(dir) => {
-                if next_state.wallpaper_dir != dir {
-                    next_state.wallpaper_dir = dir;
-                    next_state.theme.revision += 1;
-                    next_state.theme.updated_at = now.clone();
-                }
-            }
-            DaemonCommand::SetWallpaper { path, seed } => {
-                let mut changed = false;
-                if next_state.wallpaper_path.as_ref() != Some(&path) {
-                    next_state.wallpaper_path = Some(path);
-                    changed = true;
-                }
-                if next_state.wallpaper_seed != Some(seed) {
-                    next_state.wallpaper_seed = Some(seed);
-                    changed = true;
-                }
-                if next_state.theme.color_source == shilpo_theme::ColorSource::Wallpaper {
-                    let prev_sub_rev = next_state.theme.revision;
-                    reduce(
-                        &mut next_state.theme,
-                        ThemeCommand::SetWallpaperSeed(seed),
-                        &now,
-                    );
-                    if next_state.theme.revision > prev_sub_rev {
-                        changed = false;
-                    }
-                }
-                if changed {
-                    next_state.theme.revision += 1;
-                    next_state.theme.updated_at = now.clone();
-                }
-            }
-            DaemonCommand::PortalAppearanceChanged(portal_mode) => {
-                if let Some(pm) = portal_mode {
-                    debug_assert!(pm != ThemeMode::System);
-                    if next_state.theme.selected_mode == ThemeMode::System
-                        && next_state.theme.resolved_mode != pm
-                    {
-                        next_state.theme.resolved_mode = pm;
-                        next_state.theme.revision += 1;
-                        next_state.theme.updated_at = now.clone();
-                        dispatch_adapter_mode = Some(pm);
-                    }
-                }
-            }
-        }
-
-        if next_state.theme.revision > prev_rev {
+        if next_state.theme.revision > previous_revision {
             self.state = next_state;
 
             let raw_state =
@@ -514,7 +420,7 @@ impl ThemeDaemon {
             });
         }
 
-        if let Some(mode) = dispatch_adapter_mode {
+        if let Some(mode) = outcome.dispatch_adapter_mode {
             let adapter = Arc::clone(&self.adapter);
             tokio::task::spawn_blocking(move || {
                 if let Err(error) = adapter.set_mode(mode) {
@@ -570,6 +476,114 @@ impl ThemeDaemon {
             % wallpapers.len();
         Ok(wallpapers[idx].clone())
     }
+}
+
+/// Side effects a daemon command requests, expressed purely so callers can
+/// perform the actual I/O (adapter invocation, D-Bus signal, persistence).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ApplyOutcome {
+    /// Mode the desktop adapter should be switched to, if any.
+    dispatch_adapter_mode: Option<ThemeMode>,
+}
+
+/// Pure application of a [`DaemonCommand`] to a [`DaemonState`] snapshot.
+///
+/// This is the daemon-side seam: it decides state transitions and which mode (if
+/// any) the desktop adapter must be told about, without touching D-Bus, files, or
+/// subprocesses, so every command's logic is testable without system mocks. Core
+/// transitions are delegated to `shilpo_theme::reduce`; wallpaper and portal
+/// concerns are handled here, at the daemon layer (ADR-0002).
+fn apply_command(
+    state: &mut DaemonState,
+    command: DaemonCommand,
+    now: &str,
+) -> Result<ApplyOutcome, String> {
+    let mut outcome = ApplyOutcome::default();
+
+    match command {
+        DaemonCommand::Theme(command) => match command {
+            ThemeCommand::SetMode(mode) => {
+                let previous_resolved = state.theme.resolved_mode;
+                reduce(&mut state.theme, ThemeCommand::SetMode(mode), now);
+                if mode != ThemeMode::System {
+                    if state.theme.resolved_mode != previous_resolved {
+                        outcome.dispatch_adapter_mode = Some(state.theme.resolved_mode);
+                    } else if state.theme.selected_mode == mode {
+                        outcome.dispatch_adapter_mode = Some(mode);
+                    }
+                }
+            }
+            ThemeCommand::ToggleMode => {
+                reduce(&mut state.theme, ThemeCommand::ToggleMode, now);
+                outcome.dispatch_adapter_mode = Some(state.theme.resolved_mode);
+            }
+            ThemeCommand::SetColorSource(source) => {
+                let available = match source {
+                    ColorSource::Custom => state.theme.custom_seed.is_some(),
+                    ColorSource::Wallpaper => state.wallpaper_seed.is_some(),
+                };
+                if !available {
+                    return Err(format!("No seed is available for color source {source:?}"));
+                }
+                reduce(&mut state.theme, ThemeCommand::SetColorSource(source), now);
+                if source == ColorSource::Wallpaper
+                    && let Some(seed) = state.wallpaper_seed
+                {
+                    reduce(&mut state.theme, ThemeCommand::SetWallpaperSeed(seed), now);
+                }
+            }
+            ThemeCommand::SetSchemeVariant(variant) => {
+                reduce(&mut state.theme, ThemeCommand::SetSchemeVariant(variant), now);
+            }
+            ThemeCommand::SetCustomSeed(seed) => {
+                reduce(&mut state.theme, ThemeCommand::SetCustomSeed(seed), now);
+            }
+            ThemeCommand::SetWallpaperSeed(seed) => {
+                reduce(&mut state.theme, ThemeCommand::SetWallpaperSeed(seed), now);
+            }
+        },
+        DaemonCommand::SetWallpaperDirectory(dir) => {
+            if state.wallpaper_dir != dir {
+                state.wallpaper_dir = dir;
+                bump_revision(state, now);
+            }
+        }
+        DaemonCommand::SetWallpaper { path, seed } => {
+            let mut changed = false;
+            if state.wallpaper_path.as_ref() != Some(&path) {
+                state.wallpaper_path = Some(path);
+                changed = true;
+            }
+            if state.wallpaper_seed != Some(seed) {
+                state.wallpaper_seed = Some(seed);
+                changed = true;
+            }
+            let seed_applied = state.theme.color_source == ColorSource::Wallpaper
+                && reduce(&mut state.theme, ThemeCommand::SetWallpaperSeed(seed), now);
+            if changed && !seed_applied {
+                bump_revision(state, now);
+            }
+        }
+        DaemonCommand::PortalAppearanceChanged(portal_mode) => {
+            if let Some(pm) = portal_mode {
+                debug_assert!(pm != ThemeMode::System);
+                if state.theme.selected_mode == ThemeMode::System
+                    && state.theme.resolved_mode != pm
+                {
+                    state.theme.resolved_mode = pm;
+                    bump_revision(state, now);
+                    outcome.dispatch_adapter_mode = Some(pm);
+                }
+            }
+        }
+    }
+
+    Ok(outcome)
+}
+
+fn bump_revision(state: &mut DaemonState, now: &str) {
+    state.theme.revision += 1;
+    state.theme.updated_at = now.to_string();
 }
 
 fn expand_tilde(path: &Path) -> PathBuf {
@@ -640,6 +654,14 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    const TEST_NOW: &str = "2026-08-07T09:00:00Z";
+    const CUSTOM_SEED: u32 = 0xffaabbcc;
+    const WALLPAPER_SEED: u32 = 0xffdd11dd;
+
+    fn apply(state: &mut DaemonState, command: DaemonCommand) -> Result<ApplyOutcome, String> {
+        apply_command(state, command, TEST_NOW)
+    }
+
     #[test]
     fn configured_wallpaper_directory_overrides_persisted_snapshot() {
         let persisted = DaemonState {
@@ -664,5 +686,292 @@ mod tests {
             shilpo_theme::state::DEFAULT_TIMESTAMP
         );
         assert_eq!(state.theme.updated_at, state.theme.palette_generated_at);
+    }
+
+    #[test]
+    fn portal_appearance_updates_resolved_mode_in_system_mode() {
+        let mut state = DaemonState::default();
+        assert_eq!(state.theme.selected_mode, ThemeMode::System);
+        assert_eq!(state.theme.resolved_mode, ThemeMode::Light);
+        let revision = state.theme.revision;
+
+        let outcome = apply(
+            &mut state,
+            DaemonCommand::PortalAppearanceChanged(Some(ThemeMode::Dark)),
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.selected_mode, ThemeMode::System);
+        assert_eq!(state.theme.resolved_mode, ThemeMode::Dark);
+        assert_eq!(state.theme.revision, revision + 1);
+        assert_eq!(state.theme.updated_at, TEST_NOW);
+        assert_eq!(outcome.dispatch_adapter_mode, Some(ThemeMode::Dark));
+    }
+
+    #[test]
+    fn portal_echo_equal_to_resolution_is_a_noop() {
+        let mut state = DaemonState::default();
+        let revision = state.theme.revision;
+
+        let outcome = apply(
+            &mut state,
+            DaemonCommand::PortalAppearanceChanged(Some(ThemeMode::Light)),
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.resolved_mode, ThemeMode::Light);
+        assert_eq!(state.theme.revision, revision);
+        assert_eq!(outcome.dispatch_adapter_mode, None);
+    }
+
+    #[test]
+    fn portal_no_preference_is_a_noop() {
+        let mut state = DaemonState::default();
+        let revision = state.theme.revision;
+
+        let outcome = apply(&mut state, DaemonCommand::PortalAppearanceChanged(None)).unwrap();
+
+        assert_eq!(state.theme.resolved_mode, ThemeMode::Light);
+        assert_eq!(state.theme.revision, revision);
+        assert_eq!(outcome.dispatch_adapter_mode, None);
+    }
+
+    #[test]
+    fn portal_change_is_ignored_when_mode_is_fixed() {
+        let mut state = DaemonState::default();
+        apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::SetMode(ThemeMode::Dark)),
+        )
+        .unwrap();
+        assert_eq!(state.theme.selected_mode, ThemeMode::Dark);
+        let revision = state.theme.revision;
+
+        let outcome = apply(
+            &mut state,
+            DaemonCommand::PortalAppearanceChanged(Some(ThemeMode::Light)),
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.selected_mode, ThemeMode::Dark);
+        assert_eq!(state.theme.resolved_mode, ThemeMode::Dark);
+        assert_eq!(state.theme.revision, revision);
+        assert_eq!(outcome.dispatch_adapter_mode, None);
+    }
+
+    #[test]
+    fn fixed_mode_dispatches_adapter() {
+        let mut state = DaemonState::default();
+        let outcome = apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::SetMode(ThemeMode::Dark)),
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.selected_mode, ThemeMode::Dark);
+        assert_eq!(state.theme.resolved_mode, ThemeMode::Dark);
+        assert_eq!(outcome.dispatch_adapter_mode, Some(ThemeMode::Dark));
+    }
+
+    #[test]
+    fn system_mode_does_not_dispatch_adapter() {
+        let mut state = DaemonState::default();
+        let revision = state.theme.revision;
+
+        let outcome = apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::SetMode(ThemeMode::System)),
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.selected_mode, ThemeMode::System);
+        assert_eq!(state.theme.revision, revision);
+        assert_eq!(outcome.dispatch_adapter_mode, None);
+    }
+
+    #[test]
+    fn pinning_portal_resolved_mode_dispatches_adapter() {
+        let mut state = DaemonState {
+            theme: ThemeState {
+                selected_mode: ThemeMode::System,
+                resolved_mode: ThemeMode::Light,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let outcome = apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::SetMode(ThemeMode::Light)),
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.selected_mode, ThemeMode::Light);
+        assert_eq!(outcome.dispatch_adapter_mode, Some(ThemeMode::Light));
+    }
+
+    #[test]
+    fn toggle_mode_dispatches_resolved_mode() {
+        let mut state = DaemonState {
+            theme: ThemeState {
+                resolved_mode: ThemeMode::Light,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let outcome = apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::ToggleMode),
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.resolved_mode, ThemeMode::Dark);
+        assert_eq!(outcome.dispatch_adapter_mode, Some(ThemeMode::Dark));
+    }
+
+    #[test]
+    fn switching_to_wallpaper_source_applies_wallpaper_seed() {
+        let mut state = DaemonState {
+            theme: ThemeState {
+                color_source: ColorSource::Custom,
+                custom_seed: Some(CUSTOM_SEED),
+                source_argb: CUSTOM_SEED,
+                ..Default::default()
+            },
+            wallpaper_seed: Some(WALLPAPER_SEED),
+            ..Default::default()
+        };
+
+        apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::SetColorSource(ColorSource::Wallpaper)),
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.color_source, ColorSource::Wallpaper);
+        assert_eq!(state.theme.source_argb, WALLPAPER_SEED);
+        assert_eq!(state.theme.palette_generated_at, TEST_NOW);
+    }
+
+    #[test]
+    fn switching_to_custom_source_without_seed_fails() {
+        let mut state = DaemonState::default();
+        let result = apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::SetColorSource(ColorSource::Custom)),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn switching_to_wallpaper_source_without_seed_fails() {
+        let mut state = DaemonState::default();
+        let result = apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::SetColorSource(ColorSource::Wallpaper)),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn custom_seed_followed_by_custom_source_regenerates() {
+        let mut state = DaemonState::default();
+        apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::SetCustomSeed(CUSTOM_SEED)),
+        )
+        .unwrap();
+        apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::SetColorSource(ColorSource::Custom)),
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.custom_seed, Some(CUSTOM_SEED));
+        assert_eq!(state.theme.color_source, ColorSource::Custom);
+        assert_eq!(state.theme.source_argb, CUSTOM_SEED);
+    }
+
+    #[test]
+    fn wallpaper_directory_updates_state_and_bumps_revision() {
+        let mut state = DaemonState::default();
+        let revision = state.theme.revision;
+        let new_dir = PathBuf::from("/new/wallpapers");
+
+        apply(
+            &mut state,
+            DaemonCommand::SetWallpaperDirectory(new_dir.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(state.wallpaper_dir, new_dir);
+        assert_eq!(state.theme.revision, revision + 1);
+        assert_eq!(state.theme.updated_at, TEST_NOW);
+    }
+
+    #[test]
+    fn wallpaper_directory_same_path_is_a_noop() {
+        let mut state = DaemonState {
+            wallpaper_dir: PathBuf::from("/same/dir"),
+            ..Default::default()
+        };
+        let revision = state.theme.revision;
+
+        apply(
+            &mut state,
+            DaemonCommand::SetWallpaperDirectory(PathBuf::from("/same/dir")),
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.revision, revision);
+    }
+
+    #[test]
+    fn wallpaper_sets_path_and_seed_and_bumps_once() {
+        let mut state = DaemonState {
+            theme: ThemeState {
+                color_source: ColorSource::Custom,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let revision = state.theme.revision;
+        let path = PathBuf::from("/w/pic.png");
+
+        apply(
+            &mut state,
+            DaemonCommand::SetWallpaper {
+                path: path.clone(),
+                seed: WALLPAPER_SEED,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(state.wallpaper_path, Some(path));
+        assert_eq!(state.wallpaper_seed, Some(WALLPAPER_SEED));
+        assert_eq!(state.theme.source_argb, 0xff006c4c);
+        assert_eq!(state.theme.revision, revision + 1);
+    }
+
+    #[test]
+    fn wallpaper_seed_is_applied_when_source_is_wallpaper() {
+        let mut state = DaemonState::default();
+        let revision = state.theme.revision;
+        let path = PathBuf::from("/w/pic.png");
+
+        apply(
+            &mut state,
+            DaemonCommand::SetWallpaper {
+                path: path.clone(),
+                seed: WALLPAPER_SEED,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(state.wallpaper_path, Some(path));
+        assert_eq!(state.theme.source_argb, WALLPAPER_SEED);
+        assert_eq!(state.theme.revision, revision + 1);
+        assert_eq!(state.theme.palette_generated_at, TEST_NOW);
     }
 }

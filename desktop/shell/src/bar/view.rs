@@ -1158,8 +1158,8 @@ mod bar_view_tests {
         let (mut view, _commands_rx) = test_view(ShellConfig::default());
         let err_msg = "Invalid TOML syntax".to_string();
 
-        let result = view
-            .compute_worker_update(&WorkerUpdate::Config(ConfigUpdate::Failed(err_msg.clone())));
+        let result =
+            view.compute_worker_update(&WorkerUpdate::Config(ConfigUpdate::Failed(err_msg.clone())));
         assert!(result.changed);
         assert_eq!(view.last_error, Some(err_msg.clone()));
         assert_eq!(result.effects.len(), 1);
