@@ -757,6 +757,7 @@ mod tests {
             percentage: 75,
             available: true,
             device_name: None,
+            ..Default::default()
         };
         assert!(snapshot.apply(&WorkerUpdate::Brightness(brightness.clone())));
         assert_eq!(snapshot.brightness, brightness);

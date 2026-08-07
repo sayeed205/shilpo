@@ -194,14 +194,12 @@ pub fn discover_drm_connectors() -> HashMap<u8, String> {
             if let Some(idx) = name.find('-') {
                 let connector = &name[idx + 1..];
                 let ddc_path = path.join("ddc");
-                if let Ok(target) = std::fs::read_link(&ddc_path) {
-                    if let Some(target_str) = target.to_str() {
-                        if let Some(i2c_idx) = target_str.rfind("i2c-") {
-                            if let Ok(bus) = target_str[i2c_idx + 4..].parse::<u8>() {
-                                map.insert(bus, connector.to_string());
-                            }
-                        }
-                    }
+                if let Ok(target) = std::fs::read_link(&ddc_path)
+                    && let Some(target_str) = target.to_str()
+                    && let Some(i2c_idx) = target_str.rfind("i2c-")
+                    && let Ok(bus) = target_str[i2c_idx + 4..].parse::<u8>()
+                {
+                    map.insert(bus, connector.to_string());
                 }
             }
         }
