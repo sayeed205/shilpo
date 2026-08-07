@@ -142,6 +142,69 @@ fn should_restore_overview_prior_focus(
     }
 }
 
+use super::extension_host::ExtensionSurfaceSpec;
+use shilpo_ext_types::CanonicalId;
+
+pub struct SurfaceManager {
+    pub(super) bars: HashMap<DisplayId, (WindowHandle<BarView>, crate::bar::BarSpec)>,
+    pub(super) last_bar_specs: Vec<(BarGeometry, bool)>,
+    pub(super) bar_state: BarState,
+    pub(super) control_center: Option<WindowHandle<shilpo_ui::Root>>,
+    pub(super) overview: Option<WindowHandle<shilpo_ui::Root>>,
+    pub(super) overview_entity: Option<Entity<crate::overview::WorkspaceOverview>>,
+    pub(super) overview_instance: u64,
+    pub(super) next_overview_instance: u64,
+    pub(super) overview_opened_workspace_id: Option<u64>,
+    pub(super) current_wallpaper_path: Option<PathBuf>,
+    pub(super) latest_snapshot: Arc<CompositorSnapshot>,
+    pub(super) notification: Option<(
+        u64,
+        u32,
+        WindowHandle<crate::notification::NotificationToastView>,
+    )>,
+    pub(super) notification_generation: u64,
+    pub(super) prior_window_id: Option<u64>,
+    pub(super) osd: Option<(
+        u64,
+        WindowHandle<shilpo_ui::Root>,
+        Entity<crate::osd::OsdView>,
+    )>,
+    pub(super) _osd_generation: u64,
+    pub(super) extension_surfaces:
+        HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
+    pub(super) extension_panel: Option<(WindowHandle<shilpo_ui::Root>, CanonicalId)>,
+    pub(super) extension_output_ids: std::collections::HashSet<DisplayId>,
+}
+
+impl SurfaceManager {
+    pub fn new(
+        initial_wallpaper_path: Option<PathBuf>,
+        latest_snapshot: Arc<CompositorSnapshot>,
+    ) -> Self {
+        Self {
+            bars: HashMap::new(),
+            last_bar_specs: Vec::new(),
+            bar_state: BarState::Starting,
+            control_center: None,
+            overview: None,
+            overview_entity: None,
+            overview_instance: 0,
+            next_overview_instance: 0,
+            overview_opened_workspace_id: None,
+            current_wallpaper_path: initial_wallpaper_path,
+            latest_snapshot,
+            notification: None,
+            notification_generation: 0,
+            prior_window_id: None,
+            osd: None,
+            _osd_generation: 0,
+            extension_surfaces: HashMap::new(),
+            extension_panel: None,
+            extension_output_ids: std::collections::HashSet::new(),
+        }
+    }
+}
+
 impl ShellRuntime {
     pub(super) fn output_name_for_bounds(
         bounds: Bounds<Pixels>,
@@ -224,8 +287,8 @@ impl ShellRuntime {
             .iter()
             .map(|o| o.display_id)
             .collect::<std::collections::HashSet<_>>();
-        if output_ids != cx.global::<Self>().extension_output_ids {
-            cx.global_mut::<Self>().extension_output_ids = output_ids;
+        if output_ids != cx.global::<Self>().surface_manager.extension_output_ids {
+            cx.global_mut::<Self>().surface_manager.extension_output_ids = output_ids;
             Self::dispatch_extension_event(cx, shilpo_ext::ExtensionEvent::OutputsChanged);
         }
 
@@ -246,8 +309,8 @@ impl ShellRuntime {
         match view_result {
             Ok(handle) => {
                 let runtime = cx.global_mut::<Self>();
-                runtime.bars.insert(display_id, (handle, spec));
-                runtime.bar_state = BarState::Visible;
+                runtime.surface_manager.bars.insert(display_id, (handle, spec));
+                runtime.surface_manager.bar_state = BarState::Visible;
                 runtime.publish_status();
                 true
             }
@@ -292,6 +355,7 @@ impl ShellRuntime {
         let ops = {
             let current_bars = cx
                 .global::<Self>()
+                .surface_manager
                 .bars
                 .iter()
                 .map(|(id, (_, spec))| (*id, spec.clone()))
@@ -310,7 +374,7 @@ impl ShellRuntime {
                     mounted |= Self::open_bar_with_spec(cx, spec);
                 }
                 ReconciliationOp::Remove(display_id) => {
-                    if let Some((handle, _)) = cx.global_mut::<Self>().bars.remove(&display_id) {
+                    if let Some((handle, _)) = cx.global_mut::<Self>().surface_manager.bars.remove(&display_id) {
                         let _ = handle.update(cx, |_, window, _| window.remove_window());
                     }
                 }
@@ -320,34 +384,34 @@ impl ShellRuntime {
             }
         }
 
-        if !mounted && !cx.global::<Self>().bars.is_empty() {
+        if !mounted && !cx.global::<Self>().surface_manager.bars.is_empty() {
             mounted = true;
         }
 
         let runtime = cx.global_mut::<Self>();
         if !mounted {
-            runtime.bar_state = BarState::OpenFailed;
+            runtime.surface_manager.bar_state = BarState::OpenFailed;
             runtime.publish_status();
         }
     }
 
     pub fn mark_bar_open_failed(cx: &mut App) {
         let runtime = cx.global_mut::<Self>();
-        runtime.bar_state = BarState::OpenFailed;
+        runtime.surface_manager.bar_state = BarState::OpenFailed;
         runtime.publish_status();
     }
 
     pub fn toggle_bar(cx: &mut App) {
-        if cx.global::<Self>().bars.is_empty() {
+        if cx.global::<Self>().surface_manager.bars.is_empty() {
             Self::reconcile_bars(cx);
         } else {
-            let old_bars = std::mem::take(&mut cx.global_mut::<Self>().bars);
+            let old_bars = std::mem::take(&mut cx.global_mut::<Self>().surface_manager.bars);
             for (_, (handle, _)) in old_bars {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             }
             let runtime = cx.global_mut::<Self>();
-            runtime.bar_state = BarState::Hidden;
-            runtime.last_bar_specs.clear();
+            runtime.surface_manager.bar_state = BarState::Hidden;
+            runtime.surface_manager.last_bar_specs.clear();
             runtime.publish_status();
         }
     }
@@ -355,23 +419,23 @@ impl ShellRuntime {
     pub(super) fn capture_prior_focus(cx: &mut App) {
         let focused_window_id = Self::compositor_snapshot(cx).focused_window_id;
         let runtime = cx.global_mut::<Self>();
-        if runtime.control_center.is_none() && runtime.overview.is_none() {
-            runtime.prior_window_id = focused_window_id;
+        if runtime.surface_manager.control_center.is_none() && runtime.surface_manager.overview.is_none() {
+            runtime.surface_manager.prior_window_id = focused_window_id;
         }
     }
 
     pub(super) fn restore_prior_focus(cx: &mut App) {
         let runtime = cx.global_mut::<Self>();
-        if runtime.control_center.is_some() || runtime.overview.is_some() {
+        if runtime.surface_manager.control_center.is_some() || runtime.surface_manager.overview.is_some() {
             return;
         }
-        if let Some(window_id) = runtime.prior_window_id.take() {
+        if let Some(window_id) = runtime.surface_manager.prior_window_id.take() {
             let _ = Self::overview_focus_window(cx, window_id);
         }
     }
 
     pub fn toggle_overview(cx: &mut App) {
-        if cx.global::<Self>().overview.is_some() {
+        if cx.global::<Self>().surface_manager.overview.is_some() {
             Self::close_overview(cx);
         } else {
             Self::open_or_focus_overview(cx);
@@ -379,7 +443,7 @@ impl ShellRuntime {
     }
 
     pub fn close_overview(cx: &mut App) {
-        let overview = cx.global::<Self>().overview_entity.clone();
+        let overview = cx.global::<Self>().surface_manager.overview_entity.clone();
         if let Some(overview) = overview {
             overview.update(cx, |view, cx| {
                 view.begin_close(crate::overview::OverviewCloseReason::Cancel, cx);
@@ -393,13 +457,13 @@ impl ShellRuntime {
         reason: crate::overview::OverviewCloseReason,
     ) {
         let runtime = cx.global_mut::<Self>();
-        if runtime.overview_instance != instance_id {
+        if runtime.surface_manager.overview_instance != instance_id {
             return;
         }
 
-        let opened_workspace_id = runtime.overview_opened_workspace_id.take();
-        let handle = runtime.overview.take();
-        runtime.overview_entity = None;
+        let opened_workspace_id = runtime.surface_manager.overview_opened_workspace_id.take();
+        let handle = runtime.surface_manager.overview.take();
+        runtime.surface_manager.overview_entity = None;
 
         if let Some(handle) = handle {
             Self::dispatch_surface_lifecycle(cx, ContributionSurface::Launcher, false, 1280., 720.);
@@ -419,13 +483,13 @@ impl ShellRuntime {
 
     pub fn forget_overview(cx: &mut App, instance_id: u64) {
         let runtime = cx.global_mut::<Self>();
-        if runtime.overview_instance != instance_id {
+        if runtime.surface_manager.overview_instance != instance_id {
             return;
         }
 
-        let had_handle = runtime.overview.take().is_some();
-        runtime.overview_entity = None;
-        runtime.overview_opened_workspace_id = None;
+        let had_handle = runtime.surface_manager.overview.take().is_some();
+        runtime.surface_manager.overview_entity = None;
+        runtime.surface_manager.overview_opened_workspace_id = None;
 
         if had_handle {
             Self::dispatch_surface_lifecycle(cx, ContributionSurface::Launcher, false, 1280., 720.);
@@ -462,12 +526,13 @@ impl ShellRuntime {
     }
 
     pub fn is_overview_open(cx: &App) -> bool {
-        cx.has_global::<Self>() && cx.global::<Self>().overview.is_some()
+        cx.has_global::<Self>() && cx.global::<Self>().surface_manager.overview.is_some()
     }
 
     pub(super) fn refresh_bars(cx: &mut App) {
         let handles: Vec<_> = cx
             .global::<Self>()
+            .surface_manager
             .bars
             .values()
             .map(|(handle, _)| *handle)
@@ -480,7 +545,7 @@ impl ShellRuntime {
     pub fn overview_wallpaper_path(cx: &App) -> Option<PathBuf> {
         if cx.has_global::<Self>() {
             let runtime = cx.global::<Self>();
-            if let Some(path) = runtime.current_wallpaper_path.clone() {
+            if let Some(path) = runtime.surface_manager.current_wallpaper_path.clone() {
                 return Some(path);
             }
         }
@@ -504,9 +569,9 @@ impl ShellRuntime {
 
     pub fn begin_overview_instance(cx: &mut App) -> u64 {
         let runtime = cx.global_mut::<Self>();
-        runtime.next_overview_instance = runtime.next_overview_instance.wrapping_add(1);
-        runtime.overview_instance = runtime.next_overview_instance;
-        runtime.overview_instance
+        runtime.surface_manager.next_overview_instance = runtime.surface_manager.next_overview_instance.wrapping_add(1);
+        runtime.surface_manager.overview_instance = runtime.surface_manager.next_overview_instance;
+        runtime.surface_manager.overview_instance
     }
 
     pub fn open_or_focus_overview(cx: &mut App) {
@@ -514,19 +579,19 @@ impl ShellRuntime {
     }
 
     pub fn open_or_focus_overview_on_display(cx: &mut App, target_display_id: Option<DisplayId>) {
-        if let Some(handle) = cx.global::<Self>().overview {
+        if let Some(handle) = cx.global::<Self>().surface_manager.overview {
             let _ = handle.update(cx, |_, window, _| window.activate_window());
             return;
         }
 
         Self::capture_prior_focus(cx);
         if let Some(discovered_wallpaper_path) = query_awww_wallpaper_path() {
-            let theme_wallpaper_path = cx.global::<Self>().current_wallpaper_path.as_deref();
+            let theme_wallpaper_path = cx.global::<Self>().surface_manager.current_wallpaper_path.as_deref();
             if discovered_wallpaper_needs_theme_sync(
                 theme_wallpaper_path,
                 &discovered_wallpaper_path,
             ) {
-                cx.global_mut::<Self>().current_wallpaper_path =
+                cx.global_mut::<Self>().surface_manager.current_wallpaper_path =
                     Some(discovered_wallpaper_path.clone());
 
                 shilpo_theme_daemon::ThemeClient::spawn_task(async move {
@@ -542,7 +607,7 @@ impl ShellRuntime {
 
         let _instance_id = Self::begin_overview_instance(cx);
         let opened_workspace_id = Self::compositor_snapshot(cx).focused_workspace_id;
-        cx.global_mut::<Self>().overview_opened_workspace_id = opened_workspace_id;
+        cx.global_mut::<Self>().surface_manager.overview_opened_workspace_id = opened_workspace_id;
 
         let window_size = size(px(1280.), px(720.));
         let (origin, display_id) = if let Some(display) = cx
@@ -576,7 +641,7 @@ impl ShellRuntime {
         }) {
             Ok(handle) => {
                 let runtime = cx.global_mut::<Self>();
-                runtime.overview = Some(handle);
+                runtime.surface_manager.overview = Some(handle);
                 Self::dispatch_surface_lifecycle(
                     cx,
                     ContributionSurface::Launcher,
@@ -591,7 +656,7 @@ impl ShellRuntime {
     }
 
     pub fn open_or_focus_control_center(cx: &mut App) {
-        if let Some(handle) = cx.global::<Self>().control_center {
+        if let Some(handle) = cx.global::<Self>().surface_manager.control_center {
             let _ = handle.update(cx, |_, window, _| window.activate_window());
             return;
         }
@@ -625,7 +690,7 @@ impl ShellRuntime {
             ControlCenterView::view(window, cx)
         }) {
             Ok(handle) => {
-                cx.global_mut::<Self>().control_center = Some(handle);
+                cx.global_mut::<Self>().surface_manager.control_center = Some(handle);
                 Self::dispatch_surface_lifecycle(
                     cx,
                     ContributionSurface::ControlCenter,
@@ -640,7 +705,7 @@ impl ShellRuntime {
     }
 
     pub fn toggle_control_center(cx: &mut App) {
-        if cx.global::<Self>().control_center.is_some() {
+        if cx.global::<Self>().surface_manager.control_center.is_some() {
             Self::close_control_center(cx);
         } else {
             Self::open_or_focus_control_center(cx);
@@ -661,7 +726,7 @@ impl ShellRuntime {
     }
 
     fn remove_control_center_surface(cx: &mut App) -> bool {
-        let handle = cx.global_mut::<Self>().control_center.take();
+        let handle = cx.global_mut::<Self>().surface_manager.control_center.take();
         let Some(handle) = handle else { return false };
         Self::dispatch_surface_lifecycle(cx, ContributionSurface::ControlCenter, false, 340., 540.);
         let _ = handle.update(cx, |_, window, _| window.remove_window());
@@ -669,7 +734,7 @@ impl ShellRuntime {
     }
 
     pub fn forget_control_center(cx: &mut App) {
-        let had_handle = cx.global_mut::<Self>().control_center.take().is_some();
+        let had_handle = cx.global_mut::<Self>().surface_manager.control_center.take().is_some();
         if had_handle {
             Self::dispatch_surface_lifecycle(
                 cx,
@@ -688,7 +753,7 @@ impl ShellRuntime {
         entity: Entity<crate::overview::WorkspaceOverview>,
     ) {
         if cx.has_global::<Self>() {
-            cx.global_mut::<Self>().overview_entity = Some(entity);
+            cx.global_mut::<Self>().surface_manager.overview_entity = Some(entity);
         }
     }
 
@@ -697,6 +762,7 @@ impl ShellRuntime {
     ) -> Option<WindowHandle<crate::notification::NotificationToastView>> {
         if cx.has_global::<Self>() {
             cx.global::<Self>()
+                .surface_manager
                 .notification
                 .as_ref()
                 .map(|(_, _, handle)| *handle)
@@ -712,12 +778,12 @@ impl ShellRuntime {
         handle: WindowHandle<crate::notification::NotificationToastView>,
     ) {
         let runtime = cx.global_mut::<Self>();
-        runtime.notification = Some((generation, notification_id, handle));
+        runtime.surface_manager.notification = Some((generation, notification_id, handle));
         tracing::warn!("[NOTIFTRACE] register_notification gen={generation} id={notification_id}");
     }
 
     pub fn close_active_notification(cx: &mut App) {
-        let entry = cx.global_mut::<Self>().notification.take();
+        let entry = cx.global_mut::<Self>().surface_manager.notification.take();
         if let Some((_, notification_id, handle)) = entry {
             tracing::warn!(
                 "[NOTIFTRACE] close_active_notification id={notification_id} removing window"
@@ -730,7 +796,7 @@ impl ShellRuntime {
     }
 
     pub fn expire_notification(cx: &mut App, generation: u64) {
-        let entry = cx.global_mut::<Self>().notification.take();
+        let entry = cx.global_mut::<Self>().surface_manager.notification.take();
         let Some((current_generation, notification_id, handle)) = entry else {
             tracing::warn!(
                 "[NOTIFTRACE] expire_notification(gen={generation}) no active entry; window NOT removed"
@@ -738,7 +804,7 @@ impl ShellRuntime {
             return;
         };
         if current_generation != generation {
-            cx.global_mut::<Self>().notification =
+            cx.global_mut::<Self>().surface_manager.notification =
                 Some((current_generation, notification_id, handle));
             tracing::warn!(
                 "[NOTIFTRACE] expire_notification stale gen={generation} current={current_generation}; window NOT removed"
@@ -755,11 +821,12 @@ impl ShellRuntime {
     pub fn forget_notification(cx: &mut App, generation: u64) {
         let is_current = cx
             .global::<Self>()
+            .surface_manager
             .notification
             .as_ref()
             .is_some_and(|(current_generation, _, _)| *current_generation == generation);
         if is_current
-            && let Some((_, notification_id, _)) = cx.global_mut::<Self>().notification.take()
+            && let Some((_, notification_id, _)) = cx.global_mut::<Self>().surface_manager.notification.take()
         {
             tracing::warn!(
                 "[NOTIFTRACE] forget_notification gen={generation} id={notification_id} entry dropped"
@@ -798,7 +865,7 @@ impl ShellRuntime {
 
     pub fn forget_osd(cx: &mut App) {
         if cx.has_global::<Self>() {
-            cx.global_mut::<Self>().osd = None;
+            cx.global_mut::<Self>().surface_manager.osd = None;
         }
     }
 
@@ -810,11 +877,11 @@ impl ShellRuntime {
             cx.update(|cx: &mut gpui::App| {
                 if cx.has_global::<Self>() {
                     let runtime = cx.global_mut::<Self>();
-                    if let Some((current_gen, handle, _)) = &runtime.osd
+                    if let Some((current_gen, handle, _)) = &runtime.surface_manager.osd
                         && *current_gen == generation
                     {
                         let window_handle = *handle;
-                        runtime.osd = None;
+                        runtime.surface_manager.osd = None;
                         let _ = window_handle.update(cx, |_, window, _| window.remove_window());
                     }
                 }
@@ -824,14 +891,14 @@ impl ShellRuntime {
     }
 
     pub fn show_osd(cx: &mut App, kind: crate::osd::OsdKind) {
-        let existing = cx.global_mut::<Self>().osd.take();
+        let existing = cx.global_mut::<Self>().surface_manager.osd.take();
         if let Some((generation, window_handle, view_handle)) = existing {
             view_handle.update(cx, |view, cx| {
                 view.kind = kind;
                 cx.notify();
             });
             let next_gen = generation + 1;
-            cx.global_mut::<Self>().osd = Some((next_gen, window_handle, view_handle));
+            cx.global_mut::<Self>().surface_manager.osd = Some((next_gen, window_handle, view_handle));
             Self::schedule_osd_dismiss(cx, next_gen);
             return;
         }
@@ -880,15 +947,15 @@ impl ShellRuntime {
         if let Ok(window_handle) = window_result
             && let Some(view_handle) = spawned_view.lock().unwrap().take()
         {
-            cx.global_mut::<Self>().osd = Some((1, window_handle, view_handle));
+            cx.global_mut::<Self>().surface_manager.osd = Some((1, window_handle, view_handle));
             Self::schedule_osd_dismiss(cx, 1);
         }
     }
 
     pub fn forget_bar(cx: &mut App) {
         let runtime = cx.global_mut::<Self>();
-        runtime.bars.clear();
-        runtime.bar_state = BarState::Hidden;
+        runtime.surface_manager.bars.clear();
+        runtime.surface_manager.bar_state = BarState::Hidden;
         runtime.publish_status();
     }
 }
@@ -896,6 +963,17 @@ impl ShellRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_surface_manager_initialization() {
+        let snapshot = Arc::new(CompositorSnapshot::default());
+        let manager = SurfaceManager::new(Some(PathBuf::from("/wallpaper.png")), snapshot);
+        assert_eq!(manager.bar_state, BarState::Starting);
+        assert_eq!(manager.current_wallpaper_path, Some(PathBuf::from("/wallpaper.png")));
+        assert!(manager.bars.is_empty());
+        assert!(manager.control_center.is_none());
+        assert!(manager.overview.is_none());
+    }
 
     #[test]
     fn parses_awww_wallpaper_query() {

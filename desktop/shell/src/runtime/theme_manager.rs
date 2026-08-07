@@ -61,12 +61,12 @@ impl ShellRuntime {
     pub(super) fn apply_theme_state(cx: &mut App, state: &DaemonState) {
         let runtime = cx.global_mut::<Self>();
         if let Some(path) = state.wallpaper_path.clone().filter(|path| path.is_file()) {
-            runtime.current_wallpaper_path = Some(path);
+            runtime.surface_manager.current_wallpaper_path = Some(path);
         }
-        let overview_entity = runtime.overview_entity.clone();
-        let wallpaper_path = runtime.current_wallpaper_path.clone();
-        let cc_handle = runtime.control_center;
-        let ov_handle = runtime.overview;
+        let overview_entity = runtime.surface_manager.overview_entity.clone();
+        let wallpaper_path = runtime.surface_manager.current_wallpaper_path.clone();
+        let cc_handle = runtime.surface_manager.control_center;
+        let ov_handle = runtime.surface_manager.overview;
 
         if let Some(overview) = overview_entity {
             overview.update(cx, |view, cx| {

@@ -9,6 +9,61 @@ use crate::{
 
 use super::ShellRuntime;
 
+pub struct ActionDispatcher {
+    pub(super) actions: ActionRegistry,
+    pub(super) keybindings: crate::actions::KeybindingManager,
+}
+
+impl Default for ActionDispatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActionDispatcher {
+    pub fn new() -> Self {
+        Self {
+            actions: ActionRegistry::default(),
+            keybindings: crate::actions::KeybindingManager::with_defaults(),
+        }
+    }
+
+    pub fn actions(&self) -> &ActionRegistry {
+        &self.actions
+    }
+
+    pub fn actions_mut(&mut self) -> &mut ActionRegistry {
+        &mut self.actions
+    }
+
+    pub fn keybindings(&self) -> &crate::actions::KeybindingManager {
+        &self.keybindings
+    }
+
+    pub fn keybindings_mut(&mut self) -> &mut crate::actions::KeybindingManager {
+        &mut self.keybindings
+    }
+
+    pub fn update_shortcut(&mut self, spec: &str, action: ActionId) -> Result<(), String> {
+        let shortcut = crate::actions::Shortcut::parse(spec)
+            .ok_or_else(|| format!("invalid shortcut specification: '{}'", spec))?;
+        self.keybindings.register(shortcut, action)
+    }
+
+    pub fn reset_shortcuts_to_defaults(&mut self) {
+        self.keybindings.reset_to_defaults();
+    }
+
+    pub fn register_extension_action(
+        &mut self,
+        id: CanonicalId,
+        name: impl Into<String>,
+        label: impl Into<String>,
+    ) -> Result<ActionId, String> {
+        self.actions.register_extension(id, name, label)
+    }
+}
+
 impl ShellRuntime {
     pub fn device_snapshot(cx: &App) -> crate::bar::service_worker::DeviceSnapshot {
         cx.global::<Self>()
@@ -30,12 +85,12 @@ impl ShellRuntime {
         let shortcut = crate::actions::Shortcut::parse(spec)
             .ok_or_else(|| format!("invalid shortcut specification: '{}'", spec))?;
         let runtime = cx.global_mut::<Self>();
-        runtime.keybindings.register(shortcut, action)
+        runtime.action_dispatcher.keybindings.register(shortcut, action)
     }
 
     pub fn action_descriptors(cx: &App) -> Vec<crate::actions::ActionDescriptor> {
         if cx.has_global::<Self>() {
-            cx.global::<Self>().actions.all()
+            cx.global::<Self>().action_dispatcher.actions.all()
         } else {
             ActionRegistry::default().all()
         }
@@ -48,6 +103,7 @@ impl ShellRuntime {
         label: impl Into<String>,
     ) -> Result<ActionId, String> {
         cx.global_mut::<Self>()
+            .action_dispatcher
             .actions
             .register_extension(id, name, label)
     }
@@ -60,12 +116,12 @@ impl ShellRuntime {
         let shortcut = crate::actions::Shortcut::parse(spec)
             .ok_or_else(|| format!("invalid shortcut specification: '{}'", spec))?;
         let runtime = cx.global_mut::<Self>();
-        Ok(runtime.keybindings.register_with_override(shortcut, action))
+        Ok(runtime.action_dispatcher.keybindings.register_with_override(shortcut, action))
     }
 
     pub fn reset_shortcuts_to_defaults(cx: &mut App) {
         if cx.has_global::<Self>() {
-            cx.global_mut::<Self>().keybindings.reset_to_defaults();
+            cx.global_mut::<Self>().action_dispatcher.keybindings.reset_to_defaults();
         }
     }
 
@@ -130,6 +186,7 @@ impl ShellRuntime {
         let action_id = invocation.id();
         let descriptor = cx
             .global::<Self>()
+            .action_dispatcher
             .actions
             .descriptor(&action_id)
             .cloned()
@@ -318,7 +375,7 @@ impl ShellRuntime {
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::Extension { id, payload } => {
-                if cx.global::<Self>().extensions.is_none() {
+                if cx.global::<Self>().extension_host.extensions.is_none() {
                     return Err(ShellError::ActionFailed(format!(
                         "extension action 'ext:{id}' has no loaded runtime"
                     )));
@@ -332,15 +389,46 @@ impl ShellRuntime {
     pub fn keybinding_descriptors(cx: &App) -> Vec<(String, String)> {
         let runtime = cx.global::<Self>();
         runtime
+            .action_dispatcher
             .actions
             .all()
             .into_iter()
             .filter_map(|desc| {
                 runtime
+                    .action_dispatcher
                     .keybindings
                     .shortcut_for(&desc.id)
                     .map(|shortcut| (shortcut.to_spec(), desc.label))
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_action_dispatcher_initialization_and_shortcuts() {
+        let mut dispatcher = ActionDispatcher::new();
+        assert!(!dispatcher.actions().all().is_empty());
+
+        let res = dispatcher.update_shortcut("Ctrl+Shift+T", ActionId::ToggleBar);
+        assert!(res.is_ok());
+
+        dispatcher.reset_shortcuts_to_defaults();
+    }
+
+    #[test]
+    fn test_action_dispatcher_extension_action_registration() {
+        use shilpo_ext_types::{ContributionId, ExtensionId};
+        let mut dispatcher = ActionDispatcher::new();
+        let ext_id = ExtensionId::new("org.shilpo.test").unwrap();
+        let contrib_id = ContributionId::new("test-action").unwrap();
+        let cid = CanonicalId::new(ext_id, contrib_id);
+        let res = dispatcher.register_extension_action(cid, "test-action", "Test Action Label");
+        assert!(res.is_ok());
+        let action_id = res.unwrap();
+        assert!(dispatcher.actions().descriptor(&action_id).is_some());
     }
 }

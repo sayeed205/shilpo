@@ -332,6 +332,7 @@ impl ShellRuntime {
 
             let handles: Vec<_> = cx
                 .global::<Self>()
+                .surface_manager
                 .bars
                 .values()
                 .map(|(handle, _)| *handle)

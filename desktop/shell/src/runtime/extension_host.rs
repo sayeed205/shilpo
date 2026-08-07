@@ -41,12 +41,50 @@ pub(super) fn extension_settings(
     settings
 }
 
+pub struct ExtensionHost {
+    pub(super) extensions: Option<crate::extensions::ExtensionCoordinator>,
+    pub(super) extension_tasks: std::collections::HashMap<
+        (
+            crate::extensions::ExtensionGeneration,
+            ExtensionId,
+            String,
+        ),
+        gpui::Task<()>,
+    >,
+    pub(super) extension_location_service: shilpo_services::LocationService,
+}
+
+impl Default for ExtensionHost {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+impl ExtensionHost {
+    pub fn new(extensions: Option<crate::extensions::ExtensionCoordinator>) -> Self {
+        Self {
+            extensions,
+            extension_tasks: std::collections::HashMap::new(),
+            extension_location_service: shilpo_services::LocationService::new(),
+        }
+    }
+
+    pub fn extensions(&self) -> Option<&crate::extensions::ExtensionCoordinator> {
+        self.extensions.as_ref()
+    }
+
+    pub fn extensions_mut(&mut self) -> Option<&mut crate::extensions::ExtensionCoordinator> {
+        self.extensions.as_mut()
+    }
+}
+
 impl ShellRuntime {
     pub fn extension_descriptors(
         cx: &App,
         surface: ContributionSurface,
     ) -> Vec<ContributionDescriptor> {
         cx.global::<Self>()
+            .extension_host
             .extensions
             .as_ref()
             .map_or_else(Vec::new, |extensions| extensions.descriptors_for(surface))
@@ -68,6 +106,7 @@ impl ShellRuntime {
 
     pub fn extension_view(cx: &App, id: &CanonicalId) -> Option<shilpo_ext::ViewTree> {
         cx.global::<Self>()
+            .extension_host
             .extensions
             .as_ref()
             .and_then(|extensions| extensions.view(id))
@@ -79,6 +118,7 @@ impl ShellRuntime {
         relative: &str,
     ) -> Result<PathBuf, String> {
         cx.global::<Self>()
+            .extension_host
             .extensions
             .as_ref()
             .ok_or_else(|| "extension runtime is unavailable".to_owned())?
@@ -92,7 +132,7 @@ impl ShellRuntime {
         event_id: impl Into<String>,
         value: Option<serde_json::Value>,
     ) {
-        if let Some(ext) = cx.global::<Self>().extensions.as_ref()
+        if let Some(ext) = cx.global::<Self>().extension_host.extensions.as_ref()
             && let Err(error) = ext.send_command(crate::extensions::ExtensionCommand::Input {
                 expected: ext.generation(),
                 contribution: contribution.clone(),
@@ -106,16 +146,16 @@ impl ShellRuntime {
     }
 
     pub fn open_extension_panel(cx: &mut App, contribution: CanonicalId) {
-        if let Some((handle, current)) = cx.global_mut::<Self>().extension_panel.take() {
+        if let Some((handle, current)) = cx.global_mut::<Self>().surface_manager.extension_panel.take() {
             if current == contribution
                 && handle
                     .update(cx, |_, window, _| window.activate_window())
                     .is_ok()
             {
-                cx.global_mut::<Self>().extension_panel = Some((handle, current));
+                cx.global_mut::<Self>().surface_manager.extension_panel = Some((handle, current));
                 return;
             }
-            if let Some(ext) = cx.global::<Self>().extensions.as_ref()
+            if let Some(ext) = cx.global::<Self>().extension_host.extensions.as_ref()
                 && let Err(error) =
                     ext.send_command(crate::extensions::ExtensionCommand::Lifecycle {
                         expected: ext.generation(),
@@ -154,7 +194,7 @@ impl ShellRuntime {
             crate::extension_surface::ExtensionSurfaceView::view(view_id, None, window, cx)
         }) {
             Ok(handle) => {
-                if let Some(ext) = cx.global::<Self>().extensions.as_ref()
+                if let Some(ext) = cx.global::<Self>().extension_host.extensions.as_ref()
                     && let Err(error) =
                         ext.send_command(crate::extensions::ExtensionCommand::Lifecycle {
                             expected: ext.generation(),
@@ -168,7 +208,7 @@ impl ShellRuntime {
                 {
                     tracing::warn!(%error, "extension mount was not queued");
                 }
-                cx.global_mut::<Self>().extension_panel = Some((handle, contribution));
+                cx.global_mut::<Self>().surface_manager.extension_panel = Some((handle, contribution));
             }
             Err(error) => tracing::warn!(error = %error, "failed to open extension side panel"),
         }
@@ -181,6 +221,7 @@ impl ShellRuntime {
         let updates = {
             let runtime = cx.global::<ShellRuntime>();
             runtime
+                .extension_host
                 .extensions
                 .as_ref()
                 .map(|ext| ext.drain_updates())
@@ -194,6 +235,7 @@ impl ShellRuntime {
     pub(super) fn apply_extension_update(cx: &mut App, update: crate::extensions::ExtensionUpdate) {
         let current_gen = cx
             .global::<ShellRuntime>()
+            .extension_host
             .extensions
             .as_ref()
             .map(|ext| ext.generation());
@@ -217,6 +259,7 @@ impl ShellRuntime {
         if let Some(snapshot) = &update.snapshot {
             let active_gen = snapshot.generation;
             cx.global_mut::<ShellRuntime>()
+                .extension_host
                 .extension_tasks
                 .retain(|(task_gen, _, _), _| *task_gen >= active_gen);
         }
@@ -227,7 +270,7 @@ impl ShellRuntime {
     }
 
     pub(super) fn dispatch_extension_event(cx: &mut App, event: shilpo_ext::ExtensionEvent) {
-        if let Some(ext) = cx.global::<ShellRuntime>().extensions.as_ref() {
+        if let Some(ext) = cx.global::<ShellRuntime>().extension_host.extensions.as_ref() {
             let cmd = match event {
                 shilpo_ext::ExtensionEvent::PowerChanged {
                     percentage,
@@ -273,7 +316,7 @@ impl ShellRuntime {
         height: f32,
     ) {
         let descriptors = ShellRuntime::extension_descriptors(cx, surface);
-        if let Some(ext) = cx.global::<ShellRuntime>().extensions.as_ref() {
+        if let Some(ext) = cx.global::<ShellRuntime>().extension_host.extensions.as_ref() {
             let expected_gen = ext.generation();
             for descriptor in descriptors {
                 let event = if mounted {
@@ -305,12 +348,13 @@ impl ShellRuntime {
         let desired = ShellRuntime::extension_descriptors(cx, ContributionSurface::Action);
         let existing = cx
             .global::<ShellRuntime>()
+            .action_dispatcher
             .actions
             .all()
             .into_iter()
             .filter_map(|descriptor| descriptor.id.extension_id())
             .collect::<Vec<_>>();
-        let actions = &mut cx.global_mut::<ShellRuntime>().actions;
+        let actions = &mut cx.global_mut::<ShellRuntime>().action_dispatcher.actions;
         for id in existing {
             actions.unregister_extension(&id);
         }
@@ -402,14 +446,14 @@ impl ShellRuntime {
                 let request_id = request.request_id().to_string();
                 let key = (generation, extension_id.clone(), request_id.clone());
                 let accepted = {
-                    let in_flight = &mut cx.global_mut::<ShellRuntime>().extension_tasks;
+                    let in_flight = &mut cx.global_mut::<ShellRuntime>().extension_host.extension_tasks;
                     request_id.len() <= 128
                         && !request_id.is_empty()
                         && in_flight.len() < 8
                         && !in_flight.contains_key(&key)
                 };
                 if !accepted {
-                    if let Some(ext) = cx.global::<ShellRuntime>().extensions.as_ref()
+                    if let Some(ext) = cx.global::<ShellRuntime>().extension_host.extensions.as_ref()
                         && let Err(error) = ext.send_command(crate::extensions::ExtensionCommand::Response {
                         expected: generation,
                         extension_id: extension_id.clone(),
@@ -435,10 +479,11 @@ impl ShellRuntime {
                     cx.update(|cx: &mut gpui::App| {
                         if cx.has_global::<ShellRuntime>() {
                             cx.global_mut::<ShellRuntime>()
+                                .extension_host
                                 .extension_tasks
                                 .remove(&task_key);
                         }
-                        if let Some(ext) = cx.global::<ShellRuntime>().extensions.as_ref()
+                        if let Some(ext) = cx.global::<ShellRuntime>().extension_host.extensions.as_ref()
                             && let Err(error) =
                                 ext.send_command(crate::extensions::ExtensionCommand::Response {
                                     expected: generation,
@@ -451,12 +496,14 @@ impl ShellRuntime {
                     });
                 });
                 cx.global_mut::<ShellRuntime>()
+                    .extension_host
                     .extension_tasks
                     .insert(key.clone(), task);
             }
             shilpo_ext::AuthorizedHostEffectKind::NonHttp(shilpo_ext::HostEffect::LocationRead) => {
                 let location_service = cx
                     .global::<ShellRuntime>()
+                    .extension_host
                     .extension_location_service
                     .clone();
                 let ext_id = extension_id.clone();
@@ -482,10 +529,11 @@ impl ShellRuntime {
                     cx.update(|cx: &mut gpui::App| {
                         if cx.has_global::<ShellRuntime>() {
                             cx.global_mut::<ShellRuntime>()
+                                .extension_host
                                 .extension_tasks
                                 .remove(&task_key);
                         }
-                        if let Some(ext) = cx.global::<ShellRuntime>().extensions.as_ref()
+                        if let Some(ext) = cx.global::<ShellRuntime>().extension_host.extensions.as_ref()
                             && let Err(error) =
                                 ext.send_command(crate::extensions::ExtensionCommand::Response {
                                     expected: generation,
@@ -498,6 +546,7 @@ impl ShellRuntime {
                     });
                 });
                 cx.global_mut::<ShellRuntime>()
+                    .extension_host
                     .extension_tasks
                     .insert(key.clone(), task);
             }
@@ -516,7 +565,7 @@ impl ShellRuntime {
         let config = cx.global::<Self>().active_config.clone();
         let mut instances = Vec::new();
 
-        for (display_id, (_, spec)) in &cx.global::<Self>().bars {
+        for (display_id, (_, spec)) in &cx.global::<Self>().surface_manager.bars {
             for (section, widgets) in [
                 ("start", &spec.config.widgets.start),
                 ("center", &spec.config.widgets.center),
@@ -577,7 +626,7 @@ impl ShellRuntime {
             });
         }
 
-        if let Some(ext) = cx.global::<Self>().extensions.as_ref()
+        if let Some(ext) = cx.global::<Self>().extension_host.extensions.as_ref()
             && let Err(error) =
                 ext.send_command(crate::extensions::ExtensionCommand::ReconcileInstances {
                     expected: ext.generation(),
@@ -589,13 +638,14 @@ impl ShellRuntime {
 
         let stale = cx
             .global::<Self>()
+            .surface_manager
             .extension_surfaces
             .iter()
             .filter(|(id, (_, current))| desired_windows.get(*id) != Some(current))
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
         for id in stale {
-            if let Some((handle, _)) = cx.global_mut::<Self>().extension_surfaces.remove(&id) {
+            if let Some((handle, _)) = cx.global_mut::<Self>().surface_manager.extension_surfaces.remove(&id) {
                 let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
             }
         }
@@ -603,6 +653,7 @@ impl ShellRuntime {
         for (instance_id, spec) in desired_windows {
             if cx
                 .global::<Self>()
+                .surface_manager
                 .extension_surfaces
                 .contains_key(&instance_id)
             {
@@ -634,6 +685,7 @@ impl ShellRuntime {
             }) {
                 Ok(handle) => {
                     cx.global_mut::<Self>()
+                        .surface_manager
                         .extension_surfaces
                         .insert(instance_id, (handle, spec));
                 }
@@ -648,7 +700,7 @@ impl ShellRuntime {
     pub(super) fn reconcile_bar_extension_instances(cx: &mut App) {
         let config = cx.global::<Self>().active_config.clone();
         let mut instances = Vec::new();
-        for (display_id, (_, spec)) in &cx.global::<Self>().bars {
+        for (display_id, (_, spec)) in &cx.global::<Self>().surface_manager.bars {
             for (section, widgets) in [
                 ("start", &spec.config.widgets.start),
                 ("center", &spec.config.widgets.center),
@@ -668,7 +720,7 @@ impl ShellRuntime {
                 }
             }
         }
-        if let Some(ext) = cx.global::<Self>().extensions.as_ref()
+        if let Some(ext) = cx.global::<Self>().extension_host.extensions.as_ref()
             && let Err(error) =
                 ext.send_command(crate::extensions::ExtensionCommand::ReconcileInstances {
                     expected: ext.generation(),
@@ -683,6 +735,13 @@ impl ShellRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_extension_host_initialization() {
+        let host = ExtensionHost::new(None);
+        assert!(host.extensions().is_none());
+        assert!(host.extension_tasks.is_empty());
+    }
 
     #[test]
     fn extension_settings_merge_global_values_with_instance_overrides() {

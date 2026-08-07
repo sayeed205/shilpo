@@ -96,7 +96,7 @@ impl ShellRuntime {
 
     pub fn compositor_snapshot(cx: &App) -> Arc<CompositorSnapshot> {
         if cx.has_global::<Self>() {
-            cx.global::<Self>().latest_snapshot.clone()
+            cx.global::<Self>().surface_manager.latest_snapshot.clone()
         } else {
             Arc::new(CompositorSnapshot::default())
         }
@@ -141,8 +141,8 @@ impl ShellRuntime {
 
     pub(crate) fn reserve_notification_generation(cx: &mut App) -> u64 {
         let runtime = cx.global_mut::<Self>();
-        runtime.notification_generation = runtime.notification_generation.wrapping_add(1);
-        runtime.notification_generation
+        runtime.surface_manager.notification_generation = runtime.surface_manager.notification_generation.wrapping_add(1);
+        runtime.surface_manager.notification_generation
     }
 
     pub fn invoke_notification_action(cx: &App, id: u32, action_key: &str) {
@@ -233,12 +233,12 @@ impl ShellRuntime {
         for request in requests {
             match request {
                 IpcRequest::ShowBar => {
-                    if cx.global::<Self>().bars.is_empty() {
+                    if cx.global::<Self>().surface_manager.bars.is_empty() {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                     }
                 }
                 IpcRequest::HideBar => {
-                    if !cx.global::<Self>().bars.is_empty() {
+                    if !cx.global::<Self>().surface_manager.bars.is_empty() {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                     }
                 }
@@ -246,12 +246,12 @@ impl ShellRuntime {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                 }
                 IpcRequest::ShowControlCenter => {
-                    if cx.global::<Self>().control_center.is_none() {
+                    if cx.global::<Self>().surface_manager.control_center.is_none() {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
                     }
                 }
                 IpcRequest::HideControlCenter => {
-                    if cx.global::<Self>().control_center.is_some() {
+                    if cx.global::<Self>().surface_manager.control_center.is_some() {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
                     }
                 }
@@ -259,12 +259,12 @@ impl ShellRuntime {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
                 }
                 IpcRequest::ShowOverview => {
-                    if cx.global::<Self>().overview.is_none() {
+                    if cx.global::<Self>().surface_manager.overview.is_none() {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
                     }
                 }
                 IpcRequest::HideOverview => {
-                    if cx.global::<Self>().overview.is_some() {
+                    if cx.global::<Self>().surface_manager.overview.is_some() {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
                     }
                 }
@@ -308,9 +308,9 @@ impl ShellRuntime {
             instance_id: std::process::id().to_string(),
             pid: std::process::id(),
             readiness: self.readiness,
-            bar: self.bar_state.clone(),
-            overview_visible: self.overview.is_some(),
-            control_center_visible: self.control_center.is_some(),
+            bar: self.surface_manager.bar_state.clone(),
+            overview_visible: self.surface_manager.overview.is_some(),
+            control_center_visible: self.surface_manager.control_center.is_some(),
             health: shilpo_services::ServiceHealth::default(),
         };
 
