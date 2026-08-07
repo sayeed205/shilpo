@@ -218,20 +218,10 @@ pub fn material_theme_with_variant(
         SchemeContent, SchemeExpressive, SchemeFidelity, SchemeFruitSalad, SchemeMonochrome,
         SchemeNeutral, SchemeRainbow, SchemeTonalSpot,
     };
+    let variant = shilpo_theme::resolve_variant(source_argb, variant);
     let hct = Hct::from_int(source_argb);
     match variant {
-        shilpo_theme::SchemeVariant::Auto => {
-            let chroma = hct.chroma();
-            if chroma < 6.0 {
-                ThemeColor::from_scheme(&SchemeMonochrome::new(hct, dark, 0.0))
-            } else if chroma < 20.0 {
-                ThemeColor::from_scheme(&SchemeNeutral::new(hct, dark, 0.0))
-            } else if chroma >= 70.0 {
-                ThemeColor::from_scheme(&SchemeExpressive::new(hct, dark, 0.0))
-            } else {
-                ThemeColor::from_scheme(&SchemeTonalSpot::new(hct, dark, 0.0))
-            }
-        }
+        shilpo_theme::SchemeVariant::Auto => unreachable!(),
         shilpo_theme::SchemeVariant::TonalSpot => {
             ThemeColor::from_scheme(&SchemeTonalSpot::new(hct, dark, 0.0))
         }

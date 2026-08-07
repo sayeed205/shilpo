@@ -18,13 +18,14 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
     let theme_client_for_task = theme_client.clone();
     cx.spawn(async move |cx| {
         loop {
-            let state = match rx.recv().await {
-                Ok(update) => update.state,
+            let update = match rx.recv().await {
+                Ok(update) => update,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    theme_client_for_task.current_state()
+                    theme_client_for_task.current_update()
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
+            let state = update.state;
             cx.update(|cx: &mut App| {
                 shilpo_ui::Theme::global_mut(cx).apply_state(&state);
                 if cx.has_global::<ShellRuntime>() {

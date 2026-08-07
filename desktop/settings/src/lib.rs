@@ -125,14 +125,14 @@ impl SettingsView {
         let client_clone = theme_client.clone();
         cx.spawn(async move |this, cx| {
             loop {
-                let state = match rx.recv().await {
-                    Ok(update) => update.state,
+                let update = match rx.recv().await {
+                    Ok(update) => update,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        client_clone.current_state()
+                        client_clone.current_update()
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
-                let mut latest = state;
+                let mut latest = update.state;
                 while let Ok(newer) = rx.try_recv() {
                     latest = newer.state;
                 }

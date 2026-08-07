@@ -662,7 +662,8 @@ impl ChangeSnapshot {
                 || self.resolved_mode != state.theme.resolved_mode,
             source: self.color_source != state.theme.color_source,
             variant: self.scheme_variant != state.theme.scheme_variant,
-            palette: self.source_argb != state.theme.source_argb,
+            palette: self.source_argb != state.theme.source_argb
+                || self.scheme_variant != state.theme.scheme_variant,
             wallpaper: self.wallpaper_path != state.wallpaper_path
                 || self.wallpaper_seed != state.wallpaper_seed
                 || self.wallpaper_dir != state.wallpaper_dir,
@@ -1075,5 +1076,25 @@ mod tests {
         assert_eq!(state.theme.palette_generated_at, TEST_NOW);
         assert!(outcome.change_kind.wallpaper);
         assert!(outcome.change_kind.palette);
+    }
+
+    #[test]
+    fn switching_scheme_variant_flags_variant_and_palette() {
+        let mut state = DaemonState::default();
+        let revision = state.theme.revision;
+
+        let outcome = apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::SetSchemeVariant(
+                shilpo_theme::SchemeVariant::Expressive,
+            )),
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.scheme_variant, shilpo_theme::SchemeVariant::Expressive);
+        assert_eq!(state.theme.revision, revision + 1);
+        assert!(outcome.change_kind.variant);
+        assert!(outcome.change_kind.palette);
+        assert!(!outcome.change_kind.mode);
     }
 }

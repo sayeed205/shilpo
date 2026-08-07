@@ -63,6 +63,16 @@ impl ThemeClient {
         self.current_state.lock().unwrap().clone()
     }
 
+    /// Current state wrapped as a `full()` update, for lagged catch-up and
+    /// reconnect paths where no delta was observed.
+    pub fn current_update(&self) -> ThemeUpdate {
+        let state = self.current_state.lock().unwrap().clone();
+        ThemeUpdate {
+            state,
+            change_kind: ChangeKind::full(),
+        }
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<ThemeUpdate> {
         self.tx.subscribe()
     }
@@ -143,13 +153,10 @@ impl ThemeClient {
     }
 
     fn update_state_if_newer(&self, new_state: DaemonState) {
-        let mut cur = self.current_state.lock().unwrap();
-        if new_state.revision >= cur.revision {
-            *cur = new_state.clone();
-            let _ = self
-                .tx
-                .send(ThemeUpdate { state: new_state, change_kind: ChangeKind::full() });
-        }
+        self.handle_signal_update(ThemeUpdate {
+            state: new_state,
+            change_kind: ChangeKind::full(),
+        });
     }
 
     fn handle_signal_update(&self, update: ThemeUpdate) {
