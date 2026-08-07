@@ -128,10 +128,7 @@ impl BluetoothService {
                         )
                         .await;
 
-                    if let Ok((info, adapter_path)) = query_bluez_dbus(conn).await {
-                        current_adapter_path = adapter_path;
-                        let _ = tx_clone.send_replace(info);
-                    }
+                    update_dbus_state(conn, &tx_clone, &mut current_adapter_path).await;
 
                     let mut stream = zbus::MessageStream::from(conn);
 
@@ -141,21 +138,14 @@ impl BluetoothService {
                                 match cmd {
                                     Some(cmd) => {
                                         handle_bluetooth_command(&connection_opt, current_adapter_path.as_deref(), cmd).await;
-                                        if let Ok((info, adapter_path)) = query_bluez_dbus(conn).await {
-                                            current_adapter_path = adapter_path;
-                                            let _ = tx_clone.send_replace(info);
-                                        }
+                                        update_dbus_state(conn, &tx_clone, &mut current_adapter_path).await;
                                     }
                                     None => break,
                                 }
                             }
                             Some(msg_res) = stream.next() => {
-                                if let Ok(msg) = msg_res
-                                    && is_bluez_signal(&msg)
-                                    && let Ok((info, adapter_path)) = query_bluez_dbus(conn).await
-                                {
-                                    current_adapter_path = adapter_path;
-                                    let _ = tx_clone.send_replace(info);
+                                if let Ok(msg) = msg_res && is_bluez_signal(&msg) {
+                                    update_dbus_state(conn, &tx_clone, &mut current_adapter_path).await;
                                 }
                             }
                         }
@@ -207,21 +197,24 @@ impl BluetoothService {
         if let Some(ref tx) = self.command_tx {
             tx.try_send(cmd)
                 .map_err(|e| anyhow::anyhow!("Failed to send bluetooth command: {e}"))?;
+            Ok(())
+        } else {
+            anyhow::bail!("Bluetooth service command channel is not initialized")
         }
-        Ok(())
     }
 
-    pub fn set_powered(&self, powered: bool) -> bool {
+    pub fn set_powered(&self, powered: bool) -> Result<()> {
         if !self.info().available && self.command_tx.is_none() {
-            return false;
+            anyhow::bail!("Bluetooth service unavailable or running offline");
         }
         self.send_command(BluetoothCommand::SetPowered(powered))
-            .is_ok()
     }
 
-    pub fn toggle(&self) -> bool {
+    pub fn toggle(&self) -> Result<bool> {
         let current = self.info().powered;
-        self.set_powered(!current)
+        let target = !current;
+        self.set_powered(target)?;
+        Ok(target)
     }
 
     pub fn start_discovery(&self) -> Result<()> {
@@ -232,28 +225,31 @@ impl BluetoothService {
         self.send_command(BluetoothCommand::StopDiscovery)
     }
 
-    pub fn connect_device(&self, address: &str) -> Result<()> {
-        self.send_command(BluetoothCommand::ConnectDevice(BluetoothAddress::from(
-            address,
-        )))
+    pub fn connect_device(&self, address: impl Into<BluetoothAddress>) -> Result<()> {
+        self.send_command(BluetoothCommand::ConnectDevice(address.into()))
     }
 
-    pub fn disconnect_device(&self, address: &str) -> Result<()> {
-        self.send_command(BluetoothCommand::DisconnectDevice(BluetoothAddress::from(
-            address,
-        )))
+    pub fn disconnect_device(&self, address: impl Into<BluetoothAddress>) -> Result<()> {
+        self.send_command(BluetoothCommand::DisconnectDevice(address.into()))
     }
 
-    pub fn pair_device(&self, address: &str) -> Result<()> {
-        self.send_command(BluetoothCommand::PairDevice(BluetoothAddress::from(
-            address,
-        )))
+    pub fn pair_device(&self, address: impl Into<BluetoothAddress>) -> Result<()> {
+        self.send_command(BluetoothCommand::PairDevice(address.into()))
     }
 
-    pub fn remove_device(&self, address: &str) -> Result<()> {
-        self.send_command(BluetoothCommand::RemoveDevice(BluetoothAddress::from(
-            address,
-        )))
+    pub fn remove_device(&self, address: impl Into<BluetoothAddress>) -> Result<()> {
+        self.send_command(BluetoothCommand::RemoveDevice(address.into()))
+    }
+}
+
+async fn update_dbus_state(
+    conn: &Connection,
+    tx: &watch::Sender<BluetoothInfo>,
+    current_adapter_path: &mut Option<String>,
+) {
+    if let Ok((info, adapter_path)) = query_bluez_dbus(conn).await {
+        *current_adapter_path = adapter_path;
+        let _ = tx.send_replace(info);
     }
 }
 
@@ -288,14 +284,6 @@ fn get_str(props: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> Op
 
 fn get_bool(props: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> bool {
     get_property::<bool>(props, key).unwrap_or(false)
-}
-
-fn get_i16(props: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> Option<i16> {
-    get_property::<i16>(props, key)
-}
-
-fn get_u8(props: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> Option<u8> {
-    get_property::<u8>(props, key)
 }
 
 async fn query_bluez_dbus(conn: &Connection) -> Result<(BluetoothInfo, Option<String>)> {
@@ -342,11 +330,11 @@ async fn query_bluez_dbus(conn: &Connection) -> Result<(BluetoothInfo, Option<St
             let connected = get_bool(dev, "Connected");
             let trusted = get_bool(dev, "Trusted");
             let blocked = get_bool(dev, "Blocked");
-            let rssi = get_i16(dev, "RSSI");
+            let rssi = get_property::<i16>(dev, "RSSI");
 
             let battery_percentage = interfaces
                 .get("org.bluez.Battery1")
-                .and_then(|bat| get_u8(bat, "Percentage"));
+                .and_then(|bat| get_property::<u8>(bat, "Percentage"));
 
             devices.push(BluetoothDevice {
                 address,
@@ -536,7 +524,7 @@ mod tests {
         assert!(!info.connected);
         assert_eq!(info.connected_devices_count, 0);
         assert!(info.devices.is_empty());
-        assert!(!service.toggle());
+        assert!(service.toggle().is_err());
     }
 
     #[test]

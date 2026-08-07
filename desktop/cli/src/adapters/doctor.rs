@@ -658,21 +658,19 @@ fn is_command_available(cmd: &str) -> bool {
 }
 
 fn is_bluez_dbus_active() -> bool {
-    let dbus_ping = zbus::blocking::Connection::system().ok().and_then(|conn| {
-        conn.call_method(
-            Some("org.bluez"),
-            "/",
-            Some("org.freedesktop.DBus.Peer"),
-            "Ping",
-            &(),
-        )
+    zbus::blocking::Connection::system()
         .ok()
-    });
-    dbus_ping.is_some()
-        || std::process::Command::new("systemctl")
-            .args(["is-active", "bluetooth.service"])
-            .output()
-            .is_ok_and(|o| o.status.success())
+        .and_then(|conn| {
+            conn.call_method(
+                Some("org.bluez"),
+                "/",
+                Some("org.freedesktop.DBus.Peer"),
+                "Ping",
+                &(),
+            )
+            .ok()
+        })
+        .is_some()
 }
 
 fn expand_home_path(path: PathBuf) -> PathBuf {
