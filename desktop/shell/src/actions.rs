@@ -1,5 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use shilpo_ext::CanonicalId;
+use shilpo_ext_types::{CanonicalId, IdError};
 use std::{borrow::Cow, collections::BTreeMap, fmt, str::FromStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -171,7 +171,7 @@ impl FromStr for ActionId {
             .strip_prefix("ext:")
             .ok_or_else(|| format!("action ID '{value}' is missing its namespace"))?
             .parse()
-            .map_err(|error: shilpo_ext::IdError| error.to_string())?;
+            .map_err(|error: IdError| error.to_string())?;
         Ok(Self::extension(id))
     }
 }

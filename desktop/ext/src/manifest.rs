@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::{Component, Path};
 
-pub use shilpo_ext_types::{CanonicalId, ContributionId, ExtensionId, IdError};
+use shilpo_ext_types::{ContributionId, ExtensionId, IdError};
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 pub const SUPPORTED_API_VERSION: &str = "0.2.0";

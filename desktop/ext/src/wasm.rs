@@ -1,8 +1,8 @@
 use crate::adapter::{ExtensionRuntime, RuntimeBudget, RuntimeError, RuntimeFailureKind};
 use crate::effects::HostEffect;
 use crate::events::ExtensionEvent;
-use crate::manifest::ExtensionId;
 use crate::view::ViewTree;
+use shilpo_ext_types::ExtensionId;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;

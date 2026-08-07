@@ -1,4 +1,5 @@
-use shilpo_ext::{AuthorizedHostEffect, CanonicalId, ExtensionId, ViewTree};
+use shilpo_ext::{AuthorizedHostEffect, ViewTree};
+use shilpo_ext_types::{CanonicalId, ExtensionId};
 use std::{
     collections::BTreeMap,
     path::{Component, Path, PathBuf},
@@ -406,6 +407,7 @@ fn spawn_fallback_scan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shilpo_ext_types::ContributionId;
 
     #[test]
     fn test_extension_generation_increment() {
@@ -427,8 +429,8 @@ mod tests {
 
     #[test]
     fn test_coordinator_snapshot_reads() {
-        let ext_id = shilpo_ext::ExtensionId::new("org.test.ext").unwrap();
-        let contrib_id = shilpo_ext::ContributionId::new("bar_widget").unwrap();
+        let ext_id = ExtensionId::new("org.test.ext").unwrap();
+        let contrib_id = ContributionId::new("bar_widget").unwrap();
         let snapshot = Arc::new(RwLock::new(ExtensionSnapshot {
             generation: ExtensionGeneration(1),
             descriptors: vec![ContributionDescriptor {

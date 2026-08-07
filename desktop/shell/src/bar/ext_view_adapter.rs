@@ -4,8 +4,9 @@ use gpui::{
     Styled, Window, div, px,
 };
 use shilpo_ext::{
-    CanonicalId, ContainerDirection, SemanticColorToken, ViewNode, ViewStyle, ViewTree,
+    ContainerDirection, SemanticColorToken, ViewNode, ViewStyle, ViewTree,
 };
+use shilpo_ext_types::CanonicalId;
 use shilpo_ui::{
     ActiveTheme, Icon, Sizable, Size,
     input::{Input, InputEvent, InputState},

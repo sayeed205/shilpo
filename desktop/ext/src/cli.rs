@@ -4,9 +4,10 @@ use crate::catalog::{
     sign_package,
 };
 use crate::events::ExtensionEvent;
-use crate::manifest::{ExtensionId, ExtensionManifest};
+use crate::manifest::ExtensionManifest;
 use crate::view::ViewLimits;
 use crate::wasm::{WasmModule, WasmRuntime};
+use shilpo_ext_types::ExtensionId;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};

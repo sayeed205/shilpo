@@ -1,4 +1,5 @@
 use std::{collections::HashMap, path::PathBuf};
+use shilpo_ext_types::{CanonicalId, ExtensionId};
 
 use crate::{
     actions::{ActionId, ActionInvocation},
@@ -15,14 +16,14 @@ use super::{ShellRuntime, surface_manager::overlay_options};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExtensionSurfaceSpec {
-    pub contribution: shilpo_ext::CanonicalId,
+    pub contribution: CanonicalId,
     pub display_id: DisplayId,
     pub bounds: Bounds<Pixels>,
 }
 
 pub(super) fn extension_settings(
     config: &shilpo_config::ShellConfig,
-    extension_id: &shilpo_ext::ExtensionId,
+    extension_id: &ExtensionId,
     instance_settings: Option<&serde_json::Value>,
 ) -> serde_json::Value {
     let mut settings = config
@@ -54,7 +55,7 @@ impl ShellRuntime {
     pub fn extension_surface_views(
         cx: &App,
         surface: ContributionSurface,
-    ) -> Vec<(shilpo_ext::CanonicalId, shilpo_ext::ViewTree)> {
+    ) -> Vec<(CanonicalId, shilpo_ext::ViewTree)> {
         let descriptors = Self::extension_descriptors(cx, surface);
         descriptors
             .into_iter()
@@ -65,7 +66,7 @@ impl ShellRuntime {
             .collect()
     }
 
-    pub fn extension_view(cx: &App, id: &shilpo_ext::CanonicalId) -> Option<shilpo_ext::ViewTree> {
+    pub fn extension_view(cx: &App, id: &CanonicalId) -> Option<shilpo_ext::ViewTree> {
         cx.global::<Self>()
             .extensions
             .as_ref()
@@ -74,7 +75,7 @@ impl ShellRuntime {
 
     pub fn extension_asset_path(
         cx: &App,
-        id: &shilpo_ext::CanonicalId,
+        id: &CanonicalId,
         relative: &str,
     ) -> Result<PathBuf, String> {
         cx.global::<Self>()
@@ -86,7 +87,7 @@ impl ShellRuntime {
 
     pub fn dispatch_extension_input(
         cx: &mut App,
-        contribution: &shilpo_ext::CanonicalId,
+        contribution: &CanonicalId,
         instance_id: Option<&str>,
         event_id: impl Into<String>,
         value: Option<serde_json::Value>,
@@ -104,7 +105,7 @@ impl ShellRuntime {
         }
     }
 
-    pub fn open_extension_panel(cx: &mut App, contribution: shilpo_ext::CanonicalId) {
+    pub fn open_extension_panel(cx: &mut App, contribution: CanonicalId) {
         if let Some((handle, current)) = cx.global_mut::<Self>().extension_panel.take() {
             if current == contribution
                 && handle
@@ -324,7 +325,7 @@ impl ShellRuntime {
 
     pub(super) fn execute_extension_effect(
         cx: &mut App,
-        extension_id: &shilpo_ext::ExtensionId,
+        extension_id: &ExtensionId,
         generation: ExtensionGeneration,
         effect: shilpo_ext::AuthorizedHostEffect,
     ) {
@@ -693,7 +694,7 @@ mod tests {
                 "show_condition": false
             }),
         );
-        let id = shilpo_ext::ExtensionId::new("org.shilpo.weather").unwrap();
+        let id = ExtensionId::new("org.shilpo.weather").unwrap();
         assert_eq!(
             extension_settings(
                 &config,

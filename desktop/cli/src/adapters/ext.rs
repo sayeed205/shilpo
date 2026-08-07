@@ -1,7 +1,8 @@
 use shilpo_ext::{
-    ExtensionCatalog, ExtensionCli, ExtensionCliResult, ExtensionId, ReleaseChannel, UpdateState,
+    ExtensionCatalog, ExtensionCli, ExtensionCliResult, ReleaseChannel, UpdateState,
     default_extension_state_dir, sign_package,
 };
+use shilpo_ext_types::ExtensionId;
 use shilpo_services::{IpcRequest, ShellIpcClient};
 use std::path::{Path, PathBuf};
 
