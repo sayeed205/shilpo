@@ -34,6 +34,7 @@ The workspace is split into two tiers (see [ADR-0001](docs/adr/0001-cross-platfo
 - **[`shilpo-services`](desktop/services)**: System service integrations — Wayland/Niri, audio, bluetooth, brightness,
   network, notifications, media, tray, upower, IPC.
 - **[`shilpo-config`](desktop/config)**: TOML configuration, XDG directory resolution, LMDB session storage.
+- **[`shilpo-ext-types`](desktop/ext-types)**: Extension ID types (`ExtensionId`, `ContributionId`, `CanonicalId`) and string validation logic.
 - **[`shilpo-ext`](desktop/ext)**: Wasmtime-sandboxed extension runtime with capability-based security.
 - **[`shilpo-theme-daemon`](desktop/theme-daemon)**: Theme DBus daemon, XDG portal sync, persistence, third-party
   adapters (see [ADR-0002](docs/adr/0002-theme-crate-split.md)).

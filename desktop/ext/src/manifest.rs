@@ -2,38 +2,33 @@ use crate::effects::{HostEffect, WallpaperSource};
 use crate::events::EventKind;
 use schemars::JsonSchema;
 use semver::Version;
-use serde::{Deserialize, Deserializer, Serialize, de};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::path::{Component, Path};
-use std::str::FromStr;
+
+pub use shilpo_ext_types::{CanonicalId, ContributionId, ExtensionId, IdError};
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 pub const SUPPORTED_API_VERSION: &str = "0.2.0";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ManifestError {
-    InvalidExtensionId(String),
-    InvalidContributionId(String),
-    InvalidCanonicalId(String),
+    Id(IdError),
     ParseError(String),
     Validation(String),
+}
+
+impl From<IdError> for ManifestError {
+    fn from(value: IdError) -> Self {
+        Self::Id(value)
+    }
 }
 
 impl fmt::Display for ManifestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidExtensionId(value) => write!(
-                f,
-                "invalid extension ID '{value}': expected lowercase reverse-domain segments"
-            ),
-            Self::InvalidContributionId(value) => write!(
-                f,
-                "invalid contribution ID '{value}': expected lowercase letters, digits, dashes, or underscores"
-            ),
-            Self::InvalidCanonicalId(value) => {
-                write!(f, "invalid canonical contribution ID '{value}'")
-            }
+            Self::Id(err) => write!(f, "{err}"),
             Self::ParseError(message) => write!(f, "failed to parse TOML manifest: {message}"),
             Self::Validation(message) => write!(f, "invalid extension manifest: {message}"),
         }
@@ -41,150 +36,6 @@ impl fmt::Display for ManifestError {
 }
 
 impl std::error::Error for ManifestError {}
-
-#[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[serde(transparent)]
-pub struct ExtensionId(String);
-
-impl ExtensionId {
-    pub fn new(id: impl Into<String>) -> Result<Self, ManifestError> {
-        let value = id.into();
-        let segments = value.split('.').collect::<Vec<_>>();
-        let valid = segments.len() >= 3
-            && segments.iter().all(|segment| {
-                !segment.is_empty()
-                    && segment
-                        .bytes()
-                        .next()
-                        .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-                    && segment.bytes().all(|byte| {
-                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-                    })
-            });
-        if !valid {
-            return Err(ManifestError::InvalidExtensionId(value));
-        }
-        Ok(Self(value))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for ExtensionId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::new(String::deserialize(deserializer)?).map_err(de::Error::custom)
-    }
-}
-
-impl fmt::Display for ExtensionId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-#[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[serde(transparent)]
-pub struct ContributionId(String);
-
-impl ContributionId {
-    pub fn new(id: impl Into<String>) -> Result<Self, ManifestError> {
-        let value = id.into();
-        let valid = value
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-            && value.bytes().all(|byte| {
-                byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
-            });
-        if !valid {
-            return Err(ManifestError::InvalidContributionId(value));
-        }
-        Ok(Self(value))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for ContributionId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::new(String::deserialize(deserializer)?).map_err(de::Error::custom)
-    }
-}
-
-impl fmt::Display for ContributionId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-#[derive(Clone, Debug, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[schemars(with = "String")]
-pub struct CanonicalId {
-    pub extension_id: ExtensionId,
-    pub contribution_id: ContributionId,
-}
-
-impl CanonicalId {
-    pub fn new(extension_id: ExtensionId, contribution_id: ContributionId) -> Self {
-        Self {
-            extension_id,
-            contribution_id,
-        }
-    }
-}
-
-impl FromStr for CanonicalId {
-    type Err = ManifestError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let Some((extension_id, contribution_id)) = value.split_once('/') else {
-            return Err(ManifestError::InvalidCanonicalId(value.to_owned()));
-        };
-        if contribution_id.contains('/') {
-            return Err(ManifestError::InvalidCanonicalId(value.to_owned()));
-        }
-        Ok(Self::new(
-            ExtensionId::new(extension_id)?,
-            ContributionId::new(contribution_id)?,
-        ))
-    }
-}
-
-impl Serialize for CanonicalId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for CanonicalId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(de::Error::custom)
-    }
-}
-
-impl fmt::Display for CanonicalId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.extension_id, self.contribution_id)
-    }
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

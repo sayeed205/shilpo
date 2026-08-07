@@ -223,6 +223,12 @@ impl From<ManifestError> for HostError {
     }
 }
 
+impl From<shilpo_ext_types::IdError> for HostError {
+    fn from(value: shilpo_ext_types::IdError) -> Self {
+        Self::Manifest(ManifestError::Id(value))
+    }
+}
+
 impl From<RuntimeError> for HostError {
     fn from(value: RuntimeError) -> Self {
         Self::Runtime(value)

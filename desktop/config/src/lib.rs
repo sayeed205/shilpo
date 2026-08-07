@@ -3,7 +3,7 @@ pub use session_store::*;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use shilpo_ext::{CanonicalId, ExtensionId};
+use shilpo_ext_types::{CanonicalId, ExtensionId, IdError};
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -176,7 +176,7 @@ impl FromStr for ExtensionContributionRef {
             })?
             .parse()
             .map(Self)
-            .map_err(|error: shilpo_ext::ManifestError| error.to_string())
+            .map_err(|error: IdError| error.to_string())
     }
 }
 

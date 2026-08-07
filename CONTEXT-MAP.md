@@ -30,8 +30,9 @@ library at its core.
   brightness, caffeine, clipboard, location, media, network, night light, notifications, power profile, screen capture,
   tray, upower, app scanning.
 - **Config** (`desktop/config`) — Shell configuration management. TOML config loading/validation, XDG directory
-  resolution, LMDB session storage via `heed`. Imports extension ID types from Ext for validating extension contribution
+  resolution, LMDB session storage via `heed`. Imports extension ID types from Ext Types for validating extension contribution
   references in config.
+- **Ext Types** (`desktop/ext-types`) — Extension ID types (`ExtensionId`, `ContributionId`, `CanonicalId`) and string validation logic. Pure data types, zero WASM/Wasmtime dependencies.
 - **Ext** (`desktop/ext`) — Wasmtime-sandboxed extension runtime. Capability-based security model, extension manifests,
   package catalog/registry, WASI component-model host, ViewTree schema rendering. Shell-only — extends shell
   capabilities.
@@ -57,9 +58,10 @@ library at its core.
 - **Shell → Services**: Shell wires system service data into presentational widgets via service worker channels.
 - **Shell → Config**: Shell loads and validates its configuration.
 - **Shell → Ext**: Shell hosts and coordinates extensions.
+- **Ext → Ext Types**: Ext re-exports extension ID types from Ext Types.
 - **Settings → UI, Services, Theme Daemon, Config, Ext**: Same dependency set as Shell — same product, separate binary.
-- **Config → Ext**: Config imports `CanonicalId`, `ExtensionId` for validating extension references in TOML config
-  files. Lightweight type-sharing, not deep coupling.
+- **Config → Ext Types**: Config imports `CanonicalId`, `ExtensionId` for validating extension references in TOML config
+  files. Lightweight pure-data dependency without Wasmtime runtime overhead.
 - **Theme Daemon → Theme**: Daemon uses core theme types and color generation.
 - **Theme Daemon → Config**: Daemon reads shell config and uses XDG state directories for persistence.
 - **Storybook → UI, Theme, Assets**: Demos the core component library.
