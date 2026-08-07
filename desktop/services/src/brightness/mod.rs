@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
+use std::future::Future;
 use std::path::{Path, PathBuf};
-use tokio::sync::{mpsc, watch};
+use std::sync::Arc;
+use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{debug, warn};
 
 /// Screen brightness status.
@@ -122,8 +124,16 @@ pub fn discover_primary_backlight(sysfs_base: &Path) -> Option<BacklightDevice> 
     devices.into_iter().next()
 }
 
+/// Sysfs brightness readings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SysfsBrightness {
+    pub percentage: u8,
+    pub current_raw: u32,
+    pub max_raw: u32,
+}
+
 /// Reads current raw brightness, max brightness, and calculates percentage.
-pub fn read_sysfs_brightness(sysfs_path: &Path) -> Option<(u8, u32, u32)> {
+pub fn read_sysfs_brightness(sysfs_path: &Path) -> Option<SysfsBrightness> {
     let curr_str = std::fs::read_to_string(sysfs_path.join("brightness")).ok()?;
     let max_str = std::fs::read_to_string(sysfs_path.join("max_brightness")).ok()?;
 
@@ -131,93 +141,117 @@ pub fn read_sysfs_brightness(sysfs_path: &Path) -> Option<(u8, u32, u32)> {
     let max: f64 = max_str.trim().parse().ok()?;
 
     if max <= 0.0 {
-        return Some((0, 0, 0));
+        return Some(SysfsBrightness {
+            percentage: 0,
+            current_raw: 0,
+            max_raw: 0,
+        });
     }
 
     let percentage = ((curr / max) * 100.0).round() as u8;
-    Some((percentage.min(100), curr as u32, max as u32))
+    Some(SysfsBrightness {
+        percentage: percentage.min(100),
+        current_raw: curr as u32,
+        max_raw: max as u32,
+    })
 }
 
-/// System screen brightness service.
-pub struct BrightnessService {
-    tx: watch::Sender<BrightnessInfo>,
-    rx: watch::Receiver<BrightnessInfo>,
-    cmd_tx: Option<mpsc::UnboundedSender<u8>>,
-    #[allow(dead_code)]
-    max_brightness: u32,
+/// Abstracted trait for setting brightness on hardware via DBus or IPC.
+pub trait BrightnessSetter: Send + Sync + 'static {
+    fn set_brightness(
+        &self,
+        device_name: &str,
+        target_raw: u32,
+    ) -> impl Future<Output = Result<()>> + Send;
 }
 
-impl BrightnessService {
-    pub fn new() -> Result<Self> {
-        Self::new_with_sysfs_path(Path::new("/sys/class/backlight"))
-    }
+/// Resilient systemd-logind DBus brightness setter with dynamic reconnection.
+pub struct LogindDbusSetter {
+    conn: Mutex<Option<zbus::Connection>>,
+}
 
-    pub fn new_offline() -> Self {
-        let (tx, rx) = watch::channel(BrightnessInfo::default());
+impl LogindDbusSetter {
+    pub fn new() -> Self {
         Self {
-            tx,
-            rx,
-            cmd_tx: None,
-            max_brightness: 100,
+            conn: Mutex::new(None),
         }
     }
 
-    pub fn new_with_sysfs_path(sysfs_base: &Path) -> Result<Self> {
-        let device = discover_primary_backlight(sysfs_base)
-            .context("no compatible backlight device found in sysfs")?;
-
-        let (initial_pct, _curr, max) = read_sysfs_brightness(&device.sysfs_path)
-            .context("failed to read backlight sysfs attributes")?;
-
-        let initial_info = BrightnessInfo {
-            percentage: initial_pct,
-            available: true,
-            device_name: Some(device.name.clone()),
-        };
-
-        let (tx, rx) = watch::channel(initial_info);
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<u8>();
-
-        let device_name = device.name.clone();
-        let sysfs_path = device.sysfs_path.clone();
-
-        // Spawn DBus command handler task
-        tokio::spawn(async move {
-            let dbus_conn = match zbus::Connection::system().await {
-                Ok(conn) => Some(conn),
-                Err(err) => {
-                    warn!(error = %err, "failed to connect to system DBus bus for logind brightness control");
-                    None
-                }
-            };
-
-            while let Some(target_pct) = cmd_rx.recv().await {
-                let target_pct = target_pct.min(100);
-                let target_raw = ((target_pct as u64 * max as u64) as f64 / 100.0).round() as u32;
-
-                if let Some(ref conn) = dbus_conn {
-                    let res = conn
-                        .call_method(
-                            Some("org.freedesktop.login1"),
-                            "/org/freedesktop/login1/session/auto",
-                            Some("org.freedesktop.login1.Session"),
-                            "SetBrightness",
-                            &("backlight", device_name.as_str(), target_raw),
-                        )
-                        .await;
-                    if let Err(err) = res {
-                        warn!(error = %err, device = %device_name, target_raw, "failed to set brightness via systemd-logind DBus");
-                    }
-                }
+    async fn get_or_connect(&self) -> Option<zbus::Connection> {
+        let mut guard = self.conn.lock().await;
+        if let Some(ref conn) = *guard
+            && !conn.is_closed()
+        {
+            return Some(conn.clone());
+        }
+        match zbus::Connection::system().await {
+            Ok(conn) => {
+                *guard = Some(conn.clone());
+                Some(conn)
             }
-        });
+            Err(err) => {
+                warn!(error = %err, "failed to connect to system DBus bus for logind brightness control");
+                *guard = None;
+                None
+            }
+        }
+    }
+}
 
-        // Spawn non-Send udev event monitor in dedicated thread
-        let tx_clone = tx.clone();
-        let sysfs_path_clone = sysfs_path.clone();
-        let device_name_clone = device.name.clone();
+impl Default for LogindDbusSetter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-        let _ = std::thread::Builder::new()
+impl BrightnessSetter for LogindDbusSetter {
+    async fn set_brightness(&self, device_name: &str, target_raw: u32) -> Result<()> {
+        if let Some(conn) = self.get_or_connect().await {
+            let res = conn
+                .call_method(
+                    Some("org.freedesktop.login1"),
+                    "/org/freedesktop/login1/session/auto",
+                    Some("org.freedesktop.login1.Session"),
+                    "SetBrightness",
+                    &("backlight", device_name, target_raw),
+                )
+                .await;
+            if let Err(err) = res {
+                warn!(error = %err, device = %device_name, target_raw, "failed to set brightness via systemd-logind DBus");
+                let mut guard = self.conn.lock().await;
+                *guard = None;
+                anyhow::bail!(err);
+            }
+            Ok(())
+        } else {
+            anyhow::bail!("system DBus connection unavailable")
+        }
+    }
+}
+
+/// Abstracted trait for monitoring udev backlight kernel events.
+pub trait UdevMonitor: Send + Sync + 'static {
+    fn listen(
+        &self,
+        tx: watch::Sender<BrightnessInfo>,
+        sysfs_path: PathBuf,
+        device_name: String,
+        shutdown_rx: watch::Receiver<bool>,
+    ) -> Option<std::thread::JoinHandle<()>>;
+}
+
+/// Linux netlink udev backlight event monitor thread.
+pub struct SystemUdevMonitor;
+
+impl UdevMonitor for SystemUdevMonitor {
+    fn listen(
+        &self,
+        tx: watch::Sender<BrightnessInfo>,
+        sysfs_path: PathBuf,
+        device_name: String,
+        mut shutdown_rx: watch::Receiver<bool>,
+    ) -> Option<std::thread::JoinHandle<()>> {
+        std::thread::Builder::new()
             .name("shilpo-udev-backlight".into())
             .spawn(move || {
                 let rt = match tokio::runtime::Builder::new_current_thread()
@@ -248,33 +282,136 @@ impl BrightnessService {
                             };
 
                             use futures_lite::StreamExt;
-                            while let Some(res) = udev_stream.next().await {
-                                if res.is_ok()
-                                    && let Some((pct, _curr, _max)) = read_sysfs_brightness(&sysfs_path_clone)
-                                {
-                                    debug!(device = %device_name_clone, percentage = pct, "backlight uevent received; updated brightness");
-                                    tx_clone.send_if_modified(|curr| {
-                                        if curr.percentage != pct || !curr.available {
-                                            curr.percentage = pct;
-                                            curr.available = true;
-                                            true
-                                        } else {
-                                            false
+                            loop {
+                                tokio::select! {
+                                    _ = shutdown_rx.changed() => {
+                                        if *shutdown_rx.borrow() {
+                                            break;
                                         }
-                                    });
+                                    }
+                                    res = udev_stream.next() => {
+                                        match res {
+                                            Some(Ok(_)) => {
+                                                if let Some(sysfs) = read_sysfs_brightness(&sysfs_path) {
+                                                    debug!(device = %device_name, percentage = sysfs.percentage, "backlight uevent received; updated brightness");
+                                                    tx.send_if_modified(|curr| {
+                                                        if curr.percentage != sysfs.percentage || !curr.available {
+                                                            curr.percentage = sysfs.percentage;
+                                                            curr.available = true;
+                                                            true
+                                                        } else {
+                                                            false
+                                                        }
+                                                    });
+                                                }
+                                            }
+                                            Some(Err(err)) => {
+                                                warn!(error = %err, "udev monitor stream error");
+                                            }
+                                            None => break,
+                                        }
+                                    }
                                 }
                             }
                         })
                         .await;
                 });
-            });
+            })
+            .ok()
+    }
+}
+
+/// System screen brightness service.
+pub struct BrightnessService {
+    tx: watch::Sender<BrightnessInfo>,
+    rx: watch::Receiver<BrightnessInfo>,
+    cmd_tx: Option<mpsc::UnboundedSender<u8>>,
+    shutdown_tx: Option<watch::Sender<bool>>,
+    _udev_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl BrightnessService {
+    pub fn new() -> Result<Self> {
+        Self::new_with_sysfs_path(Path::new("/sys/class/backlight"))
+    }
+
+    pub fn new_offline() -> Self {
+        let (tx, rx) = watch::channel(BrightnessInfo::default());
+        Self {
+            tx,
+            rx,
+            cmd_tx: None,
+            shutdown_tx: None,
+            _udev_thread: None,
+        }
+    }
+
+    pub fn new_with_sysfs_path(sysfs_base: &Path) -> Result<Self> {
+        Self::new_with_adapters(
+            sysfs_base,
+            Arc::new(LogindDbusSetter::new()),
+            SystemUdevMonitor,
+        )
+    }
+
+    pub fn new_with_adapters<S: BrightnessSetter, M: UdevMonitor>(
+        sysfs_base: &Path,
+        setter: Arc<S>,
+        monitor: M,
+    ) -> Result<Self> {
+        let (device, sysfs) = Self::discover_and_read_initial(sysfs_base)?;
+
+        let initial_info = BrightnessInfo {
+            percentage: sysfs.percentage,
+            available: true,
+            device_name: Some(device.name.clone()),
+        };
+
+        let (tx, rx) = watch::channel(initial_info);
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<u8>();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        Self::spawn_dbus_worker(cmd_rx, setter, device.name.clone(), sysfs.max_raw);
+        let udev_thread = monitor.listen(
+            tx.clone(),
+            device.sysfs_path.clone(),
+            device.name.clone(),
+            shutdown_rx,
+        );
 
         Ok(Self {
             tx,
             rx,
             cmd_tx: Some(cmd_tx),
-            max_brightness: max,
+            shutdown_tx: Some(shutdown_tx),
+            _udev_thread: udev_thread,
         })
+    }
+
+    fn discover_and_read_initial(sysfs_base: &Path) -> Result<(BacklightDevice, SysfsBrightness)> {
+        let device = discover_primary_backlight(sysfs_base)
+            .context("no compatible backlight device found in sysfs")?;
+
+        let sysfs = read_sysfs_brightness(&device.sysfs_path)
+            .context("failed to read backlight sysfs attributes")?;
+
+        Ok((device, sysfs))
+    }
+
+    fn spawn_dbus_worker<S: BrightnessSetter>(
+        mut cmd_rx: mpsc::UnboundedReceiver<u8>,
+        setter: Arc<S>,
+        device_name: String,
+        max_raw: u32,
+    ) {
+        tokio::spawn(async move {
+            while let Some(target_pct) = cmd_rx.recv().await {
+                let target_pct = target_pct.min(100);
+                let target_raw =
+                    ((target_pct as u64 * max_raw as u64) as f64 / 100.0).round() as u32;
+                let _ = setter.set_brightness(&device_name, target_raw).await;
+            }
+        });
     }
 
     pub fn subscribe(&self) -> watch::Receiver<BrightnessInfo> {
@@ -308,10 +445,85 @@ impl BrightnessService {
     }
 }
 
+impl Drop for BrightnessService {
+    fn drop(&mut self) {
+        if let Some(ref shutdown_tx) = self.shutdown_tx {
+            let _ = shutdown_tx.send(true);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex as StdMutex;
     use tempfile::TempDir;
+
+    #[derive(Default)]
+    struct MockDbusSetter {
+        calls: Arc<StdMutex<Vec<(String, u32)>>>,
+    }
+
+    impl BrightnessSetter for MockDbusSetter {
+        async fn set_brightness(&self, device_name: &str, target_raw: u32) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((device_name.to_string(), target_raw));
+            Ok(())
+        }
+    }
+
+    struct MockUdevMonitor {
+        trigger_tx: mpsc::UnboundedSender<()>,
+    }
+
+    impl UdevMonitor for MockUdevMonitor {
+        fn listen(
+            &self,
+            tx: watch::Sender<BrightnessInfo>,
+            sysfs_path: PathBuf,
+            device_name: String,
+            mut shutdown_rx: watch::Receiver<bool>,
+        ) -> Option<std::thread::JoinHandle<()>> {
+            let (event_tx, mut event_rx) = mpsc::unbounded_channel::<()>();
+            let trigger_tx = self.trigger_tx.clone();
+
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+
+                rt.block_on(async move {
+                    loop {
+                        tokio::select! {
+                            _ = shutdown_rx.changed() => {
+                                if *shutdown_rx.borrow() {
+                                    break;
+                                }
+                            }
+                            res = event_rx.recv() => {
+                                if res.is_none() {
+                                    break;
+                                }
+                                if let Some(sysfs) = read_sysfs_brightness(&sysfs_path) {
+                                    let _ = tx.send(BrightnessInfo {
+                                        percentage: sysfs.percentage,
+                                        available: true,
+                                        device_name: Some(device_name.clone()),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+
+            let _ = (trigger_tx, event_tx);
+            None
+        }
+    }
 
     #[test]
     fn default_is_unavailable() {
@@ -351,10 +563,10 @@ mod tests {
         assert_eq!(device.name, "intel_backlight");
         assert_eq!(device.device_type, BacklightType::Raw);
 
-        let (pct, curr, max) = read_sysfs_brightness(&intel_dir).unwrap();
-        assert_eq!(curr, 150);
-        assert_eq!(max, 255);
-        assert_eq!(pct, 59);
+        let sysfs = read_sysfs_brightness(&intel_dir).unwrap();
+        assert_eq!(sysfs.current_raw, 150);
+        assert_eq!(sysfs.max_raw, 255);
+        assert_eq!(sysfs.percentage, 59);
     }
 
     #[tokio::test]
@@ -368,7 +580,12 @@ mod tests {
         std::fs::write(amd_dir.join("max_brightness"), "100\n").unwrap();
         std::fs::write(amd_dir.join("type"), "raw\n").unwrap();
 
-        let service = BrightnessService::new_with_sysfs_path(sysfs_base).unwrap();
+        let setter = Arc::new(MockDbusSetter::default());
+        let (trigger_tx, _trigger_rx) = mpsc::unbounded_channel();
+        let monitor = MockUdevMonitor { trigger_tx };
+
+        let service =
+            BrightnessService::new_with_adapters(sysfs_base, setter.clone(), monitor).unwrap();
         let info = service.brightness_info();
         assert!(info.available);
         assert_eq!(info.percentage, 50);
@@ -376,6 +593,11 @@ mod tests {
 
         service.set_brightness(75);
         assert_eq!(service.brightness_info().percentage, 75);
+
+        tokio::task::yield_now().await;
+        let calls = setter.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], ("amdgpu_bl0".to_string(), 75));
     }
 
     #[tokio::test]
@@ -384,5 +606,26 @@ mod tests {
         let info = service.brightness_info();
         assert!(!info.available);
         assert_eq!(info.percentage, 0);
+    }
+
+    #[tokio::test]
+    async fn test_brightness_task_cancellation() {
+        let temp_dir = TempDir::new().unwrap();
+        let sysfs_base = temp_dir.path();
+
+        let intel_dir = sysfs_base.join("intel_backlight");
+        std::fs::create_dir(&intel_dir).unwrap();
+        std::fs::write(intel_dir.join("brightness"), "100\n").unwrap();
+        std::fs::write(intel_dir.join("max_brightness"), "200\n").unwrap();
+        std::fs::write(intel_dir.join("type"), "raw\n").unwrap();
+
+        let setter = Arc::new(MockDbusSetter::default());
+        let (trigger_tx, _trigger_rx) = mpsc::unbounded_channel();
+        let monitor = MockUdevMonitor { trigger_tx };
+
+        let service = BrightnessService::new_with_adapters(sysfs_base, setter, monitor).unwrap();
+        tokio::task::yield_now().await;
+        drop(service);
+        tokio::task::yield_now().await;
     }
 }
