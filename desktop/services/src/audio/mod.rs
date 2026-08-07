@@ -37,8 +37,21 @@ pub struct AudioDevice {
     pub is_muted: bool,
     pub is_default: bool,
     pub is_input: bool,
+    pub channels: u8,
     pub ports: Vec<AudioPort>,
     pub active_port: Option<String>,
+}
+
+impl AudioDevice {
+    /// Resolves the default flag and port activity state against a default device name.
+    pub fn resolve_active_ports(&mut self, default_name: &str) {
+        self.is_default = self.name == default_name;
+        if let Some(ref active) = self.active_port {
+            for p in &mut self.ports {
+                p.is_active = p.name == *active;
+            }
+        }
+    }
 }
 
 /// Comprehensive system audio snapshot including volumes, mutes, sinks, sources, and application streams.
@@ -72,6 +85,15 @@ impl AudioInfo {
             .map(|s| s.ports.clone())
             .unwrap_or_default()
     }
+
+    /// Returns the available audio ports for the default input source (microphone).
+    pub fn default_source_ports(&self) -> Vec<AudioPort> {
+        self.sources
+            .iter()
+            .find(|s| s.is_default)
+            .map(|s| s.ports.clone())
+            .unwrap_or_default()
+    }
 }
 
 enum PulseCommand {
@@ -92,6 +114,10 @@ enum PulseCommand {
     },
     SetSinkPort {
         sink_name: String,
+        port_name: String,
+    },
+    SetSourcePort {
+        source_name: String,
         port_name: String,
     },
 }
@@ -261,26 +287,47 @@ impl AudioService {
         Ok(())
     }
 
-    /// Toggles simultaneous audio output routing.
-    pub fn toggle_simultaneous_output(&self) -> Result<bool> {
-        Ok(false)
+    /// Switches the active audio port for the specified input source (microphone).
+    pub fn set_source_port(&self, source_name: &str, port_name: &str) -> Result<()> {
+        if let Some(cmd_tx) = &self.cmd_tx {
+            let _ = cmd_tx.send(PulseCommand::SetSourcePort {
+                source_name: source_name.to_string(),
+                port_name: port_name.to_string(),
+            });
+        }
+        Ok(())
     }
 }
 
-fn percent_to_pa_volume(percentage: u8) -> pulse::volume::ChannelVolumes {
+fn percent_to_pa_volume(percentage: u8, channels: u8) -> pulse::volume::ChannelVolumes {
     let mut cvol = pulse::volume::ChannelVolumes::default();
     let pa_vol = pulse::volume::Volume((percentage as u32 * pulse::volume::Volume::NORMAL.0) / 100);
-    cvol.set(2, pa_vol);
+    let ch = if channels == 0 { 2 } else { channels };
+    cvol.set(ch, pa_vol);
     cvol
 }
 
-fn resolve_device_active_ports(device: &mut AudioDevice, default_name: &str) {
-    device.is_default = device.name == default_name;
-    if let Some(ref active) = device.active_port {
-        for p in &mut device.ports {
-            p.is_active = p.name == *active;
-        }
-    }
+macro_rules! convert_pa_ports {
+    ($ports:expr) => {
+        $ports
+            .iter()
+            .map(|p| AudioPort {
+                name: p.name.as_ref().map(|s| s.to_string()).unwrap_or_default(),
+                description: p
+                    .description
+                    .as_ref()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+                is_active: false,
+                available: p.available != pulse::def::PortAvailable::No,
+            })
+            .collect::<Vec<_>>()
+    };
+}
+
+enum WorkerEvent {
+    Subscription,
+    Command(PulseCommand),
 }
 
 fn run_pulse_worker(
@@ -319,13 +366,13 @@ fn run_pulse_worker(
 
     refresh_snapshot(&mut mainloop, &mut context, &tx);
 
-    let (sub_tx, sub_rx) = mpsc::channel();
+    let (evt_tx, evt_rx) = mpsc::channel();
     {
         mainloop.lock();
-        let sub_tx_clone = sub_tx.clone();
+        let sub_tx = evt_tx.clone();
 
         context.set_subscribe_callback(Some(Box::new(move |_facility, _op, _index| {
-            let _ = sub_tx_clone.send(());
+            let _ = sub_tx.send(WorkerEvent::Subscription);
         })));
 
         context.subscribe(
@@ -338,96 +385,141 @@ fn run_pulse_worker(
         mainloop.unlock();
     }
 
-    loop {
-        // Poll for subscription events or incoming command requests
-        while sub_rx.try_recv().is_ok() {
-            refresh_snapshot(&mut mainloop, &mut context, &tx);
+    let cmd_evt_tx = evt_tx.clone();
+    std::thread::spawn(move || {
+        while let Ok(cmd) = cmd_rx.recv() {
+            if cmd_evt_tx.send(WorkerEvent::Command(cmd)).is_err() {
+                break;
+            }
+        }
+    });
+
+    while let Ok(first_evt) = evt_rx.recv() {
+        let mut needs_refresh = false;
+        let mut pending_command: Option<PulseCommand> = None;
+
+        match first_evt {
+            WorkerEvent::Subscription => {
+                needs_refresh = true;
+            }
+            WorkerEvent::Command(cmd) => {
+                pending_command = Some(cmd);
+            }
         }
 
-        match cmd_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-            Ok(cmd) => {
-                mainloop.lock();
-                let info = tx.borrow().clone();
+        while let Ok(evt) = evt_rx.try_recv() {
+            match evt {
+                WorkerEvent::Subscription => {
+                    needs_refresh = true;
+                }
+                WorkerEvent::Command(cmd) => {
+                    pending_command = Some(cmd);
+                }
+            }
+        }
 
-                match cmd {
-                    PulseCommand::SetVolume(vol) => {
-                        if !info.default_sink_name.is_empty() {
-                            let cvol = percent_to_pa_volume(vol);
-                            context.introspect().set_sink_volume_by_name(
-                                &info.default_sink_name,
-                                &cvol,
-                                None,
-                            );
-                        }
-                    }
-                    PulseCommand::ToggleMute => {
-                        if !info.default_sink_name.is_empty() {
-                            context.introspect().set_sink_mute_by_name(
-                                &info.default_sink_name,
-                                !info.is_muted,
-                                None,
-                            );
-                        }
-                    }
-                    PulseCommand::SetInputVolume(vol) => {
-                        if !info.default_source_name.is_empty() {
-                            let cvol = percent_to_pa_volume(vol);
-                            context.introspect().set_source_volume_by_name(
-                                &info.default_source_name,
-                                &cvol,
-                                None,
-                            );
-                        }
-                    }
-                    PulseCommand::ToggleInputMute => {
-                        if !info.default_source_name.is_empty() {
-                            context.introspect().set_source_mute_by_name(
-                                &info.default_source_name,
-                                !info.is_input_muted,
-                                None,
-                            );
-                        }
-                    }
-                    PulseCommand::SetDefaultDevice {
-                        device_id,
-                        is_input,
-                    } => {
-                        if is_input {
-                            context.set_default_source(&device_id, |_| {});
-                        } else {
-                            context.set_default_sink(&device_id, |_| {});
-                        }
-                    }
-                    PulseCommand::SetStreamVolume { index, percentage } => {
-                        let cvol = percent_to_pa_volume(percentage);
-                        context
-                            .introspect()
-                            .set_sink_input_volume(index, &cvol, None);
-                    }
-                    PulseCommand::ToggleStreamMute { index } => {
-                        let current_mute = info
-                            .app_streams
+        if let Some(cmd) = pending_command {
+            mainloop.lock();
+            let info = tx.borrow().clone();
+
+            match cmd {
+                PulseCommand::SetVolume(vol) => {
+                    if !info.default_sink_name.is_empty() {
+                        let channels = info
+                            .sinks
                             .iter()
-                            .find(|s| s.index == index)
-                            .is_some_and(|s| s.is_muted);
-                        context
-                            .introspect()
-                            .set_sink_input_mute(index, !current_mute, None);
-                    }
-                    PulseCommand::SetSinkPort {
-                        sink_name,
-                        port_name,
-                    } => {
-                        context
-                            .introspect()
-                            .set_sink_port_by_name(&sink_name, &port_name, None);
+                            .find(|s| s.name == info.default_sink_name)
+                            .map_or(2, |s| s.channels);
+                        let cvol = percent_to_pa_volume(vol, channels);
+                        context.introspect().set_sink_volume_by_name(
+                            &info.default_sink_name,
+                            &cvol,
+                            None,
+                        );
                     }
                 }
-                mainloop.unlock();
-                refresh_snapshot(&mut mainloop, &mut context, &tx);
+                PulseCommand::ToggleMute => {
+                    if !info.default_sink_name.is_empty() {
+                        context.introspect().set_sink_mute_by_name(
+                            &info.default_sink_name,
+                            !info.is_muted,
+                            None,
+                        );
+                    }
+                }
+                PulseCommand::SetInputVolume(vol) => {
+                    if !info.default_source_name.is_empty() {
+                        let channels = info
+                            .sources
+                            .iter()
+                            .find(|s| s.name == info.default_source_name)
+                            .map_or(2, |s| s.channels);
+                        let cvol = percent_to_pa_volume(vol, channels);
+                        context.introspect().set_source_volume_by_name(
+                            &info.default_source_name,
+                            &cvol,
+                            None,
+                        );
+                    }
+                }
+                PulseCommand::ToggleInputMute => {
+                    if !info.default_source_name.is_empty() {
+                        context.introspect().set_source_mute_by_name(
+                            &info.default_source_name,
+                            !info.is_input_muted,
+                            None,
+                        );
+                    }
+                }
+                PulseCommand::SetDefaultDevice {
+                    device_id,
+                    is_input,
+                } => {
+                    if is_input {
+                        context.set_default_source(&device_id, |_| {});
+                    } else {
+                        context.set_default_sink(&device_id, |_| {});
+                    }
+                }
+                PulseCommand::SetStreamVolume { index, percentage } => {
+                    let cvol = percent_to_pa_volume(percentage, 2);
+                    context
+                        .introspect()
+                        .set_sink_input_volume(index, &cvol, None);
+                }
+                PulseCommand::ToggleStreamMute { index } => {
+                    let current_mute = info
+                        .app_streams
+                        .iter()
+                        .find(|s| s.index == index)
+                        .is_some_and(|s| s.is_muted);
+                    context
+                        .introspect()
+                        .set_sink_input_mute(index, !current_mute, None);
+                }
+                PulseCommand::SetSinkPort {
+                    sink_name,
+                    port_name,
+                } => {
+                    context
+                        .introspect()
+                        .set_sink_port_by_name(&sink_name, &port_name, None);
+                }
+                PulseCommand::SetSourcePort {
+                    source_name,
+                    port_name,
+                } => {
+                    context
+                        .introspect()
+                        .set_source_port_by_name(&source_name, &port_name, None);
+                }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            mainloop.unlock();
+            needs_refresh = true;
+        }
+
+        if needs_refresh {
+            refresh_snapshot(&mut mainloop, &mut context, &tx);
         }
     }
 
@@ -470,20 +562,7 @@ fn refresh_snapshot(mainloop: &mut Mainloop, context: &mut Context, tx: &watch::
                 .round()
                 .min(100.0) as u8;
             let is_muted = info.mute;
-            let ports = info
-                .ports
-                .iter()
-                .map(|p| AudioPort {
-                    name: p.name.as_ref().map(|s| s.to_string()).unwrap_or_default(),
-                    description: p
-                        .description
-                        .as_ref()
-                        .map(|s| s.to_string())
-                        .unwrap_or_default(),
-                    is_active: false,
-                    available: p.available != pulse::def::PortAvailable::No,
-                })
-                .collect::<Vec<_>>();
+            let ports = convert_pa_ports!(&info.ports);
             let active_port = info
                 .active_port
                 .as_ref()
@@ -497,6 +576,7 @@ fn refresh_snapshot(mainloop: &mut Mainloop, context: &mut Context, tx: &watch::
                 is_muted,
                 is_default: false,
                 is_input: false,
+                channels: info.volume.len(),
                 ports,
                 active_port,
             }));
@@ -524,20 +604,7 @@ fn refresh_snapshot(mainloop: &mut Mainloop, context: &mut Context, tx: &watch::
                         .round()
                         .min(100.0) as u8;
                 let is_muted = info.mute;
-                let ports = info
-                    .ports
-                    .iter()
-                    .map(|p| AudioPort {
-                        name: p.name.as_ref().map(|s| s.to_string()).unwrap_or_default(),
-                        description: p
-                            .description
-                            .as_ref()
-                            .map(|s| s.to_string())
-                            .unwrap_or_default(),
-                        is_active: false,
-                        available: p.available != pulse::def::PortAvailable::No,
-                    })
-                    .collect::<Vec<_>>();
+                let ports = convert_pa_ports!(&info.ports);
                 let active_port = info
                     .active_port
                     .as_ref()
@@ -551,6 +618,7 @@ fn refresh_snapshot(mainloop: &mut Mainloop, context: &mut Context, tx: &watch::
                     is_muted,
                     is_default: false,
                     is_input: true,
+                    channels: info.volume.len(),
                     ports,
                     active_port,
                 }));
@@ -598,13 +666,13 @@ fn refresh_snapshot(mainloop: &mut Mainloop, context: &mut Context, tx: &watch::
 
     let mut sinks = Vec::new();
     while let Ok(Some(mut sink)) = sinks_rx.recv_timeout(std::time::Duration::from_millis(500)) {
-        resolve_device_active_ports(&mut sink, &default_sink_name);
+        sink.resolve_active_ports(&default_sink_name);
         sinks.push(sink);
     }
 
     let mut sources = Vec::new();
     while let Ok(Some(mut src)) = sources_rx.recv_timeout(std::time::Duration::from_millis(500)) {
-        resolve_device_active_ports(&mut src, &default_source_name);
+        src.resolve_active_ports(&default_source_name);
         sources.push(src);
     }
 
@@ -670,6 +738,7 @@ mod tests {
             is_muted: false,
             is_default: true,
             is_input: false,
+            channels: 2,
             ports: vec![port],
             active_port: Some("analog-output-headphones".to_string()),
         };

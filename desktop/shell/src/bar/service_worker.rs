@@ -1,8 +1,8 @@
 use gpui::BackgroundExecutor;
 use shilpo_config::ShellConfig;
 use shilpo_services::{
-    AudioInfo, AudioService, BatteryInfo, BatteryService, BrightnessInfo,
-    BrightnessService, MediaCommand, MediaInfo, MediaService, NetworkInfo, NetworkService,
+    AudioInfo, AudioService, BatteryInfo, BatteryService, BrightnessInfo, BrightnessService,
+    MediaCommand, MediaInfo, MediaService, NetworkInfo, NetworkService,
 };
 use std::{
     path::PathBuf,
@@ -127,7 +127,10 @@ pub enum AudioCommand {
         sink_name: String,
         port_name: String,
     },
-    ToggleSimultaneousOutput,
+    SetSourcePort {
+        source_name: String,
+        port_name: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -356,8 +359,11 @@ impl DeviceServices {
                         } => {
                             let _ = audio.set_sink_port(sink_name, port_name);
                         }
-                        AudioCommand::ToggleSimultaneousOutput => {
-                            let _ = audio.toggle_simultaneous_output();
+                        AudioCommand::SetSourcePort {
+                            source_name,
+                            port_name,
+                        } => {
+                            let _ = audio.set_source_port(source_name, port_name);
                         }
                     }
                 } else {
