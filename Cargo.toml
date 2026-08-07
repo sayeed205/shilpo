@@ -9,6 +9,7 @@ members = [
     # Linux desktop shell crates
     "desktop/services",
     "desktop/config",
+    "desktop/ext-types",
     "desktop/ext",
     "desktop/theme-daemon",
     "desktop/shell",
@@ -31,6 +32,7 @@ shilpo-assets = { path = "core/assets" }
 shilpo-macros = { path = "core/macros" }
 shilpo-services = { path = "desktop/services" }
 shilpo-config = { path = "desktop/config" }
+shilpo-ext-types = { path = "desktop/ext-types" }
 shilpo-ext = { path = "desktop/ext" }
 shilpo-theme-daemon = { path = "desktop/theme-daemon" }
 

@@ -32,7 +32,7 @@ pub use effects::{
 pub use events::{EventKind, ExtensionEvent};
 pub use manifest::{
     CanonicalId, Capability, CapabilityKind, ContributionId, ExtensionId, ExtensionManifest,
-    ManifestError,
+    IdError, ManifestError,
 };
 pub use view::{
     ContainerDirection, ContainerNode, LoadingIndicatorNode, SemanticColorToken, TextNode,

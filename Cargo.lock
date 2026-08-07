@@ -8035,7 +8035,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "shilpo-ext",
+ "shilpo-ext-types",
  "toml 1.1.3+spec-1.1.0",
 ]
 
@@ -8053,12 +8053,22 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "shilpo-ext-types",
  "tar",
  "toml 1.1.3+spec-1.1.0",
  "url",
  "wasmtime",
  "wasmtime-wasi",
  "zed-reqwest",
+]
+
+[[package]]
+name = "shilpo-ext-types"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
