@@ -126,7 +126,7 @@ impl SettingsView {
         cx.spawn(async move |this, cx| {
             loop {
                 let state = match rx.recv().await {
-                    Ok(state) => state,
+                    Ok(update) => update.state,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         client_clone.current_state()
                     }
@@ -134,7 +134,7 @@ impl SettingsView {
                 };
                 let mut latest = state;
                 while let Ok(newer) = rx.try_recv() {
-                    latest = newer;
+                    latest = newer.state;
                 }
                 cx.update(|cx: &mut App| {
                     shilpo_ui::Theme::global_mut(cx).apply_state(&latest);

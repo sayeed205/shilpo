@@ -3,6 +3,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashMap;
 use std::fmt;
 
+use mcu_material_color::Hct;
+
 /// Deterministic placeholder timestamp used by `ThemeState::default()` so the pure
 /// default carries no hidden clock I/O (ADR-0002). System-boundary callers (e.g.
 /// `shilpo-theme-daemon`) must replace it with a real clock time when constructing
@@ -204,16 +206,39 @@ pub fn argb_to_hex(argb: u32) -> String {
     format!("#{:06X}", argb & 0x00FF_FFFF)
 }
 
+/// Resolve a [`SchemeVariant`] against a seed. `Auto` picks a concrete variant
+/// from the seed's HCT chroma; any explicit variant passes through unchanged.
+/// Pure, so callers (e.g. settings) can show what `Auto` resolves to without
+/// regenerating palettes.
+pub fn resolve_variant(source_argb: u32, variant: SchemeVariant) -> SchemeVariant {
+    match variant {
+        SchemeVariant::Auto => {
+            let chroma = Hct::from_int(source_argb).chroma();
+            if chroma < 6.0 {
+                SchemeVariant::Monochrome
+            } else if chroma < 20.0 {
+                SchemeVariant::Neutral
+            } else if chroma >= 70.0 {
+                SchemeVariant::Expressive
+            } else {
+                SchemeVariant::TonalSpot
+            }
+        }
+        explicit => explicit,
+    }
+}
+
 pub fn generate_m3_palettes(
     source_argb: u32,
     variant: SchemeVariant,
 ) -> (HashMap<String, String>, HashMap<String, String>) {
     use mcu_material_color::{
-        Hct, SchemeContent, SchemeExpressive, SchemeFidelity, SchemeFruitSalad, SchemeMonochrome,
+        SchemeContent, SchemeExpressive, SchemeFidelity, SchemeFruitSalad, SchemeMonochrome,
         SchemeNeutral, SchemeRainbow, SchemeTonalSpot,
     };
 
     let hct = Hct::from_int(source_argb);
+    let variant = resolve_variant(source_argb, variant);
 
     fn build_palette(scheme: &mcu_material_color::DynamicScheme) -> HashMap<String, String> {
         let mut map = HashMap::new();
@@ -429,18 +454,6 @@ pub fn generate_m3_palettes(
     }
 
     match variant {
-        SchemeVariant::Auto => {
-            let chroma = hct.chroma();
-            if chroma < 6.0 {
-                gen_pair!(SchemeMonochrome)
-            } else if chroma < 20.0 {
-                gen_pair!(SchemeNeutral)
-            } else if chroma >= 70.0 {
-                gen_pair!(SchemeExpressive)
-            } else {
-                gen_pair!(SchemeTonalSpot)
-            }
-        }
         SchemeVariant::TonalSpot => gen_pair!(SchemeTonalSpot),
         SchemeVariant::Content => gen_pair!(SchemeContent),
         SchemeVariant::Expressive => gen_pair!(SchemeExpressive),
@@ -449,6 +462,7 @@ pub fn generate_m3_palettes(
         SchemeVariant::Monochrome => gen_pair!(SchemeMonochrome),
         SchemeVariant::Neutral => gen_pair!(SchemeNeutral),
         SchemeVariant::Rainbow => gen_pair!(SchemeRainbow),
+        SchemeVariant::Auto => unreachable!("Auto resolved by resolve_variant"),
     }
 }
 
@@ -458,11 +472,17 @@ pub enum ThemeCommand {
     ToggleMode,
     SetColorSource(ColorSource),
     SetSchemeVariant(SchemeVariant),
+    /// Remember the user's custom seed choice and apply it while
+    /// [`ColorSource::Custom`] is the active source. The seed is persisted in
+    /// `ThemeState.custom_seed`, so switching back to `Custom` re-applies it.
     SetCustomSeed(u32),
-    /// Set the ARGB seed driving the palette while [`ColorSource::Wallpaper`] is
-    /// active. The daemon forwards the extracted wallpaper seed through this
-    /// command; it is a no-op for any other color source.
-    SetWallpaperSeed(u32),
+    /// Transiently apply the current external source's seed (e.g. from a
+    /// wallpaper) while [`ColorSource::Wallpaper`] is the active source. Unlike
+    /// [`Self::SetCustomSeed`] this never stores the seed — the daemon owns
+    /// remembering it, since it is tied to an on-disk source (ADR-0002). The
+    /// core crate never knows where the seed came from; it only applies it for
+    /// the source that consumes external seeds, and is a no-op otherwise.
+    SetSeed(u32),
 }
 
 fn regenerate_palette(state: &mut ThemeState, seed: u32, variant: SchemeVariant, timestamp: &str) {
@@ -542,7 +562,7 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand, timestamp: &str) ->
                 regenerate_palette(state, seed, variant, timestamp);
             }
         }
-        ThemeCommand::SetWallpaperSeed(seed) => {
+        ThemeCommand::SetSeed(seed) => {
             if state.color_source == ColorSource::Wallpaper && state.source_argb != seed {
                 let variant = state.scheme_variant;
                 state.source_argb = seed;
@@ -619,6 +639,28 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_variant_matches_generated_auto_palette() {
+        assert_eq!(
+            resolve_variant(0xff000000, SchemeVariant::Auto),
+            SchemeVariant::Monochrome
+        );
+        assert_eq!(
+            resolve_variant(0xffa08f7f, SchemeVariant::Auto),
+            SchemeVariant::Neutral
+        );
+        assert_eq!(
+            resolve_variant(0xffe63946, SchemeVariant::Auto),
+            SchemeVariant::Expressive
+        );
+        assert_eq!(
+            resolve_variant(0xff006c4c, SchemeVariant::Auto),
+            SchemeVariant::TonalSpot
+        );
+        let explicit = resolve_variant(0xffe63946, SchemeVariant::Expressive);
+        assert_eq!(explicit, SchemeVariant::Expressive);
+    }
+
+    #[test]
     fn test_toggle_mode() {
         let mut state = ThemeState {
             resolved_mode: ThemeMode::Light,
@@ -670,7 +712,7 @@ mod tests {
 
         let changed = reduce(
             &mut state,
-            ThemeCommand::SetWallpaperSeed(seed),
+            ThemeCommand::SetSeed(seed),
             TEST_TIMESTAMP,
         );
         assert!(changed);
@@ -689,7 +731,7 @@ mod tests {
 
         let changed = reduce(
             &mut state,
-            ThemeCommand::SetWallpaperSeed(0xffab12cd),
+            ThemeCommand::SetSeed(0xffab12cd),
             TEST_TIMESTAMP,
         );
         assert!(!changed);

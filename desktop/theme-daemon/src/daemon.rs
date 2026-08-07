@@ -156,14 +156,18 @@ impl ThemeDaemon {
         };
 
         let _ = write_state_snapshot(&daemon.state);
-        if let Ok(raw_state) = serde_json::to_string(&daemon.state) {
+        let startup_update = ThemeUpdate {
+            state: daemon.state.clone(),
+            change_kind: ChangeKind::full(),
+        };
+        if let Ok(raw_update) = serde_json::to_string(&startup_update) {
             let _ = conn
                 .emit_signal(
                     Option::<BusName>::None,
                     "/org/shilpo/Theme",
                     "org.shilpo.Theme",
                     "StateChanged",
-                    &raw_state,
+                    &raw_update,
                 )
                 .await;
         }
@@ -401,8 +405,12 @@ impl ThemeDaemon {
         if next_state.theme.revision > previous_revision {
             self.state = next_state;
 
-            let raw_state =
-                serde_json::to_string(&self.state).map_err(|error| error.to_string())?;
+            let update = ThemeUpdate {
+                state: self.state.clone(),
+                change_kind: outcome.change_kind,
+            };
+            let raw_update =
+                serde_json::to_string(&update).map_err(|error| error.to_string())?;
             let _ = self
                 ._conn
                 .emit_signal(
@@ -410,7 +418,7 @@ impl ThemeDaemon {
                     "/org/shilpo/Theme",
                     "org.shilpo.Theme",
                     "StateChanged",
-                    &raw_state,
+                    &raw_update,
                 )
                 .await;
 
@@ -478,12 +486,49 @@ impl ThemeDaemon {
     }
 }
 
+/// Which aspects of the theme changed, so consumers can react to specific kinds
+/// of change (e.g. animate a mode toggle without re-deriving the palette).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangeKind {
+    pub mode: bool,
+    pub source: bool,
+    pub variant: bool,
+    pub palette: bool,
+    pub wallpaper: bool,
+}
+
+impl ChangeKind {
+    /// Marks every aspect as changed — used for full-state syncs where no
+    /// transition produced the state (startup, `get_state` replies).
+    pub fn full() -> Self {
+        Self {
+            mode: true,
+            source: true,
+            variant: true,
+            palette: true,
+            wallpaper: true,
+        }
+    }
+}
+
+/// A theme state delivered to consumers, plus what changed relative to the
+/// previous state so they can react selectively instead of re-deriving
+/// everything.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeUpdate {
+    pub state: DaemonState,
+    pub change_kind: ChangeKind,
+}
+
 /// Side effects a daemon command requests, expressed purely so callers can
 /// perform the actual I/O (adapter invocation, D-Bus signal, persistence).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct ApplyOutcome {
     /// Mode the desktop adapter should be switched to, if any.
     dispatch_adapter_mode: Option<ThemeMode>,
+    /// Which aspects of the state actually changed, for consumers that react
+    /// to specific kinds of change.
+    change_kind: ChangeKind,
 }
 
 /// Pure application of a [`DaemonCommand`] to a [`DaemonState`] snapshot.
@@ -498,6 +543,7 @@ fn apply_command(
     command: DaemonCommand,
     now: &str,
 ) -> Result<ApplyOutcome, String> {
+    let before = ChangeSnapshot::from_state(state);
     let mut outcome = ApplyOutcome::default();
 
     match command {
@@ -529,7 +575,7 @@ fn apply_command(
                 if source == ColorSource::Wallpaper
                     && let Some(seed) = state.wallpaper_seed
                 {
-                    reduce(&mut state.theme, ThemeCommand::SetWallpaperSeed(seed), now);
+                    reduce(&mut state.theme, ThemeCommand::SetSeed(seed), now);
                 }
             }
             ThemeCommand::SetSchemeVariant(variant) => {
@@ -538,8 +584,8 @@ fn apply_command(
             ThemeCommand::SetCustomSeed(seed) => {
                 reduce(&mut state.theme, ThemeCommand::SetCustomSeed(seed), now);
             }
-            ThemeCommand::SetWallpaperSeed(seed) => {
-                reduce(&mut state.theme, ThemeCommand::SetWallpaperSeed(seed), now);
+            ThemeCommand::SetSeed(seed) => {
+                reduce(&mut state.theme, ThemeCommand::SetSeed(seed), now);
             }
         },
         DaemonCommand::SetWallpaperDirectory(dir) => {
@@ -558,8 +604,7 @@ fn apply_command(
                 state.wallpaper_seed = Some(seed);
                 changed = true;
             }
-            let seed_applied = state.theme.color_source == ColorSource::Wallpaper
-                && reduce(&mut state.theme, ThemeCommand::SetWallpaperSeed(seed), now);
+            let seed_applied = reduce(&mut state.theme, ThemeCommand::SetSeed(seed), now);
             if changed && !seed_applied {
                 bump_revision(state, now);
             }
@@ -578,7 +623,51 @@ fn apply_command(
         }
     }
 
+    outcome.change_kind = before.compute_change(state);
+
     Ok(outcome)
+}
+
+/// Snapshot of the aspects `ChangeKind` tracks, captured before a command runs
+/// so the outcome can diff what actually changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChangeSnapshot {
+    selected_mode: ThemeMode,
+    resolved_mode: ThemeMode,
+    color_source: ColorSource,
+    scheme_variant: shilpo_theme::SchemeVariant,
+    source_argb: u32,
+    wallpaper_path: Option<PathBuf>,
+    wallpaper_seed: Option<u32>,
+    wallpaper_dir: PathBuf,
+}
+
+impl ChangeSnapshot {
+    fn from_state(state: &DaemonState) -> Self {
+        Self {
+            selected_mode: state.theme.selected_mode,
+            resolved_mode: state.theme.resolved_mode,
+            color_source: state.theme.color_source,
+            scheme_variant: state.theme.scheme_variant,
+            source_argb: state.theme.source_argb,
+            wallpaper_path: state.wallpaper_path.clone(),
+            wallpaper_seed: state.wallpaper_seed,
+            wallpaper_dir: state.wallpaper_dir.clone(),
+        }
+    }
+
+    fn compute_change(&self, state: &DaemonState) -> ChangeKind {
+        ChangeKind {
+            mode: self.selected_mode != state.theme.selected_mode
+                || self.resolved_mode != state.theme.resolved_mode,
+            source: self.color_source != state.theme.color_source,
+            variant: self.scheme_variant != state.theme.scheme_variant,
+            palette: self.source_argb != state.theme.source_argb,
+            wallpaper: self.wallpaper_path != state.wallpaper_path
+                || self.wallpaper_seed != state.wallpaper_seed
+                || self.wallpaper_dir != state.wallpaper_dir,
+        }
+    }
 }
 
 fn bump_revision(state: &mut DaemonState, now: &str) {
@@ -771,6 +860,9 @@ mod tests {
         assert_eq!(state.theme.selected_mode, ThemeMode::Dark);
         assert_eq!(state.theme.resolved_mode, ThemeMode::Dark);
         assert_eq!(outcome.dispatch_adapter_mode, Some(ThemeMode::Dark));
+        assert!(outcome.change_kind.mode);
+        assert!(!outcome.change_kind.source);
+        assert!(!outcome.change_kind.palette);
     }
 
     #[test]
@@ -842,8 +934,9 @@ mod tests {
             wallpaper_seed: Some(WALLPAPER_SEED),
             ..Default::default()
         };
+        let revision = state.theme.revision;
 
-        apply(
+        let outcome = apply(
             &mut state,
             DaemonCommand::Theme(ThemeCommand::SetColorSource(ColorSource::Wallpaper)),
         )
@@ -852,6 +945,10 @@ mod tests {
         assert_eq!(state.theme.color_source, ColorSource::Wallpaper);
         assert_eq!(state.theme.source_argb, WALLPAPER_SEED);
         assert_eq!(state.theme.palette_generated_at, TEST_NOW);
+        assert_eq!(state.theme.revision, revision + 2);
+        assert!(outcome.change_kind.source);
+        assert!(outcome.change_kind.palette);
+        assert!(!outcome.change_kind.mode);
     }
 
     #[test]
@@ -939,7 +1036,7 @@ mod tests {
         let revision = state.theme.revision;
         let path = PathBuf::from("/w/pic.png");
 
-        apply(
+        let outcome = apply(
             &mut state,
             DaemonCommand::SetWallpaper {
                 path: path.clone(),
@@ -952,6 +1049,9 @@ mod tests {
         assert_eq!(state.wallpaper_seed, Some(WALLPAPER_SEED));
         assert_eq!(state.theme.source_argb, 0xff006c4c);
         assert_eq!(state.theme.revision, revision + 1);
+        assert!(outcome.change_kind.wallpaper);
+        assert!(!outcome.change_kind.mode);
+        assert!(!outcome.change_kind.palette);
     }
 
     #[test]
@@ -960,7 +1060,7 @@ mod tests {
         let revision = state.theme.revision;
         let path = PathBuf::from("/w/pic.png");
 
-        apply(
+        let outcome = apply(
             &mut state,
             DaemonCommand::SetWallpaper {
                 path: path.clone(),
@@ -973,5 +1073,7 @@ mod tests {
         assert_eq!(state.theme.source_argb, WALLPAPER_SEED);
         assert_eq!(state.theme.revision, revision + 1);
         assert_eq!(state.theme.palette_generated_at, TEST_NOW);
+        assert!(outcome.change_kind.wallpaper);
+        assert!(outcome.change_kind.palette);
     }
 }

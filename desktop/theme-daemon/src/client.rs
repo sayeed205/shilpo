@@ -1,4 +1,4 @@
-use crate::daemon::DaemonState;
+use crate::daemon::{ChangeKind, DaemonState, ThemeUpdate};
 use crate::dbus::ThemeDbusProxy;
 use crate::persistence::read_state_snapshot;
 use anyhow::{Context, Result, anyhow};
@@ -13,7 +13,7 @@ use zbus::Connection;
 #[derive(Clone)]
 pub struct ThemeClient {
     current_state: Arc<Mutex<DaemonState>>,
-    tx: broadcast::Sender<DaemonState>,
+    tx: broadcast::Sender<ThemeUpdate>,
     dbus_conn: Arc<tokio::sync::RwLock<Option<Connection>>>,
 }
 
@@ -63,7 +63,7 @@ impl ThemeClient {
         self.current_state.lock().unwrap().clone()
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<DaemonState> {
+    pub fn subscribe(&self) -> broadcast::Receiver<ThemeUpdate> {
         self.tx.subscribe()
     }
 
@@ -100,9 +100,10 @@ impl ThemeClient {
                                             // 3. Process signals
                                             while let Some(signal) = signal_stream.next().await {
                                                 if let Ok(signal) = signal.args()
-                                                    && let Ok(state) = serde_json::from_str(&signal.state)
+                                                    && let Ok(update) =
+                                                        serde_json::from_str(&signal.state)
                                                 {
-                                                    client_clone.update_state_if_newer(state);
+                                                    client_clone.handle_signal_update(update);
                                                 }
                                             }
                                             warn!("D-Bus StateChanged signal stream ended; reconnecting...");
@@ -136,14 +137,26 @@ impl ThemeClient {
     fn force_update_state(&self, new_state: DaemonState) {
         let mut cur = self.current_state.lock().unwrap();
         *cur = new_state.clone();
-        let _ = self.tx.send(new_state);
+        let _ = self
+            .tx
+            .send(ThemeUpdate { state: new_state, change_kind: ChangeKind::full() });
     }
 
     fn update_state_if_newer(&self, new_state: DaemonState) {
         let mut cur = self.current_state.lock().unwrap();
         if new_state.revision >= cur.revision {
             *cur = new_state.clone();
-            let _ = self.tx.send(new_state);
+            let _ = self
+                .tx
+                .send(ThemeUpdate { state: new_state, change_kind: ChangeKind::full() });
+        }
+    }
+
+    fn handle_signal_update(&self, update: ThemeUpdate) {
+        let mut cur = self.current_state.lock().unwrap();
+        if update.state.revision >= cur.revision {
+            *cur = update.state.clone();
+            let _ = self.tx.send(update);
         }
     }
 

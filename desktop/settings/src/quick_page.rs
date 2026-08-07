@@ -46,6 +46,7 @@ impl QuickPage {
             .overflow_y_scrollbar()
             // ── Section: Wallpaper & Colors ──
             .child(Self::render_wallpaper_section(
+                &state,
                 theme_client,
                 wallpaper_path.as_deref(),
                 current_mode,
@@ -56,6 +57,7 @@ impl QuickPage {
     /// The main Wallpaper & Colors section:
     /// wallpaper preview on the left, controls on the right.
     fn render_wallpaper_section(
+        state: &shilpo_theme_daemon::DaemonState,
         theme_client: &ThemeClient,
         wallpaper_path: Option<&std::path::Path>,
         current_mode: ThemeMode,
@@ -198,7 +200,27 @@ impl QuickPage {
                 let selected = current_variant == variant;
                 let client = theme_client.clone();
                 Button::new(SharedString::from(format!("scheme-{ix}")))
-                    .label(*label)
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                v_flex()
+                                    .items_start()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_medium()
+                                            .child(*label)
+                                            .when(variant == SchemeVariant::Auto && current_variant == SchemeVariant::Auto, |el| {
+                                                el.child(" → ")
+                                                    .child(Self::resolved_variant_label(state, cx))
+                                            }),
+                                    )
+                                    .child(Self::render_variant_preview(state, variant)),
+                            ),
+                    )
                     .selected(selected)
                     .small()
                     .on_click(move |_, _, _| {
@@ -216,6 +238,45 @@ impl QuickPage {
             .child(title_row)
             .child(main_content)
             .child(scheme_group)
+    }
+
+    /// Label shown next to "Auto" when it is active, revealing which concrete
+    /// variant the current seed resolves to (e.g. "Auto → Tonal Spot").
+    fn resolved_variant_label(
+        state: &shilpo_theme_daemon::DaemonState,
+        cx: &App,
+    ) -> impl IntoElement {
+        let resolved = shilpo_theme::resolve_variant(state.theme.source_argb, SchemeVariant::Auto);
+        div()
+            .text_sm()
+            .font_medium()
+            .text_color(cx.theme().on_surface_variant)
+            .child(resolved.display_name())
+    }
+
+    /// Three color chips previewing the palette a variant would generate from
+    /// the current seed, so the user sees each option against their own
+    /// wallpaper before committing.
+    fn render_variant_preview(
+        state: &shilpo_theme_daemon::DaemonState,
+        variant: SchemeVariant,
+    ) -> impl IntoElement {
+        let seed = state.theme.source_argb;
+        let (light, _dark) = shilpo_theme::generate_m3_palettes(seed, variant);
+        let chips = ["primary", "secondary", "tertiary"]
+            .into_iter()
+            .filter_map(|token| light.get(token))
+            .map(|hex| {
+                let color = shilpo_ui::theme::argb_to_hsla(
+                    u32::from_str_radix(&hex[1..], 16).unwrap_or(0) | 0xff000000,
+                );
+                div()
+                    .size(px(10.))
+                    .rounded_full()
+                    .bg(color)
+            })
+            .collect::<Vec<_>>();
+        h_flex().gap_1().mt_0p5().children(chips)
     }
 }
 

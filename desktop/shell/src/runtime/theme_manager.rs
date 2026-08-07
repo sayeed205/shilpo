@@ -19,7 +19,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
     cx.spawn(async move |cx| {
         loop {
             let state = match rx.recv().await {
-                Ok(state) => state,
+                Ok(update) => update.state,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                     theme_client_for_task.current_state()
                 }
