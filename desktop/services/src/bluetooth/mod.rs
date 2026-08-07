@@ -80,16 +80,26 @@ impl BluetoothService {
         let task = if tokio::runtime::Handle::try_current().is_ok() {
             Some(tokio::spawn(async move {
                 let connection_opt = Connection::system().await.ok();
+                let mut current_adapter_path: Option<String> = None;
+
+                // Perform an initial state fetch if DBus connection is live
+                if let Some(ref conn) = connection_opt
+                    && let Ok((info, adapter_path)) = query_bluez_dbus(conn).await
+                {
+                    current_adapter_path = adapter_path;
+                    let _ = tx_clone.send_replace(info);
+                }
 
                 loop {
                     tokio::select! {
                         cmd = command_rx.recv() => {
                             match cmd {
                                 Some(cmd) => {
-                                    handle_bluetooth_command(&connection_opt, cmd).await;
+                                    handle_bluetooth_command(&connection_opt, current_adapter_path.as_deref(), cmd).await;
                                     if let Some(ref conn) = connection_opt
-                                        && let Ok(info) = query_bluez_dbus(conn).await
+                                        && let Ok((info, adapter_path)) = query_bluez_dbus(conn).await
                                     {
+                                        current_adapter_path = adapter_path;
                                         let _ = tx_clone.send_replace(info);
                                     }
                                 }
@@ -98,7 +108,8 @@ impl BluetoothService {
                         }
                         _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
                             if let Some(ref conn) = connection_opt {
-                                if let Ok(info) = query_bluez_dbus(conn).await {
+                                if let Ok((info, adapter_path)) = query_bluez_dbus(conn).await {
+                                    current_adapter_path = adapter_path;
                                     let _ = tx_clone.send_replace(info);
                                 }
                             } else {
@@ -207,7 +218,29 @@ impl BluetoothService {
     }
 }
 
-async fn query_bluez_dbus(conn: &Connection) -> Result<BluetoothInfo> {
+fn get_str(props: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> Option<String> {
+    props
+        .get(key)
+        .and_then(|v| v.downcast_ref::<zbus::zvariant::Str>().ok())
+        .map(|s| s.as_str().to_string())
+}
+
+fn get_bool(props: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> bool {
+    props
+        .get(key)
+        .and_then(|v| v.downcast_ref::<bool>().ok())
+        .unwrap_or(false)
+}
+
+fn get_i16(props: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> Option<i16> {
+    props.get(key).and_then(|v| v.downcast_ref::<i16>().ok())
+}
+
+fn get_u8(props: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> Option<u8> {
+    props.get(key).and_then(|v| v.downcast_ref::<u8>().ok())
+}
+
+async fn query_bluez_dbus(conn: &Connection) -> Result<(BluetoothInfo, Option<String>)> {
     let reply = conn
         .call_method(
             Some("org.bluez"),
@@ -228,70 +261,34 @@ async fn query_bluez_dbus(conn: &Connection) -> Result<BluetoothInfo> {
     let mut powered = false;
     let mut discovering = false;
     let mut available = false;
+    let mut detected_adapter_path: Option<String> = None;
     let mut devices = Vec::new();
 
-    for (_path, interfaces) in objects {
+    for (path, interfaces) in objects {
         if let Some(adapter) = interfaces.get("org.bluez.Adapter1") {
             available = true;
-            if let Some(val) = adapter.get("Powered")
-                && let Ok(p) = val.downcast_ref::<bool>()
-            {
-                powered = p;
+            if detected_adapter_path.is_none() {
+                detected_adapter_path = Some(path.as_str().to_string());
             }
-            if let Some(val) = adapter.get("Discovering")
-                && let Ok(d) = val.downcast_ref::<bool>()
-            {
-                discovering = d;
-            }
+            powered = get_bool(adapter, "Powered");
+            discovering = get_bool(adapter, "Discovering");
         }
 
         if let Some(dev) = interfaces.get("org.bluez.Device1") {
-            let address = dev
-                .get("Address")
-                .and_then(|v| v.downcast_ref::<zbus::zvariant::Str>().ok())
-                .map(|s| s.as_str().to_string())
-                .unwrap_or_default();
-
-            let name = dev
-                .get("Alias")
-                .or_else(|| dev.get("Name"))
-                .and_then(|v| v.downcast_ref::<zbus::zvariant::Str>().ok())
-                .map(|s| s.as_str().to_string())
+            let address = get_str(dev, "Address").unwrap_or_default();
+            let name = get_str(dev, "Alias")
+                .or_else(|| get_str(dev, "Name"))
                 .unwrap_or_else(|| address.clone());
-
-            let icon = dev
-                .get("Icon")
-                .and_then(|v| v.downcast_ref::<zbus::zvariant::Str>().ok())
-                .map(|s| s.as_str().to_string());
-
-            let paired = dev
-                .get("Paired")
-                .and_then(|v| v.downcast_ref::<bool>().ok())
-                .unwrap_or(false);
-
-            let connected = dev
-                .get("Connected")
-                .and_then(|v| v.downcast_ref::<bool>().ok())
-                .unwrap_or(false);
-
-            let trusted = dev
-                .get("Trusted")
-                .and_then(|v| v.downcast_ref::<bool>().ok())
-                .unwrap_or(false);
-
-            let blocked = dev
-                .get("Blocked")
-                .and_then(|v| v.downcast_ref::<bool>().ok())
-                .unwrap_or(false);
-
-            let rssi = dev
-                .get("RSSI")
-                .and_then(|v| v.downcast_ref::<i16>().ok());
+            let icon = get_str(dev, "Icon");
+            let paired = get_bool(dev, "Paired");
+            let connected = get_bool(dev, "Connected");
+            let trusted = get_bool(dev, "Trusted");
+            let blocked = get_bool(dev, "Blocked");
+            let rssi = get_i16(dev, "RSSI");
 
             let battery_percentage = interfaces
                 .get("org.bluez.Battery1")
-                .and_then(|bat| bat.get("Percentage"))
-                .and_then(|v| v.downcast_ref::<u8>().ok());
+                .and_then(|bat| get_u8(bat, "Percentage"));
 
             devices.push(BluetoothDevice {
                 address,
@@ -316,27 +313,34 @@ async fn query_bluez_dbus(conn: &Connection) -> Result<BluetoothInfo> {
         devices,
     };
     info.update_derived_fields();
-    Ok(info)
+    Ok((info, detected_adapter_path))
 }
 
 async fn handle_bluetooth_command(
     conn_opt: &Option<Connection>,
+    adapter_path_opt: Option<&str>,
     cmd: BluetoothCommand,
 ) {
+    let adapter_path = adapter_path_opt.unwrap_or("/org/bluez/hci0");
+
     let Some(conn) = conn_opt else {
         if let BluetoothCommand::SetPowered(powered) = cmd {
             let arg = if powered { "on" } else { "off" };
-            let _ = Command::new("bluetoothctl").args(["power", arg]).status();
+            if let Err(err) = Command::new("bluetoothctl").args(["power", arg]).status() {
+                tracing::warn!("Fallback bluetoothctl power failed: {err}");
+            }
+        } else {
+            tracing::warn!("Bluetooth DBus connection unavailable for command: {:?}", cmd);
         }
         return;
     };
 
     match cmd {
         BluetoothCommand::SetPowered(powered) => {
-            let _ = conn
+            if let Err(err) = conn
                 .call_method(
                     Some("org.bluez"),
-                    "/org/bluez/hci0",
+                    adapter_path,
                     Some("org.freedesktop.DBus.Properties"),
                     "Set",
                     &(
@@ -345,33 +349,42 @@ async fn handle_bluetooth_command(
                         zbus::zvariant::Value::Bool(powered),
                     ),
                 )
-                .await;
+                .await
+            {
+                tracing::warn!("Failed to set Bluetooth powered state ({powered}) via DBus: {err}");
+            }
         }
         BluetoothCommand::StartDiscovery => {
-            let _ = conn
+            if let Err(err) = conn
                 .call_method(
                     Some("org.bluez"),
-                    "/org/bluez/hci0",
+                    adapter_path,
                     Some("org.bluez.Adapter1"),
                     "StartDiscovery",
                     &(),
                 )
-                .await;
+                .await
+            {
+                tracing::warn!("Failed to start Bluetooth discovery via DBus: {err}");
+            }
         }
         BluetoothCommand::StopDiscovery => {
-            let _ = conn
+            if let Err(err) = conn
                 .call_method(
                     Some("org.bluez"),
-                    "/org/bluez/hci0",
+                    adapter_path,
                     Some("org.bluez.Adapter1"),
                     "StopDiscovery",
                     &(),
                 )
-                .await;
+                .await
+            {
+                tracing::warn!("Failed to stop Bluetooth discovery via DBus: {err}");
+            }
         }
         BluetoothCommand::ConnectDevice(address) => {
-            let path = device_address_to_path(&address);
-            let _ = conn
+            let path = device_address_to_path(adapter_path, &address);
+            if let Err(err) = conn
                 .call_method(
                     Some("org.bluez"),
                     path,
@@ -379,11 +392,14 @@ async fn handle_bluetooth_command(
                     "Connect",
                     &(),
                 )
-                .await;
+                .await
+            {
+                tracing::warn!("Failed to connect Bluetooth device ({address}) via DBus: {err}");
+            }
         }
         BluetoothCommand::DisconnectDevice(address) => {
-            let path = device_address_to_path(&address);
-            let _ = conn
+            let path = device_address_to_path(adapter_path, &address);
+            if let Err(err) = conn
                 .call_method(
                     Some("org.bluez"),
                     path,
@@ -391,11 +407,14 @@ async fn handle_bluetooth_command(
                     "Disconnect",
                     &(),
                 )
-                .await;
+                .await
+            {
+                tracing::warn!("Failed to disconnect Bluetooth device ({address}) via DBus: {err}");
+            }
         }
         BluetoothCommand::PairDevice(address) => {
-            let path = device_address_to_path(&address);
-            let _ = conn
+            let path = device_address_to_path(adapter_path, &address);
+            if let Err(err) = conn
                 .call_method(
                     Some("org.bluez"),
                     path,
@@ -403,31 +422,36 @@ async fn handle_bluetooth_command(
                     "Pair",
                     &(),
                 )
-                .await;
+                .await
+            {
+                tracing::warn!("Failed to pair Bluetooth device ({address}) via DBus: {err}");
+            }
         }
         BluetoothCommand::RemoveDevice(address) => {
-            if let Ok(obj_path) =
-                zbus::zvariant::ObjectPath::try_from(device_address_to_path(&address))
-            {
-                let _ = conn
+            let path_str = device_address_to_path(adapter_path, &address);
+            if let Ok(obj_path) = zbus::zvariant::ObjectPath::try_from(path_str)
+                && let Err(err) = conn
                     .call_method(
                         Some("org.bluez"),
-                        "/org/bluez/hci0",
+                        adapter_path,
                         Some("org.bluez.Adapter1"),
                         "RemoveDevice",
                         &(obj_path,),
                     )
-                    .await;
+                    .await
+            {
+                tracing::warn!("Failed to remove Bluetooth device ({address}) via DBus: {err}");
             }
         }
+
     }
 }
 
-fn device_address_to_path(address: &str) -> String {
+fn device_address_to_path(adapter_path: &str, address: &str) -> String {
     if address.starts_with('/') {
         address.to_string()
     } else {
-        format!("/org/bluez/hci0/dev_{}", address.replace(':', "_"))
+        format!("{adapter_path}/dev_{}", address.replace(':', "_"))
     }
 }
 
@@ -494,5 +518,17 @@ mod tests {
         info.update_derived_fields();
         assert!(info.connected);
         assert_eq!(info.connected_devices_count, 1);
+    }
+
+    #[test]
+    fn test_device_address_to_path() {
+        assert_eq!(
+            device_address_to_path("/org/bluez/hci1", "00:11:22:33:44:55"),
+            "/org/bluez/hci1/dev_00_11_22_33_44_55"
+        );
+        assert_eq!(
+            device_address_to_path("/org/bluez/hci0", "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"),
+            "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"
+        );
     }
 }
