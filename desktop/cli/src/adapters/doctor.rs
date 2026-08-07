@@ -575,12 +575,22 @@ impl DoctorChecker {
         let i2c_buses = shilpo_services::brightness::discover_i2c_bus_paths();
         let i2c_devs: Vec<PathBuf> = i2c_buses.into_iter().map(|(_, p)| p).collect();
 
+        let udev_rule_exists = PathBuf::from("/etc/udev/rules.d/60-ddcutil.rules").exists()
+            || PathBuf::from("/usr/lib/udev/rules.d/60-ddcutil.rules").exists()
+            || PathBuf::from("/lib/udev/rules.d/60-ddcutil.rules").exists();
+
+        let in_i2c_group = std::process::Command::new("id")
+            .arg("-nG")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("i2c"))
+            .unwrap_or(false);
+
         if i2c_devs.is_empty() {
             return DiagnosticItem {
                 category: "Hardware".into(),
-                name: "Linux I2C Dev Devices".into(),
+                name: "Linux I2C Dev Devices & Permissions".into(),
                 status: DiagnosticStatus::Warn,
-                message: "No /dev/i2c-* devices found. Ensure the 'i2c-dev' kernel module is loaded: sudo modprobe i2c-dev".into(),
+                message: "No /dev/i2c-* devices found. Ensure 'i2c-dev' module is loaded: sudo modprobe i2c-dev".into(),
                 repair_command: Some("sudo modprobe i2c-dev".into()),
                 unit_identifier: None,
                 fix_applied: false,
@@ -589,27 +599,56 @@ impl DoctorChecker {
 
         let unreadable: Vec<String> = i2c_devs
             .iter()
-            .filter(|p| std::fs::File::options().read(true).write(true).open(p).is_err())
+            .filter(|p| {
+                std::fs::File::options()
+                    .read(true)
+                    .write(true)
+                    .open(p)
+                    .is_err()
+            })
             .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
             .collect();
 
-        if unreadable.is_empty() {
+        if !unreadable.is_empty() || !in_i2c_group || !udev_rule_exists {
+            let mut issues = Vec::new();
+            if !unreadable.is_empty() {
+                issues.push(format!(
+                    "restricted permissions on: {}",
+                    unreadable.join(", ")
+                ));
+            }
+            if !in_i2c_group {
+                issues.push("user not in 'i2c' group".into());
+            }
+            if !udev_rule_exists {
+                issues.push("60-ddcutil.rules missing".into());
+            }
+
+            let repair = if !in_i2c_group {
+                "sudo usermod -aG i2c $USER && sudo udevadm control --reload-rules"
+            } else {
+                "sudo udevadm control --reload-rules && sudo udevadm trigger"
+            };
+
             DiagnosticItem {
                 category: "Hardware".into(),
-                name: "DDC/CI I2C Bus Permissions".into(),
-                status: DiagnosticStatus::Pass,
-                message: format!("Accessible read/write access confirmed for {} I2C devices", i2c_devs.len()),
-                repair_command: None,
+                name: "DDC/CI I2C Bus & Group Permissions".into(),
+                status: DiagnosticStatus::Warn,
+                message: format!("I2C DDC/CI issues detected: {}", issues.join("; ")),
+                repair_command: Some(repair.into()),
                 unit_identifier: None,
                 fix_applied: false,
             }
         } else {
             DiagnosticItem {
                 category: "Hardware".into(),
-                name: "DDC/CI I2C Bus Permissions".into(),
-                status: DiagnosticStatus::Warn,
-                message: format!("Restricted permissions on I2C devices: {}. Add your user to the i2c group", unreadable.join(", ")),
-                repair_command: Some("sudo usermod -aG i2c $USER".into()),
+                name: "DDC/CI I2C Bus & Group Permissions".into(),
+                status: DiagnosticStatus::Pass,
+                message: format!(
+                    "Accessible read/write access, i2c group membership, and udev rules confirmed for {} I2C devices",
+                    i2c_devs.len()
+                ),
+                repair_command: None,
                 unit_identifier: None,
                 fix_applied: false,
             }

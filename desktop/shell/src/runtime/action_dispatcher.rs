@@ -42,9 +42,7 @@ impl ActionDispatcher {
     ) -> Result<Option<ActionId>, String> {
         let shortcut = crate::actions::Shortcut::parse(spec)
             .ok_or_else(|| format!("invalid shortcut specification: '{}'", spec))?;
-        Ok(self
-            .keybindings
-            .register_with_override(shortcut, action))
+        Ok(self.keybindings.register_with_override(shortcut, action))
     }
 
     pub(crate) fn reset_shortcuts_to_defaults(&mut self) {
@@ -134,7 +132,10 @@ impl ActionDispatcher {
         );
     }
 
-    pub(crate) fn dispatch_action(cx: &mut App, action: ActionInvocation) -> Result<(), ShellError> {
+    pub(crate) fn dispatch_action(
+        cx: &mut App,
+        action: ActionInvocation,
+    ) -> Result<(), ShellError> {
         match Self::dispatch_invocation(cx, action) {
             Ok(crate::actions::ActionResult::Immediate) => Ok(()),
             Ok(crate::actions::ActionResult::Compositor(ticket)) => {
@@ -337,15 +338,32 @@ impl ActionDispatcher {
                 ShellRuntime::dispatch_device_command(
                     cx,
                     crate::bar::service_worker::DeviceCommand::AdjustFocusedBrightness {
-                        connector,
+                        connector: connector.clone(),
                         delta: 5,
                     },
                 );
-                let target_pct = (info.percentage + 5).min(100);
+                let target_display = info
+                    .displays
+                    .iter()
+                    .find(|d| d.connector.as_deref() == Some(&connector))
+                    .or_else(|| info.displays.iter().find(|d| d.is_primary))
+                    .or_else(|| info.displays.first());
+
+                let (target_pct, display_name, connector_opt) = match target_display {
+                    Some(d) => (
+                        (d.percentage as i16 + 5).clamp(0, 100) as u32,
+                        Some(d.name.clone()),
+                        d.connector.clone(),
+                    ),
+                    None => ((info.percentage + 5).min(100) as u32, None, Some(connector)),
+                };
+
                 ShellRuntime::show_osd(
                     cx,
                     crate::osd::OsdKind::Brightness {
-                        level: target_pct as u32,
+                        level: target_pct,
+                        display_name,
+                        connector: connector_opt,
                     },
                 );
                 Ok(crate::actions::ActionResult::Immediate)
@@ -358,15 +376,36 @@ impl ActionDispatcher {
                 ShellRuntime::dispatch_device_command(
                     cx,
                     crate::bar::service_worker::DeviceCommand::AdjustFocusedBrightness {
-                        connector,
+                        connector: connector.clone(),
                         delta: -5,
                     },
                 );
-                let target_pct = info.percentage.saturating_sub(5);
+                let target_display = info
+                    .displays
+                    .iter()
+                    .find(|d| d.connector.as_deref() == Some(&connector))
+                    .or_else(|| info.displays.iter().find(|d| d.is_primary))
+                    .or_else(|| info.displays.first());
+
+                let (target_pct, display_name, connector_opt) = match target_display {
+                    Some(d) => (
+                        d.percentage.saturating_sub(5) as u32,
+                        Some(d.name.clone()),
+                        d.connector.clone(),
+                    ),
+                    None => (
+                        info.percentage.saturating_sub(5) as u32,
+                        None,
+                        Some(connector),
+                    ),
+                };
+
                 ShellRuntime::show_osd(
                     cx,
                     crate::osd::OsdKind::Brightness {
-                        level: target_pct as u32,
+                        level: target_pct,
+                        display_name,
+                        connector: connector_opt,
                     },
                 );
                 Ok(crate::actions::ActionResult::Immediate)
@@ -506,7 +545,9 @@ mod tests {
     #[test]
     fn shortcut_override_reports_the_displaced_action() {
         let mut dispatcher = ActionDispatcher::new();
-        dispatcher.update_shortcut("Ctrl+Shift+T", ActionId::ToggleBar).unwrap();
+        dispatcher
+            .update_shortcut("Ctrl+Shift+T", ActionId::ToggleBar)
+            .unwrap();
         let displaced = dispatcher
             .update_shortcut_with_override("Ctrl+Shift+T", ActionId::ToggleOverview)
             .unwrap();
@@ -545,11 +586,10 @@ mod tests {
         use shilpo_ext_types::{ContributionId, ExtensionId};
         let mut dispatcher = ActionDispatcher::new();
         let ext_id = ExtensionId::new("org.shilpo.test").unwrap();
-        let cid = CanonicalId::new(
-            ext_id.clone(),
-            ContributionId::new("first").unwrap(),
-        );
-        dispatcher.register_extension_action(cid, "first", "First").unwrap();
+        let cid = CanonicalId::new(ext_id.clone(), ContributionId::new("first").unwrap());
+        dispatcher
+            .register_extension_action(cid, "first", "First")
+            .unwrap();
 
         let next = CanonicalId::new(ext_id, ContributionId::new("second").unwrap());
         dispatcher.sync_extension_actions(vec![ContributionDescriptor {
@@ -586,7 +626,12 @@ mod tests {
     fn test_harness_action_dispatcher_isolated_state_transitions() {
         let mut harness = ActionDispatcherTestHarness::new_offline();
         assert!(!harness.dispatcher.action_descriptors().is_empty());
-        assert!(harness.dispatcher.update_shortcut("Ctrl+Shift+U", ActionId::ToggleBar).is_ok());
+        assert!(
+            harness
+                .dispatcher
+                .update_shortcut("Ctrl+Shift+U", ActionId::ToggleBar)
+                .is_ok()
+        );
         harness.dispatcher.reset_shortcuts_to_defaults();
         assert!(!harness.dispatcher.keybinding_descriptors().is_empty());
     }
