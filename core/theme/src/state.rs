@@ -162,6 +162,8 @@ pub struct ThemeState {
     pub color_source: ColorSource,
     #[serde(default)]
     pub scheme_variant: SchemeVariant,
+    #[serde(default)]
+    pub resolved_variant: SchemeVariant,
     pub custom_seed: Option<u32>,
     pub source_argb: u32,
     pub light: HashMap<String, String>,
@@ -172,6 +174,7 @@ pub struct ThemeState {
 
 impl ThemeState {
     pub fn new(timestamp: &str) -> Self {
+        let resolved_variant = resolve_variant(DEFAULT_SOURCE_ARGB, SchemeVariant::Auto);
         let (light, dark) = generate_m3_palettes(DEFAULT_SOURCE_ARGB, SchemeVariant::Auto);
         Self {
             revision: 1,
@@ -179,6 +182,7 @@ impl ThemeState {
             resolved_mode: ThemeMode::Light,
             color_source: ColorSource::Wallpaper,
             scheme_variant: SchemeVariant::Auto,
+            resolved_variant,
             custom_seed: None,
             source_argb: DEFAULT_SOURCE_ARGB,
             light,
@@ -486,10 +490,49 @@ pub enum ThemeCommand {
 }
 
 fn regenerate_palette(state: &mut ThemeState, seed: u32, variant: SchemeVariant, timestamp: &str) {
-    let (light, dark) = generate_m3_palettes(seed, variant);
+    let effective = resolve_variant(seed, variant);
+    state.resolved_variant = effective;
+    let (light, dark) = generate_m3_palettes(seed, effective);
     state.light = light;
     state.dark = dark;
     state.palette_generated_at = timestamp.to_string();
+}
+
+/// Apply a wallpaper seed along with an image-detected variant (used when
+/// [`ThemeState::scheme_variant`] is [`SchemeVariant::Auto`]). If an explicit
+/// variant is pinned, the detected variant is ignored and the explicit pin is
+/// used. Returns whether the state changed.
+pub fn reduce_wallpaper_seed(
+    state: &mut ThemeState,
+    seed: u32,
+    detected_variant: SchemeVariant,
+    timestamp: &str,
+) -> bool {
+    let mut changed = false;
+
+    if state.color_source == ColorSource::Wallpaper {
+        let effective = match state.scheme_variant {
+            SchemeVariant::Auto => detected_variant,
+            explicit => explicit,
+        };
+
+        if state.source_argb != seed || state.resolved_variant != effective {
+            state.source_argb = seed;
+            state.resolved_variant = effective;
+            let (light, dark) = generate_m3_palettes(seed, effective);
+            state.light = light;
+            state.dark = dark;
+            state.palette_generated_at = timestamp.to_string();
+            changed = true;
+        }
+    }
+
+    if changed {
+        state.revision += 1;
+        state.updated_at = timestamp.to_string();
+    }
+
+    changed
 }
 
 /// Apply a pure `ThemeCommand` transition, returning whether the state changed.

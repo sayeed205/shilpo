@@ -4,21 +4,7 @@ use image::imageops::FilterType;
 use mcu_material_color::{Hct, QuantizerCelebi, Score};
 use std::path::Path;
 
-/// All official Material Design 3 dynamic scheme variants + Auto selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SchemeVariant {
-    #[default]
-    Auto,
-    TonalSpot,
-    Vibrant,
-    Expressive,
-    Fidelity,
-    Content,
-    FruitSalad,
-    Rainbow,
-    Neutral,
-    Monochrome,
-}
+pub use shilpo_theme::SchemeVariant;
 
 /// Advanced Material You / MCU Palette Extractor with image downscaling, HCT chroma pre-filtering,
 /// MCU score ranking, and automatic scheme variant decision tree.

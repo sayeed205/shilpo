@@ -246,7 +246,7 @@ impl QuickPage {
         state: &shilpo_theme_daemon::DaemonState,
         cx: &App,
     ) -> impl IntoElement {
-        let resolved = shilpo_theme::resolve_variant(state.theme.source_argb, SchemeVariant::Auto);
+        let resolved = state.theme.resolved_variant;
         div()
             .text_sm()
             .font_medium()

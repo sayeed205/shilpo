@@ -8101,6 +8101,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shilpo-config",
+ "shilpo-theme",
  "smol",
  "tokio",
  "tracing",
