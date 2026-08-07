@@ -3,137 +3,69 @@ use shilpo_ext_types::{CanonicalId, ExtensionId};
 
 use crate::{
     actions::{ActionId, ActionInvocation},
-    extensions::{ContributionDescriptor, ContributionSurface, ExtensionGeneration},
+    extensions::{
+        ContributionDescriptor, ContributionInstance, ContributionSurface, ExtensionCommand,
+        ExtensionGeneration,
+    },
 };
-use gpui::{
-    App, AppContext, Bounds, DisplayId, Pixels, WindowBackgroundAppearance, WindowBounds,
-    WindowKind, WindowOptions,
-    layer_shell::{KeyboardInteractivity, Layer, LayerShellOptions},
-    point, px, size,
-};
+use gpui::App;
 
-use super::{ShellRuntime, surface_manager::overlay_options};
+use super::{ShellRuntime, surface_manager::SurfaceManager};
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct ExtensionSurfaceSpec {
-    pub contribution: CanonicalId,
-    pub display_id: DisplayId,
-    pub bounds: Bounds<Pixels>,
-}
-
-pub(super) fn extension_settings(
-    config: &shilpo_config::ShellConfig,
-    extension_id: &ExtensionId,
-    instance_settings: Option<&serde_json::Value>,
-) -> serde_json::Value {
-    let mut settings = config
-        .extensions
-        .settings
-        .get(extension_id.as_str())
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
-    if let (Some(base), Some(overrides)) = (
-        settings.as_object_mut(),
-        instance_settings.and_then(serde_json::Value::as_object),
-    ) {
-        base.extend(overrides.clone());
-    }
-    settings
-}
-
+/// Owns the wasm extension runtime (coordinator), its in-flight task registry,
+/// and the location service used by extension effects.
+///
+/// Coordinator and task state are private; the shell interacts with extensions
+/// exclusively through the method surface below.
 pub struct ExtensionHost {
-    pub(super) extensions: Option<crate::extensions::ExtensionCoordinator>,
-    pub(super) extension_tasks: std::collections::HashMap<
-        (
-            crate::extensions::ExtensionGeneration,
-            ExtensionId,
-            String,
-        ),
-        gpui::Task<()>,
-    >,
-    pub(super) extension_location_service: shilpo_services::LocationService,
-}
-
-impl Default for ExtensionHost {
-    fn default() -> Self {
-        Self::new(None)
-    }
+    extensions: Option<crate::extensions::ExtensionCoordinator>,
+    extension_tasks: HashMap<(ExtensionGeneration, ExtensionId, String), gpui::Task<()>>,
+    extension_location_service: shilpo_services::LocationService,
 }
 
 impl ExtensionHost {
     pub fn new(extensions: Option<crate::extensions::ExtensionCoordinator>) -> Self {
         Self {
             extensions,
-            extension_tasks: std::collections::HashMap::new(),
+            extension_tasks: HashMap::new(),
             extension_location_service: shilpo_services::LocationService::new(),
         }
     }
 
-    pub fn extensions(&self) -> Option<&crate::extensions::ExtensionCoordinator> {
-        self.extensions.as_ref()
+    pub(crate) fn is_loaded(&self) -> bool {
+        self.extensions.is_some()
     }
 
-    pub fn extensions_mut(&mut self) -> Option<&mut crate::extensions::ExtensionCoordinator> {
-        self.extensions.as_mut()
+    pub(crate) fn generation(&self) -> Option<ExtensionGeneration> {
+        self.extensions.as_ref().map(|ext| ext.generation())
     }
-}
 
-impl ShellRuntime {
-    pub fn extension_descriptors(
-        cx: &App,
-        surface: ContributionSurface,
-    ) -> Vec<ContributionDescriptor> {
-        cx.global::<Self>()
-            .extension_host
-            .extensions
+    pub(crate) fn descriptors_for(&self, surface: ContributionSurface) -> Vec<ContributionDescriptor> {
+        self.extensions
             .as_ref()
             .map_or_else(Vec::new, |extensions| extensions.descriptors_for(surface))
     }
 
-    pub fn extension_surface_views(
-        cx: &App,
-        surface: ContributionSurface,
-    ) -> Vec<(CanonicalId, shilpo_ext::ViewTree)> {
-        let descriptors = Self::extension_descriptors(cx, surface);
-        descriptors
-            .into_iter()
-            .filter_map(|descriptor| {
-                let tree = Self::extension_view(cx, &descriptor.id)?;
-                Some((descriptor.id, tree))
-            })
-            .collect()
+    pub(crate) fn view(&self, id: &CanonicalId) -> Option<shilpo_ext::ViewTree> {
+        self.extensions.as_ref().and_then(|extensions| extensions.view(id))
     }
 
-    pub fn extension_view(cx: &App, id: &CanonicalId) -> Option<shilpo_ext::ViewTree> {
-        cx.global::<Self>()
-            .extension_host
-            .extensions
-            .as_ref()
-            .and_then(|extensions| extensions.view(id))
-    }
-
-    pub fn extension_asset_path(
-        cx: &App,
-        id: &CanonicalId,
-        relative: &str,
-    ) -> Result<PathBuf, String> {
-        cx.global::<Self>()
-            .extension_host
-            .extensions
+    pub(crate) fn asset_path(&self, id: &CanonicalId, relative: &str) -> Result<PathBuf, String> {
+        self.extensions
             .as_ref()
             .ok_or_else(|| "extension runtime is unavailable".to_owned())?
             .asset_path(id, relative)
     }
 
-    pub fn dispatch_extension_input(
-        cx: &mut App,
+    pub(crate) fn send_input(
+        &self,
         contribution: &CanonicalId,
         instance_id: Option<&str>,
         event_id: impl Into<String>,
         value: Option<serde_json::Value>,
     ) {
-        if let Some(ext) = cx.global::<Self>().extension_host.extensions.as_ref()
-            && let Err(error) = ext.send_command(crate::extensions::ExtensionCommand::Input {
+        if let Some(ext) = &self.extensions
+            && let Err(error) = ext.send_command(ExtensionCommand::Input {
                 expected: ext.generation(),
                 contribution: contribution.clone(),
                 instance_id: instance_id.map(ToString::to_string),
@@ -145,159 +77,33 @@ impl ShellRuntime {
         }
     }
 
-    pub fn open_extension_panel(cx: &mut App, contribution: CanonicalId) {
-        if let Some((handle, current)) = cx.global_mut::<Self>().surface_manager.extension_panel.take() {
-            if current == contribution
-                && handle
-                    .update(cx, |_, window, _| window.activate_window())
-                    .is_ok()
-            {
-                cx.global_mut::<Self>().surface_manager.extension_panel = Some((handle, current));
-                return;
-            }
-            if let Some(ext) = cx.global::<Self>().extension_host.extensions.as_ref()
-                && let Err(error) =
-                    ext.send_command(crate::extensions::ExtensionCommand::Lifecycle {
-                        expected: ext.generation(),
-                        event: shilpo_ext::ExtensionEvent::ContributionUnmounted {
-                            contribution_id: current.contribution_id.to_string(),
-                            instance_id: None,
-                        },
-                    })
-            {
-                tracing::warn!(%error, "extension unmount was not queued");
-            }
-            let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
-        }
-        let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
-            (display.bounds(), Some(display.id()))
-        } else {
-            (
-                Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
-                None,
-            )
-        };
-        let panel_size = size(px(420.), px(600.));
-        let origin = point(
-            display_bounds.origin.x + display_bounds.size.width - panel_size.width - px(16.),
-            display_bounds.origin.y + px(56.),
-        );
-        let options = overlay_options(
-            "shilpo-extension-panel",
-            "extension-panel",
-            panel_size,
-            origin,
-            display_id,
-        );
-        let view_id = contribution.clone();
-        match cx.open_window(options, move |window, cx| {
-            crate::extension_surface::ExtensionSurfaceView::view(view_id, None, window, cx)
-        }) {
-            Ok(handle) => {
-                if let Some(ext) = cx.global::<Self>().extension_host.extensions.as_ref()
-                    && let Err(error) =
-                        ext.send_command(crate::extensions::ExtensionCommand::Lifecycle {
-                            expected: ext.generation(),
-                            event: shilpo_ext::ExtensionEvent::ContributionMounted {
-                                contribution_id: contribution.contribution_id.to_string(),
-                                instance_id: None,
-                                width: 420.,
-                                height: 600.,
-                            },
-                        })
-                {
-                    tracing::warn!(%error, "extension mount was not queued");
-                }
-                cx.global_mut::<Self>().surface_manager.extension_panel = Some((handle, contribution));
-            }
-            Err(error) => tracing::warn!(error = %error, "failed to open extension side panel"),
-        }
-    }
-
-    pub(super) fn drain_extensions(cx: &mut App) {
-        if !cx.has_global::<ShellRuntime>() {
-            return;
-        }
-        let updates = {
-            let runtime = cx.global::<ShellRuntime>();
-            runtime
-                .extension_host
-                .extensions
-                .as_ref()
-                .map(|ext| ext.drain_updates())
-                .unwrap_or_default()
-        };
-        for update in updates {
-            ShellRuntime::apply_extension_update(cx, update);
-        }
-    }
-
-    pub(super) fn apply_extension_update(cx: &mut App, update: crate::extensions::ExtensionUpdate) {
-        let current_gen = cx
-            .global::<ShellRuntime>()
-            .extension_host
-            .extensions
-            .as_ref()
-            .map(|ext| ext.generation());
-        if current_gen.is_some_and(|target_gen| update.generation < target_gen) {
-            return;
-        }
-
-        if update
-            .snapshot
-            .as_ref()
-            .is_some_and(|s| s.catalog_changed_at.is_some())
-        {
-            ShellRuntime::sync_extension_actions(cx);
-            ShellRuntime::reconcile_bar_extension_instances(cx);
-        }
-
-        for (extension_id, effect) in update.effects {
-            ShellRuntime::execute_extension_effect(cx, &extension_id, update.generation, effect);
-        }
-
-        if let Some(snapshot) = &update.snapshot {
-            let active_gen = snapshot.generation;
-            cx.global_mut::<ShellRuntime>()
-                .extension_host
-                .extension_tasks
-                .retain(|(task_gen, _, _), _| *task_gen >= active_gen);
-        }
-
-        if update.snapshot.is_some() || !update.invalidated_views.is_empty() {
-            cx.refresh_windows();
-        }
-    }
-
-    pub(super) fn dispatch_extension_event(cx: &mut App, event: shilpo_ext::ExtensionEvent) {
-        if let Some(ext) = cx.global::<ShellRuntime>().extension_host.extensions.as_ref() {
+    pub(crate) fn send_event(&self, event: shilpo_ext::ExtensionEvent) {
+        if let Some(ext) = &self.extensions {
             let cmd = match event {
                 shilpo_ext::ExtensionEvent::PowerChanged {
                     percentage,
                     charging,
-                } => crate::extensions::ExtensionCommand::Replaceable(
+                } => ExtensionCommand::Replaceable(
                     crate::extensions::ReplaceableEvent::Power {
                         percentage,
                         charging,
                     },
                 ),
                 shilpo_ext::ExtensionEvent::NetworkChanged { connected } => {
-                    crate::extensions::ExtensionCommand::Replaceable(
-                        crate::extensions::ReplaceableEvent::Network { connected },
-                    )
+                    ExtensionCommand::Replaceable(crate::extensions::ReplaceableEvent::Network {
+                        connected,
+                    })
                 }
                 shilpo_ext::ExtensionEvent::MediaChanged {
                     title,
                     artist,
                     playing,
-                } => crate::extensions::ExtensionCommand::Replaceable(
-                    crate::extensions::ReplaceableEvent::Media {
-                        title,
-                        artist,
-                        playing,
-                    },
-                ),
-                _ => crate::extensions::ExtensionCommand::Lifecycle {
+                } => ExtensionCommand::Replaceable(crate::extensions::ReplaceableEvent::Media {
+                    title,
+                    artist,
+                    playing,
+                }),
+                _ => ExtensionCommand::Lifecycle {
                     expected: ext.generation(),
                     event,
                 },
@@ -308,17 +114,16 @@ impl ShellRuntime {
         }
     }
 
-    pub(crate) fn dispatch_surface_lifecycle(
-        cx: &mut App,
+    pub(crate) fn send_lifecycle_for(
+        &self,
         surface: ContributionSurface,
         mounted: bool,
         width: f32,
         height: f32,
     ) {
-        let descriptors = ShellRuntime::extension_descriptors(cx, surface);
-        if let Some(ext) = cx.global::<ShellRuntime>().extension_host.extensions.as_ref() {
+        if let Some(ext) = &self.extensions {
             let expected_gen = ext.generation();
-            for descriptor in descriptors {
+            for descriptor in self.descriptors_for(surface) {
                 let event = if mounted {
                     shilpo_ext::ExtensionEvent::ContributionMounted {
                         contribution_id: descriptor.id.contribution_id.to_string(),
@@ -333,7 +138,7 @@ impl ShellRuntime {
                     }
                 };
                 if let Err(error) =
-                    ext.send_command(crate::extensions::ExtensionCommand::Lifecycle {
+                    ext.send_command(ExtensionCommand::Lifecycle {
                         expected: expected_gen,
                         event,
                     })
@@ -344,30 +149,164 @@ impl ShellRuntime {
         }
     }
 
-    pub(super) fn sync_extension_actions(cx: &mut App) {
-        let desired = ShellRuntime::extension_descriptors(cx, ContributionSurface::Action);
-        let existing = cx
-            .global::<ShellRuntime>()
-            .action_dispatcher
-            .actions
-            .all()
-            .into_iter()
-            .filter_map(|descriptor| descriptor.id.extension_id())
-            .collect::<Vec<_>>();
-        let actions = &mut cx.global_mut::<ShellRuntime>().action_dispatcher.actions;
-        for id in existing {
-            actions.unregister_extension(&id);
-        }
-        for descriptor in desired {
-            if let Err(error) =
-                actions.register_extension(descriptor.id, descriptor.name.clone(), descriptor.name)
-            {
-                tracing::warn!(error = %error, "extension action registration failed");
-            }
+    pub(crate) fn send_instance_reconciliation(&mut self, desired: Vec<ContributionInstance>) {
+        if let Some(ext) = &self.extensions
+            && let Err(error) =
+                ext.send_command(ExtensionCommand::ReconcileInstances {
+                    expected: ext.generation(),
+                    desired,
+                })
+        {
+            tracing::warn!(%error, "extension instance reconciliation was not queued");
         }
     }
 
-    pub(super) fn execute_extension_effect(
+    pub(crate) fn mount_contribution(&self, contribution: &CanonicalId, width: f32, height: f32) {
+        if let Some(ext) = &self.extensions
+            && let Err(error) = ext.send_command(ExtensionCommand::Lifecycle {
+                expected: ext.generation(),
+                event: shilpo_ext::ExtensionEvent::ContributionMounted {
+                    contribution_id: contribution.contribution_id.to_string(),
+                    instance_id: None,
+                    width,
+                    height,
+                },
+            })
+        {
+            tracing::warn!(%error, "extension mount was not queued");
+        }
+    }
+
+    pub(crate) fn unmount_contribution(&self, contribution: &CanonicalId) {
+        if let Some(ext) = &self.extensions
+            && let Err(error) = ext.send_command(ExtensionCommand::Lifecycle {
+                expected: ext.generation(),
+                event: shilpo_ext::ExtensionEvent::ContributionUnmounted {
+                    contribution_id: contribution.contribution_id.to_string(),
+                    instance_id: None,
+                },
+            })
+        {
+            tracing::warn!(%error, "extension unmount was not queued");
+        }
+    }
+
+    pub(crate) fn send_response(
+        &self,
+        expected: ExtensionGeneration,
+        extension_id: ExtensionId,
+        event: shilpo_ext::ExtensionEvent,
+    ) {
+        if let Some(ext) = &self.extensions
+            && let Err(error) =
+                ext.send_command(ExtensionCommand::Response {
+                    expected,
+                    extension_id,
+                    event,
+                })
+        {
+            tracing::warn!(%error, "extension response was not queued");
+        }
+    }
+
+    pub(crate) fn drain_updates(&mut self) -> Vec<crate::extensions::ExtensionUpdate> {
+        self.extensions
+            .as_ref()
+            .map(|ext| ext.drain_updates())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn shutdown_task(
+        &self,
+        executor: gpui::BackgroundExecutor,
+        timeout: std::time::Duration,
+    ) -> Option<gpui::Task<bool>> {
+        self.extensions.as_ref().map(|ext| ext.shutdown(executor, timeout))
+    }
+
+    fn task_count(&self) -> usize {
+        self.extension_tasks.len()
+    }
+
+    fn has_task(&self, key: &(ExtensionGeneration, ExtensionId, String)) -> bool {
+        self.extension_tasks.contains_key(key)
+    }
+
+    fn insert_task(&mut self, key: (ExtensionGeneration, ExtensionId, String), task: gpui::Task<()>) {
+        self.extension_tasks.insert(key, task);
+    }
+
+    fn remove_task(&mut self, key: &(ExtensionGeneration, ExtensionId, String)) {
+        self.extension_tasks.remove(key);
+    }
+
+    fn retain_tasks_for_generation(&mut self, active_gen: ExtensionGeneration) {
+        self.extension_tasks
+            .retain(|(task_gen, _, _), _| *task_gen >= active_gen);
+    }
+
+    fn location_service(&self) -> shilpo_services::LocationService {
+        self.extension_location_service.clone()
+    }
+
+    /// Drains and applies the pending extension updates.
+    pub(crate) fn drain(cx: &mut App) {
+        if !cx.has_global::<ShellRuntime>() {
+            return;
+        }
+        let updates = cx
+            .global_mut::<ShellRuntime>()
+            .extension_host_mut()
+            .drain_updates();
+        for update in updates {
+            Self::apply_update(cx, update);
+        }
+    }
+
+    pub(crate) fn apply_update(cx: &mut App, update: crate::extensions::ExtensionUpdate) {
+        let current_gen = cx.global::<ShellRuntime>().extension_host().generation();
+        if current_gen.is_some_and(|target_gen| update.generation < target_gen) {
+            return;
+        }
+
+        if update
+            .snapshot
+            .as_ref()
+            .is_some_and(|s| s.catalog_changed_at.is_some())
+        {
+            Self::sync_extension_actions(cx);
+            SurfaceManager::reconcile_bar_extension_instances(cx);
+        }
+
+        for (extension_id, effect) in update.effects {
+            Self::execute_effect(cx, &extension_id, update.generation, effect);
+        }
+
+        if let Some(snapshot) = &update.snapshot {
+            let active_gen = snapshot.generation;
+            cx.global_mut::<ShellRuntime>()
+                .extension_host_mut()
+                .retain_tasks_for_generation(active_gen);
+        }
+
+        if update.snapshot.is_some() || !update.invalidated_views.is_empty() {
+            cx.refresh_windows();
+        }
+    }
+
+    /// Reconciles the action registry with the actions contributed by the loaded
+    /// extensions.
+    pub(crate) fn sync_extension_actions(cx: &mut App) {
+        let desired = cx
+            .global::<ShellRuntime>()
+            .extension_host()
+            .descriptors_for(ContributionSurface::Action);
+        cx.global_mut::<ShellRuntime>()
+            .action_dispatcher_mut()
+            .sync_extension_actions(desired);
+    }
+
+    pub(crate) fn execute_effect(
         cx: &mut App,
         extension_id: &ExtensionId,
         generation: ExtensionGeneration,
@@ -433,7 +372,7 @@ impl ShellRuntime {
                     .global::<ShellRuntime>()
                     .service_hub
                     .as_ref()
-                    .map(|hub| hub.clipboard.copy_text(&text));
+                    .map(|hub| hub.copy_text(&text));
                 if let Some(Err(error)) = result {
                     tracing::warn!(
                         extension = %extension_id,
@@ -446,18 +385,18 @@ impl ShellRuntime {
                 let request_id = request.request_id().to_string();
                 let key = (generation, extension_id.clone(), request_id.clone());
                 let accepted = {
-                    let in_flight = &mut cx.global_mut::<ShellRuntime>().extension_host.extension_tasks;
+                    let host = cx.global_mut::<ShellRuntime>().extension_host_mut();
                     request_id.len() <= 128
                         && !request_id.is_empty()
-                        && in_flight.len() < 8
-                        && !in_flight.contains_key(&key)
+                        && host.task_count() < 8
+                        && !host.has_task(&key)
                 };
                 if !accepted {
-                    if let Some(ext) = cx.global::<ShellRuntime>().extension_host.extensions.as_ref()
-                        && let Err(error) = ext.send_command(crate::extensions::ExtensionCommand::Response {
-                        expected: generation,
-                        extension_id: extension_id.clone(),
-                        event: shilpo_ext::ExtensionEvent::HttpResponse {
+                    let ext_id = extension_id.clone();
+                    cx.global_mut::<ShellRuntime>().extension_host_mut().send_response(
+                        generation,
+                        ext_id,
+                        shilpo_ext::ExtensionEvent::HttpResponse {
                             request_id,
                             status: None,
                             body: String::new(),
@@ -466,50 +405,36 @@ impl ShellRuntime {
                                     .into(),
                             ),
                         },
-                    })
-                    {
-                        tracing::warn!(%error, "extension rejection response was not queued");
-                    }
+                    );
                     return;
                 }
                 let ext_id = extension_id.clone();
                 let task_key = key.clone();
+                let expected = generation;
                 let task = cx.spawn(async move |cx| {
                     let response = crate::extension_http::fetch(request).await;
                     cx.update(|cx: &mut gpui::App| {
                         if cx.has_global::<ShellRuntime>() {
-                            cx.global_mut::<ShellRuntime>()
-                                .extension_host
-                                .extension_tasks
-                                .remove(&task_key);
-                        }
-                        if let Some(ext) = cx.global::<ShellRuntime>().extension_host.extensions.as_ref()
-                            && let Err(error) =
-                                ext.send_command(crate::extensions::ExtensionCommand::Response {
-                                    expected: generation,
-                                    extension_id: ext_id,
-                                    event: response,
-                                })
-                        {
-                            tracing::warn!(%error, "extension HTTP response was not queued");
+                            let host = cx.global_mut::<ShellRuntime>().extension_host_mut();
+                            host.remove_task(&task_key);
+                            host.send_response(expected, ext_id, response);
                         }
                     });
                 });
                 cx.global_mut::<ShellRuntime>()
-                    .extension_host
-                    .extension_tasks
-                    .insert(key.clone(), task);
+                    .extension_host_mut()
+                    .insert_task(key, task);
             }
             shilpo_ext::AuthorizedHostEffectKind::NonHttp(shilpo_ext::HostEffect::LocationRead) => {
                 let location_service = cx
                     .global::<ShellRuntime>()
-                    .extension_host
-                    .extension_location_service
-                    .clone();
+                    .extension_host()
+                    .location_service();
                 let ext_id = extension_id.clone();
                 let task_id = uuid::Uuid::new_v4().to_string();
                 let key = (generation, extension_id.clone(), task_id);
                 let task_key = key.clone();
+                let expected = generation;
                 let task = cx.spawn(async move |cx| {
                     let result = location_service.read_location_async().await;
                     let event = match result {
@@ -528,27 +453,15 @@ impl ShellRuntime {
                     };
                     cx.update(|cx: &mut gpui::App| {
                         if cx.has_global::<ShellRuntime>() {
-                            cx.global_mut::<ShellRuntime>()
-                                .extension_host
-                                .extension_tasks
-                                .remove(&task_key);
-                        }
-                        if let Some(ext) = cx.global::<ShellRuntime>().extension_host.extensions.as_ref()
-                            && let Err(error) =
-                                ext.send_command(crate::extensions::ExtensionCommand::Response {
-                                    expected: generation,
-                                    extension_id: ext_id,
-                                    event,
-                                })
-                        {
-                            tracing::warn!(%error, "extension location response was not queued");
+                            let host = cx.global_mut::<ShellRuntime>().extension_host_mut();
+                            host.remove_task(&task_key);
+                            host.send_response(expected, ext_id, event);
                         }
                     });
                 });
                 cx.global_mut::<ShellRuntime>()
-                    .extension_host
-                    .extension_tasks
-                    .insert(key.clone(), task);
+                    .extension_host_mut()
+                    .insert_task(key, task);
             }
             shilpo_ext::AuthorizedHostEffectKind::NonHttp(effect) => tracing::debug!(
                 extension = %extension_id,
@@ -557,178 +470,78 @@ impl ShellRuntime {
             ),
         }
     }
+}
 
-    pub(super) fn reconcile_extension_surfaces(
-        cx: &mut App,
-        outputs: &[crate::bar::OutputDescriptor],
-    ) {
-        let config = cx.global::<Self>().active_config.clone();
-        let mut instances = Vec::new();
-
-        for (display_id, (_, spec)) in &cx.global::<Self>().surface_manager.bars {
-            for (section, widgets) in [
-                ("start", &spec.config.widgets.start),
-                ("center", &spec.config.widgets.center),
-                ("end", &spec.config.widgets.end),
-            ] {
-                for (index, widget) in widgets.iter().enumerate() {
-                    if let shilpo_config::BarWidget::Extension(contribution) = widget {
-                        instances.push(crate::extensions::ContributionInstance {
-                            id: format!("bar:{display_id:?}:{section}:{index}"),
-                            contribution: contribution.clone(),
-                            output: Some(format!("{display_id:?}")),
-                            width: spec.geometry.bounds.size.width.as_f32(),
-                            height: spec.config.height as f32,
-                            settings: extension_settings(&config, &contribution.extension_id, None),
-                        });
-                    }
-                }
-            }
-        }
-
-        let mut desired_windows = HashMap::new();
-        for widget in &config.desktop.widgets {
-            let output = if widget.output == "primary" {
-                outputs.iter().find(|output| output.is_primary)
-            } else {
-                outputs.iter().find(|output| {
-                    output.name.as_deref() == Some(widget.output.as_str())
-                        || format!("{:?}", output.display_id) == widget.output
-                })
-            };
-            let Some(output) = output else {
-                continue;
-            };
-            let bounds = Bounds::new(
-                point(
-                    output.bounds.origin.x + px(widget.x as f32),
-                    output.bounds.origin.y + px(widget.y as f32),
-                ),
-                size(px(widget.width as f32), px(widget.height as f32)),
-            );
-            let spec = ExtensionSurfaceSpec {
-                contribution: widget.contribution.0.clone(),
-                display_id: output.display_id,
-                bounds,
-            };
-            desired_windows.insert(widget.instance.clone(), spec);
-            instances.push(crate::extensions::ContributionInstance {
-                id: widget.instance.clone(),
-                contribution: widget.contribution.0.clone(),
-                output: Some(widget.output.clone()),
-                width: widget.width as f32,
-                height: widget.height as f32,
-                settings: extension_settings(
-                    &config,
-                    &widget.contribution.0.extension_id,
-                    Some(&widget.settings),
-                ),
-            });
-        }
-
-        if let Some(ext) = cx.global::<Self>().extension_host.extensions.as_ref()
-            && let Err(error) =
-                ext.send_command(crate::extensions::ExtensionCommand::ReconcileInstances {
-                    expected: ext.generation(),
-                    desired: instances,
-                })
-        {
-            tracing::warn!(%error, "extension instance reconciliation was not queued");
-        }
-
-        let stale = cx
-            .global::<Self>()
-            .surface_manager
-            .extension_surfaces
-            .iter()
-            .filter(|(id, (_, current))| desired_windows.get(*id) != Some(current))
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
-        for id in stale {
-            if let Some((handle, _)) = cx.global_mut::<Self>().surface_manager.extension_surfaces.remove(&id) {
-                let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
-            }
-        }
-
-        for (instance_id, spec) in desired_windows {
-            if cx
-                .global::<Self>()
-                .surface_manager
-                .extension_surfaces
-                .contains_key(&instance_id)
-            {
-                continue;
-            }
-            let options = WindowOptions {
-                titlebar: None,
-                window_bounds: Some(WindowBounds::Windowed(spec.bounds)),
-                display_id: Some(spec.display_id),
-                app_id: Some(format!("shilpo-extension-{instance_id}")),
-                window_background: WindowBackgroundAppearance::Transparent,
-                kind: WindowKind::LayerShell(LayerShellOptions {
-                    namespace: format!("extension-{instance_id}"),
-                    layer: Layer::Bottom,
-                    keyboard_interactivity: KeyboardInteractivity::None,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            };
-            let contribution = spec.contribution.clone();
-            let view_instance_id = instance_id.clone();
-            match cx.open_window(options, move |window, cx| {
-                crate::extension_surface::ExtensionSurfaceView::view(
-                    contribution,
-                    Some(view_instance_id),
-                    window,
-                    cx,
-                )
-            }) {
-                Ok(handle) => {
-                    cx.global_mut::<Self>()
-                        .surface_manager
-                        .extension_surfaces
-                        .insert(instance_id, (handle, spec));
-                }
-                Err(error) => tracing::warn!(
-                    error = %error,
-                    "failed to open extension desktop surface"
-                ),
-            }
-        }
+impl ShellRuntime {
+    pub fn extension_descriptors(
+        cx: &App,
+        surface: ContributionSurface,
+    ) -> Vec<ContributionDescriptor> {
+        cx.global::<Self>()
+            .extension_host()
+            .descriptors_for(surface)
     }
 
-    pub(super) fn reconcile_bar_extension_instances(cx: &mut App) {
-        let config = cx.global::<Self>().active_config.clone();
-        let mut instances = Vec::new();
-        for (display_id, (_, spec)) in &cx.global::<Self>().surface_manager.bars {
-            for (section, widgets) in [
-                ("start", &spec.config.widgets.start),
-                ("center", &spec.config.widgets.center),
-                ("end", &spec.config.widgets.end),
-            ] {
-                for (index, widget) in widgets.iter().enumerate() {
-                    if let shilpo_config::BarWidget::Extension(contribution) = widget {
-                        instances.push(crate::extensions::ContributionInstance {
-                            id: format!("bar:{display_id:?}:{section}:{index}"),
-                            contribution: contribution.clone(),
-                            output: Some(format!("{display_id:?}")),
-                            width: spec.geometry.bounds.size.width.as_f32(),
-                            height: spec.config.height as f32,
-                            settings: extension_settings(&config, &contribution.extension_id, None),
-                        });
-                    }
-                }
-            }
-        }
-        if let Some(ext) = cx.global::<Self>().extension_host.extensions.as_ref()
-            && let Err(error) =
-                ext.send_command(crate::extensions::ExtensionCommand::ReconcileInstances {
-                    expected: ext.generation(),
-                    desired: instances,
-                })
-        {
-            tracing::warn!(%error, "extension bar instance reconciliation was not queued");
-        }
+    pub fn extension_surface_views(
+        cx: &App,
+        surface: ContributionSurface,
+    ) -> Vec<(CanonicalId, shilpo_ext::ViewTree)> {
+        let descriptors = Self::extension_descriptors(cx, surface);
+        descriptors
+            .into_iter()
+            .filter_map(|descriptor| {
+                let tree = Self::extension_view(cx, &descriptor.id)?;
+                Some((descriptor.id, tree))
+            })
+            .collect()
+    }
+
+    pub fn extension_view(cx: &App, id: &CanonicalId) -> Option<shilpo_ext::ViewTree> {
+        cx.global::<Self>().extension_host().view(id)
+    }
+
+    pub fn extension_asset_path(
+        cx: &App,
+        id: &CanonicalId,
+        relative: &str,
+    ) -> Result<PathBuf, String> {
+        cx.global::<Self>().extension_host().asset_path(id, relative)
+    }
+
+    pub fn dispatch_extension_input(
+        cx: &mut App,
+        contribution: &CanonicalId,
+        instance_id: Option<&str>,
+        event_id: impl Into<String>,
+        value: Option<serde_json::Value>,
+    ) {
+        cx.global_mut::<Self>()
+            .extension_host_mut()
+            .send_input(contribution, instance_id, event_id, value);
+    }
+
+    pub fn dispatch_extension_event(cx: &mut App, event: shilpo_ext::ExtensionEvent) {
+        cx.global_mut::<Self>().extension_host_mut().send_event(event);
+    }
+
+    pub(crate) fn dispatch_surface_lifecycle(
+        cx: &mut App,
+        surface: ContributionSurface,
+        mounted: bool,
+        width: f32,
+        height: f32,
+    ) {
+        cx.global_mut::<Self>()
+            .extension_host_mut()
+            .send_lifecycle_for(surface, mounted, width, height);
+    }
+
+    pub(super) fn sync_extension_actions(cx: &mut App) {
+        ExtensionHost::sync_extension_actions(cx);
+    }
+
+    pub(super) fn drain_extensions(cx: &mut App) {
+        ExtensionHost::drain(cx);
     }
 }
 
@@ -739,8 +552,28 @@ mod tests {
     #[test]
     fn test_extension_host_initialization() {
         let host = ExtensionHost::new(None);
-        assert!(host.extensions().is_none());
-        assert!(host.extension_tasks.is_empty());
+        assert!(!host.is_loaded());
+        assert!(host.generation().is_none());
+        assert!(host.descriptors_for(ContributionSurface::Action).is_empty());
+        assert_eq!(host.task_count(), 0);
+    }
+
+    #[test]
+    fn extension_task_registry_tracks_generations() {
+        let mut host = ExtensionHost::new(None);
+        let key = (
+            ExtensionGeneration(7),
+            ExtensionId::new("org.shilpo.test").unwrap(),
+            "req-1".into(),
+        );
+        assert!(!host.has_task(&key));
+
+        host.insert_task(key.clone(), gpui::Task::ready(()));
+        assert!(host.has_task(&key));
+        assert_eq!(host.task_count(), 1);
+
+        host.remove_task(&key);
+        assert_eq!(host.task_count(), 0);
     }
 
     #[test]
@@ -755,7 +588,7 @@ mod tests {
         );
         let id = ExtensionId::new("org.shilpo.weather").unwrap();
         assert_eq!(
-            extension_settings(
+            crate::runtime::surface_manager::extension_settings(
                 &config,
                 &id,
                 Some(&serde_json::json!({"show_condition": true}))

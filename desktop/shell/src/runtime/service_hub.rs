@@ -5,34 +5,43 @@ use std::{
 };
 
 use gpui::App;
-use shilpo_services::NotificationService;
+use shilpo_config::ClipboardItem;
+use shilpo_services::{Notification, NotificationService};
 
-use crate::bar::service_worker::{self, CommandSender, UpdateReceiver, WorkerCommand};
+use crate::bar::service_worker::{
+    self, CommandSender, DeviceCommand, UpdateReceiver, WorkerCommand, WorkerUpdate,
+};
 
-use super::{SessionContext, ShellRuntime};
+use super::{SessionContext, ShellRuntime, surface_manager::SurfaceManager};
 
+/// Owns the platform service integrations (compositor, notifications, clipboard,
+/// app scanning) and the background service worker that reports device state.
+///
+/// All state is private: the shell reaches the services exclusively through the
+/// narrow method surface below.
 pub struct ServiceHub {
-    pub compositor: Arc<dyn shilpo_services::CompositorAdapter>,
-    pub notification: Option<NotificationService>,
-    pub notification_state: shilpo_services::ServiceLifecycle,
-    pub notification_last_error: Option<String>,
-    pub(super) notification_attempt: u32,
-    pub(super) notification_next_retry: Option<Instant>,
-    pub(super) notification_dnd: bool,
-    pub clipboard: shilpo_services::ClipboardService,
-    pub app_scanner: shilpo_services::AppScanner,
-    pub service_commands: CommandSender,
-    pub device_snapshot: crate::bar::service_worker::DeviceSnapshot,
-    pub availability: crate::bar::service_worker::ServiceAvailability,
-    pub notif_rx: Arc<Mutex<mpsc::Receiver<shilpo_services::Notification>>>,
-    pub notif_tx: mpsc::Sender<shilpo_services::Notification>,
-    pub updates_rx: Arc<Mutex<UpdateReceiver>>,
-    pub _service_task: Option<gpui::Task<()>>,
-    pub _watcher: Option<notify::RecommendedWatcher>,
-    pub _app_watcher: Option<notify::RecommendedWatcher>,
+    compositor: Arc<dyn shilpo_services::CompositorAdapter>,
+    notification: Option<NotificationService>,
+    notification_state: shilpo_services::ServiceLifecycle,
+    notification_last_error: Option<String>,
+    notification_attempt: u32,
+    notification_next_retry: Option<Instant>,
+    notification_dnd: bool,
+    clipboard: shilpo_services::ClipboardService,
+    app_scanner: shilpo_services::AppScanner,
+    service_commands: CommandSender,
+    device_snapshot: crate::bar::service_worker::DeviceSnapshot,
+    availability: crate::bar::service_worker::ServiceAvailability,
+    notif_rx: Arc<Mutex<mpsc::Receiver<Notification>>>,
+    notif_tx: mpsc::Sender<Notification>,
+    updates_rx: Arc<Mutex<UpdateReceiver>>,
+    _service_task: Option<gpui::Task<()>>,
+    _watcher: Option<notify::RecommendedWatcher>,
+    _app_watcher: Option<notify::RecommendedWatcher>,
 }
 
 impl ServiceHub {
+    /// Starts the service hub from a restored session, applying persisted DND state.
     pub fn start(executor: gpui::BackgroundExecutor, session: &SessionContext) -> Self {
         let mut hub = Self::new(
             executor,
@@ -152,7 +161,8 @@ impl ServiceHub {
         }
     }
 
-    pub fn poll_notification_reconnect(&mut self) {
+    /// Reconnects the notification D-Bus service using exponential backoff.
+    pub(crate) fn poll_notification_reconnect(&mut self) {
         if self
             .notification
             .as_ref()
@@ -178,7 +188,7 @@ impl ServiceHub {
         match NotificationService::new() {
             Ok(service) => {
                 service.set_new_notification_sender(self.notif_tx.clone());
-                service.set_dnd_enabled(self.notification_dnd);
+                service.set_dnd_enabled(self.notification_dnd_flag());
                 self.notification = Some(service);
                 self.notification_state = shilpo_services::ServiceLifecycle::Ready;
                 self.notification_last_error = None;
@@ -196,110 +206,196 @@ impl ServiceHub {
             }
         }
     }
-}
 
-pub fn apply_notification_dnd(notification: Option<&NotificationService>, enabled: bool) {
-    if let Some(notification) = notification {
-        notification.set_dnd_enabled(enabled);
+    pub(crate) fn compositor(&self) -> Arc<dyn shilpo_services::CompositorAdapter> {
+        self.compositor.clone()
     }
-}
 
-impl ShellRuntime {
-    pub(super) fn drain_service_hub(cx: &mut App) {
-        if !cx.has_global::<Self>() {
+    pub(crate) fn app_scanner(&self) -> shilpo_services::AppScanner {
+        self.app_scanner.clone()
+    }
+
+    pub(crate) fn service_commands(&self) -> CommandSender {
+        self.service_commands.clone()
+    }
+
+    pub(crate) fn device_snapshot(&self) -> crate::bar::service_worker::DeviceSnapshot {
+        self.device_snapshot.clone()
+    }
+
+    pub(crate) fn is_dnd_enabled(&self) -> bool {
+        self.notification.as_ref().is_some_and(|n| n.is_dnd_enabled())
+    }
+
+    /// Returns the persisted DND intent even when the notification service is offline.
+    pub(crate) fn notification_dnd_flag(&self) -> bool {
+        self.notification_dnd
+    }
+
+    pub(crate) fn set_dnd_enabled(&mut self, enabled: bool) {
+        self.notification_dnd = enabled;
+        apply_notification_dnd(self.notification.as_ref(), enabled);
+    }
+
+    pub(crate) fn push_notification(&self, notification: Notification) {
+        if let Some(service) = &self.notification {
+            service.push_notification(notification);
+        }
+    }
+
+    pub(crate) fn dismiss_notification(&self, id: u32) {
+        if let Some(service) = &self.notification {
+            service.dismiss(id);
+        }
+    }
+
+    pub(crate) fn expire_notification(&self, id: u32) {
+        if let Some(service) = &self.notification {
+            service.expire(id);
+        }
+    }
+
+    pub(crate) fn invoke_notification_action(&self, id: u32, action_key: &str) {
+        if let Some(service) = &self.notification {
+            service.invoke_action(id, action_key);
+        }
+    }
+
+    pub(crate) fn notification_history(&self) -> Vec<Notification> {
+        self.notification
+            .as_ref()
+            .map_or_else(Vec::new, |service| service.history())
+    }
+
+    pub(crate) fn clear_notification_history(&self) {
+        if let Some(service) = &self.notification {
+            service.clear_history();
+        }
+    }
+
+    pub(crate) fn copy_text(&self, text: &str) -> anyhow::Result<()> {
+        self.clipboard.copy_text(text)
+    }
+
+    pub(crate) fn clipboard_history(&self) -> Vec<ClipboardItem> {
+        self.clipboard.history()
+    }
+
+    pub(crate) fn send_device_command(&self, command: DeviceCommand) {
+        let _ = service_worker::try_send_command(
+            &self.service_commands,
+            WorkerCommand::Device(command),
+        );
+    }
+
+    fn drain_notifications(&mut self) -> Vec<Notification> {
+        let mut list = Vec::new();
+        if let Ok(rx) = self.notif_rx.lock() {
+            while let Ok(notif) = rx.try_recv() {
+                list.push(notif);
+            }
+        }
+        list
+    }
+
+    fn drain_updates(&mut self) -> Vec<WorkerUpdate> {
+        let mut list = Vec::new();
+        if let Ok(rx) = self.updates_rx.lock() {
+            while let Ok(upd) = rx.try_recv() {
+                list.push(upd);
+            }
+        }
+        list
+    }
+
+    fn apply_update(&mut self, update: &WorkerUpdate) {
+        self.device_snapshot.apply(update);
+        match update {
+            crate::bar::service_worker::WorkerUpdate::ServiceStateChange {
+                service,
+                state,
+                last_error,
+            } => {
+                let available = state.is_ready();
+                match *service {
+                    "battery" => {
+                        self.availability.battery_available = available;
+                        self.availability.battery_state = *state;
+                        self.availability.battery_last_error = last_error.clone();
+                    }
+                    "audio" => {
+                        self.availability.audio_available = available;
+                        self.availability.audio_state = *state;
+                        self.availability.audio_last_error = last_error.clone();
+                    }
+                    "network" => {
+                        self.availability.network_available = available;
+                        self.availability.network_state = *state;
+                        self.availability.network_last_error = last_error.clone();
+                    }
+                    "media" => {
+                        self.availability.media_available = available;
+                        self.availability.media_state = *state;
+                        self.availability.media_last_error = last_error.clone();
+                    }
+                    "brightness" => {
+                        self.availability.brightness_available = available;
+                        self.availability.brightness_state = *state;
+                        self.availability.brightness_last_error = last_error.clone();
+                    }
+                    _ => tracing::warn!(service, "unknown service state update"),
+                }
+            }
+            crate::bar::service_worker::WorkerUpdate::CommandRejected { reason, .. } => {
+                tracing::warn!(%reason, "device command rejected")
+            }
+            _ => {}
+        }
+    }
+
+    /// Drains the notification inbox, the service-worker update stream, and the
+    /// notification reconnection loop, applying device state and forwarding updates
+    /// to the shell surfaces.
+    pub(crate) fn drain(cx: &mut App) {
+        if !cx.has_global::<ShellRuntime>() {
             return;
         }
 
-        if let Some(hub) = cx.global_mut::<Self>().service_hub.as_mut() {
+        if let Some(hub) = cx.global_mut::<ShellRuntime>().service_hub_mut() {
             hub.poll_notification_reconnect();
         }
-        cx.global::<Self>().publish_status();
+        ShellRuntime::publish_status(cx);
 
-        let notifs = {
-            let runtime = cx.global_mut::<Self>();
-            let mut list = Vec::new();
-            if let Some(hub) = &runtime.service_hub
-                && let Ok(rx) = hub.notif_rx.lock()
-            {
-                while let Ok(notif) = rx.try_recv() {
-                    list.push(notif);
-                }
-            }
-            list
-        };
-
+        let notifs = cx
+            .global_mut::<ShellRuntime>()
+            .service_hub_mut()
+            .map(ServiceHub::drain_notifications)
+            .unwrap_or_default();
         for notif in notifs {
             crate::bar::view::open_notification_toast(cx, notif);
         }
 
-        let updates = {
-            let runtime = cx.global_mut::<Self>();
-            let mut list = Vec::new();
-            if let Some(hub) = &runtime.service_hub
-                && let Ok(rx) = hub.updates_rx.lock()
-            {
-                while let Ok(upd) = rx.try_recv() {
-                    list.push(upd);
-                }
-            }
-            list
-        };
+        let updates = cx
+            .global_mut::<ShellRuntime>()
+            .service_hub_mut()
+            .map(ServiceHub::drain_updates)
+            .unwrap_or_default();
 
         if !updates.is_empty() {
             for upd in &updates {
-                if let Some(ref mut hub) = cx.global_mut::<Self>().service_hub {
-                    hub.device_snapshot.apply(upd);
+                if let Some(hub) = cx.global_mut::<ShellRuntime>().service_hub_mut() {
+                    hub.apply_update(upd);
                 }
                 match upd {
-                    crate::bar::service_worker::WorkerUpdate::ServiceStateChange {
-                        service,
-                        state,
-                        last_error,
-                    } => {
-                        if let Some(hub) = cx.global_mut::<Self>().service_hub.as_mut() {
-                            let available = state.is_ready();
-                            match *service {
-                                "battery" => {
-                                    hub.availability.battery_available = available;
-                                    hub.availability.battery_state = *state;
-                                    hub.availability.battery_last_error = last_error.clone();
-                                }
-                                "audio" => {
-                                    hub.availability.audio_available = available;
-                                    hub.availability.audio_state = *state;
-                                    hub.availability.audio_last_error = last_error.clone();
-                                }
-                                "network" => {
-                                    hub.availability.network_available = available;
-                                    hub.availability.network_state = *state;
-                                    hub.availability.network_last_error = last_error.clone();
-                                }
-                                "media" => {
-                                    hub.availability.media_available = available;
-                                    hub.availability.media_state = *state;
-                                    hub.availability.media_last_error = last_error.clone();
-                                }
-                                "brightness" => {
-                                    hub.availability.brightness_available = available;
-                                    hub.availability.brightness_state = *state;
-                                    hub.availability.brightness_last_error = last_error.clone();
-                                }
-                                _ => tracing::warn!(service, "unknown service state update"),
-                            }
-                        }
-                    }
-                    crate::bar::service_worker::WorkerUpdate::CommandRejected {
-                        reason, ..
-                    } => tracing::warn!(%reason, "device command rejected"),
                     crate::bar::service_worker::WorkerUpdate::Config(
                         crate::bar::service_worker::ConfigUpdate::Loaded(config),
                     ) => {
-                        cx.global_mut::<Self>().active_config = (**config).clone();
-                        Self::sync_displays(cx);
-                        Self::reconcile_bar_extension_instances(cx);
+                        ShellRuntime::set_active_config(cx, config);
+                        SurfaceManager::sync_displays(cx);
+                        SurfaceManager::reconcile_bar_extension_instances(cx);
                     }
                     crate::bar::service_worker::WorkerUpdate::Battery(info) => {
-                        Self::dispatch_extension_event(
+                        ShellRuntime::dispatch_extension_event(
                             cx,
                             shilpo_ext::ExtensionEvent::PowerChanged {
                                 percentage: info.is_present.then_some(info.percentage as f32),
@@ -308,7 +404,7 @@ impl ShellRuntime {
                         );
                     }
                     crate::bar::service_worker::WorkerUpdate::Network(info) => {
-                        Self::dispatch_extension_event(
+                        ShellRuntime::dispatch_extension_event(
                             cx,
                             shilpo_ext::ExtensionEvent::NetworkChanged {
                                 connected: info.available && info.is_connected,
@@ -316,7 +412,7 @@ impl ShellRuntime {
                         );
                     }
                     crate::bar::service_worker::WorkerUpdate::Media(info) => {
-                        Self::dispatch_extension_event(
+                        ShellRuntime::dispatch_extension_event(
                             cx,
                             shilpo_ext::ExtensionEvent::MediaChanged {
                                 title: (!info.title.is_empty()).then_some(info.title.clone()),
@@ -330,14 +426,10 @@ impl ShellRuntime {
                 }
             }
 
-            let handles: Vec<_> = cx
-                .global::<Self>()
-                .surface_manager
-                .bars
-                .values()
-                .map(|(handle, _)| *handle)
-                .collect();
-
+            let handles = cx
+                .global::<ShellRuntime>()
+                .surface_manager()
+                .bar_handles();
             for handle in handles {
                 let updates_clone = updates.clone();
                 let _ = handle.update(cx, |bar_view, _window, cx| {
@@ -346,6 +438,126 @@ impl ShellRuntime {
                     }
                 });
             }
+        }
+    }
+}
+
+/// Applies the do-not-disturb flag to a notification service, tolerating its absence.
+pub(crate) fn apply_notification_dnd(notification: Option<&NotificationService>, enabled: bool) {
+    if let Some(notification) = notification {
+        notification.set_dnd_enabled(enabled);
+    }
+}
+
+impl ShellRuntime {
+    pub fn service_commands(cx: &App) -> Option<crate::bar::service_worker::CommandSender> {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>()
+                .service_hub()
+                .map(|hub| hub.service_commands())
+        } else {
+            None
+        }
+    }
+
+    pub fn device_snapshot(cx: &App) -> crate::bar::service_worker::DeviceSnapshot {
+        cx.global::<Self>()
+            .service_hub()
+            .map(|hub| hub.device_snapshot())
+            .unwrap_or_default()
+    }
+
+    pub fn dispatch_device_command(cx: &App, command: DeviceCommand) {
+        if let Some(hub) = cx.global::<Self>().service_hub() {
+            hub.send_device_command(command);
+        }
+    }
+
+    pub fn app_scanner(cx: &App) -> Option<shilpo_services::AppScanner> {
+        if cx.has_global::<Self>()
+            && let Some(hub) = cx.global::<Self>().service_hub()
+        {
+            Some(hub.app_scanner())
+        } else {
+            None
+        }
+    }
+
+    pub fn compositor(cx: &App) -> Option<Arc<dyn shilpo_services::CompositorAdapter>> {
+        if cx.has_global::<Self>()
+            && let Some(hub) = cx.global::<Self>().service_hub()
+        {
+            Some(hub.compositor())
+        } else {
+            None
+        }
+    }
+
+    pub fn clipboard_history(cx: &App) -> Vec<ClipboardItem> {
+        if cx.has_global::<Self>()
+            && let Some(hub) = cx.global::<Self>().service_hub()
+        {
+            hub.clipboard_history()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn copy_clipboard_text(cx: &App, text: &str) {
+        if cx.has_global::<Self>()
+            && let Some(hub) = cx.global::<Self>().service_hub()
+        {
+            let _ = hub.copy_text(text);
+        }
+    }
+
+    pub fn is_dnd_active(cx: &App) -> bool {
+        if cx.has_global::<Self>() {
+            let runtime = cx.global::<Self>();
+            runtime
+                .service_hub()
+                .map_or(runtime.session_state().dnd_active, |hub| hub.is_dnd_enabled())
+        } else {
+            false
+        }
+    }
+
+    pub fn set_dnd_enabled(cx: &mut App, enabled: bool) {
+        if cx.has_global::<Self>() {
+            let runtime = cx.global_mut::<Self>();
+            runtime.session_state_mut().dnd_active = enabled;
+            let path = runtime.session_path().clone();
+            let session = runtime.session_state().clone();
+            let _ = session.save_atomic(&path);
+            if let Some(hub) = runtime.service_hub_mut() {
+                hub.set_dnd_enabled(enabled);
+            }
+        }
+    }
+
+    pub fn notification_history(cx: &App) -> Vec<Notification> {
+        if cx.has_global::<Self>()
+            && let Some(hub) = cx.global::<Self>().service_hub()
+        {
+            hub.notification_history()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn clear_notification_history(cx: &mut App) {
+        if cx.has_global::<Self>()
+            && let Some(hub) = cx.global::<Self>().service_hub()
+        {
+            hub.clear_notification_history();
+        }
+    }
+
+    pub fn invoke_notification_action(cx: &App, id: u32, action_key: &str) {
+        if cx.has_global::<Self>()
+            && let Some(hub) = cx.global::<Self>().service_hub()
+        {
+            hub.invoke_notification_action(id, action_key);
         }
     }
 }
@@ -391,15 +603,51 @@ mod tests {
         let executor = gpui::TestAppContext::single().executor().clone();
         let hub = ServiceHub::start(executor, &session);
 
-        // The restored DND flag is applied to the hub lifecycle.
-        assert!(hub.notification_dnd);
-        // The hub is fully wired: the service worker owns the command receiver.
+        assert!(hub.notification_dnd_flag());
         assert!(
-            service_worker::try_send_command(&hub.service_commands, WorkerCommand::ReloadConfig)
+            service_worker::try_send_command(&hub.service_commands(), WorkerCommand::ReloadConfig)
                 .is_ok()
         );
 
         drop(hub);
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn dnd_persistence_flag_survives_notification_restart() {
+        let mut hub = ServiceHub::new_offline_harness();
+        hub.set_dnd_enabled(true);
+        assert!(hub.notification_dnd);
+        assert!(!hub.is_dnd_enabled());
+        hub.set_dnd_enabled(false);
+        assert!(!hub.notification_dnd);
+    }
+
+    impl ServiceHub {
+        fn new_offline_harness() -> Self {
+            let (updates_tx, _updates_rx, service_commands, _commands_rx) =
+                service_worker::channels();
+            drop(updates_tx);
+            Self {
+                compositor: Arc::new(shilpo_services::TestCompositorAdapter::new_default()),
+                notification: None,
+                notification_state: shilpo_services::ServiceLifecycle::Connecting { attempt: 1 },
+                notification_last_error: None,
+                notification_attempt: 1,
+                notification_next_retry: None,
+                notification_dnd: false,
+                clipboard: shilpo_services::ClipboardService::with_store(None),
+                app_scanner: shilpo_services::AppScanner::new_empty(),
+                service_commands,
+                device_snapshot: crate::bar::service_worker::DeviceSnapshot::default(),
+                availability: crate::bar::service_worker::ServiceAvailability::default(),
+                notif_rx: Arc::new(Mutex::new(mpsc::channel().1)),
+                notif_tx: mpsc::channel().0,
+                updates_rx: Arc::new(Mutex::new(_updates_rx)),
+                _service_task: None,
+                _watcher: None,
+                _app_watcher: None,
+            }
+        }
     }
 }

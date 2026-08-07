@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use gpui::{App, AppContext};
-use shilpo_theme_daemon::{DaemonState, ThemeClient};
+use shilpo_theme_daemon::ThemeClient;
 
-use super::{ShellRuntime, surface_manager};
+use super::surface_manager::{self, SurfaceManager};
 
 pub fn init(cx: &mut App) -> Option<PathBuf> {
     let theme_client = futures_lite::future::block_on(ThemeClient::new());
@@ -28,9 +28,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
             let state = update.state;
             cx.update(|cx: &mut App| {
                 shilpo_ui::Theme::global_mut(cx).apply_state(&state);
-                if cx.has_global::<ShellRuntime>() {
-                    ShellRuntime::apply_theme_state(cx, &state);
-                }
+                SurfaceManager::apply_theme_state(cx, &state);
             });
         }
     })
@@ -55,33 +53,6 @@ pub fn sync_wallpaper(cx: &mut App, initial_wallpaper_path: Option<PathBuf>) {
                 .await;
         }
     });
-}
-
-impl ShellRuntime {
-    pub(super) fn apply_theme_state(cx: &mut App, state: &DaemonState) {
-        let runtime = cx.global_mut::<Self>();
-        if let Some(path) = state.wallpaper_path.clone().filter(|path| path.is_file()) {
-            runtime.surface_manager.current_wallpaper_path = Some(path);
-        }
-        let overview_entity = runtime.surface_manager.overview_entity.clone();
-        let wallpaper_path = runtime.surface_manager.current_wallpaper_path.clone();
-        let cc_handle = runtime.surface_manager.control_center;
-        let ov_handle = runtime.surface_manager.overview;
-
-        if let Some(overview) = overview_entity {
-            overview.update(cx, |view, cx| {
-                view.update_wallpaper_path(wallpaper_path, cx);
-            });
-        }
-        Self::refresh_bars(cx);
-        if let Some(cc) = cc_handle {
-            let _ = cc.update(cx, |_, _, cx| cx.notify());
-        }
-        if let Some(ov) = ov_handle {
-            let _ = ov.update(cx, |_, _, cx| cx.notify());
-        }
-        cx.refresh_windows();
-    }
 }
 
 #[cfg(test)]
