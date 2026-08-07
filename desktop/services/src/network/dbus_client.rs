@@ -1,3 +1,5 @@
+//! DBus client utilities for interacting with NetworkManager services.
+
 use super::{IpConfig, VpnConnection, WifiAccessPoint};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -17,6 +19,14 @@ const NM_AP_IFACE: &str = "org.freedesktop.NetworkManager.AccessPoint";
 const NM_IP4_IFACE: &str = "org.freedesktop.NetworkManager.IP4Config";
 const DBUS_PROP_IFACE: &str = "org.freedesktop.DBus.Properties";
 
+/// NetworkManager state code for global internet connectivity.
+pub const NM_STATE_CONNECTED_GLOBAL: u32 = 70;
+/// NetworkManager device type code for Wi-Fi hardware interfaces.
+pub const NM_DEVICE_TYPE_WIFI: u32 = 2;
+/// NetworkManager active connection state code for fully activated status.
+pub const NM_ACTIVE_CONN_STATE_ACTIVATED: u32 = 2;
+
+/// Get a single DBus property from a target service object.
 pub async fn get_property<T: zbus::zvariant::Type + serde::de::DeserializeOwned>(
     conn: &Connection,
     path: &str,
@@ -37,6 +47,7 @@ pub async fn get_property<T: zbus::zvariant::Type + serde::de::DeserializeOwned>
     Ok(val)
 }
 
+/// Set a single DBus property on a target service object.
 pub async fn set_property<'a>(
     conn: &Connection,
     path: &str,
@@ -56,6 +67,7 @@ pub async fn set_property<'a>(
     Ok(())
 }
 
+/// Query the overall numeric state of NetworkManager.
 pub async fn get_nm_state(conn: &Connection) -> Result<u32> {
     let reply = conn
         .call_method(
@@ -70,10 +82,12 @@ pub async fn get_nm_state(conn: &Connection) -> Result<u32> {
     Ok(state)
 }
 
+/// Query whether Wireless (Wi-Fi) radio is enabled.
 pub async fn get_wireless_enabled(conn: &Connection) -> Result<bool> {
     get_property::<bool>(conn, NM_OBJECT_PATH, NM_IFACE, "WirelessEnabled").await
 }
 
+/// Set the Wireless (Wi-Fi) radio power state.
 pub async fn set_wireless_enabled(conn: &Connection, enabled: bool) -> Result<()> {
     set_property(
         conn,
@@ -85,6 +99,7 @@ pub async fn set_wireless_enabled(conn: &Connection, enabled: bool) -> Result<()
     .await
 }
 
+/// Set the WWAN (Cellular) radio power state.
 pub async fn set_wwan_enabled(conn: &Connection, enabled: bool) -> Result<()> {
     set_property(
         conn,
@@ -96,6 +111,7 @@ pub async fn set_wwan_enabled(conn: &Connection, enabled: bool) -> Result<()> {
     .await
 }
 
+/// Deactivate an active network connection by object path.
 pub async fn deactivate_connection(conn: &Connection, active_path: &str) -> Result<()> {
     let obj_path = ObjectPath::try_from(active_path)?;
     conn.call_method(
@@ -109,105 +125,103 @@ pub async fn deactivate_connection(conn: &Connection, active_path: &str) -> Resu
     Ok(())
 }
 
-pub async fn request_wifi_scan(conn: &Connection) -> Result<()> {
+/// Retrieve object paths of all wireless (Wi-Fi) network devices.
+async fn get_wifi_device_paths(conn: &Connection) -> Result<Vec<OwnedObjectPath>> {
     let devices: Vec<OwnedObjectPath> =
         get_property(conn, NM_OBJECT_PATH, NM_IFACE, "AllDevices").await?;
-
+    let mut wifi_devs = Vec::new();
     for dev_path in devices {
-        let dev_type: u32 =
-            match get_property(conn, dev_path.as_str(), NM_DEVICE_IFACE, "DeviceType").await {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-
-        // DeviceType 2 == Wi-Fi
-        if dev_type == 2 {
-            let options: HashMap<String, Value> = HashMap::new();
-            let _ = conn
-                .call_method(
-                    Some(NM_BUS_NAME),
-                    dev_path.as_str(),
-                    Some(NM_WIFI_IFACE),
-                    "RequestScan",
-                    &(options,),
-                )
-                .await;
+        if let Ok(dev_type) =
+            get_property::<u32>(conn, dev_path.as_str(), NM_DEVICE_IFACE, "DeviceType").await
+            && dev_type == NM_DEVICE_TYPE_WIFI
+        {
+            wifi_devs.push(dev_path);
         }
+    }
+    Ok(wifi_devs)
+}
+
+/// Request background access point scan on all Wi-Fi interfaces.
+pub async fn request_wifi_scan(conn: &Connection) -> Result<()> {
+    let wifi_devices = get_wifi_device_paths(conn).await?;
+    for dev_path in wifi_devices {
+        let options: HashMap<String, Value> = HashMap::new();
+        let _ = conn
+            .call_method(
+                Some(NM_BUS_NAME),
+                dev_path.as_str(),
+                Some(NM_WIFI_IFACE),
+                "RequestScan",
+                &(options,),
+            )
+            .await;
     }
     Ok(())
 }
 
+/// Discover and list visible Wi-Fi access points.
 pub async fn list_access_points(conn: &Connection) -> Result<Vec<WifiAccessPoint>> {
     let mut access_points = Vec::new();
-    let devices: Vec<OwnedObjectPath> =
-        get_property(conn, NM_OBJECT_PATH, NM_IFACE, "AllDevices").await?;
+    let wifi_devices = get_wifi_device_paths(conn).await?;
 
-    for dev_path in devices {
-        let dev_type: u32 =
-            match get_property(conn, dev_path.as_str(), NM_DEVICE_IFACE, "DeviceType").await {
-                Ok(t) => t,
+    for dev_path in wifi_devices {
+        let ap_paths: Vec<OwnedObjectPath> =
+            match get_property(conn, dev_path.as_str(), NM_WIFI_IFACE, "AccessPoints").await {
+                Ok(paths) => paths,
                 Err(_) => continue,
             };
 
-        if dev_type == 2 {
-            let ap_paths: Vec<OwnedObjectPath> =
-                match get_property(conn, dev_path.as_str(), NM_WIFI_IFACE, "AccessPoints").await {
-                    Ok(paths) => paths,
-                    Err(_) => continue,
-                };
+        let active_ap_path: Option<OwnedObjectPath> =
+            get_property(conn, dev_path.as_str(), NM_WIFI_IFACE, "ActiveAccessPoint")
+                .await
+                .ok();
 
-            let active_ap_path: Option<OwnedObjectPath> =
-                get_property(conn, dev_path.as_str(), NM_WIFI_IFACE, "ActiveAccessPoint")
-                    .await
-                    .ok();
-
-            for ap_path in ap_paths {
-                let ap_str = ap_path.as_str();
-                let raw_ssid: Vec<u8> = get_property(conn, ap_str, NM_AP_IFACE, "Ssid")
-                    .await
-                    .unwrap_or_default();
-                let ssid = String::from_utf8_lossy(&raw_ssid).to_string();
-                if ssid.trim().is_empty() {
-                    continue;
-                }
-
-                let bssid: String = get_property(conn, ap_str, NM_AP_IFACE, "HwAddress")
-                    .await
-                    .unwrap_or_default();
-                let strength: u8 = get_property(conn, ap_str, NM_AP_IFACE, "Strength")
-                    .await
-                    .unwrap_or(0);
-                let freq: u32 = get_property(conn, ap_str, NM_AP_IFACE, "Frequency")
-                    .await
-                    .unwrap_or(0);
-
-                let wpa_flags: u32 = get_property(conn, ap_str, NM_AP_IFACE, "WpaFlags")
-                    .await
-                    .unwrap_or(0);
-                let rsn_flags: u32 = get_property(conn, ap_str, NM_AP_IFACE, "RsnFlags")
-                    .await
-                    .unwrap_or(0);
-
-                let security_type = if rsn_flags != 0 {
-                    "WPA2/WPA3".to_string()
-                } else if wpa_flags != 0 {
-                    "WPA".to_string()
-                } else {
-                    "Open".to_string()
-                };
-
-                let is_connected = active_ap_path.as_ref() == Some(&ap_path);
-
-                access_points.push(WifiAccessPoint {
-                    ssid,
-                    bssid,
-                    signal_percent: strength,
-                    security_type,
-                    frequency_mhz: freq,
-                    is_connected,
-                    object_path: ap_str.to_string(),
-                });
+        for ap_path in ap_paths {
+            let ap_str = ap_path.as_str();
+            let raw_ssid: Vec<u8> = get_property(conn, ap_str, NM_AP_IFACE, "Ssid")
+                .await
+                .unwrap_or_default();
+            let ssid = String::from_utf8_lossy(&raw_ssid).to_string();
+            if ssid.trim().is_empty() {
+                continue;
             }
+
+            let bssid: String = get_property(conn, ap_str, NM_AP_IFACE, "HwAddress")
+                .await
+                .unwrap_or_default();
+            let strength: u8 = get_property(conn, ap_str, NM_AP_IFACE, "Strength")
+                .await
+                .unwrap_or(0);
+            let freq: u32 = get_property(conn, ap_str, NM_AP_IFACE, "Frequency")
+                .await
+                .unwrap_or(0);
+
+            let wpa_flags: u32 = get_property(conn, ap_str, NM_AP_IFACE, "WpaFlags")
+                .await
+                .unwrap_or(0);
+            let rsn_flags: u32 = get_property(conn, ap_str, NM_AP_IFACE, "RsnFlags")
+                .await
+                .unwrap_or(0);
+
+            let security_type = if rsn_flags != 0 {
+                "WPA2/WPA3".to_string()
+            } else if wpa_flags != 0 {
+                "WPA".to_string()
+            } else {
+                "Open".to_string()
+            };
+
+            let is_connected = active_ap_path.as_ref() == Some(&ap_path);
+
+            access_points.push(WifiAccessPoint {
+                ssid,
+                bssid,
+                signal_percent: strength,
+                security_type,
+                frequency_mhz: freq,
+                is_connected,
+                object_path: ap_str.to_string(),
+            });
         }
     }
 
@@ -215,6 +229,7 @@ pub async fn list_access_points(conn: &Connection) -> Result<Vec<WifiAccessPoint
     Ok(access_points)
 }
 
+/// Query list of active VPN connections.
 pub async fn list_active_vpns(conn: &Connection) -> Result<Vec<VpnConnection>> {
     let active_paths: Vec<OwnedObjectPath> =
         get_property(conn, NM_OBJECT_PATH, NM_IFACE, "ActiveConnections").await?;
@@ -237,8 +252,7 @@ pub async fn list_active_vpns(conn: &Connection) -> Result<Vec<VpnConnection>> {
                 .await
                 .unwrap_or(0);
 
-            // State 2 == NM_ACTIVE_CONNECTION_STATE_ACTIVATED
-            let is_active = state == 2;
+            let is_active = state == NM_ACTIVE_CONN_STATE_ACTIVATED;
 
             vpns.push(VpnConnection {
                 id,
@@ -252,6 +266,7 @@ pub async fn list_active_vpns(conn: &Connection) -> Result<Vec<VpnConnection>> {
     Ok(vpns)
 }
 
+/// Activate a VPN connection by profile name or UUID via DBus.
 pub async fn connect_vpn(conn: &Connection, name_or_uuid: &str) -> Result<()> {
     let list_reply = conn
         .call_method(
@@ -299,20 +314,25 @@ pub async fn connect_vpn(conn: &Connection, name_or_uuid: &str) -> Result<()> {
     let target_path = target_setting_path
         .context(format!("VPN connection profile '{name_or_uuid}' not found"))?;
 
-    let root_path1 = ObjectPath::try_from("/")?;
-    let root_path2 = ObjectPath::try_from("/")?;
+    let null_device_path = ObjectPath::try_from("/")?;
+    let null_specific_object_path = ObjectPath::try_from("/")?;
     conn.call_method(
         Some(NM_BUS_NAME),
         NM_OBJECT_PATH,
         Some(NM_IFACE),
         "ActivateConnection",
-        &(target_path.as_ref(), root_path1, root_path2),
+        &(
+            target_path.as_ref(),
+            null_device_path,
+            null_specific_object_path,
+        ),
     )
     .await?;
 
     Ok(())
 }
 
+/// Disconnect an active VPN connection by name, UUID, or object path.
 pub async fn disconnect_vpn(conn: &Connection, name_or_path: &str) -> Result<()> {
     let vpns = list_active_vpns(conn).await?;
     for vpn in vpns {
@@ -324,6 +344,7 @@ pub async fn disconnect_vpn(conn: &Connection, name_or_path: &str) -> Result<()>
     anyhow::bail!("Active VPN '{name_or_path}' not found")
 }
 
+/// Query primary active connection type and IPv4 network details.
 pub async fn get_primary_connection_info(conn: &Connection) -> Result<(String, Option<IpConfig>)> {
     let active_paths: Vec<OwnedObjectPath> =
         get_property(conn, NM_OBJECT_PATH, NM_IFACE, "ActiveConnections").await?;
@@ -340,15 +361,17 @@ pub async fn get_primary_connection_info(conn: &Connection) -> Result<(String, O
             .await
             .unwrap_or(0);
 
-        if state == 2 && conn_type != "vpn" {
+        if state == NM_ACTIVE_CONN_STATE_ACTIVATED && conn_type != "vpn" {
             connection_type = conn_type.clone();
 
-            let ip4_path: OwnedObjectPath =
+            let ip4_path: Option<OwnedObjectPath> =
                 get_property(conn, path_str, NM_ACTIVE_CONN_IFACE, "Ip4Config")
                     .await
-                    .unwrap_or_else(|_| OwnedObjectPath::try_from("/").unwrap());
+                    .ok();
 
-            if ip4_path.as_str() != "/" {
+            if let Some(ip4_path) = ip4_path
+                && ip4_path.as_str() != "/"
+            {
                 let gateway: Option<String> =
                     get_property(conn, ip4_path.as_str(), NM_IP4_IFACE, "Gateway")
                         .await

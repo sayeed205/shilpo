@@ -94,19 +94,21 @@ impl NetworkService {
                                         }
                                         NetworkCommand::ConnectWifi { ssid, object_path } => {
                                             if let Some(path) = object_path {
-                                                let _ = connection
-                                                    .call_method(
-                                                        Some("org.freedesktop.NetworkManager"),
-                                                        "/org/freedesktop/NetworkManager",
-                                                        Some("org.freedesktop.NetworkManager"),
-                                                        "ActivateConnection",
-                                                        &(
-                                                            zbus::zvariant::ObjectPath::try_from(path).unwrap_or_default(),
-                                                            zbus::zvariant::ObjectPath::try_from("/").unwrap_or_default(),
-                                                            zbus::zvariant::ObjectPath::try_from("/").unwrap_or_default(),
-                                                        ),
-                                                    )
-                                                    .await;
+                                                if let (Ok(conn_path), Ok(null_dev), Ok(null_obj)) = (
+                                                    zbus::zvariant::ObjectPath::try_from(path),
+                                                    zbus::zvariant::ObjectPath::try_from("/"),
+                                                    zbus::zvariant::ObjectPath::try_from("/"),
+                                                ) {
+                                                    let _ = connection
+                                                        .call_method(
+                                                            Some("org.freedesktop.NetworkManager"),
+                                                            "/org/freedesktop/NetworkManager",
+                                                            Some("org.freedesktop.NetworkManager"),
+                                                            "ActivateConnection",
+                                                            &(conn_path, null_dev, null_obj),
+                                                        )
+                                                        .await;
+                                                }
                                             } else {
                                                 let _ = dbus_client::connect_vpn(connection, &ssid).await;
                                             }
@@ -133,7 +135,7 @@ impl NetworkService {
                     _ = tokio::time::sleep(tokio::time::Duration::from_secs(3)) => {
                         if let Some(ref connection) = connection_opt {
                             let nm_state = dbus_client::get_nm_state(connection).await.unwrap_or(0);
-                            let is_connected = nm_state == 70;
+                            let is_connected = nm_state == dbus_client::NM_STATE_CONNECTED_GLOBAL;
                             let wifi_enabled = dbus_client::get_wireless_enabled(connection).await.unwrap_or(true);
                             let access_points = dbus_client::list_access_points(connection).await.unwrap_or_default();
                             let active_vpns = dbus_client::list_active_vpns(connection).await.unwrap_or_default();
