@@ -2,7 +2,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
 
 /// Deterministic placeholder timestamp used by `ThemeState::default()` so the pure
 /// default carries no hidden clock I/O (ADR-0002). System-boundary callers (e.g.
@@ -162,9 +161,6 @@ pub struct ThemeState {
     #[serde(default)]
     pub scheme_variant: SchemeVariant,
     pub custom_seed: Option<u32>,
-    pub wallpaper_path: Option<PathBuf>,
-    pub wallpaper_seed: Option<u32>,
-    pub wallpaper_dir: PathBuf,
     pub source_argb: u32,
     pub light: HashMap<String, String>,
     pub dark: HashMap<String, String>,
@@ -182,9 +178,6 @@ impl ThemeState {
             color_source: ColorSource::Wallpaper,
             scheme_variant: SchemeVariant::Auto,
             custom_seed: None,
-            wallpaper_path: None,
-            wallpaper_seed: None,
-            wallpaper_dir: PathBuf::from("~/Pictures/Wallpapers"),
             source_argb: DEFAULT_SOURCE_ARGB,
             light,
             dark,
@@ -466,34 +459,21 @@ pub enum ThemeCommand {
     SetColorSource(ColorSource),
     SetSchemeVariant(SchemeVariant),
     SetCustomSeed(u32),
-    SetWallpaperDirectory(PathBuf),
-    SetWallpaper { path: PathBuf, seed: u32 },
-    PortalAppearanceChanged(Option<ThemeMode>),
+    SetWallpaperSeed(u32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SideEffect {
-    DispatchDesktopAdapter(ThemeMode),
-}
+pub enum SideEffect {}
 
-fn regenerate_palette(
-    state: &mut ThemeState,
-    seed: u32,
-    variant: SchemeVariant,
-    timestamp: &str,
-) {
+fn regenerate_palette(state: &mut ThemeState, seed: u32, variant: SchemeVariant, timestamp: &str) {
     let (light, dark) = generate_m3_palettes(seed, variant);
     state.light = light;
     state.dark = dark;
     state.palette_generated_at = timestamp.to_string();
 }
 
-pub fn reduce(
-    state: &mut ThemeState,
-    command: ThemeCommand,
-    timestamp: &str,
-) -> Vec<SideEffect> {
-    let mut effects = Vec::new();
+pub fn reduce(state: &mut ThemeState, command: ThemeCommand, timestamp: &str) -> Vec<SideEffect> {
+    let effects = Vec::new();
     let mut changed = false;
 
     match command {
@@ -503,15 +483,12 @@ pub fn reduce(
                 changed = true;
             }
             match mode {
-                ThemeMode::System => {
-                    // System performs no desktop adapter dispatch
-                }
+                ThemeMode::System => {}
                 ThemeMode::Light | ThemeMode::Dark => {
                     if state.resolved_mode != mode {
                         state.resolved_mode = mode;
                         changed = true;
                     }
-                    effects.push(SideEffect::DispatchDesktopAdapter(mode));
                 }
             }
         }
@@ -524,18 +501,15 @@ pub fn reduce(
             state.selected_mode = next_mode;
             state.resolved_mode = next_mode;
             changed = true;
-            effects.push(SideEffect::DispatchDesktopAdapter(next_mode));
         }
         ThemeCommand::SetColorSource(source) => {
-            let target_seed = match source {
-                ColorSource::Custom => state.custom_seed,
-                ColorSource::Wallpaper => state.wallpaper_seed,
-            };
-            if target_seed.is_some() && state.color_source != source {
+            if state.color_source != source {
                 state.color_source = source;
                 changed = true;
 
-                if let Some(seed) = target_seed.filter(|&seed| seed != state.source_argb) {
+                if source == ColorSource::Custom
+                    && let Some(seed) = state.custom_seed.filter(|&seed| seed != state.source_argb)
+                {
                     let variant = state.scheme_variant;
                     state.source_argb = seed;
                     regenerate_palette(state, seed, variant, timestamp);
@@ -562,35 +536,12 @@ pub fn reduce(
                 regenerate_palette(state, seed, variant, timestamp);
             }
         }
-        ThemeCommand::SetWallpaperDirectory(dir) => {
-            if state.wallpaper_dir != dir {
-                state.wallpaper_dir = dir;
-                changed = true;
-            }
-        }
-        ThemeCommand::SetWallpaper { path, seed } => {
-            if state.wallpaper_path.as_ref() != Some(&path) {
-                state.wallpaper_path = Some(path.clone());
-                changed = true;
-            }
-            if state.wallpaper_seed != Some(seed) {
-                state.wallpaper_seed = Some(seed);
-                changed = true;
-            }
+        ThemeCommand::SetWallpaperSeed(seed) => {
             if state.color_source == ColorSource::Wallpaper && state.source_argb != seed {
                 let variant = state.scheme_variant;
                 state.source_argb = seed;
                 changed = true;
                 regenerate_palette(state, seed, variant, timestamp);
-            }
-        }
-        ThemeCommand::PortalAppearanceChanged(portal_mode) => {
-            if let Some(pm) = portal_mode {
-                debug_assert!(pm != ThemeMode::System);
-                if state.selected_mode == ThemeMode::System && state.resolved_mode != pm {
-                    state.resolved_mode = pm;
-                    changed = true;
-                }
             }
         }
     }
@@ -627,22 +578,11 @@ mod tests {
     }
 
     #[test]
-    fn test_reducer_system_preservation_and_fixed_mode_immunity() {
+    fn test_reducer_system_preservation_and_fixed_mode() {
         let mut state = ThemeState::default();
         assert_eq!(state.selected_mode, ThemeMode::System);
         assert_eq!(state.resolved_mode, ThemeMode::Light);
         assert_eq!(state.updated_at, DEFAULT_TIMESTAMP);
-
-        // Portal appearance changes to Dark while in System mode
-        let effects = reduce(
-            &mut state,
-            ThemeCommand::PortalAppearanceChanged(Some(ThemeMode::Dark)),
-            TEST_TIMESTAMP,
-        );
-        assert!(effects.is_empty());
-        assert_eq!(state.selected_mode, ThemeMode::System);
-        assert_eq!(state.resolved_mode, ThemeMode::Dark);
-        assert_eq!(state.updated_at, TEST_TIMESTAMP);
 
         // Fixed Dark mode command
         let effects = reduce(
@@ -650,22 +590,10 @@ mod tests {
             ThemeCommand::SetMode(ThemeMode::Dark),
             TEST_TIMESTAMP,
         );
-        assert_eq!(
-            effects,
-            vec![SideEffect::DispatchDesktopAdapter(ThemeMode::Dark)]
-        );
-        assert_eq!(state.selected_mode, ThemeMode::Dark);
-        assert_eq!(state.resolved_mode, ThemeMode::Dark);
-
-        // Portal appearance changes to Light while in fixed Dark mode -> ignored!
-        let effects = reduce(
-            &mut state,
-            ThemeCommand::PortalAppearanceChanged(Some(ThemeMode::Light)),
-            TEST_TIMESTAMP,
-        );
         assert!(effects.is_empty());
         assert_eq!(state.selected_mode, ThemeMode::Dark);
         assert_eq!(state.resolved_mode, ThemeMode::Dark);
+        assert_eq!(state.updated_at, TEST_TIMESTAMP);
     }
 
     #[test]
@@ -685,31 +613,6 @@ mod tests {
     }
 
     #[test]
-    fn test_portal_echo_and_no_preference() {
-        let mut state = ThemeState::default();
-        let initial_rev = state.revision;
-
-        // Portal echo equal to current resolution
-        let effects = reduce(
-            &mut state,
-            ThemeCommand::PortalAppearanceChanged(Some(ThemeMode::Light)),
-            TEST_TIMESTAMP,
-        );
-        assert!(effects.is_empty());
-        assert_eq!(state.revision, initial_rev);
-
-        // No preference
-        let effects = reduce(
-            &mut state,
-            ThemeCommand::PortalAppearanceChanged(None),
-            TEST_TIMESTAMP,
-        );
-        assert!(effects.is_empty());
-        assert_eq!(state.revision, initial_rev);
-        assert_eq!(state.resolved_mode, ThemeMode::Light);
-    }
-
-    #[test]
     fn test_toggle_mode() {
         let mut state = ThemeState {
             resolved_mode: ThemeMode::Light,
@@ -717,19 +620,13 @@ mod tests {
         };
 
         let effects = reduce(&mut state, ThemeCommand::ToggleMode, TEST_TIMESTAMP);
-        assert_eq!(
-            effects,
-            vec![SideEffect::DispatchDesktopAdapter(ThemeMode::Dark)]
-        );
+        assert!(effects.is_empty());
         assert_eq!(state.selected_mode, ThemeMode::Dark);
         assert_eq!(state.resolved_mode, ThemeMode::Dark);
         assert_eq!(state.updated_at, TEST_TIMESTAMP);
 
         let effects = reduce(&mut state, ThemeCommand::ToggleMode, TEST_TIMESTAMP);
-        assert_eq!(
-            effects,
-            vec![SideEffect::DispatchDesktopAdapter(ThemeMode::Light)]
-        );
+        assert!(effects.is_empty());
         assert_eq!(state.selected_mode, ThemeMode::Light);
         assert_eq!(state.resolved_mode, ThemeMode::Light);
     }
@@ -756,6 +653,21 @@ mod tests {
 
         assert!(state.light.contains_key("primary"));
         assert!(state.dark.contains_key("primary"));
+        assert_eq!(state.palette_generated_at, TEST_TIMESTAMP);
+    }
+
+    #[test]
+    fn test_wallpaper_seed_change() {
+        let mut state = ThemeState::default();
+        assert_eq!(state.color_source, ColorSource::Wallpaper);
+        let seed = 0xffab12cd;
+
+        let _ = reduce(
+            &mut state,
+            ThemeCommand::SetWallpaperSeed(seed),
+            TEST_TIMESTAMP,
+        );
+        assert_eq!(state.source_argb, seed);
         assert_eq!(state.palette_generated_at, TEST_TIMESTAMP);
     }
 

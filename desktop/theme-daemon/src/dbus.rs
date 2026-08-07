@@ -1,36 +1,37 @@
-use shilpo_theme::{ColorSource, SchemeVariant, ThemeMode, ThemeState};
+use crate::daemon::DaemonState;
+use shilpo_theme::{ColorSource, SchemeVariant, ThemeMode};
 use tokio::sync::mpsc;
 use zbus::object_server::SignalEmitter;
 
 pub enum ActorMessage {
-    GetState(tokio::sync::oneshot::Sender<Result<ThemeState, String>>),
+    GetState(tokio::sync::oneshot::Sender<Result<DaemonState, String>>),
     GetDiagnostics(tokio::sync::oneshot::Sender<String>),
     SetMode(
         ThemeMode,
-        tokio::sync::oneshot::Sender<Result<ThemeState, String>>,
+        tokio::sync::oneshot::Sender<Result<DaemonState, String>>,
     ),
-    ToggleMode(tokio::sync::oneshot::Sender<Result<ThemeState, String>>),
+    ToggleMode(tokio::sync::oneshot::Sender<Result<DaemonState, String>>),
     SetColorSource(
         ColorSource,
-        tokio::sync::oneshot::Sender<Result<ThemeState, String>>,
+        tokio::sync::oneshot::Sender<Result<DaemonState, String>>,
     ),
     SetSchemeVariant(
         SchemeVariant,
-        tokio::sync::oneshot::Sender<Result<ThemeState, String>>,
+        tokio::sync::oneshot::Sender<Result<DaemonState, String>>,
     ),
     SetCustomSeed(
         u32,
-        tokio::sync::oneshot::Sender<Result<ThemeState, String>>,
+        tokio::sync::oneshot::Sender<Result<DaemonState, String>>,
     ),
     SetWallpaper(
         String,
-        tokio::sync::oneshot::Sender<Result<ThemeState, String>>,
+        tokio::sync::oneshot::Sender<Result<DaemonState, String>>,
     ),
     SetWallpaperDirectory(
         String,
-        tokio::sync::oneshot::Sender<Result<ThemeState, String>>,
+        tokio::sync::oneshot::Sender<Result<DaemonState, String>>,
     ),
-    SetRandomWallpaper(tokio::sync::oneshot::Sender<Result<ThemeState, String>>),
+    SetRandomWallpaper(tokio::sync::oneshot::Sender<Result<DaemonState, String>>),
 }
 
 pub struct ThemeDbusService {
@@ -183,7 +184,7 @@ pub trait ThemeDbus {
     fn state_changed(&self, state: String) -> zbus::Result<()>;
 }
 
-fn state_result_to_json(result: Result<ThemeState, String>) -> zbus::fdo::Result<String> {
+fn state_result_to_json(result: Result<DaemonState, String>) -> zbus::fdo::Result<String> {
     match result {
         Ok(state) => serde_json::to_string(&state)
             .map_err(|error| zbus::fdo::Error::Failed(error.to_string())),

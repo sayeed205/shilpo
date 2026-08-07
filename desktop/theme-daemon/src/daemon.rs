@@ -5,8 +5,9 @@ use crate::portal::PortalObserver;
 use anyhow::Result;
 use image::imageops::FilterType;
 use mcu_material_color::{Hct, QuantizerCelebi, Score};
+use serde::{Deserialize, Serialize};
 use shilpo_config::ShellConfig;
-use shilpo_theme::{SideEffect, ThemeCommand, ThemeMode, ThemeState, generate_m3_palettes, reduce};
+use shilpo_theme::{ThemeCommand, ThemeMode, ThemeState, generate_m3_palettes, reduce};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,19 +17,69 @@ use zbus::Connection;
 use zbus::connection::Builder;
 use zbus::names::BusName;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DaemonState {
+    #[serde(flatten)]
+    pub theme: ThemeState,
+    pub wallpaper_path: Option<PathBuf>,
+    pub wallpaper_seed: Option<u32>,
+    pub wallpaper_dir: PathBuf,
+}
+
+impl DaemonState {
+    pub fn new(timestamp: &str) -> Self {
+        Self {
+            theme: ThemeState::new(timestamp),
+            wallpaper_path: None,
+            wallpaper_seed: None,
+            wallpaper_dir: PathBuf::from("~/Pictures/Wallpapers"),
+        }
+    }
+}
+
+impl Default for DaemonState {
+    fn default() -> Self {
+        Self::new(shilpo_theme::state::DEFAULT_TIMESTAMP)
+    }
+}
+
+impl std::ops::Deref for DaemonState {
+    type Target = ThemeState;
+    fn deref(&self) -> &Self::Target {
+        &self.theme
+    }
+}
+
+impl std::ops::DerefMut for DaemonState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.theme
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DaemonCommand {
+    SetMode(ThemeMode),
+    ToggleMode,
+    SetColorSource(shilpo_theme::ColorSource),
+    SetSchemeVariant(shilpo_theme::SchemeVariant),
+    SetCustomSeed(u32),
+    SetWallpaperDirectory(PathBuf),
+    SetWallpaper { path: PathBuf, seed: u32 },
+    PortalAppearanceChanged(Option<ThemeMode>),
+}
+
 pub struct WallpaperTaskResult {
     pub op_id: u64,
     pub path: PathBuf,
     pub seed: u32,
     pub error: Option<String>,
-    pub reply: tokio::sync::oneshot::Sender<Result<ThemeState, String>>,
+    pub reply: tokio::sync::oneshot::Sender<Result<DaemonState, String>>,
 }
 
 pub struct ThemeDaemon {
-    state: ThemeState,
+    state: DaemonState,
     adapter: Arc<dyn DesktopAdapter>,
     config_path: PathBuf,
-    wallpaper_dir: PathBuf,
     actor_rx: mpsc::UnboundedReceiver<ActorMessage>,
     portal_rx: mpsc::UnboundedReceiver<Option<ThemeMode>>,
     wallpaper_result_tx: mpsc::UnboundedSender<WallpaperTaskResult>,
@@ -91,12 +142,10 @@ impl ThemeDaemon {
 
         PortalObserver::start(portal_tx).await;
 
-        let wallpaper_dir = initial_state.wallpaper_dir.clone();
         let daemon = Self {
             state: initial_state,
             adapter,
             config_path,
-            wallpaper_dir,
             actor_rx,
             portal_rx,
             wallpaper_result_tx: wp_tx,
@@ -131,7 +180,7 @@ impl ThemeDaemon {
                 }
                 Some(portal_mode) = self.portal_rx.recv() => {
                     if let Err(error) = self
-                        .process_command(ThemeCommand::PortalAppearanceChanged(portal_mode))
+                        .process_command(DaemonCommand::PortalAppearanceChanged(portal_mode))
                         .await
                     {
                         tracing::warn!(%error, "Failed to persist portal appearance change");
@@ -154,31 +203,31 @@ impl ThemeDaemon {
             ActorMessage::GetDiagnostics(reply) => {
                 self.sync_wallpaper_dir_from_config();
                 let diag = serde_json::json!({
-                    "revision": self.state.revision,
-                    "selected_mode": self.state.selected_mode,
-                    "resolved_mode": self.state.resolved_mode,
-                    "color_source": self.state.color_source,
-                    "source_argb": format!("#{:08X}", self.state.source_argb),
+                    "revision": self.state.theme.revision,
+                    "selected_mode": self.state.theme.selected_mode,
+                    "resolved_mode": self.state.theme.resolved_mode,
+                    "color_source": self.state.theme.color_source,
+                    "source_argb": format!("#{:08X}", self.state.theme.source_argb),
                     "adapter": self.adapter.name(),
-                    "wallpaper_dir": self.wallpaper_dir,
+                    "wallpaper_dir": self.state.wallpaper_dir,
                 });
                 let _ = reply.send(diag.to_string());
             }
             ActorMessage::SetMode(mode, reply) => {
-                let _ = reply.send(self.process_command(ThemeCommand::SetMode(mode)).await);
+                let _ = reply.send(self.process_command(DaemonCommand::SetMode(mode)).await);
             }
             ActorMessage::ToggleMode(reply) => {
-                let _ = reply.send(self.process_command(ThemeCommand::ToggleMode).await);
+                let _ = reply.send(self.process_command(DaemonCommand::ToggleMode).await);
             }
             ActorMessage::SetColorSource(source, reply) => {
                 let _ = reply.send(
-                    self.process_command(ThemeCommand::SetColorSource(source))
+                    self.process_command(DaemonCommand::SetColorSource(source))
                         .await,
                 );
             }
             ActorMessage::SetSchemeVariant(variant, reply) => {
                 let res = self
-                    .process_command(ThemeCommand::SetSchemeVariant(variant))
+                    .process_command(DaemonCommand::SetSchemeVariant(variant))
                     .await;
                 let config_path = self.config_path.clone();
                 tokio::task::spawn_blocking(move || {
@@ -191,7 +240,7 @@ impl ThemeDaemon {
             }
             ActorMessage::SetCustomSeed(seed, reply) => {
                 let _ = reply.send(
-                    self.process_command(ThemeCommand::SetCustomSeed(seed))
+                    self.process_command(DaemonCommand::SetCustomSeed(seed))
                         .await,
                 );
             }
@@ -203,15 +252,13 @@ impl ThemeDaemon {
                 let dir = expand_tilde(Path::new(&dir_str));
                 let result = if dir.is_dir() {
                     let result = self
-                        .process_command(ThemeCommand::SetWallpaperDirectory(dir.clone()))
+                        .process_command(DaemonCommand::SetWallpaperDirectory(dir.clone()))
                         .await;
                     match result {
-                        Ok(state) => {
-                            self.wallpaper_dir = state.wallpaper_dir.clone();
-                            self.persist_wallpaper_directory_config(&dir)
-                                .map(|_| Ok(state))
-                                .unwrap_or_else(Err)
-                        }
+                        Ok(state) => self
+                            .persist_wallpaper_directory_config(&dir)
+                            .map(|_| Ok(state))
+                            .unwrap_or_else(Err),
                         Err(error) => Err(error),
                     }
                 } else {
@@ -220,9 +267,6 @@ impl ThemeDaemon {
                         dir.display()
                     ))
                 };
-                if let Ok(state) = &result {
-                    self.wallpaper_dir = state.wallpaper_dir.clone();
-                }
                 let _ = reply.send(result);
             }
             ActorMessage::SetRandomWallpaper(reply) => match self.pick_random_wallpaper() {
@@ -246,7 +290,7 @@ impl ThemeDaemon {
     fn spawn_wallpaper_task(
         &mut self,
         path: PathBuf,
-        reply: tokio::sync::oneshot::Sender<Result<ThemeState, String>>,
+        reply: tokio::sync::oneshot::Sender<Result<DaemonState, String>>,
     ) {
         if !path.exists() {
             let _ = reply.send(Err(format!(
@@ -333,7 +377,7 @@ impl ThemeDaemon {
         }
 
         let result = self
-            .process_command(ThemeCommand::SetWallpaper {
+            .process_command(DaemonCommand::SetWallpaper {
                 path: res.path,
                 seed: res.seed,
             })
@@ -341,23 +385,114 @@ impl ThemeDaemon {
         let _ = res.reply.send(result);
     }
 
-    async fn process_command(&mut self, command: ThemeCommand) -> Result<ThemeState, String> {
-        if let ThemeCommand::SetColorSource(source) = &command {
-            let available = match source {
-                shilpo_theme::ColorSource::Custom => self.state.custom_seed.is_some(),
-                shilpo_theme::ColorSource::Wallpaper => self.state.wallpaper_seed.is_some(),
-            };
-            if !available {
-                return Err(format!("No seed is available for color source {source:?}"));
+    async fn process_command(&mut self, command: DaemonCommand) -> Result<DaemonState, String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut next_state = self.state.clone();
+        let prev_rev = next_state.theme.revision;
+        let mut dispatch_adapter_mode: Option<ThemeMode> = None;
+
+        match command {
+            DaemonCommand::SetMode(mode) => {
+                let prev_resolved = next_state.theme.resolved_mode;
+                reduce(&mut next_state.theme, ThemeCommand::SetMode(mode), &now);
+                if mode != ThemeMode::System {
+                    if next_state.theme.resolved_mode != prev_resolved {
+                        dispatch_adapter_mode = Some(next_state.theme.resolved_mode);
+                    } else if next_state.theme.selected_mode == mode {
+                        dispatch_adapter_mode = Some(mode);
+                    }
+                }
+            }
+            DaemonCommand::ToggleMode => {
+                reduce(&mut next_state.theme, ThemeCommand::ToggleMode, &now);
+                dispatch_adapter_mode = Some(next_state.theme.resolved_mode);
+            }
+            DaemonCommand::SetColorSource(source) => {
+                let available = match source {
+                    shilpo_theme::ColorSource::Custom => next_state.custom_seed.is_some(),
+                    shilpo_theme::ColorSource::Wallpaper => next_state.wallpaper_seed.is_some(),
+                };
+                if !available {
+                    return Err(format!("No seed is available for color source {source:?}"));
+                }
+                if source == shilpo_theme::ColorSource::Wallpaper
+                    && let Some(seed) = next_state.wallpaper_seed
+                {
+                    reduce(
+                        &mut next_state.theme,
+                        ThemeCommand::SetWallpaperSeed(seed),
+                        &now,
+                    );
+                }
+                reduce(
+                    &mut next_state.theme,
+                    ThemeCommand::SetColorSource(source),
+                    &now,
+                );
+            }
+            DaemonCommand::SetSchemeVariant(variant) => {
+                reduce(
+                    &mut next_state.theme,
+                    ThemeCommand::SetSchemeVariant(variant),
+                    &now,
+                );
+            }
+            DaemonCommand::SetCustomSeed(seed) => {
+                reduce(
+                    &mut next_state.theme,
+                    ThemeCommand::SetCustomSeed(seed),
+                    &now,
+                );
+            }
+            DaemonCommand::SetWallpaperDirectory(dir) => {
+                if next_state.wallpaper_dir != dir {
+                    next_state.wallpaper_dir = dir;
+                    next_state.theme.revision += 1;
+                    next_state.theme.updated_at = now.clone();
+                }
+            }
+            DaemonCommand::SetWallpaper { path, seed } => {
+                let mut changed = false;
+                if next_state.wallpaper_path.as_ref() != Some(&path) {
+                    next_state.wallpaper_path = Some(path);
+                    changed = true;
+                }
+                if next_state.wallpaper_seed != Some(seed) {
+                    next_state.wallpaper_seed = Some(seed);
+                    changed = true;
+                }
+                if next_state.theme.color_source == shilpo_theme::ColorSource::Wallpaper {
+                    let prev_sub_rev = next_state.theme.revision;
+                    reduce(
+                        &mut next_state.theme,
+                        ThemeCommand::SetWallpaperSeed(seed),
+                        &now,
+                    );
+                    if next_state.theme.revision > prev_sub_rev {
+                        changed = false;
+                    }
+                }
+                if changed {
+                    next_state.theme.revision += 1;
+                    next_state.theme.updated_at = now.clone();
+                }
+            }
+            DaemonCommand::PortalAppearanceChanged(portal_mode) => {
+                if let Some(pm) = portal_mode {
+                    debug_assert!(pm != ThemeMode::System);
+                    if next_state.theme.selected_mode == ThemeMode::System
+                        && next_state.theme.resolved_mode != pm
+                    {
+                        next_state.theme.resolved_mode = pm;
+                        next_state.theme.revision += 1;
+                        next_state.theme.updated_at = now.clone();
+                        dispatch_adapter_mode = Some(pm);
+                    }
+                }
             }
         }
 
-        let mut next_state = self.state.clone();
-        let prev_rev = next_state.revision;
-        let now = chrono::Utc::now().to_rfc3339();
-        let effects = reduce(&mut next_state, command, &now);
-
-        if next_state.revision > prev_rev {
+        if next_state.theme.revision > prev_rev {
             self.state = next_state;
 
             let raw_state =
@@ -379,17 +514,13 @@ impl ThemeDaemon {
             });
         }
 
-        for effect in effects {
-            match effect {
-                SideEffect::DispatchDesktopAdapter(mode) => {
-                    let adapter = Arc::clone(&self.adapter);
-                    tokio::task::spawn_blocking(move || {
-                        if let Err(error) = adapter.set_mode(mode) {
-                            tracing::warn!(%error, provider = adapter.name(), "Desktop adapter set_mode failed");
-                        }
-                    });
+        if let Some(mode) = dispatch_adapter_mode {
+            let adapter = Arc::clone(&self.adapter);
+            tokio::task::spawn_blocking(move || {
+                if let Err(error) = adapter.set_mode(mode) {
+                    tracing::warn!(%error, provider = adapter.name(), "Desktop adapter set_mode failed");
                 }
-            }
+            });
         }
 
         Ok(self.state.clone())
@@ -398,13 +529,12 @@ impl ThemeDaemon {
     fn sync_wallpaper_dir_from_config(&mut self) {
         if let Ok(cfg) = ShellConfig::load_or_create(&self.config_path) {
             let config_dir = expand_tilde(&cfg.desktop.wallpaper_dir);
-            if config_dir != self.wallpaper_dir {
+            if config_dir != self.state.wallpaper_dir {
                 debug!(
-                    old = %self.wallpaper_dir.display(),
+                    old = %self.state.wallpaper_dir.display(),
                     new = %config_dir.display(),
                     "Syncing daemon wallpaper_dir from config.toml"
                 );
-                self.wallpaper_dir = config_dir.clone();
                 self.state.wallpaper_dir = config_dir;
             }
         }
@@ -413,10 +543,10 @@ impl ThemeDaemon {
     fn pick_random_wallpaper(&mut self) -> Result<PathBuf, String> {
         self.sync_wallpaper_dir_from_config();
         let mut wallpapers = Vec::new();
-        let entries = std::fs::read_dir(&self.wallpaper_dir).map_err(|error| {
+        let entries = std::fs::read_dir(&self.state.wallpaper_dir).map_err(|error| {
             format!(
                 "Cannot read wallpaper directory {}: {error}",
-                self.wallpaper_dir.display()
+                self.state.wallpaper_dir.display()
             )
         })?;
         for entry in entries.flatten() {
@@ -432,7 +562,7 @@ impl ThemeDaemon {
         if wallpapers.is_empty() {
             return Err(format!(
                 "No supported wallpapers found in {} (expected png, jpg, jpeg, or webp)",
-                self.wallpaper_dir.display()
+                self.state.wallpaper_dir.display()
             ));
         }
 
@@ -454,15 +584,15 @@ fn expand_tilde(path: &Path) -> PathBuf {
 }
 
 fn initial_state(
-    persisted: Option<ThemeState>,
+    persisted: Option<DaemonState>,
     configured_wp_dir: Option<&Path>,
     configured_variant: Option<shilpo_theme::SchemeVariant>,
-) -> ThemeState {
+) -> DaemonState {
     let mut state = persisted.unwrap_or_default();
-    if state.updated_at == shilpo_theme::state::DEFAULT_TIMESTAMP {
+    if state.theme.updated_at == shilpo_theme::state::DEFAULT_TIMESTAMP {
         let now = chrono::Utc::now().to_rfc3339();
-        state.updated_at = now.clone();
-        state.palette_generated_at = now;
+        state.theme.updated_at = now.clone();
+        state.theme.palette_generated_at = now;
     }
     if let Some(configured_wp_dir) = configured_wp_dir {
         state.wallpaper_dir = expand_tilde(configured_wp_dir);
@@ -470,10 +600,10 @@ fn initial_state(
         state.wallpaper_dir = expand_tilde(&state.wallpaper_dir);
     }
     if let Some(variant) = configured_variant {
-        state.scheme_variant = variant;
-        let (light, dark) = generate_m3_palettes(state.source_argb, variant);
-        state.light = light;
-        state.dark = dark;
+        state.theme.scheme_variant = variant;
+        let (light, dark) = generate_m3_palettes(state.theme.source_argb, variant);
+        state.theme.light = light;
+        state.theme.dark = dark;
     }
     state
 }
@@ -507,15 +637,14 @@ fn extract_seed_from_file(path: &Path) -> anyhow::Result<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::initial_state;
-    use shilpo_theme::ThemeState;
+    use super::*;
     use std::path::Path;
 
     #[test]
     fn configured_wallpaper_directory_overrides_persisted_snapshot() {
-        let persisted = ThemeState {
+        let persisted = DaemonState {
             wallpaper_dir: "/old/wallpapers".into(),
-            ..ThemeState::default()
+            ..DaemonState::default()
         };
 
         let state = initial_state(
@@ -530,7 +659,10 @@ mod tests {
     #[test]
     fn fresh_start_stamps_real_timestamp() {
         let state = initial_state(None, None, None);
-        assert_ne!(state.updated_at, shilpo_theme::state::DEFAULT_TIMESTAMP);
-        assert_eq!(state.updated_at, state.palette_generated_at);
+        assert_ne!(
+            state.theme.updated_at,
+            shilpo_theme::state::DEFAULT_TIMESTAMP
+        );
+        assert_eq!(state.theme.updated_at, state.theme.palette_generated_at);
     }
 }

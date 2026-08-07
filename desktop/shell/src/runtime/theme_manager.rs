@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
 use gpui::{App, AppContext};
-use shilpo_theme::ThemeState;
-use shilpo_theme_daemon::ThemeClient;
+use shilpo_theme_daemon::{DaemonState, ThemeClient};
 
 use super::{ShellRuntime, surface_manager};
 
@@ -58,7 +57,7 @@ pub fn sync_wallpaper(cx: &mut App, initial_wallpaper_path: Option<PathBuf>) {
 }
 
 impl ShellRuntime {
-    pub(super) fn apply_theme_state(cx: &mut App, state: &ThemeState) {
+    pub(super) fn apply_theme_state(cx: &mut App, state: &DaemonState) {
         let runtime = cx.global_mut::<Self>();
         if let Some(path) = state.wallpaper_path.clone().filter(|path| path.is_file()) {
             runtime.current_wallpaper_path = Some(path);
