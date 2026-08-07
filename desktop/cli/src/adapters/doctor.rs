@@ -250,24 +250,7 @@ impl DoctorChecker {
                 .output()
                 .is_ok_and(|o| o.status.success());
 
-        let bt_ok = zbus::blocking::Connection::system()
-            .ok()
-            .and_then(|conn| {
-                conn.call_method(
-                    Some("org.bluez"),
-                    "/",
-                    Some("org.freedesktop.DBus.Peer"),
-                    "Ping",
-                    &(),
-                )
-                .ok()
-            })
-            .is_some()
-            || std::process::Command::new("systemctl")
-                .args(["is-active", "bluetooth.service"])
-                .output()
-                .is_ok_and(|o| o.status.success());
-
+        let bt_ok = is_bluez_dbus_active();
 
         let audio_ok = std::process::Command::new("wpctl")
             .arg("status")
@@ -672,6 +655,24 @@ fn is_command_available(cmd: &str) -> bool {
         }
     }
     false
+}
+
+fn is_bluez_dbus_active() -> bool {
+    let dbus_ping = zbus::blocking::Connection::system().ok().and_then(|conn| {
+        conn.call_method(
+            Some("org.bluez"),
+            "/",
+            Some("org.freedesktop.DBus.Peer"),
+            "Ping",
+            &(),
+        )
+        .ok()
+    });
+    dbus_ping.is_some()
+        || std::process::Command::new("systemctl")
+            .args(["is-active", "bluetooth.service"])
+            .output()
+            .is_ok_and(|o| o.status.success())
 }
 
 fn expand_home_path(path: PathBuf) -> PathBuf {
