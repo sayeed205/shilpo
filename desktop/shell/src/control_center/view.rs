@@ -765,8 +765,15 @@ impl Render for ControlCenterView {
                     )
                     // Audio Devices & Ports Selector
                     .when(audio_available, |this| {
-                        let devices = self.device_snapshot.audio_hardware.devices.clone();
-                        let ports = self.device_snapshot.audio_hardware.ports.clone();
+                        let audio_info = &self.device_snapshot.audio;
+                        let devices = audio_info
+                            .sinks
+                            .iter()
+                            .chain(audio_info.sources.iter())
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let default_sink = audio_info.sinks.iter().find(|s| s.is_default);
+                        let ports = default_sink.map(|s| s.ports.clone()).unwrap_or_default();
 
                         this.child(
                             v_flex()
