@@ -8096,6 +8096,7 @@ dependencies = [
  "log",
  "niri-ipc",
  "notify",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "shilpo-config",
@@ -8103,6 +8104,8 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "wayland-client",
+ "wayland-protocols-wlr",
  "zbus",
 ]
 
