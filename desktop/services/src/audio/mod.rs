@@ -1,5 +1,11 @@
 use anyhow::Result;
+use libpulse_binding as pulse;
+use pulse::context::{Context, FlagSet as ContextFlagSet, State as ContextState};
+use pulse::context::subscribe::InterestMaskSet;
+use pulse::mainloop::threaded::Mainloop;
 use std::process::Command;
+use std::sync::{Arc, Mutex, mpsc};
+use tokio::sync::watch;
 
 /// Metadata describing an individual application audio playback stream (Sink Input).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -51,59 +57,126 @@ pub struct AudioInfo {
     pub app_streams: Vec<AudioStream>,
 }
 
-use crate::polled::PolledService;
-use std::time::Duration;
-use tokio::sync::watch;
+struct PulseBackend {
+    mainloop: Arc<Mutex<Mainloop>>,
+    context: Arc<Mutex<Context>>,
+}
 
-/// System audio service for volume, mute status, and device switching.
+/// System audio service for volume, mute status, and device switching using event-driven PulseAudio APIs.
 pub struct AudioService {
-    polled: PolledService<AudioInfo>,
+    tx: watch::Sender<AudioInfo>,
+    rx: watch::Receiver<AudioInfo>,
+    backend: Option<Arc<PulseBackend>>,
 }
 
 impl AudioService {
     pub fn new() -> Result<Self> {
-        let polled = PolledService::new(
-            AudioInfo::default(),
-            Duration::from_secs(3),
-            None,
-            |_curr| -> Result<AudioInfo, std::convert::Infallible> {
-                let info = match (query_volume(), query_mute()) {
-                    (Some(volume), Some(is_muted)) => AudioInfo {
-                        volume,
-                        is_muted,
-                        available: true,
-                        ..AudioInfo::default()
-                    },
-                    _ => AudioInfo::default(),
+        let (tx, rx) = watch::channel(AudioInfo::default());
+
+        let mut mainloop =
+            Mainloop::new().ok_or_else(|| anyhow::anyhow!("failed to create pulse mainloop"))?;
+        let mut context = Context::new(&mainloop, "Shilpo Audio Service")
+            .ok_or_else(|| anyhow::anyhow!("failed to create pulse context"))?;
+
+        context
+            .connect(None, ContextFlagSet::NOFLAGS, None)
+            .map_err(|e| anyhow::anyhow!("failed to connect pulse context: {e:?}"))?;
+        mainloop
+            .start()
+            .map_err(|e| anyhow::anyhow!("failed to start pulse mainloop: {e:?}"))?;
+
+        let context = Arc::new(Mutex::new(context));
+        let mainloop = Arc::new(Mutex::new(mainloop));
+
+        // Wait briefly for connection
+        let ready = {
+            let start = std::time::Instant::now();
+            loop {
+                let state = {
+                    let ctx = context.lock().unwrap();
+                    ctx.get_state()
                 };
-                Ok(info)
-            },
-        );
-        Ok(Self { polled })
+                if state == ContextState::Ready {
+                    break true;
+                }
+                if state == ContextState::Failed
+                    || state == ContextState::Terminated
+                    || start.elapsed() > std::time::Duration::from_secs(2)
+                {
+                    break false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        };
+
+        if !ready {
+            return Err(anyhow::anyhow!("pulse context connection failed or timed out"));
+        }
+
+        let backend = Arc::new(PulseBackend {
+            mainloop: mainloop.clone(),
+            context: context.clone(),
+        });
+
+        backend.refresh(&tx);
+
+        {
+            let _ml = mainloop.lock().unwrap();
+            let mut ctx = context.lock().unwrap();
+            let tx_clone = tx.clone();
+            let backend_clone = backend.clone();
+
+            ctx.set_subscribe_callback(Some(Box::new(move |_facility, _op, _index| {
+                backend_clone.refresh(&tx_clone);
+            })));
+
+            ctx.subscribe(
+                InterestMaskSet::SINK
+                    | InterestMaskSet::SOURCE
+                    | InterestMaskSet::SINK_INPUT
+                    | InterestMaskSet::SERVER,
+                |_| {},
+            );
+        }
+
+        Ok(Self {
+            tx,
+            rx,
+            backend: Some(backend),
+        })
     }
 
     pub fn new_offline() -> Self {
+        let (tx, rx) = watch::channel(AudioInfo::default());
         Self {
-            polled: PolledService::new_offline(AudioInfo::default()),
+            tx,
+            rx,
+            backend: None,
         }
     }
 
     pub fn subscribe(&self) -> watch::Receiver<AudioInfo> {
-        self.polled.subscribe()
+        self.rx.clone()
     }
 
     pub fn audio_info(&self) -> AudioInfo {
-        self.polled.get()
+        self.rx.borrow().clone()
     }
 
     pub fn list_devices(&self) -> Vec<AudioDevice> {
-        Self::list_devices_static()
+        let info = self.audio_info();
+        if !info.sinks.is_empty() || !info.sources.is_empty() {
+            let mut res = info.sinks;
+            res.extend(info.sources);
+            res
+        } else {
+            Self::list_devices_static()
+        }
     }
 
     pub fn list_devices_static() -> Vec<AudioDevice> {
         let mut devices = Vec::new();
 
-        // Query output sinks
         if let Ok(output) = Command::new("pactl")
             .args(["list", "sinks", "short"])
             .output()
@@ -136,7 +209,6 @@ impl AudioService {
             }
         }
 
-        // Query input sources
         if let Ok(output) = Command::new("pactl")
             .args(["list", "sources", "short"])
             .output()
@@ -175,72 +247,75 @@ impl AudioService {
     }
 
     pub fn increase_volume(&self, step: u8) {
-        let _ = Command::new("wpctl")
-            .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{step}%+")])
-            .status();
+        let current = self.audio_info().volume;
+        self.set_volume(current.saturating_add(step).min(100));
     }
 
     pub fn decrease_volume(&self, step: u8) {
-        let _ = Command::new("wpctl")
-            .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{step}%-")])
-            .status();
+        let current = self.audio_info().volume;
+        self.set_volume(current.saturating_sub(step));
     }
 
     pub fn set_volume(&self, vol: u8) {
-        let _ = Command::new("pactl")
-            .args(["set-sink-volume", "@DEFAULT_SINK@", &format!("{vol}%")])
-            .status();
+        if let Some(backend) = &self.backend {
+            backend.set_default_sink_volume(vol, &self.tx);
+        }
     }
 
     pub fn toggle_mute(&self) {
-        let _ = Command::new("wpctl")
-            .args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
-            .status();
+        if let Some(backend) = &self.backend {
+            let is_muted = self.audio_info().is_muted;
+            backend.set_default_sink_mute(!is_muted, &self.tx);
+        }
+    }
+
+    pub fn set_input_volume(&self, vol: u8) {
+        if let Some(backend) = &self.backend {
+            backend.set_default_source_volume(vol, &self.tx);
+        }
+    }
+
+    pub fn toggle_input_mute(&self) {
+        if let Some(backend) = &self.backend {
+            let is_muted = self.audio_info().is_input_muted;
+            backend.set_default_source_mute(!is_muted, &self.tx);
+        }
     }
 
     pub fn set_stream_volume(&self, index: u32, percentage: u8) -> Result<()> {
-        let status = Command::new("pactl")
-            .args([
-                "set-sink-input-volume",
-                &index.to_string(),
-                &format!("{percentage}%"),
-            ])
-            .status()?;
-        if status.success() {
-            Ok(())
+        if let Some(backend) = &self.backend {
+            backend.set_stream_volume(index, percentage, &self.tx)
         } else {
-            Err(anyhow::anyhow!("failed to set audio stream volume"))
+            Ok(())
         }
     }
 
     pub fn toggle_stream_mute(&self, index: u32) -> Result<()> {
-        let status = Command::new("pactl")
-            .args(["set-sink-input-mute", &index.to_string(), "toggle"])
-            .status()?;
-        if status.success() {
-            Ok(())
+        if let Some(backend) = &self.backend {
+            backend.toggle_stream_mute(index, &self.tx)
         } else {
-            Err(anyhow::anyhow!("failed to toggle audio stream mute"))
+            Ok(())
         }
     }
 
     pub fn set_default_device(&self, device_id: &str, is_input: bool) -> Result<()> {
-        let cmd = if is_input {
-            "set-default-source"
+        if let Some(backend) = &self.backend {
+            backend.set_default_device(device_id, is_input, &self.tx)
         } else {
-            "set-default-sink"
-        };
-        let status = Command::new("pactl").args([cmd, device_id]).status()?;
-
-        if status.success() {
             Ok(())
-        } else {
-            Err(anyhow::anyhow!("failed to set default audio device"))
         }
     }
 
     pub fn list_ports(&self) -> Vec<AudioPort> {
-        Self::list_ports_static()
+        let info = self.audio_info();
+        let default_sink = info.sinks.iter().find(|s| s.is_default);
+        if let Some(sink) = default_sink
+            && !sink.ports.is_empty()
+        {
+            sink.ports.clone()
+        } else {
+            Self::list_ports_static()
+        }
     }
 
     pub fn list_ports_static() -> Vec<AudioPort> {
@@ -288,13 +363,10 @@ impl AudioService {
     }
 
     pub fn set_sink_port(&self, sink_name: &str, port_name: &str) -> Result<()> {
-        let status = Command::new("pactl")
-            .args(["set-sink-port", sink_name, port_name])
-            .status()?;
-        if status.success() {
-            Ok(())
+        if let Some(backend) = &self.backend {
+            backend.set_sink_port(sink_name, port_name, &self.tx)
         } else {
-            Err(anyhow::anyhow!("failed to set sink port"))
+            Ok(())
         }
     }
 
@@ -325,38 +397,336 @@ impl AudioService {
     }
 }
 
-fn query_volume() -> Option<u8> {
-    let output = Command::new("pactl")
-        .args(["get-sink-volume", "@DEFAULT_SINK@"])
-        .output()
-        .ok()?;
+impl PulseBackend {
+    fn refresh(&self, tx: &watch::Sender<AudioInfo>) {
+        let ml = self.mainloop.lock().unwrap();
+        let ctx = self.context.lock().unwrap();
 
-    if output.status.success() {
-        let out_str = String::from_utf8_lossy(&output.stdout);
-        // Format: Volume: front-left: 49152 /  75% / -7.53 dB, ...
-        for word in out_str.split_whitespace() {
-            if word.ends_with('%')
-                && let Ok(vol) = word.trim_end_matches('%').parse::<u8>()
-            {
-                return Some(vol);
+        let (server_tx, server_rx) = mpsc::channel();
+        ctx.introspect().get_server_info(move |info| {
+            let default_sink = info
+                .default_sink_name
+                .as_ref()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let default_source = info
+                .default_source_name
+                .as_ref()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let _ = server_tx.send((default_sink, default_source));
+        });
+
+        let (sinks_tx, sinks_rx) = mpsc::channel();
+        ctx.introspect().get_sink_info_list(move |res| {
+            if let pulse::callbacks::ListResult::Item(info) = res {
+                let name = info
+                    .name
+                    .as_ref()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                let description = info
+                    .description
+                    .as_ref()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| name.clone());
+                let vol_percent = (info.volume.avg().0 as f64 / pulse::volume::Volume::NORMAL.0 as f64
+                    * 100.0)
+                    .round()
+                    .min(100.0) as u8;
+                let is_muted = info.mute;
+                let ports = info
+                    .ports
+                    .iter()
+                    .map(|p| AudioPort {
+                        name: p.name.as_ref().map(|s| s.to_string()).unwrap_or_default(),
+                        description: p
+                            .description
+                            .as_ref()
+                            .map(|s| s.to_string())
+                            .unwrap_or_default(),
+                        is_active: false,
+                        available: p.available != pulse::def::PortAvailable::No,
+                    })
+                    .collect::<Vec<_>>();
+                let active_port = info
+                    .active_port
+                    .as_ref()
+                    .and_then(|p| p.name.as_ref().map(|s| s.to_string()));
+                let _ = sinks_tx.send(Some(AudioDevice {
+                    index: info.index,
+                    id: name.clone(),
+                    name,
+                    description,
+                    volume_percent: vol_percent,
+                    is_muted,
+                    is_default: false,
+                    is_input: false,
+                    ports,
+                    active_port,
+                }));
+            } else if let pulse::callbacks::ListResult::End = res {
+                let _ = sinks_tx.send(None);
             }
+        });
+
+        let (sources_tx, sources_rx) = mpsc::channel();
+        ctx.introspect().get_source_info_list(move |res| {
+            if let pulse::callbacks::ListResult::Item(info) = res {
+                let name = info
+                    .name
+                    .as_ref()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                if !name.ends_with(".monitor") {
+                    let description = info
+                        .description
+                        .as_ref()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| name.clone());
+                    let vol_percent = (info.volume.avg().0 as f64
+                        / pulse::volume::Volume::NORMAL.0 as f64
+                        * 100.0)
+                        .round()
+                        .min(100.0) as u8;
+                    let is_muted = info.mute;
+                    let ports = info
+                        .ports
+                        .iter()
+                        .map(|p| AudioPort {
+                            name: p.name.as_ref().map(|s| s.to_string()).unwrap_or_default(),
+                            description: p
+                                .description
+                                .as_ref()
+                                .map(|s| s.to_string())
+                                .unwrap_or_default(),
+                            is_active: false,
+                            available: p.available != pulse::def::PortAvailable::No,
+                        })
+                        .collect::<Vec<_>>();
+                    let active_port = info
+                        .active_port
+                        .as_ref()
+                        .and_then(|p| p.name.as_ref().map(|s| s.to_string()));
+                    let _ = sources_tx.send(Some(AudioDevice {
+                        index: info.index,
+                        id: name.clone(),
+                        name,
+                        description,
+                        volume_percent: vol_percent,
+                        is_muted,
+                        is_default: false,
+                        is_input: true,
+                        ports,
+                        active_port,
+                    }));
+                }
+            } else if let pulse::callbacks::ListResult::End = res {
+                let _ = sources_tx.send(None);
+            }
+        });
+
+        let (streams_tx, streams_rx) = mpsc::channel();
+        ctx.introspect().get_sink_input_info_list(move |res| {
+            if let pulse::callbacks::ListResult::Item(info) = res {
+                let name = info
+                    .name
+                    .as_ref()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                let app_name = info
+                    .proplist
+                    .get_str("application.name")
+                    .unwrap_or_else(|| name.clone());
+                let vol_percent = (info.volume.avg().0 as f64
+                    / pulse::volume::Volume::NORMAL.0 as f64
+                    * 100.0)
+                    .round()
+                    .min(100.0) as u8;
+                let is_muted = info.mute;
+                let _ = streams_tx.send(Some(AudioStream {
+                    id: info.index,
+                    index: info.index,
+                    name,
+                    app_name,
+                    volume_percent: vol_percent,
+                    is_muted,
+                }));
+            } else if let pulse::callbacks::ListResult::End = res {
+                let _ = streams_tx.send(None);
+            }
+        });
+
+        drop(ctx);
+        drop(ml);
+
+        let (default_sink_name, default_source_name) = server_rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .unwrap_or_default();
+
+        let mut sinks = Vec::new();
+        while let Ok(Some(mut sink)) =
+            sinks_rx.recv_timeout(std::time::Duration::from_millis(500))
+        {
+            sink.is_default = sink.name == default_sink_name;
+            if let Some(ref active) = sink.active_port {
+                for p in &mut sink.ports {
+                    p.is_active = p.name == *active;
+                }
+            }
+            sinks.push(sink);
+        }
+
+        let mut sources = Vec::new();
+        while let Ok(Some(mut src)) =
+            sources_rx.recv_timeout(std::time::Duration::from_millis(500))
+        {
+            src.is_default = src.name == default_source_name;
+            if let Some(ref active) = src.active_port {
+                for p in &mut src.ports {
+                    p.is_active = p.name == *active;
+                }
+            }
+            sources.push(src);
+        }
+
+        let mut app_streams = Vec::new();
+        while let Ok(Some(stream)) =
+            streams_rx.recv_timeout(std::time::Duration::from_millis(500))
+        {
+            app_streams.push(stream);
+        }
+
+        let default_sink = sinks.iter().find(|s| s.name == default_sink_name || s.is_default);
+        let default_source = sources
+            .iter()
+            .find(|s| s.name == default_source_name || s.is_default);
+
+        let volume = default_sink.map(|s| s.volume_percent).unwrap_or(0);
+        let is_muted = default_sink.map(|s| s.is_muted).unwrap_or(false);
+        let input_volume = default_source.map(|s| s.volume_percent).unwrap_or(0);
+        let is_input_muted = default_source.map(|s| s.is_muted).unwrap_or(false);
+
+        let audio_info = AudioInfo {
+            available: true,
+            default_sink_name,
+            default_source_name,
+            volume,
+            is_muted,
+            input_volume,
+            is_input_muted,
+            sinks,
+            sources,
+            app_streams,
+        };
+
+        let _ = tx.send(audio_info);
+    }
+
+    fn set_default_sink_volume(&self, vol: u8, tx: &watch::Sender<AudioInfo>) {
+        let _ml = self.mainloop.lock().unwrap();
+        let ctx = self.context.lock().unwrap();
+        let default_sink = tx.borrow().default_sink_name.clone();
+        let mut cvol = pulse::volume::ChannelVolumes::default();
+        let pa_vol = pulse::volume::Volume((vol as u32 * pulse::volume::Volume::NORMAL.0) / 100);
+        cvol.set(2, pa_vol);
+        if !default_sink.is_empty() {
+            ctx.introspect()
+                .set_sink_volume_by_name(&default_sink, &cvol, None);
         }
     }
-    None
-}
 
-fn query_mute() -> Option<bool> {
-    let output = Command::new("pactl")
-        .args(["get-sink-mute", "@DEFAULT_SINK@"])
-        .output()
-        .ok()?;
-
-    if output.status.success() {
-        let out_str = String::from_utf8_lossy(&output.stdout);
-        // Format: Mute: yes / Mute: no
-        return Some(out_str.contains("yes"));
+    fn set_default_sink_mute(&self, mute: bool, tx: &watch::Sender<AudioInfo>) {
+        let _ml = self.mainloop.lock().unwrap();
+        let ctx = self.context.lock().unwrap();
+        let default_sink = tx.borrow().default_sink_name.clone();
+        if !default_sink.is_empty() {
+            ctx.introspect()
+                .set_sink_mute_by_name(&default_sink, mute, None);
+        }
     }
-    None
+
+    fn set_default_source_volume(&self, vol: u8, tx: &watch::Sender<AudioInfo>) {
+        let _ml = self.mainloop.lock().unwrap();
+        let ctx = self.context.lock().unwrap();
+        let default_source = tx.borrow().default_source_name.clone();
+        let mut cvol = pulse::volume::ChannelVolumes::default();
+        let pa_vol = pulse::volume::Volume((vol as u32 * pulse::volume::Volume::NORMAL.0) / 100);
+        cvol.set(2, pa_vol);
+        if !default_source.is_empty() {
+            ctx.introspect()
+                .set_source_volume_by_name(&default_source, &cvol, None);
+        }
+    }
+
+    fn set_default_source_mute(&self, mute: bool, tx: &watch::Sender<AudioInfo>) {
+        let _ml = self.mainloop.lock().unwrap();
+        let ctx = self.context.lock().unwrap();
+        let default_source = tx.borrow().default_source_name.clone();
+        if !default_source.is_empty() {
+            ctx.introspect()
+                .set_source_mute_by_name(&default_source, mute, None);
+        }
+    }
+
+    fn set_default_device(
+        &self,
+        device_id: &str,
+        is_input: bool,
+        _tx: &watch::Sender<AudioInfo>,
+    ) -> Result<()> {
+        let _ml = self.mainloop.lock().unwrap();
+        let mut ctx = self.context.lock().unwrap();
+        if is_input {
+            ctx.set_default_source(device_id, |_| {});
+        } else {
+            ctx.set_default_sink(device_id, |_| {});
+        }
+        Ok(())
+    }
+
+    fn set_stream_volume(
+        &self,
+        index: u32,
+        percentage: u8,
+        _tx: &watch::Sender<AudioInfo>,
+    ) -> Result<()> {
+        let _ml = self.mainloop.lock().unwrap();
+        let ctx = self.context.lock().unwrap();
+        let mut cvol = pulse::volume::ChannelVolumes::default();
+        let pa_vol =
+            pulse::volume::Volume((percentage as u32 * pulse::volume::Volume::NORMAL.0) / 100);
+        cvol.set(2, pa_vol);
+        ctx.introspect().set_sink_input_volume(index, &cvol, None);
+        Ok(())
+    }
+
+    fn toggle_stream_mute(&self, index: u32, tx: &watch::Sender<AudioInfo>) -> Result<()> {
+        let _ml = self.mainloop.lock().unwrap();
+        let ctx = self.context.lock().unwrap();
+        let current_mute = tx
+            .borrow()
+            .app_streams
+            .iter()
+            .find(|s| s.index == index)
+            .map_or(false, |s| s.is_muted);
+        ctx.introspect()
+            .set_sink_input_mute(index, !current_mute, None);
+        Ok(())
+    }
+
+    fn set_sink_port(
+        &self,
+        sink_name: &str,
+        port_name: &str,
+        _tx: &watch::Sender<AudioInfo>,
+    ) -> Result<()> {
+        let _ml = self.mainloop.lock().unwrap();
+        let ctx = self.context.lock().unwrap();
+        ctx.introspect()
+            .set_sink_port_by_name(sink_name, port_name, None);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
