@@ -39,7 +39,7 @@ impl ControlCenterView {
         let snapshot = ShellRuntime::device_snapshot(cx);
         let night_light_service = service_or_warn(NightLightService::new, "night_light");
         let bluetooth_service = service_or_warn(BluetoothService::new, "bluetooth");
-        let power_profile_service = service_or_warn(PowerProfileService::new, "power_profile");
+        let power_profile_service = Some(PowerProfileService::new());
         let screen_capture_service = service_or_warn(ScreenCaptureService::new, "screen_capture");
 
         let initial_is_recording = screen_capture_service
@@ -208,13 +208,11 @@ impl ControlCenterView {
 
     fn set_power_profile(&mut self, profile: PowerProfile, cx: &mut Context<Self>) {
         if let Some(service) = &self.power_profile_service {
-            if service.set_profile(profile.clone()) {
-                self.active_power_profile = profile;
-            }
+            service.set_profile(profile);
         } else {
             self.active_power_profile = profile;
+            cx.notify();
         }
-        cx.notify();
     }
 
     fn cycle_power_profile(&mut self, cx: &mut Context<Self>) {

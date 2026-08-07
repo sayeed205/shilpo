@@ -1,4 +1,4 @@
-use anyhow::Result;
+use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,22 +34,22 @@ pub struct PowerProfileInfo {
 
 impl PowerProfileInfo {
     /// The fallback state used when the daemon is unreachable.
-    pub(crate) fn offline() -> Self {
+    pub(crate) fn fallback() -> Self {
         Self {
             active_profile: PowerProfile::Balanced,
             available: false,
         }
     }
 
-    /// A live state read from the daemon.
+    /// A live state read from the daemon's `ActiveProfile` property.
     #[cfg(target_os = "linux")]
-    pub(crate) fn online(active_profile: &str) -> Self {
-        Self::live(PowerProfile::parse(active_profile))
+    pub(crate) fn from_daemon(active_profile: &str) -> Self {
+        Self::online(PowerProfile::parse(active_profile))
     }
 
     /// A live state derived from a parsed profile.
     #[cfg(target_os = "linux")]
-    pub(crate) fn live(active_profile: PowerProfile) -> Self {
+    pub(crate) fn online(active_profile: PowerProfile) -> Self {
         Self {
             active_profile,
             available: true,
@@ -58,7 +58,7 @@ impl PowerProfileInfo {
 }
 
 /// Commands dispatched to the backend event loop.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 enum PowerProfileCommand {
     Set(PowerProfile),
 }
@@ -67,17 +67,20 @@ enum PowerProfileCommand {
 mod adapter;
 
 #[cfg(target_os = "linux")]
-use adapter::{PowerProfileAdapter, ZbusPowerProfileAdapter};
+use adapter::{BackendChannels, PowerProfileAdapter, ZbusPowerProfileAdapter};
 
 /// Event-driven service for the `net.hadess.PowerProfiles` daemon.
 ///
 /// A backend adapter owns an async loop that watches the daemon for
 /// `PropertiesChanged` signals and forwards state updates through a
 /// `watch::Sender`, replacing the former CLI polling approach.
+///
+/// Clones share the same daemon connection, command channel, and state.
+#[derive(Clone)]
 pub struct PowerProfileService {
     tx: watch::Sender<PowerProfileInfo>,
     command_tx: Option<mpsc::UnboundedSender<PowerProfileCommand>>,
-    _task: Option<tokio::task::JoinHandle<()>>,
+    _task: Option<Arc<tokio::task::JoinHandle<()>>>,
 }
 
 impl Drop for PowerProfileService {
@@ -88,33 +91,42 @@ impl Drop for PowerProfileService {
     }
 }
 
+impl Default for PowerProfileService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PowerProfileService {
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Self {
         #[cfg(target_os = "linux")]
         {
-            Ok(Self::from_adapter(ZbusPowerProfileAdapter))
+            Self::from_adapter(ZbusPowerProfileAdapter)
         }
         #[cfg(not(target_os = "linux"))]
         {
-            Ok(Self::new_offline())
+            Self::new_offline()
         }
     }
 
     /// Spawns the adapter's event loop and wires it to the service's state.
     #[cfg(target_os = "linux")]
     fn from_adapter(adapter: impl PowerProfileAdapter) -> Self {
-        let (tx, _) = watch::channel(PowerProfileInfo::offline());
+        let (tx, _) = watch::channel(PowerProfileInfo::fallback());
         let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let task = adapter.spawn(tx.clone(), command_rx);
+        let task = adapter.spawn(BackendChannels {
+            tx: tx.clone(),
+            command_rx,
+        });
         Self {
             tx,
             command_tx: Some(command_tx),
-            _task: Some(task),
+            _task: Some(Arc::new(task)),
         }
     }
 
     pub fn new_offline() -> Self {
-        let (tx, _) = watch::channel(PowerProfileInfo::offline());
+        let (tx, _) = watch::channel(PowerProfileInfo::fallback());
         Self {
             tx,
             command_tx: None,
@@ -130,8 +142,11 @@ impl PowerProfileService {
         self.tx.borrow().clone()
     }
 
-    /// Dispatches a profile change to the daemon. The backend adapter applies
-    /// the change over D-Bus and publishes the updated state to subscribers.
+    /// Dispatches a profile change command to the backend adapter.
+    ///
+    /// Returns `true` if the service is online and the command was sent.
+    /// Subscribers observe state changes through the watch channel when
+    /// the daemon confirms the update.
     pub fn set_profile(&self, profile: PowerProfile) -> bool {
         let Some(command_tx) = &self.command_tx else {
             return false;
@@ -139,15 +154,7 @@ impl PowerProfileService {
         if !self.tx.borrow().available {
             return false;
         }
-        command_tx
-            .send(PowerProfileCommand::Set(profile))
-            .is_ok()
-    }
-
-    /// Constructs a service backed by the given adapter. Test-only.
-    #[cfg(all(test, target_os = "linux"))]
-    fn with_adapter(adapter: impl PowerProfileAdapter) -> Self {
-        Self::from_adapter(adapter)
+        command_tx.send(PowerProfileCommand::Set(profile)).is_ok()
     }
 }
 
@@ -158,8 +165,8 @@ mod tests {
     use crate::power_profile::adapter::mock::TestPowerProfileAdapter;
     use std::time::Duration;
 
-    #[test]
-    fn test_power_profile_offline() {
+    #[tokio::test]
+    async fn test_power_profile_offline() {
         let service = PowerProfileService::new_offline();
         let info = service.info();
         assert!(!info.available);
@@ -178,21 +185,36 @@ mod tests {
         assert_eq!(PowerProfile::parse("unknown"), PowerProfile::Balanced);
     }
 
+    #[test]
+    fn test_power_profile_info_states() {
+        let fallback = PowerProfileInfo::fallback();
+        assert!(!fallback.available);
+        assert_eq!(fallback.active_profile, PowerProfile::Balanced);
+
+        #[cfg(target_os = "linux")]
+        {
+            let daemon = PowerProfileInfo::from_daemon("power-saver");
+            assert!(daemon.available);
+            assert_eq!(daemon.active_profile, PowerProfile::PowerSaver);
+
+            let online = PowerProfileInfo::online(PowerProfile::Performance);
+            assert!(online.available);
+            assert_eq!(online.active_profile, PowerProfile::Performance);
+        }
+    }
+
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn test_adapter_forwards_simulated_property_changes() {
         let (adapter, events) = TestPowerProfileAdapter::new();
-        let service = PowerProfileService::with_adapter(adapter);
+        let service = PowerProfileService::from_adapter(adapter);
         let mut receiver = service.subscribe();
 
         assert_eq!(receiver.borrow().active_profile, PowerProfile::Balanced);
         assert!(!receiver.borrow().available);
 
         events
-            .send(PowerProfileInfo {
-                active_profile: PowerProfile::Performance,
-                available: true,
-            })
+            .send(PowerProfileInfo::online(PowerProfile::Performance))
             .unwrap();
         assert!(
             tokio::time::timeout(Duration::from_secs(1), receiver.changed())
@@ -203,10 +225,7 @@ mod tests {
         assert!(receiver.borrow().available);
 
         events
-            .send(PowerProfileInfo {
-                active_profile: PowerProfile::PowerSaver,
-                available: true,
-            })
+            .send(PowerProfileInfo::online(PowerProfile::PowerSaver))
             .unwrap();
         assert!(
             tokio::time::timeout(Duration::from_secs(1), receiver.changed())
@@ -220,20 +239,22 @@ mod tests {
     #[tokio::test]
     async fn test_adapter_applies_set_profile_command() {
         let (adapter, events) = TestPowerProfileAdapter::new();
-        let service = PowerProfileService::with_adapter(adapter);
+        let service = PowerProfileService::from_adapter(adapter);
         let mut receiver = service.subscribe();
 
         assert!(!receiver.borrow().available);
-        assert!(!service.set_profile(PowerProfile::Performance));
+        assert!(!service.set_profile(PowerProfile::PowerSaver));
 
-        events.send(PowerProfileInfo::online("balanced")).unwrap();
+        events
+            .send(PowerProfileInfo::from_daemon("balanced"))
+            .unwrap();
         assert!(
             tokio::time::timeout(Duration::from_secs(1), receiver.changed())
                 .await
                 .is_ok()
         );
-        assert!(receiver.borrow().available);
         assert_eq!(receiver.borrow().active_profile, PowerProfile::Balanced);
+        assert!(receiver.borrow().available);
 
         assert!(service.set_profile(PowerProfile::PowerSaver));
         assert!(
@@ -242,6 +263,5 @@ mod tests {
                 .is_ok()
         );
         assert_eq!(receiver.borrow().active_profile, PowerProfile::PowerSaver);
-        assert!(receiver.borrow().available);
     }
 }

@@ -7,7 +7,7 @@ publish.workspace = true
 [dependencies]
 gpui.workspace = true
 niri-ipc.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 zbus.workspace = true
 anyhow.workspace = true
 futures-lite.workspace = true
