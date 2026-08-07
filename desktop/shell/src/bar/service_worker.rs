@@ -136,6 +136,11 @@ pub enum AudioCommand {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NetworkCommand {
     SetWifiEnabled(bool),
+    ScanWifi,
+    ConnectWifi {
+        ssid: String,
+        object_path: Option<String>,
+    },
     DeactivateConnection(String),
     ConnectVpn(String),
     DisconnectVpn(String),
@@ -377,7 +382,13 @@ impl DeviceServices {
                 if let Some(ref network) = self.network.instance {
                     let _ = match net_cmd {
                         NetworkCommand::SetWifiEnabled(b) => network.set_wifi_enabled(*b),
-                        NetworkCommand::DeactivateConnection(p) => network.deactivate_connection(p),
+                        NetworkCommand::ScanWifi => network.scan_wifi(),
+                        NetworkCommand::ConnectWifi { ssid, object_path } => {
+                            network.connect_wifi(ssid, object_path.as_deref())
+                        }
+                        NetworkCommand::DeactivateConnection(p) => {
+                            network.deactivate_connection(p)
+                        }
                         NetworkCommand::ConnectVpn(n) => network.connect_vpn(n),
                         NetworkCommand::DisconnectVpn(n) => network.disconnect_vpn(n),
                         NetworkCommand::SetAirplaneModeEnabled(b) => {
