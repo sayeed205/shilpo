@@ -490,7 +490,14 @@ pub enum ThemeCommand {
 }
 
 fn regenerate_palette(state: &mut ThemeState, seed: u32, variant: SchemeVariant, timestamp: &str) {
-    let effective = resolve_variant(seed, variant);
+    apply_palette(state, seed, resolve_variant(seed, variant), timestamp);
+}
+
+/// Write the palettes derived from a seed under a concrete variant, and the
+/// bookkeeping that accompanies a palette change (source, resolution, and
+/// generation timestamp). The caller owns the revision/`updated_at` bump.
+fn apply_palette(state: &mut ThemeState, seed: u32, effective: SchemeVariant, timestamp: &str) {
+    state.source_argb = seed;
     state.resolved_variant = effective;
     let (light, dark) = generate_m3_palettes(seed, effective);
     state.light = light;
@@ -498,41 +505,41 @@ fn regenerate_palette(state: &mut ThemeState, seed: u32, variant: SchemeVariant,
     state.palette_generated_at = timestamp.to_string();
 }
 
-/// Apply a wallpaper seed along with an image-detected variant (used when
-/// [`ThemeState::scheme_variant`] is [`SchemeVariant::Auto`]). If an explicit
-/// variant is pinned, the detected variant is ignored and the explicit pin is
-/// used. Returns whether the state changed.
-pub fn reduce_wallpaper_seed(
+/// Materialize a seed produced by the active external source together with the
+/// concrete variant its producer resolved for it. When the stored selection is
+/// [`SchemeVariant::Auto`], the passed-in resolution wins; an explicit pin
+/// overrides it. The stored selection is left untouched, so the next external
+/// seed re-derives its own resolution. If no concrete resolution is supplied
+/// (`Auto`), falls back to seed-chroma resolution.
+///
+/// Core does not know where a seed came from or how its resolution was decided
+/// (ADR-0002); the caller owns that. This only materializes both values.
+/// Returns whether the state changed.
+pub fn materialize_seed_with_variant(
     state: &mut ThemeState,
     seed: u32,
-    detected_variant: SchemeVariant,
+    resolved_variant: SchemeVariant,
     timestamp: &str,
 ) -> bool {
-    let mut changed = false;
-
-    if state.color_source == ColorSource::Wallpaper {
-        let effective = match state.scheme_variant {
-            SchemeVariant::Auto => detected_variant,
-            explicit => explicit,
-        };
-
-        if state.source_argb != seed || state.resolved_variant != effective {
-            state.source_argb = seed;
-            state.resolved_variant = effective;
-            let (light, dark) = generate_m3_palettes(seed, effective);
-            state.light = light;
-            state.dark = dark;
-            state.palette_generated_at = timestamp.to_string();
-            changed = true;
-        }
+    if state.color_source != ColorSource::Wallpaper {
+        return false;
     }
 
-    if changed {
-        state.revision += 1;
-        state.updated_at = timestamp.to_string();
+    let effective = match state.scheme_variant {
+        SchemeVariant::Auto if resolved_variant != SchemeVariant::Auto => resolved_variant,
+        SchemeVariant::Auto => resolve_variant(seed, SchemeVariant::Auto),
+        explicit => explicit,
+    };
+
+    if state.source_argb == seed && state.resolved_variant == effective {
+        return false;
     }
 
-    changed
+    apply_palette(state, seed, effective, timestamp);
+    state.revision += 1;
+    state.updated_at = timestamp.to_string();
+
+    true
 }
 
 /// Apply a pure `ThemeCommand` transition, returning whether the state changed.
@@ -580,7 +587,6 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand, timestamp: &str) ->
                     && let Some(seed) = state.custom_seed.filter(|&seed| seed != state.source_argb)
                 {
                     let variant = state.scheme_variant;
-                    state.source_argb = seed;
                     regenerate_palette(state, seed, variant, timestamp);
                 }
             }
@@ -600,7 +606,6 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand, timestamp: &str) ->
             }
             if state.color_source == ColorSource::Custom && state.source_argb != seed {
                 let variant = state.scheme_variant;
-                state.source_argb = seed;
                 changed = true;
                 regenerate_palette(state, seed, variant, timestamp);
             }
@@ -608,7 +613,6 @@ pub fn reduce(state: &mut ThemeState, command: ThemeCommand, timestamp: &str) ->
         ThemeCommand::SetSeed(seed) => {
             if state.color_source == ColorSource::Wallpaper && state.source_argb != seed {
                 let variant = state.scheme_variant;
-                state.source_argb = seed;
                 changed = true;
                 regenerate_palette(state, seed, variant, timestamp);
             }
@@ -813,5 +817,105 @@ mod tests {
         );
         assert_eq!(state.updated_at, "2026-08-06T13:00:00Z");
         assert_eq!(state.palette_generated_at, "2026-08-06T13:00:00Z");
+    }
+
+    #[test]
+    fn test_materialize_seed_uses_injected_resolution_when_auto() {
+        let mut state = ThemeState::default();
+        assert_eq!(state.color_source, ColorSource::Wallpaper);
+        assert_eq!(state.scheme_variant, SchemeVariant::Auto);
+
+        let changed = materialize_seed_with_variant(
+            &mut state,
+            0xffdd11dd,
+            SchemeVariant::Expressive,
+            TEST_TIMESTAMP,
+        );
+        assert!(changed);
+        assert_eq!(state.scheme_variant, SchemeVariant::Auto);
+        assert_eq!(state.source_argb, 0xffdd11dd);
+        assert_eq!(state.resolved_variant, SchemeVariant::Expressive);
+        assert_eq!(state.palette_generated_at, TEST_TIMESTAMP);
+        assert_eq!(state.updated_at, TEST_TIMESTAMP);
+
+        let (expected_light, expected_dark) =
+            generate_m3_palettes(0xffdd11dd, SchemeVariant::Expressive);
+        assert_eq!(state.light, expected_light);
+        assert_eq!(state.dark, expected_dark);
+    }
+
+    #[test]
+    fn test_materialize_seed_honors_explicit_pin() {
+        let mut state = ThemeState {
+            scheme_variant: SchemeVariant::TonalSpot,
+            ..Default::default()
+        };
+
+        let changed = materialize_seed_with_variant(
+            &mut state,
+            0xffdd11dd,
+            SchemeVariant::Expressive,
+            TEST_TIMESTAMP,
+        );
+        assert!(changed);
+        assert_eq!(state.scheme_variant, SchemeVariant::TonalSpot);
+        assert_eq!(state.resolved_variant, SchemeVariant::TonalSpot);
+    }
+
+    #[test]
+    fn test_materialize_seed_falls_back_to_chroma_for_auto_resolution() {
+        let mut state = ThemeState::default();
+
+        let changed = materialize_seed_with_variant(
+            &mut state,
+            0xffdd11dd,
+            SchemeVariant::Auto,
+            TEST_TIMESTAMP,
+        );
+        assert!(changed);
+        assert_eq!(
+            state.resolved_variant,
+            resolve_variant(0xffdd11dd, SchemeVariant::Auto)
+        );
+    }
+
+    #[test]
+    fn test_materialize_seed_is_noop_for_custom_source() {
+        let mut state = ThemeState {
+            color_source: ColorSource::Custom,
+            ..Default::default()
+        };
+        let revision = state.revision;
+
+        let changed = materialize_seed_with_variant(
+            &mut state,
+            0xffdd11dd,
+            SchemeVariant::Expressive,
+            TEST_TIMESTAMP,
+        );
+        assert!(!changed);
+        assert_eq!(state.revision, revision);
+        assert_eq!(state.source_argb, DEFAULT_SOURCE_ARGB);
+    }
+
+    #[test]
+    fn test_materialize_seed_same_seed_and_resolution_is_noop() {
+        let mut state = ThemeState::default();
+        let _ = materialize_seed_with_variant(
+            &mut state,
+            0xffdd11dd,
+            SchemeVariant::Expressive,
+            TEST_TIMESTAMP,
+        );
+        let revision = state.revision;
+
+        let changed = materialize_seed_with_variant(
+            &mut state,
+            0xffdd11dd,
+            SchemeVariant::Expressive,
+            TEST_TIMESTAMP,
+        );
+        assert!(!changed);
+        assert_eq!(state.revision, revision);
     }
 }
