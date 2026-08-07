@@ -5,7 +5,7 @@ pub mod vpn;
 pub mod wifi;
 
 pub use vpn::VpnConnection;
-pub use wifi::WifiAccessPoint;
+pub use wifi::{WifiAccessPoint, WifiSecurity};
 
 use anyhow::Result;
 use futures_lite::StreamExt;
@@ -86,7 +86,10 @@ pub struct NetworkInfo {
     pub ssid: Option<String>,
     /// Whether the Wi-Fi radio is enabled.
     pub wifi_enabled: bool,
-    /// Whether airplane mode is currently active.
+    /// Whether WWAN (Cellular) radio is enabled.
+    #[serde(default)]
+    pub wwan_enabled: bool,
+    /// Whether airplane mode is currently active (true if both Wi-Fi and WWAN radios are disabled).
     pub airplane_mode: bool,
     /// Discovered Wi-Fi access points.
     pub access_points: Vec<WifiAccessPoint>,
@@ -166,6 +169,7 @@ impl NetworkService {
                 let state = NetworkState::from(nm_state);
                 let is_connected = nm_state == dbus_client::NM_STATE_CONNECTED_GLOBAL;
                 let wifi_enabled = dbus_client::get_wireless_enabled(conn).await.unwrap_or(true);
+                let wwan_enabled = dbus_client::get_wwan_enabled(conn).await.unwrap_or(false);
                 let access_points = dbus_client::list_access_points(conn).await.unwrap_or_default();
                 let active_vpns = dbus_client::list_active_vpns(conn).await.unwrap_or_default();
                 let devices = dbus_client::list_network_devices(conn).await.unwrap_or_default();
@@ -177,13 +181,14 @@ impl NetworkService {
                     .iter()
                     .find(|ap| ap.is_connected)
                     .map(|ap| ap.ssid.clone());
-                let airplane_mode = tx.borrow().airplane_mode;
+                let airplane_mode = !wifi_enabled && !wwan_enabled;
 
                 let info = NetworkInfo {
                     is_connected,
                     connection_type,
                     ssid: active_ssid,
                     wifi_enabled,
+                    wwan_enabled,
                     airplane_mode,
                     access_points,
                     active_vpns,
@@ -324,7 +329,7 @@ impl NetworkService {
         Ok(())
     }
 
-    /// Enable or disable airplane mode (disabling airplane mode restores Wi-Fi enabled status).
+    /// Enable or disable airplane mode (disabling airplane mode restores Wi-Fi and WWAN radio status).
     pub fn set_airplane_mode_enabled(&self, enabled: bool) -> Result<()> {
         if let Some(tx) = &self.command_tx {
             tx.try_send(NetworkCommand::SetAirplaneModeEnabled(enabled))
@@ -333,6 +338,7 @@ impl NetworkService {
         let mut current = self.tx.borrow().clone();
         current.airplane_mode = enabled;
         current.wifi_enabled = !enabled;
+        current.wwan_enabled = !enabled;
         let _ = self.tx.send_replace(current);
         Ok(())
     }
@@ -351,6 +357,7 @@ mod tests {
                 connection_type: String::new(),
                 ssid: None,
                 wifi_enabled: false,
+                wwan_enabled: false,
                 airplane_mode: false,
                 access_points: Vec::new(),
                 active_vpns: Vec::new(),
@@ -413,6 +420,7 @@ mod tests {
             connection_type: "802-11-wireless".to_string(),
             ssid: Some("Office-5G".to_string()),
             wifi_enabled: true,
+            wwan_enabled: false,
             airplane_mode: false,
             access_points: vec![WifiAccessPoint {
                 ssid: "Office-5G".to_string(),

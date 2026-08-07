@@ -40,7 +40,7 @@ pub use ipc::{
 };
 pub use location::{LocationInfo, LocationService};
 pub use media::{MediaCommand, MediaInfo, MediaService, PlaybackState};
-pub use network::{NetworkInfo, NetworkService, VpnConnection};
+pub use network::{NetworkCommand, NetworkInfo, NetworkService, VpnConnection};
 pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_use_dark_mode};
 pub use notifications::{Notification, NotificationService, NotificationUrgency};
 pub use polled::{BackoffConfig, PolledService};

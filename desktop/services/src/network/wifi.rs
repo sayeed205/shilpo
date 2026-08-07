@@ -21,15 +21,46 @@ pub struct WifiAccessPoint {
     pub object_path: String,
 }
 
+/// Strongly-typed Wi-Fi security classification.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WifiSecurity {
+    #[default]
+    Open,
+    Wpa,
+    Wpa2Wpa3Personal,
+    WpaEnterprise,
+    Wpa2Wpa3Enterprise,
+}
+
 impl WifiAccessPoint {
+    /// Classify the access point's security protocol as a strongly-typed enum.
+    pub fn security(&self) -> WifiSecurity {
+        if self.security_type.contains("Enterprise") || self.security_type.contains("802.1X") {
+            if self.security_type.contains("WPA2") || self.security_type.contains("WPA3") {
+                WifiSecurity::Wpa2Wpa3Enterprise
+            } else {
+                WifiSecurity::WpaEnterprise
+            }
+        } else if self.security_type.contains("WPA2") || self.security_type.contains("WPA3") {
+            WifiSecurity::Wpa2Wpa3Personal
+        } else if self.security_type.contains("WPA") {
+            WifiSecurity::Wpa
+        } else {
+            WifiSecurity::Open
+        }
+    }
+
     /// Returns `true` if the access point requires authentication/encryption.
     pub fn is_secure(&self) -> bool {
-        self.security_type != "Open" && !self.security_type.is_empty()
+        self.security() != WifiSecurity::Open
     }
 
     /// Returns `true` if the access point uses 802.1X / Enterprise authentication.
     pub fn is_enterprise(&self) -> bool {
-        self.security_type.contains("Enterprise") || self.security_type.contains("802.1X")
+        matches!(
+            self.security(),
+            WifiSecurity::WpaEnterprise | WifiSecurity::Wpa2Wpa3Enterprise
+        )
     }
 }
 

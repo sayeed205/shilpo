@@ -20,12 +20,29 @@ const NM_IP4_IFACE: &str = "org.freedesktop.NetworkManager.IP4Config";
 const NM_IP6_IFACE: &str = "org.freedesktop.NetworkManager.IP6Config";
 const DBUS_PROP_IFACE: &str = "org.freedesktop.DBus.Properties";
 
+/// NetworkManager device type code for Ethernet hardware interfaces.
+pub const NM_DEVICE_TYPE_ETHERNET: u32 = 1;
 /// NetworkManager state code for global internet connectivity.
 pub const NM_STATE_CONNECTED_GLOBAL: u32 = 70;
 /// NetworkManager device type code for Wi-Fi hardware interfaces.
 pub const NM_DEVICE_TYPE_WIFI: u32 = 2;
+/// NetworkManager device type code for Bluetooth hardware interfaces.
+pub const NM_DEVICE_TYPE_BT: u32 = 5;
+/// NetworkManager device type code for Generic interfaces.
+pub const NM_DEVICE_TYPE_GENERIC: u32 = 14;
 /// NetworkManager active connection state code for fully activated status.
 pub const NM_ACTIVE_CONN_STATE_ACTIVATED: u32 = 2;
+
+/// Translate raw DBus device type code to canonical type string.
+pub fn device_type_code_to_string(code: u32) -> &'static str {
+    match code {
+        NM_DEVICE_TYPE_ETHERNET => "ethernet",
+        NM_DEVICE_TYPE_WIFI => "wifi",
+        NM_DEVICE_TYPE_BT => "bluetooth",
+        NM_DEVICE_TYPE_GENERIC => "generic",
+        _ => "other",
+    }
+}
 
 /// Get a single DBus property from a target service object.
 pub async fn get_property<T: zbus::zvariant::Type + serde::de::DeserializeOwned>(
@@ -86,6 +103,11 @@ pub async fn get_nm_state(conn: &Connection) -> Result<u32> {
 /// Query whether Wireless (Wi-Fi) radio is enabled.
 pub async fn get_wireless_enabled(conn: &Connection) -> Result<bool> {
     get_property::<bool>(conn, NM_OBJECT_PATH, NM_IFACE, "WirelessEnabled").await
+}
+
+/// Query whether WWAN (Cellular) radio is enabled.
+pub async fn get_wwan_enabled(conn: &Connection) -> Result<bool> {
+    get_property::<bool>(conn, NM_OBJECT_PATH, NM_IFACE, "WwanEnabled").await
 }
 
 /// Set the Wireless (Wi-Fi) radio power state.
@@ -160,17 +182,10 @@ pub async fn list_network_devices(conn: &Connection) -> Result<Vec<NetworkDevice
             .await
             .unwrap_or(0);
 
-        let device_type = match dev_type_code {
-            1 => "ethernet",
-            2 => "wifi",
-            5 => "bluetooth",
-            14 => "generic",
-            _ => "other",
-        }
-        .to_string();
+        let device_type = device_type_code_to_string(dev_type_code).to_string();
 
         let mut carrier = state == 100;
-        if dev_type_code == 1
+        if dev_type_code == NM_DEVICE_TYPE_ETHERNET
             && let Ok(c) = get_property::<bool>(
                 conn,
                 path_str,
@@ -178,9 +193,9 @@ pub async fn list_network_devices(conn: &Connection) -> Result<Vec<NetworkDevice
                 "Carrier",
             )
             .await
-            {
-                carrier = c;
-            }
+        {
+            carrier = c;
+        }
 
         devices.push(NetworkDevice {
             interface,
@@ -289,12 +304,10 @@ pub async fn list_access_points(conn: &Connection) -> Result<Vec<WifiAccessPoint
     Ok(access_points)
 }
 
-/// Connect to a Wi-Fi network by SSID and optional AP object path using DBus.
-pub async fn connect_wifi_ap(
+/// Query settings dictionary for all saved NetworkManager connections.
+pub async fn list_all_connection_settings(
     conn: &Connection,
-    ssid: &str,
-    ap_path_opt: Option<&str>,
-) -> Result<()> {
+) -> Result<Vec<(OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>)>> {
     let list_reply = conn
         .call_method(
             Some(NM_BUS_NAME),
@@ -305,8 +318,8 @@ pub async fn connect_wifi_ap(
         )
         .await?;
     let conn_paths: Vec<OwnedObjectPath> = list_reply.body().deserialize()?;
-    let mut matching_setting_path: Option<OwnedObjectPath> = None;
 
+    let mut result = Vec::new();
     for setting_path in conn_paths {
         if let Ok(reply) = conn
             .call_method(
@@ -319,15 +332,33 @@ pub async fn connect_wifi_ap(
             .await
             && let Ok(settings) =
                 reply.body().deserialize::<HashMap<String, HashMap<String, OwnedValue>>>()
-            && let Some(wifi_setting) = settings.get("802-11-wireless")
-                && let Some(ssid_val) = wifi_setting.get("ssid")
-                    && let Ok(raw_ssid) = Vec::<u8>::try_from(ssid_val.clone()) {
-                        let conn_ssid = String::from_utf8_lossy(&raw_ssid);
-                        if conn_ssid == ssid {
-                            matching_setting_path = Some(setting_path);
-                            break;
-                        }
-                    }
+        {
+            result.push((setting_path, settings));
+        }
+    }
+    Ok(result)
+}
+
+/// Connect to a Wi-Fi network by SSID and optional AP object path using DBus.
+pub async fn connect_wifi_ap(
+    conn: &Connection,
+    ssid: &str,
+    ap_path_opt: Option<&str>,
+) -> Result<()> {
+    let connections = list_all_connection_settings(conn).await?;
+    let mut matching_setting_path: Option<OwnedObjectPath> = None;
+
+    for (setting_path, settings) in connections {
+        if let Some(wifi_setting) = settings.get("802-11-wireless")
+            && let Some(ssid_val) = wifi_setting.get("ssid")
+            && let Ok(raw_ssid) = Vec::<u8>::try_from(ssid_val.clone())
+        {
+            let conn_ssid = String::from_utf8_lossy(&raw_ssid);
+            if conn_ssid == ssid {
+                matching_setting_path = Some(setting_path);
+                break;
+            }
+        }
     }
 
     let wifi_devs = get_wifi_device_paths(conn).await?;
@@ -403,35 +434,11 @@ pub async fn list_active_vpns(conn: &Connection) -> Result<Vec<VpnConnection>> {
 
 /// Activate a VPN connection by profile name or UUID via DBus.
 pub async fn connect_vpn(conn: &Connection, name_or_uuid: &str) -> Result<()> {
-    let list_reply = conn
-        .call_method(
-            Some(NM_BUS_NAME),
-            NM_SETTINGS_OBJECT_PATH,
-            Some(NM_SETTINGS_IFACE),
-            "ListConnections",
-            &(),
-        )
-        .await?;
-    let conn_paths: Vec<OwnedObjectPath> = list_reply.body().deserialize()?;
-
+    let connections = list_all_connection_settings(conn).await?;
     let mut target_setting_path: Option<OwnedObjectPath> = None;
 
-    for setting_path in conn_paths {
-        let reply = conn
-            .call_method(
-                Some(NM_BUS_NAME),
-                setting_path.as_str(),
-                Some(NM_SETTINGS_CONN_IFACE),
-                "GetSettings",
-                &(),
-            )
-            .await;
-
-        if let Ok(reply) = reply
-            && let Ok(settings) =
-                reply.body().deserialize::<HashMap<String, HashMap<String, OwnedValue>>>()
-            && let Some(conn_setting) = settings.get("connection")
-        {
+    for (setting_path, settings) in connections {
+        if let Some(conn_setting) = settings.get("connection") {
             let id = conn_setting
                 .get("id")
                 .and_then(|v| String::try_from(v.clone()).ok());
@@ -479,6 +486,20 @@ pub async fn disconnect_vpn(conn: &Connection, name_or_path: &str) -> Result<()>
     anyhow::bail!("Active VPN '{name_or_path}' not found")
 }
 
+async fn get_first_address(
+    conn: &Connection,
+    config_path: &str,
+    iface: &str,
+) -> Option<String> {
+    let addr_data: Vec<HashMap<String, OwnedValue>> =
+        get_property(conn, config_path, iface, "AddressData")
+            .await
+            .ok()?;
+    let first = addr_data.first()?;
+    let addr_val = first.get("address")?;
+    String::try_from(addr_val.clone()).ok()
+}
+
 /// Query primary active connection type and full IP network details (IPv4, IPv6, Gateway, DNS).
 pub async fn get_primary_connection_info(conn: &Connection) -> Result<(String, Option<IpConfig>)> {
     let active_paths: Vec<OwnedObjectPath> =
@@ -516,14 +537,7 @@ pub async fn get_primary_connection_info(conn: &Connection) -> Result<(String, O
                     .ok()
                     .filter(|g| !g.is_empty());
 
-                if let Ok(addr_data) =
-                    get_property::<Vec<HashMap<String, OwnedValue>>>(conn, ip4_str, NM_IP4_IFACE, "AddressData")
-                        .await
-                    && let Some(first) = addr_data.first()
-                        && let Some(addr_val) = first.get("address")
-                            && let Ok(addr_str) = String::try_from(addr_val.clone()) {
-                                ipv4_addr = Some(addr_str);
-                            }
+                ipv4_addr = get_first_address(conn, ip4_str, NM_IP4_IFACE).await;
 
                 if let Ok(ns_list) =
                     get_property::<Vec<u32>>(conn, ip4_str, NM_IP4_IFACE, "Nameservers").await
@@ -546,14 +560,7 @@ pub async fn get_primary_connection_info(conn: &Connection) -> Result<(String, O
                     .ok()
                     .filter(|g| !g.is_empty());
 
-                if let Ok(addr_data) =
-                    get_property::<Vec<HashMap<String, OwnedValue>>>(conn, ip6_str, NM_IP6_IFACE, "AddressData")
-                        .await
-                    && let Some(first) = addr_data.first()
-                        && let Some(addr_val) = first.get("address")
-                            && let Ok(addr_str) = String::try_from(addr_val.clone()) {
-                                ipv6_addr = Some(addr_str);
-                            }
+                ipv6_addr = get_first_address(conn, ip6_str, NM_IP6_IFACE).await;
             }
 
             ip_config = Some(IpConfig {

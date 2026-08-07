@@ -1,5 +1,6 @@
 use gpui::BackgroundExecutor;
 use shilpo_config::ShellConfig;
+pub use shilpo_services::NetworkCommand;
 use shilpo_services::{
     AudioInfo, AudioService, BatteryInfo, BatteryService, BrightnessInfo, BrightnessService,
     MediaCommand, MediaInfo, MediaService, NetworkInfo, NetworkService,
@@ -133,19 +134,7 @@ pub enum AudioCommand {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NetworkCommand {
-    SetWifiEnabled(bool),
-    ScanWifi,
-    ConnectWifi {
-        ssid: String,
-        object_path: Option<String>,
-    },
-    DeactivateConnection(String),
-    ConnectVpn(String),
-    DisconnectVpn(String),
-    SetAirplaneModeEnabled(bool),
-}
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeviceCommand {
