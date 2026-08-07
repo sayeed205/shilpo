@@ -1,40 +1,54 @@
 use anyhow::Result;
 use std::process::Command;
 
-/// Metadata describing an individual application audio playback stream.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Metadata describing an individual application audio playback stream (Sink Input).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AudioStream {
     pub id: u32,
+    pub index: u32,
     pub name: String,
+    pub app_name: String,
     pub volume_percent: u8,
     pub is_muted: bool,
 }
 
-/// Audio sink volume & mute status.
+/// Metadata describing an audio port on a sound card, sink, or source.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct AudioInfo {
-    pub volume: u8,
-    pub is_muted: bool,
-    pub available: bool,
-    pub app_streams: Vec<AudioStream>,
-}
-
-/// Metadata describing a physical audio device (sink or source).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AudioDevice {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub is_default: bool,
-    pub is_input: bool,
-}
-
-/// Metadata describing an audio port on a sound card (e.g. Headphones vs Speakers).
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AudioPort {
     pub name: String,
     pub description: String,
     pub is_active: bool,
+    pub available: bool,
+}
+
+/// Metadata describing a physical or virtual audio device (sink or source).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AudioDevice {
+    pub index: u32,
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub volume_percent: u8,
+    pub is_muted: bool,
+    pub is_default: bool,
+    pub is_input: bool,
+    pub ports: Vec<AudioPort>,
+    pub active_port: Option<String>,
+}
+
+/// Comprehensive system audio snapshot including volumes, mutes, sinks, sources, and application streams.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AudioInfo {
+    pub available: bool,
+    pub default_sink_name: String,
+    pub default_source_name: String,
+    pub volume: u8,
+    pub is_muted: bool,
+    pub input_volume: u8,
+    pub is_input_muted: bool,
+    pub sinks: Vec<AudioDevice>,
+    pub sources: Vec<AudioDevice>,
+    pub app_streams: Vec<AudioStream>,
 }
 
 use crate::polled::PolledService;
@@ -58,7 +72,7 @@ impl AudioService {
                         volume,
                         is_muted,
                         available: true,
-                        app_streams: Vec::new(),
+                        ..AudioInfo::default()
                     },
                     _ => AudioInfo::default(),
                 };
@@ -99,6 +113,7 @@ impl AudioService {
             for line in text.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 2 {
+                    let idx = parts[0].parse::<u32>().unwrap_or(0);
                     let name = parts[1].to_string();
                     let description = name
                         .split('.')
@@ -106,11 +121,16 @@ impl AudioService {
                         .unwrap_or(&name)
                         .replace('_', " ");
                     devices.push(AudioDevice {
+                        index: idx,
                         id: name.clone(),
                         name: name.clone(),
                         description,
+                        volume_percent: 100,
+                        is_muted: false,
                         is_default: false,
                         is_input: false,
+                        ports: Vec::new(),
+                        active_port: None,
                     });
                 }
             }
@@ -126,6 +146,7 @@ impl AudioService {
             for line in text.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 2 {
+                    let idx = parts[0].parse::<u32>().unwrap_or(0);
                     let name = parts[1].to_string();
                     if !name.ends_with(".monitor") {
                         let description = name
@@ -134,11 +155,16 @@ impl AudioService {
                             .unwrap_or(&name)
                             .replace('_', " ");
                         devices.push(AudioDevice {
+                            index: idx,
                             id: name.clone(),
                             name: name.clone(),
                             description,
+                            volume_percent: 100,
+                            is_muted: false,
                             is_default: false,
                             is_input: true,
+                            ports: Vec::new(),
+                            active_port: None,
                         });
                     }
                 }
@@ -253,6 +279,7 @@ impl AudioService {
                         name: port_name,
                         description: desc,
                         is_active,
+                        available: true,
                     });
                 }
             }
@@ -346,22 +373,38 @@ mod tests {
 
     #[test]
     fn test_audio_device_listing_and_switching_fallback() {
+        let port = AudioPort {
+            name: "analog-output-headphones".to_string(),
+            description: "Headphones".to_string(),
+            is_active: true,
+            available: true,
+        };
         let dev = AudioDevice {
+            index: 1,
             id: "alsa_output.pci-0000_00_1f.3.analog-stereo".to_string(),
             name: "alsa_output.pci-0000_00_1f.3.analog-stereo".to_string(),
             description: "analog stereo".to_string(),
+            volume_percent: 75,
+            is_muted: false,
             is_default: true,
             is_input: false,
+            ports: vec![port],
+            active_port: Some("analog-output-headphones".to_string()),
         };
         assert_eq!(dev.id, "alsa_output.pci-0000_00_1f.3.analog-stereo");
+        assert_eq!(dev.volume_percent, 75);
         assert!(!dev.is_input);
+        assert_eq!(dev.ports.len(), 1);
+        assert_eq!(dev.active_port.as_deref(), Some("analog-output-headphones"));
     }
 
     #[test]
     fn test_audio_stream_volume_and_mute_controls() {
         let stream = AudioStream {
             id: 1,
-            name: "Firefox".to_string(),
+            index: 1,
+            name: "Playback".to_string(),
+            app_name: "Firefox".to_string(),
             volume_percent: 80,
             is_muted: false,
         };
@@ -369,7 +412,29 @@ mod tests {
         info.app_streams.push(stream);
 
         assert_eq!(info.app_streams.len(), 1);
-        assert_eq!(info.app_streams[0].name, "Firefox");
+        assert_eq!(info.app_streams[0].app_name, "Firefox");
         assert_eq!(info.app_streams[0].volume_percent, 80);
+    }
+
+    #[test]
+    fn test_audio_info_unified_snapshot() {
+        let info = AudioInfo {
+            available: true,
+            default_sink_name: "alsa_output.pci-0000_00_1f.3.analog-stereo".to_string(),
+            default_source_name: "alsa_input.pci-0000_00_1f.3.analog-stereo".to_string(),
+            volume: 65,
+            is_muted: false,
+            input_volume: 50,
+            is_input_muted: true,
+            sinks: vec![AudioDevice::default()],
+            sources: vec![AudioDevice::default()],
+            app_streams: vec![AudioStream::default()],
+        };
+        assert!(info.available);
+        assert_eq!(info.volume, 65);
+        assert_eq!(info.input_volume, 50);
+        assert!(info.is_input_muted);
+        assert_eq!(info.sinks.len(), 1);
+        assert_eq!(info.sources.len(), 1);
     }
 }
