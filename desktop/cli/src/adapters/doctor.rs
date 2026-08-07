@@ -46,6 +46,7 @@ impl DoctorChecker {
             self.check_config_file(auto_fix),
             self.check_weather_extension(),
             self.check_terminal_fonts_cursors(),
+            self.check_i2c_permissions(),
             self.check_xdg_user_dirs(auto_fix),
         ]
     }
@@ -564,6 +565,53 @@ impl DoctorChecker {
                 status: DiagnosticStatus::Warn,
                 message: "One or more desktop theme assets (Fish, JetBrains Mono, Capitaine cursors) need installation".into(),
                 repair_command: Some("sudo pacman -S fish ttf-jetbrains-mono-nerd capitaine-cursors".into()),
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        }
+    }
+
+    pub fn check_i2c_permissions(&self) -> DiagnosticItem {
+        let i2c_devs: Vec<PathBuf> = (0..=32)
+            .map(|i| PathBuf::from(format!("/dev/i2c-{i}")))
+            .filter(|p| p.exists())
+            .collect();
+
+        if i2c_devs.is_empty() {
+            return DiagnosticItem {
+                category: "Hardware".into(),
+                name: "Linux I2C Dev Devices".into(),
+                status: DiagnosticStatus::Warn,
+                message: "No /dev/i2c-* devices found. Ensure the 'i2c-dev' kernel module is loaded: sudo modprobe i2c-dev".into(),
+                repair_command: Some("sudo modprobe i2c-dev".into()),
+                unit_identifier: None,
+                fix_applied: false,
+            };
+        }
+
+        let unreadable: Vec<String> = i2c_devs
+            .iter()
+            .filter(|p| std::fs::File::options().read(true).write(true).open(p).is_err())
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+
+        if unreadable.is_empty() {
+            DiagnosticItem {
+                category: "Hardware".into(),
+                name: "DDC/CI I2C Bus Permissions".into(),
+                status: DiagnosticStatus::Pass,
+                message: format!("Accessible read/write access confirmed for {} I2C devices", i2c_devs.len()),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        } else {
+            DiagnosticItem {
+                category: "Hardware".into(),
+                name: "DDC/CI I2C Bus Permissions".into(),
+                status: DiagnosticStatus::Warn,
+                message: format!("Restricted permissions on I2C devices: {}. Add your user to the i2c group", unreadable.join(", ")),
+                repair_command: Some("sudo usermod -aG i2c $USER".into()),
                 unit_identifier: None,
                 fix_applied: false,
             }

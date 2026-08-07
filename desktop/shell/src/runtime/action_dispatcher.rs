@@ -331,11 +331,14 @@ impl ActionDispatcher {
             }
             ActionInvocation::BrightnessUp => {
                 let info = ShellRuntime::device_snapshot(cx).brightness;
-                let target_pct = (info.percentage + 5).min(100);
                 ShellRuntime::dispatch_device_command(
                     cx,
-                    crate::bar::service_worker::DeviceCommand::Brightness(target_pct),
+                    crate::bar::service_worker::DeviceCommand::AdjustFocusedBrightness {
+                        connector: "eDP-1".to_string(),
+                        delta: 5,
+                    },
                 );
+                let target_pct = (info.percentage + 5).min(100);
                 ShellRuntime::show_osd(
                     cx,
                     crate::osd::OsdKind::Brightness {
@@ -346,11 +349,14 @@ impl ActionDispatcher {
             }
             ActionInvocation::BrightnessDown => {
                 let info = ShellRuntime::device_snapshot(cx).brightness;
-                let target_pct = info.percentage.saturating_sub(5);
                 ShellRuntime::dispatch_device_command(
                     cx,
-                    crate::bar::service_worker::DeviceCommand::Brightness(target_pct),
+                    crate::bar::service_worker::DeviceCommand::AdjustFocusedBrightness {
+                        connector: "eDP-1".to_string(),
+                        delta: -5,
+                    },
                 );
+                let target_pct = info.percentage.saturating_sub(5);
                 ShellRuntime::show_osd(
                     cx,
                     crate::osd::OsdKind::Brightness {
