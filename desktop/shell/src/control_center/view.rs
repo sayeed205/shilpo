@@ -31,6 +31,7 @@ pub struct ControlCenterView {
     focus_handle: FocusHandle,
     device_snapshot: crate::bar::service_worker::DeviceSnapshot,
     _device_snapshot_task: gpui::Task<()>,
+    _power_profile_task: gpui::Task<()>,
 }
 
 impl ControlCenterView {
@@ -129,6 +130,30 @@ impl ControlCenterView {
             }
         });
 
+        let power_profile_receiver = power_profile_service
+            .as_ref()
+            .map(PowerProfileService::subscribe);
+        let _power_profile_task = cx.spawn(async move |this, cx| {
+            let Some(mut receiver) = power_profile_receiver else {
+                return;
+            };
+            loop {
+                if receiver.changed().await.is_err() {
+                    break;
+                }
+                let profile = receiver.borrow().active_profile.clone();
+                if this
+                    .update(cx, |view, cx| {
+                        view.active_power_profile = profile;
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
         Self {
             night_light_service,
             bluetooth_service,
@@ -144,6 +169,7 @@ impl ControlCenterView {
             focus_handle,
             device_snapshot: snapshot_clone,
             _device_snapshot_task,
+            _power_profile_task,
         }
     }
 
