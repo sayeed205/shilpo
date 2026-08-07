@@ -104,7 +104,9 @@ with `rtk`**.
     - Implement GPUI traits (`IntoElement`, `RenderOnce`, `Sizable`, `Selectable`, `Disabled`) consistently.
     - Support mouse interaction safety (e.g. `cx.stop_propagation()` on mouse down for draggable titlebars).
 3. **Interactive Documentation**:
-    - When introducing or modifying UI components, add interactive stories in `apps/storybook/src/stories/`.
+    - When introducing or modifying core UI components in `shilpo-ui` (`core/ui`), add interactive stories in
+      `apps/storybook/src/stories/`. Storybook is strictly reserved for reusable core UI components, not internal
+      desktop shell widgets.
     - **Full Event Handler Wiring**: Ensure all component interactive events (`on_click`, `on_index_change`,
       `on_change`)
       are explicitly wired in Storybook stories using `cx.entity().clone()` / `entity.update(cx, ...)` so all toggles,

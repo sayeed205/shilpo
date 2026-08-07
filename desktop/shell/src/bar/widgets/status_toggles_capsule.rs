@@ -11,8 +11,8 @@ pub type ClickHandler = Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App) + '
 #[derive(IntoElement)]
 pub struct StatusTogglesCapsule {
     id: ElementId,
-    _audio: AudioInfo,
-    _network: NetworkInfo,
+    audio: AudioInfo,
+    network: NetworkInfo,
     style: StyleRefinement,
     on_click: Option<ClickHandler>,
 }
@@ -21,8 +21,8 @@ impl StatusTogglesCapsule {
     pub fn new(id: impl Into<ElementId>, audio: AudioInfo, network: NetworkInfo) -> Self {
         Self {
             id: id.into(),
-            _audio: audio,
-            _network: network,
+            audio,
+            network,
             style: StyleRefinement::default(),
             on_click: None,
         }
@@ -52,15 +52,21 @@ impl RenderOnce for StatusTogglesCapsule {
                 .child("·")
         };
 
-        let audio_icon = if self._audio.available {
-            div().child(Icon::new(IconName::Favorite).size(px(14.)))
+        let audio_icon_name = if self.audio.is_muted {
+            IconName::BedtimeOff
+        } else {
+            IconName::Airwave
+        };
+
+        let audio_icon = if self.audio.available {
+            div().child(Icon::new(audio_icon_name).size(px(14.)))
         } else {
             div()
                 .opacity(0.35)
-                .child(Icon::new(IconName::Favorite).size(px(14.)))
+                .child(Icon::new(audio_icon_name).size(px(14.)))
         };
 
-        let network_icon = if self._network.available {
+        let network_icon = if self.network.available {
             div().child(Icon::new(IconName::Lan).size(px(14.)))
         } else {
             div()

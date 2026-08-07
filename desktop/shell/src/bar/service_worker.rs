@@ -1,8 +1,8 @@
 use gpui::BackgroundExecutor;
 use shilpo_config::ShellConfig;
 use shilpo_services::{
-    AudioDevice, AudioInfo, AudioPort, AudioService, BatteryInfo, BatteryService, BrightnessInfo,
-    BrightnessService, MediaCommand, MediaInfo, MediaService, NetworkInfo, NetworkService,
+    AudioInfo, AudioService, BatteryInfo, BatteryService, BrightnessInfo, BrightnessService,
+    MediaCommand, MediaInfo, MediaService, NetworkInfo, NetworkService,
 };
 use std::{
     path::PathBuf,
@@ -15,17 +15,10 @@ pub type UpdateReceiver = mpsc::Receiver<WorkerUpdate>;
 pub type CommandSender = mpsc::SyncSender<WorkerCommand>;
 pub type CommandReceiver = mpsc::Receiver<WorkerCommand>;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct AudioHardwareSnapshot {
-    pub devices: Vec<AudioDevice>,
-    pub ports: Vec<AudioPort>,
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DeviceSnapshot {
     pub battery: BatteryInfo,
     pub audio: AudioInfo,
-    pub audio_hardware: AudioHardwareSnapshot,
     pub network: NetworkInfo,
     pub media: MediaInfo,
     pub brightness: BrightnessInfo,
@@ -47,14 +40,6 @@ impl DeviceSnapshot {
                     false
                 } else {
                     self.audio = info.clone();
-                    true
-                }
-            }
-            WorkerUpdate::AudioHardware(info) => {
-                if self.audio_hardware == *info {
-                    false
-                } else {
-                    self.audio_hardware = info.clone();
                     true
                 }
             }
@@ -142,7 +127,10 @@ pub enum AudioCommand {
         sink_name: String,
         port_name: String,
     },
-    ToggleSimultaneousOutput,
+    SetSourcePort {
+        source_name: String,
+        port_name: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,7 +169,6 @@ pub enum WorkerUpdate {
     Network(NetworkInfo),
     Media(MediaInfo),
     Brightness(BrightnessInfo),
-    AudioHardware(AudioHardwareSnapshot),
     Config(ConfigUpdate),
     ServiceStateChange {
         service: &'static str,
@@ -372,8 +359,11 @@ impl DeviceServices {
                         } => {
                             let _ = audio.set_sink_port(sink_name, port_name);
                         }
-                        AudioCommand::ToggleSimultaneousOutput => {
-                            let _ = audio.toggle_simultaneous_output();
+                        AudioCommand::SetSourcePort {
+                            source_name,
+                            port_name,
+                        } => {
+                            let _ = audio.set_source_port(source_name, port_name);
                         }
                     }
                 } else {
@@ -573,7 +563,6 @@ async fn run(
     let mut network_last = None;
     let mut media_last = None;
     let mut brightness_last = None;
-    let mut audio_hardware_last = None;
     let mut device_ticks = 0u8;
     let mut pending_reload: Option<Instant> = None;
     let debounce_duration = Duration::from_millis(200);
@@ -592,29 +581,6 @@ async fn run(
                 }
                 WorkerCommand::Device(cmd) => {
                     services.handle_command(&updates, &cmd);
-                    if let DeviceCommand::Audio(
-                        AudioCommand::SetDefaultDevice { .. }
-                        | AudioCommand::SetSinkPort { .. }
-                        | AudioCommand::ToggleSimultaneousOutput,
-                    ) = &cmd
-                    {
-                        audio_hardware_last = None;
-                        if !sample_device(
-                            &updates,
-                            &mut audio_hardware_last,
-                            services
-                                .audio
-                                .instance
-                                .as_ref()
-                                .map(|a| AudioHardwareSnapshot {
-                                    devices: a.list_devices(),
-                                    ports: a.list_ports(),
-                                }),
-                            WorkerUpdate::AudioHardware,
-                        ) {
-                            return;
-                        }
-                    }
                 }
             }
         }
@@ -626,7 +592,6 @@ async fn run(
             }
             invalidate_device_snapshots_after_config_reload(
                 &mut audio_last,
-                &mut audio_hardware_last,
                 &mut battery_last,
                 &mut network_last,
                 &mut media_last,
@@ -688,21 +653,6 @@ async fn run(
             }
             if !sample_device(
                 &updates,
-                &mut audio_hardware_last,
-                services
-                    .audio
-                    .instance
-                    .as_ref()
-                    .map(|a| AudioHardwareSnapshot {
-                        devices: a.list_devices(),
-                        ports: a.list_ports(),
-                    }),
-                WorkerUpdate::AudioHardware,
-            ) {
-                return;
-            }
-            if !sample_device(
-                &updates,
                 &mut brightness_last,
                 services
                     .brightness
@@ -752,7 +702,6 @@ fn send_changed<T: Clone + PartialEq>(
 
 fn invalidate_device_snapshots_after_config_reload(
     audio: &mut Option<AudioInfo>,
-    audio_hardware: &mut Option<AudioHardwareSnapshot>,
     battery: &mut Option<BatteryInfo>,
     network: &mut Option<NetworkInfo>,
     media: &mut Option<MediaInfo>,
@@ -760,7 +709,6 @@ fn invalidate_device_snapshots_after_config_reload(
     device_ticks: &mut u8,
 ) {
     *audio = None;
-    *audio_hardware = None;
     *battery = None;
     *network = None;
     *media = None;
@@ -818,7 +766,7 @@ mod tests {
             volume: 50,
             is_muted: false,
             available: true,
-            app_streams: Vec::new(),
+            ..AudioInfo::default()
         });
         assert!(send_changed(
             &tx,
@@ -839,7 +787,6 @@ mod tests {
         };
         let mut previous = Some(battery.clone());
         let mut audio = Some(AudioInfo::default());
-        let mut audio_hardware = Some(AudioHardwareSnapshot::default());
         let mut network = Some(NetworkInfo::default());
         let mut media = Some(MediaInfo::default());
         let mut brightness = Some(BrightnessInfo::default());
@@ -847,7 +794,6 @@ mod tests {
 
         invalidate_device_snapshots_after_config_reload(
             &mut audio,
-            &mut audio_hardware,
             &mut previous,
             &mut network,
             &mut media,

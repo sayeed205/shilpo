@@ -275,16 +275,6 @@ impl ControlCenterView {
         cx.notify();
     }
 
-    fn toggle_simultaneous_audio(&mut self, cx: &mut Context<Self>) {
-        ShellRuntime::dispatch_device_command(
-            cx,
-            crate::bar::service_worker::DeviceCommand::Audio(
-                crate::bar::service_worker::AudioCommand::ToggleSimultaneousOutput,
-            ),
-        );
-        cx.notify();
-    }
-
     fn toggle_wifi(&mut self, enabled: bool, cx: &mut Context<Self>) {
         ShellRuntime::dispatch_device_command(
             cx,
@@ -765,39 +755,20 @@ impl Render for ControlCenterView {
                     )
                     // Audio Devices & Ports Selector
                     .when(audio_available, |this| {
-                        let devices = self.device_snapshot.audio_hardware.devices.clone();
-                        let ports = self.device_snapshot.audio_hardware.ports.clone();
+                        let audio_info = &self.device_snapshot.audio;
+                        let devices = audio_info.all_devices();
+                        let ports = audio_info.default_sink_ports();
 
                         this.child(
                             v_flex()
                                 .gap_1p5()
                                 .child(
-                                    h_flex()
-                                        .justify_between()
-                                        .items_center()
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .font_semibold()
-                                                .child("Audio Devices & Ports"),
-                                        )
-                                        .child(
-                                            div()
-                                                .id("cc-toggle-simultaneous-audio")
-                                                .role(Role::Button)
-                                                .px_2()
-                                                .py_0p5()
-                                                .rounded_full()
-                                                .bg(cx.theme().primary_container)
-                                                .text_color(cx.theme().on_primary_container)
-                                                .text_xs()
-                                                .font_bold()
-                                                .cursor_pointer()
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.toggle_simultaneous_audio(cx);
-                                                }))
-                                                .child("Simultaneous Audio"),
-                                        ),
+                                    h_flex().justify_between().items_center().child(
+                                        div()
+                                            .text_xs()
+                                            .font_semibold()
+                                            .child("Audio Devices & Ports"),
+                                    ),
                                 )
                                 .child(h_flex().gap_1p5().flex_wrap().children(
                                     devices.into_iter().enumerate().map(|(i, dev)| {
