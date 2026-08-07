@@ -17,7 +17,7 @@ use surface_manager::WindowClosedOutcome;
 use std::{path::PathBuf, sync::Arc};
 
 use gpui::{App, AppContext, Global, Subscription};
-use shilpo_services::{BarState, CompositorConnection, CompositorSnapshot, ShellIpcServer};
+use shilpo_services::{CompositorSnapshot, ShellIpcServer};
 
 use crate::extensions::{ContributionSurface, ExtensionCoordinator};
 
@@ -29,7 +29,6 @@ use crate::extensions::{ContributionSurface, ExtensionCoordinator};
 pub struct ShellRuntime {
     ipc_server: ShellIpcServer,
     active_config: shilpo_config::ShellConfig,
-    readiness: shilpo_services::ipc::ReadinessState,
     surface_manager: SurfaceManager,
     action_dispatcher: ActionDispatcher,
     extension_host: ExtensionHost,
@@ -54,7 +53,7 @@ impl ShellRuntime {
     }
 
     pub(crate) fn readiness(&self) -> shilpo_services::ipc::ReadinessState {
-        self.readiness
+        self.surface_manager.readiness()
     }
 
     pub(crate) fn session_state(&self) -> &shilpo_config::ShellSessionState {
@@ -137,7 +136,6 @@ impl ShellRuntime {
         cx.set_global(Self {
             ipc_server,
             active_config: session.active_config,
-            readiness: shilpo_services::ipc::ReadinessState::Starting,
             surface_manager,
             action_dispatcher,
             extension_host,
@@ -154,7 +152,7 @@ impl ShellRuntime {
         theme_manager::sync_wallpaper(cx, initial_wallpaper_path);
         Self::on_compositor_snapshot_changed(cx, latest_snapshot);
         Self::spawn_window_closed_watch(cx);
-        Self::sync_extension_actions(cx);
+        ExtensionHost::sync_extension_actions(cx);
         Self::spawn_drain_loop(cx);
         Self::publish_status(cx);
     }
@@ -222,8 +220,7 @@ impl ShellRuntime {
         cx.global_mut::<Self>()
             .action_dispatcher
             .update_enabled_for_snapshot(&snapshot);
-        let runtime = cx.global_mut::<Self>();
-        runtime.readiness = readiness_for(&snapshot.connection, &runtime.surface_manager.bar_state());
+        cx.global_mut::<Self>().surface_manager.update_readiness();
         Self::publish_status(cx);
         SurfaceManager::refresh_bars(cx);
         if outputs_changed {
@@ -273,25 +270,5 @@ impl ShellRuntime {
             });
         })
         .detach();
-    }
-}
-
-fn readiness_for(
-    connection: &CompositorConnection,
-    bar_state: &BarState,
-) -> shilpo_services::ipc::ReadinessState {
-    match connection {
-        CompositorConnection::Connecting => shilpo_services::ipc::ReadinessState::Starting,
-        CompositorConnection::Ready => {
-            if matches!(bar_state, BarState::Visible | BarState::Hidden) {
-                shilpo_services::ipc::ReadinessState::Ready
-            } else {
-                shilpo_services::ipc::ReadinessState::Degraded
-            }
-        }
-        CompositorConnection::Reconnecting { .. } => {
-            shilpo_services::ipc::ReadinessState::Degraded
-        }
-        CompositorConnection::Stopped => shilpo_services::ipc::ReadinessState::Failed,
     }
 }

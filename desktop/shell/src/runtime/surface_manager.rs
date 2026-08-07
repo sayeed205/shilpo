@@ -230,6 +230,7 @@ pub struct SurfaceManager {
         HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
     extension_panel: Option<(WindowHandle<shilpo_ui::Root>, CanonicalId)>,
     extension_output_ids: HashSet<DisplayId>,
+    readiness: shilpo_services::ipc::ReadinessState,
 }
 
 impl SurfaceManager {
@@ -237,7 +238,7 @@ impl SurfaceManager {
         initial_wallpaper_path: Option<PathBuf>,
         latest_snapshot: Arc<CompositorSnapshot>,
     ) -> Self {
-        Self {
+        let mut manager = Self {
             bars: HashMap::new(),
             last_bar_specs: Vec::new(),
             bar_state: BarState::Starting,
@@ -257,7 +258,10 @@ impl SurfaceManager {
             extension_surfaces: HashMap::new(),
             extension_panel: None,
             extension_output_ids: HashSet::new(),
-        }
+            readiness: shilpo_services::ipc::ReadinessState::Starting,
+        };
+        manager.update_readiness();
+        manager
     }
 
     pub(crate) fn latest_snapshot(&self) -> Arc<CompositorSnapshot> {
@@ -274,6 +278,46 @@ impl SurfaceManager {
 
     pub(crate) fn set_bar_state(&mut self, state: BarState) {
         self.bar_state = state;
+        self.update_readiness();
+    }
+
+    pub(crate) fn readiness(&self) -> shilpo_services::ipc::ReadinessState {
+        self.readiness
+    }
+
+    pub(crate) fn update_readiness(&mut self) {
+        self.readiness = readiness_for(&self.latest_snapshot.connection, &self.bar_state);
+    }
+
+    pub(crate) fn store_extension_surface(
+        &mut self,
+        instance_id: String,
+        handle: WindowHandle<shilpo_ui::Root>,
+        spec: ExtensionSurfaceSpec,
+    ) {
+        self.extension_surfaces.insert(instance_id, (handle, spec));
+    }
+
+    pub(crate) fn remove_extension_surface(
+        &mut self,
+        id: &str,
+    ) -> Option<(WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)> {
+        self.extension_surfaces.remove(id)
+    }
+
+    pub(crate) fn stale_extension_surface_ids(
+        &self,
+        desired: &HashMap<String, ExtensionSurfaceSpec>,
+    ) -> Vec<String> {
+        self.extension_surfaces
+            .iter()
+            .filter(|(id, (_, current))| desired.get(*id) != Some(current))
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    pub(crate) fn has_extension_surface(&self, instance_id: &str) -> bool {
+        self.extension_surfaces.contains_key(instance_id)
     }
 
     pub(crate) fn bar_handles(&self) -> Vec<WindowHandle<BarView>> {
@@ -1288,17 +1332,12 @@ impl SurfaceManager {
         let stale = cx
             .global::<ShellRuntime>()
             .surface_manager()
-            .extension_surfaces
-            .iter()
-            .filter(|(id, (_, current))| desired_windows.get(*id) != Some(current))
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
+            .stale_extension_surface_ids(&desired_windows);
         for id in stale {
             if let Some((handle, _)) = cx
                 .global_mut::<ShellRuntime>()
                 .surface_manager_mut()
-                .extension_surfaces
-                .remove(&id)
+                .remove_extension_surface(&id)
             {
                 let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
             }
@@ -1308,8 +1347,7 @@ impl SurfaceManager {
             if cx
                 .global::<ShellRuntime>()
                 .surface_manager()
-                .extension_surfaces
-                .contains_key(&instance_id)
+                .has_extension_surface(&instance_id)
             {
                 continue;
             }
@@ -1340,8 +1378,7 @@ impl SurfaceManager {
                 Ok(handle) => {
                     cx.global_mut::<ShellRuntime>()
                         .surface_manager_mut()
-                        .extension_surfaces
-                        .insert(instance_id, (handle, spec));
+                        .store_extension_surface(instance_id, handle, spec);
                 }
                 Err(error) => tracing::warn!(
                     error = %error,
@@ -1482,6 +1519,24 @@ impl ShellRuntime {
         }
     }
 
+    pub fn is_control_center_open(cx: &App) -> bool {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>()
+                .surface_manager()
+                .is_control_center_open()
+        } else {
+            false
+        }
+    }
+
+    pub fn has_bars(cx: &App) -> bool {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>().surface_manager().has_bars()
+        } else {
+            false
+        }
+    }
+
     pub fn overview_wallpaper_path(cx: &App) -> Option<PathBuf> {
         SurfaceManager::overview_wallpaper_path(cx)
     }
@@ -1597,6 +1652,26 @@ impl ShellRuntime {
         cx.global_mut::<Self>()
             .surface_manager_mut()
             .reserve_notification_generation()
+    }
+}
+
+fn readiness_for(
+    connection: &shilpo_services::CompositorConnection,
+    bar_state: &BarState,
+) -> shilpo_services::ipc::ReadinessState {
+    match connection {
+        shilpo_services::CompositorConnection::Connecting => shilpo_services::ipc::ReadinessState::Starting,
+        shilpo_services::CompositorConnection::Ready => {
+            if matches!(bar_state, BarState::Visible | BarState::Hidden) {
+                shilpo_services::ipc::ReadinessState::Ready
+            } else {
+                shilpo_services::ipc::ReadinessState::Degraded
+            }
+        }
+        shilpo_services::CompositorConnection::Reconnecting { .. } => {
+            shilpo_services::ipc::ReadinessState::Degraded
+        }
+        shilpo_services::CompositorConnection::Stopped => shilpo_services::ipc::ReadinessState::Failed,
     }
 }
 
@@ -1776,5 +1851,49 @@ mod tests {
         );
         assert_eq!(bar_geom.display_id, display_id);
         assert_eq!(bar_geom.bounds.size.width, px(3840.));
+    }
+
+    struct SurfaceManagerTestHarness {
+        manager: SurfaceManager,
+    }
+
+    impl SurfaceManagerTestHarness {
+        fn new_offline() -> Self {
+            let snapshot = Arc::new(CompositorSnapshot::default());
+            Self {
+                manager: SurfaceManager::new(None, snapshot),
+            }
+        }
+    }
+
+    #[test]
+    fn test_harness_surface_manager_readiness_and_extension_surfaces() {
+        let mut harness = SurfaceManagerTestHarness::new_offline();
+        assert_eq!(
+            harness.manager.readiness(),
+            shilpo_services::ipc::ReadinessState::Starting
+        );
+
+        harness.manager.set_bar_state(BarState::Visible);
+        harness.manager.update_readiness();
+        assert_eq!(
+            harness.manager.readiness(),
+            shilpo_services::ipc::ReadinessState::Starting
+        );
+
+        let ready_snapshot = CompositorSnapshot {
+            connection: shilpo_services::CompositorConnection::Ready,
+            ..Default::default()
+        };
+        harness.manager.set_latest_snapshot(Arc::new(ready_snapshot));
+        harness.manager.update_readiness();
+        assert_eq!(
+            harness.manager.readiness(),
+            shilpo_services::ipc::ReadinessState::Ready
+        );
+
+        assert!(!harness.manager.has_extension_surface("inst-1"));
+        let desired = HashMap::new();
+        assert!(harness.manager.stale_extension_surface_ids(&desired).is_empty());
     }
 }

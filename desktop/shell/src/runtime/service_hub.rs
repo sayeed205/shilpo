@@ -623,6 +623,26 @@ mod tests {
         assert!(!hub.notification_dnd);
     }
 
+    struct ServiceHubTestHarness {
+        hub: ServiceHub,
+    }
+
+    impl ServiceHubTestHarness {
+        fn new_offline() -> Self {
+            Self {
+                hub: ServiceHub::new_offline_harness(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_harness_service_hub_isolated_state_transitions() {
+        let mut harness = ServiceHubTestHarness::new_offline();
+        assert!(!harness.hub.notification_dnd_flag());
+        harness.hub.set_dnd_enabled(true);
+        assert!(harness.hub.notification_dnd_flag());
+    }
+
     impl ServiceHub {
         fn new_offline_harness() -> Self {
             let (updates_tx, _updates_rx, service_commands, _commands_rx) =

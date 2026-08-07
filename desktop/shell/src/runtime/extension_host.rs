@@ -536,10 +536,6 @@ impl ShellRuntime {
             .send_lifecycle_for(surface, mounted, width, height);
     }
 
-    pub(super) fn sync_extension_actions(cx: &mut App) {
-        ExtensionHost::sync_extension_actions(cx);
-    }
-
     pub(super) fn drain_extensions(cx: &mut App) {
         ExtensionHost::drain(cx);
     }
@@ -598,5 +594,25 @@ mod tests {
                 "show_condition": true
             })
         );
+    }
+
+    struct ExtensionHostTestHarness {
+        host: ExtensionHost,
+    }
+
+    impl ExtensionHostTestHarness {
+        fn new_offline() -> Self {
+            Self {
+                host: ExtensionHost::new(None),
+            }
+        }
+    }
+
+    #[test]
+    fn test_harness_extension_host_isolated_state_transitions() {
+        let harness = ExtensionHostTestHarness::new_offline();
+        assert!(!harness.host.is_loaded());
+        assert!(harness.host.generation().is_none());
+        assert!(harness.host.descriptors_for(ContributionSurface::Action).is_empty());
     }
 }

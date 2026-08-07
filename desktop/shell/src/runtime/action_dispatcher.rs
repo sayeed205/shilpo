@@ -557,4 +557,25 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(ids, vec![next]);
     }
+
+    struct ActionDispatcherTestHarness {
+        dispatcher: ActionDispatcher,
+    }
+
+    impl ActionDispatcherTestHarness {
+        fn new_offline() -> Self {
+            Self {
+                dispatcher: ActionDispatcher::new(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_harness_action_dispatcher_isolated_state_transitions() {
+        let mut harness = ActionDispatcherTestHarness::new_offline();
+        assert!(!harness.dispatcher.action_descriptors().is_empty());
+        assert!(harness.dispatcher.update_shortcut("Ctrl+Shift+U", ActionId::ToggleBar).is_ok());
+        harness.dispatcher.reset_shortcuts_to_defaults();
+        assert!(!harness.dispatcher.keybinding_descriptors().is_empty());
+    }
 }

@@ -100,12 +100,12 @@ impl ShellRuntime {
         for request in requests {
             match request {
                 IpcRequest::ShowBar => {
-                    if !cx.global::<Self>().surface_manager().has_bars() {
+                    if !Self::has_bars(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                     }
                 }
                 IpcRequest::HideBar => {
-                    if cx.global::<Self>().surface_manager().has_bars() {
+                    if Self::has_bars(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                     }
                 }
@@ -113,12 +113,12 @@ impl ShellRuntime {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                 }
                 IpcRequest::ShowControlCenter => {
-                    if !cx.global::<Self>().surface_manager().is_control_center_open() {
+                    if !Self::is_control_center_open(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
                     }
                 }
                 IpcRequest::HideControlCenter => {
-                    if cx.global::<Self>().surface_manager().is_control_center_open() {
+                    if Self::is_control_center_open(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
                     }
                 }
@@ -126,12 +126,12 @@ impl ShellRuntime {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
                 }
                 IpcRequest::ShowOverview => {
-                    if !cx.global::<Self>().surface_manager().is_overview_open() {
+                    if !Self::is_overview_open(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
                     }
                 }
                 IpcRequest::HideOverview => {
-                    if cx.global::<Self>().surface_manager().is_overview_open() {
+                    if Self::is_overview_open(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
                     }
                 }
