@@ -4,7 +4,7 @@ use pulse::context::{Context, FlagSet as ContextFlagSet, State as ContextState};
 use pulse::context::subscribe::InterestMaskSet;
 use pulse::mainloop::threaded::Mainloop;
 use std::process::Command;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::mpsc;
 use tokio::sync::watch;
 
 /// Metadata describing an individual application audio playback stream (Sink Input).
@@ -367,16 +367,9 @@ fn run_pulse_worker(
         .start()
         .map_err(|e| anyhow::anyhow!("mainloop start failed: {e:?}"))?;
 
-    let context = Arc::new(Mutex::new(context));
-    let mainloop = Arc::new(Mutex::new(mainloop));
-
-    // Wait up to 2 seconds for context Ready
     let start = std::time::Instant::now();
     loop {
-        let state = {
-            let ctx = context.lock().unwrap();
-            ctx.get_state()
-        };
+        let state = context.get_state();
         if state == ContextState::Ready {
             let _ = init_tx.send(Ok(()));
             break;
@@ -391,37 +384,36 @@ fn run_pulse_worker(
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 
-    refresh_snapshot(&mainloop, &context, &tx);
+    refresh_snapshot(&mut mainloop, &mut context, &tx);
 
     let (sub_tx, sub_rx) = mpsc::channel();
     {
-        let _ml = mainloop.lock().unwrap();
-        let mut ctx = context.lock().unwrap();
+        mainloop.lock();
         let sub_tx_clone = sub_tx.clone();
 
-        ctx.set_subscribe_callback(Some(Box::new(move |_facility, _op, _index| {
+        context.set_subscribe_callback(Some(Box::new(move |_facility, _op, _index| {
             let _ = sub_tx_clone.send(());
         })));
 
-        ctx.subscribe(
+        context.subscribe(
             InterestMaskSet::SINK
                 | InterestMaskSet::SOURCE
                 | InterestMaskSet::SINK_INPUT
                 | InterestMaskSet::SERVER,
             |_| {},
         );
+        mainloop.unlock();
     }
 
     loop {
         // Poll for subscription events or incoming command requests
         while sub_rx.try_recv().is_ok() {
-            refresh_snapshot(&mainloop, &context, &tx);
+            refresh_snapshot(&mut mainloop, &mut context, &tx);
         }
 
         match cmd_rx.recv_timeout(std::time::Duration::from_millis(50)) {
             Ok(cmd) => {
-                let _ml = mainloop.lock().unwrap();
-                let mut ctx = context.lock().unwrap();
+                mainloop.lock();
                 let info = tx.borrow().clone();
 
                 match cmd {
@@ -432,13 +424,14 @@ fn run_pulse_worker(
                                 (vol as u32 * pulse::volume::Volume::NORMAL.0) / 100,
                             );
                             cvol.set(2, pa_vol);
-                            ctx.introspect()
+                            context
+                                .introspect()
                                 .set_sink_volume_by_name(&info.default_sink_name, &cvol, None);
                         }
                     }
                     PulseCommand::ToggleMute => {
                         if !info.default_sink_name.is_empty() {
-                            ctx.introspect().set_sink_mute_by_name(
+                            context.introspect().set_sink_mute_by_name(
                                 &info.default_sink_name,
                                 !info.is_muted,
                                 None,
@@ -452,7 +445,7 @@ fn run_pulse_worker(
                                 (vol as u32 * pulse::volume::Volume::NORMAL.0) / 100,
                             );
                             cvol.set(2, pa_vol);
-                            ctx.introspect().set_source_volume_by_name(
+                            context.introspect().set_source_volume_by_name(
                                 &info.default_source_name,
                                 &cvol,
                                 None,
@@ -461,18 +454,14 @@ fn run_pulse_worker(
                     }
                     PulseCommand::ToggleInputMute => {
                         if !info.default_source_name.is_empty() {
-                            ctx.introspect().set_source_mute_by_name(
-                                &info.default_source_name,
-                                !info.is_input_muted,
-                                None,
-                            );
+                            ctx_toggle_source_mute(&mut context, &info.default_source_name, info.is_input_muted);
                         }
                     }
                     PulseCommand::SetDefaultDevice { device_id, is_input } => {
                         if is_input {
-                            ctx.set_default_source(&device_id, |_| {});
+                            context.set_default_source(&device_id, |_| {});
                         } else {
-                            ctx.set_default_sink(&device_id, |_| {});
+                            context.set_default_sink(&device_id, |_| {});
                         }
                     }
                     PulseCommand::SetStreamVolume { index, percentage } => {
@@ -481,28 +470,29 @@ fn run_pulse_worker(
                             (percentage as u32 * pulse::volume::Volume::NORMAL.0) / 100,
                         );
                         cvol.set(2, pa_vol);
-                        ctx.introspect().set_sink_input_volume(index, &cvol, None);
+                        context.introspect().set_sink_input_volume(index, &cvol, None);
                     }
                     PulseCommand::ToggleStreamMute { index } => {
                         let current_mute = info
                             .app_streams
                             .iter()
                             .find(|s| s.index == index)
-                            .map_or(false, |s| s.is_muted);
-                        ctx.introspect()
+                            .is_some_and(|s| s.is_muted);
+                        context
+                            .introspect()
                             .set_sink_input_mute(index, !current_mute, None);
                     }
                     PulseCommand::SetSinkPort {
                         sink_name,
                         port_name,
                     } => {
-                        ctx.introspect()
+                        context
+                            .introspect()
                             .set_sink_port_by_name(&sink_name, &port_name, None);
                     }
                 }
-                drop(ctx);
-                drop(_ml);
-                refresh_snapshot(&mainloop, &context, &tx);
+                mainloop.unlock();
+                refresh_snapshot(&mut mainloop, &mut context, &tx);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -512,16 +502,21 @@ fn run_pulse_worker(
     Ok(())
 }
 
+fn ctx_toggle_source_mute(context: &mut Context, default_source: &str, is_muted: bool) {
+    context
+        .introspect()
+        .set_source_mute_by_name(default_source, !is_muted, None);
+}
+
 fn refresh_snapshot(
-    mainloop: &Arc<Mutex<Mainloop>>,
-    context: &Arc<Mutex<Context>>,
+    mainloop: &mut Mainloop,
+    context: &mut Context,
     tx: &watch::Sender<AudioInfo>,
 ) {
-    let _ml = mainloop.lock().unwrap();
-    let ctx = context.lock().unwrap();
+    mainloop.lock();
 
     let (server_tx, server_rx) = mpsc::channel();
-    ctx.introspect().get_server_info(move |info| {
+    context.introspect().get_server_info(move |info| {
         let default_sink = info
             .default_sink_name
             .as_ref()
@@ -536,7 +531,7 @@ fn refresh_snapshot(
     });
 
     let (sinks_tx, sinks_rx) = mpsc::channel();
-    ctx.introspect().get_sink_info_list(move |res| {
+    context.introspect().get_sink_info_list(move |res| {
         if let pulse::callbacks::ListResult::Item(info) = res {
             let name = info
                 .name
@@ -590,7 +585,7 @@ fn refresh_snapshot(
     });
 
     let (sources_tx, sources_rx) = mpsc::channel();
-    ctx.introspect().get_source_info_list(move |res| {
+    context.introspect().get_source_info_list(move |res| {
         if let pulse::callbacks::ListResult::Item(info) = res {
             let name = info
                 .name
@@ -646,7 +641,7 @@ fn refresh_snapshot(
     });
 
     let (streams_tx, streams_rx) = mpsc::channel();
-    ctx.introspect().get_sink_input_info_list(move |res| {
+    context.introspect().get_sink_input_info_list(move |res| {
         if let pulse::callbacks::ListResult::Item(info) = res {
             let name = info
                 .name
@@ -676,8 +671,7 @@ fn refresh_snapshot(
         }
     });
 
-    drop(ctx);
-    drop(_ml);
+    mainloop.unlock();
 
     let (default_sink_name, default_source_name) = server_rx
         .recv_timeout(std::time::Duration::from_millis(500))
