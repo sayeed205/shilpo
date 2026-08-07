@@ -1,6 +1,6 @@
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div, px,
-    relative,
+    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div,
+    prelude::FluentBuilder, px, relative,
 };
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
 
@@ -9,8 +9,15 @@ use crate::runtime::ShellRuntime;
 /// Kind of On-Screen Display popup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OsdKind {
-    Volume { level: u32, muted: bool },
-    Brightness { level: u32 },
+    Volume {
+        level: u32,
+        muted: bool,
+    },
+    Brightness {
+        level: u32,
+        display_name: Option<String>,
+        connector: Option<String>,
+    },
     Notification(shilpo_services::Notification),
 }
 
@@ -86,8 +93,24 @@ impl Render for OsdView {
 
         let (icon, level, muted) = match self.kind {
             OsdKind::Volume { level, muted } => (IconName::Notifications, level, muted),
-            OsdKind::Brightness { level } => (IconName::Sunny, level, false),
+            OsdKind::Brightness { level, .. } => (IconName::Sunny, level, false),
             OsdKind::Notification(_) => unreachable!(),
+        };
+
+        let display_badge = if let OsdKind::Brightness {
+            ref display_name,
+            ref connector,
+            ..
+        } = self.kind
+        {
+            match (display_name, connector) {
+                (Some(name), Some(conn)) => Some(format!("{name} [{conn}]")),
+                (Some(name), None) => Some(name.clone()),
+                (None, Some(conn)) => Some(format!("[{conn}]")),
+                (None, None) => None,
+            }
+        } else {
+            None
         };
 
         let fill_pct = (level as f32 / 100.0).clamp(0.0, 1.0);
@@ -122,21 +145,34 @@ impl Render for OsdView {
                     .child(Icon::new(icon).size(px(16.))),
             )
             .child(
-                v_flex().flex_1().justify_center().child(
-                    div()
-                        .h(px(8.))
-                        .w_full()
-                        .rounded_full()
-                        .bg(cx.theme().surface_container.opacity(0.6))
-                        .overflow_hidden()
-                        .child(
+                v_flex()
+                    .flex_1()
+                    .justify_center()
+                    .gap_1()
+                    .when_some(display_badge, |this, badge| {
+                        this.child(
                             div()
-                                .h_full()
-                                .w(relative(fill_pct))
-                                .bg(fill_color)
-                                .rounded_full(),
-                        ),
-                ),
+                                .text_xs()
+                                .font_medium()
+                                .text_color(cx.theme().on_surface_variant)
+                                .child(badge),
+                        )
+                    })
+                    .child(
+                        div()
+                            .h(px(8.))
+                            .w_full()
+                            .rounded_full()
+                            .bg(cx.theme().surface_container.opacity(0.6))
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(relative(fill_pct))
+                                    .bg(fill_color)
+                                    .rounded_full(),
+                            ),
+                    ),
             )
             .child(
                 div()

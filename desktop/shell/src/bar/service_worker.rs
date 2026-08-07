@@ -141,6 +141,8 @@ pub enum DeviceCommand {
     Audio(AudioCommand),
     Network(NetworkCommand),
     Brightness(u8),
+    DisplayBrightness { id: String, percentage: u8 },
+    AdjustFocusedBrightness { connector: String, delta: i8 },
     Media(MediaCommand),
 }
 
@@ -399,6 +401,16 @@ impl DeviceServices {
                         command: cmd.clone(),
                         reason: "Brightness service unavailable or reconnecting".into(),
                     });
+                }
+            }
+            DeviceCommand::DisplayBrightness { id, percentage } => {
+                if let Some(ref brightness) = self.brightness.instance {
+                    brightness.set_display_brightness(id, *percentage);
+                }
+            }
+            DeviceCommand::AdjustFocusedBrightness { connector, delta } => {
+                if let Some(ref brightness) = self.brightness.instance {
+                    brightness.adjust_focused_brightness(connector, *delta);
                 }
             }
             DeviceCommand::Media(m) => {
@@ -745,6 +757,7 @@ mod tests {
             percentage: 75,
             available: true,
             device_name: None,
+            ..Default::default()
         };
         assert!(snapshot.apply(&WorkerUpdate::Brightness(brightness.clone())));
         assert_eq!(snapshot.brightness, brightness);

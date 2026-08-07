@@ -27,6 +27,7 @@ pub struct ControlCenterView {
     night_light_active: bool,
     bluetooth_active: bool,
     is_recording: bool,
+    brightness_accordion_expanded: bool,
     active_power_profile: PowerProfile,
     focus_handle: FocusHandle,
     device_snapshot: crate::bar::service_worker::DeviceSnapshot,
@@ -165,12 +166,18 @@ impl ControlCenterView {
             night_light_active: initial_night_light,
             bluetooth_active: initial_bluetooth,
             is_recording: initial_is_recording,
+            brightness_accordion_expanded: false,
             active_power_profile: initial_power_profile,
             focus_handle,
             device_snapshot: snapshot_clone,
             _device_snapshot_task,
             _power_profile_task,
         }
+    }
+
+    fn toggle_brightness_accordion(&mut self, cx: &mut Context<Self>) {
+        self.brightness_accordion_expanded = !self.brightness_accordion_expanded;
+        cx.notify();
     }
 
     pub fn view(window: &mut Window, cx: &mut App) -> Entity<shilpo_ui::Root> {
@@ -866,22 +873,153 @@ impl Render for ControlCenterView {
                             )
                         },
                     )
-                    // Brightness Slider
+                    // Brightness Slider & Expandable Display Accordion
                     .child(
                         v_flex()
-                            .gap_1()
+                            .gap_1p5()
                             .child(
                                 h_flex()
                                     .justify_between()
                                     .items_center()
                                     .child(div().text_xs().font_semibold().child("Brightness"))
-                                    .child(Icon::new(IconName::Search).size(px(14.))),
+                                    .when(
+                                        brightness_available
+                                            && !self.device_snapshot.brightness.displays.is_empty(),
+                                        |this| {
+                                            let displays_count =
+                                                self.device_snapshot.brightness.displays.len();
+                                            let is_expanded = self.brightness_accordion_expanded;
+                                            this.child(
+                                                h_flex()
+                                                    .id("cc-brightness-accordion-toggle")
+                                                    .gap_1()
+                                                    .items_center()
+                                                    .cursor_pointer()
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.toggle_brightness_accordion(cx);
+                                                    }))
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .font_medium()
+                                                            .text_color(
+                                                                cx.theme().on_surface_variant,
+                                                            )
+                                                            .child(format!("{displays_count} displays")),
+                                                    )
+                                                    .child(
+                                                        Icon::new(if is_expanded {
+                                                            IconName::KeyboardArrowUp
+                                                        } else {
+                                                            IconName::KeyboardArrowDown
+                                                        })
+                                                            .size(px(14.)),
+                                                    ),
+                                            )
+                                        },
+                                    ),
                             )
                             .child(
                                 Slider::new(&self.brightness_state)
                                     .disabled(!brightness_available)
                                     .horizontal()
                                     .with_size(shilpo_ui::Size::Small),
+                            )
+                            .when(
+                                brightness_available && self.brightness_accordion_expanded,
+                                |this| {
+                                    let displays =
+                                        self.device_snapshot.brightness.displays.clone();
+                                    this.child(
+                                        v_flex().gap_1p5().pt_1().children(
+                                            displays.into_iter().enumerate().map(|(i, disp)| {
+                                                let disp_id = disp.id.clone();
+                                                let pct = disp.percentage;
+                                                let conn_badge = disp
+                                                    .connector
+                                                    .map(|c| format!(" [{c}]"))
+                                                    .unwrap_or_default();
+                                                let label = format!("{}{conn_badge}", disp.name);
+
+                                                h_flex()
+                                                    .id(("cc-display-row", i))
+                                                    .justify_between()
+                                                    .items_center()
+                                                    .px_2p5()
+                                                    .py_1p5()
+                                                    .rounded_lg()
+                                                    .bg(cx.theme().surface_container)
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .font_medium()
+                                                            .child(label),
+                                                    )
+                                                    .child(
+                                                        h_flex()
+                                                            .gap_1p5()
+                                                            .items_center()
+                                                            .child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .font_bold()
+                                                                    .child(format!("{pct}%")),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .id(("cc-disp-dec", i))
+                                                                    .role(Role::Button)
+                                                                    .px_1p5()
+                                                                    .py_0p5()
+                                                                    .rounded_md()
+                                                                    .bg(cx.theme().surface_container_highest)
+                                                                    .text_xs()
+                                                                    .cursor_pointer()
+                                                                    .on_click(cx.listener({
+                                                                        let id = disp_id.clone();
+                                                                        let new_pct = pct.saturating_sub(10);
+                                                                        move |_, _, _, cx| {
+                                                                            ShellRuntime::dispatch_device_command(
+                                                                                cx,
+                                                                                crate::bar::service_worker::DeviceCommand::DisplayBrightness {
+                                                                                    id: id.clone(),
+                                                                                    percentage: new_pct,
+                                                                                },
+                                                                            );
+                                                                        }
+                                                                    }))
+                                                                    .child("-10%"),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .id(("cc-disp-inc", i))
+                                                                    .role(Role::Button)
+                                                                    .px_1p5()
+                                                                    .py_0p5()
+                                                                    .rounded_md()
+                                                                    .bg(cx.theme().surface_container_highest)
+                                                                    .text_xs()
+                                                                    .cursor_pointer()
+                                                                    .on_click(cx.listener({
+                                                                        let id = disp_id.clone();
+                                                                        let new_pct = (pct + 10).min(100);
+                                                                        move |_, _, _, cx| {
+                                                                            ShellRuntime::dispatch_device_command(
+                                                                                cx,
+                                                                                crate::bar::service_worker::DeviceCommand::DisplayBrightness {
+                                                                                    id: id.clone(),
+                                                                                    percentage: new_pct,
+                                                                                },
+                                                                            );
+                                                                        }
+                                                                    }))
+                                                                    .child("+10%"),
+                                                            ),
+                                                    )
+                                            }),
+                                        ),
+                                    )
+                                },
                             ),
                     )
                     // Power Session Action buttons

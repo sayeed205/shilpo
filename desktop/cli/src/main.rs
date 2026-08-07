@@ -6,9 +6,9 @@ mod tests;
 
 use adapters::{DoctorChecker, ExtAdapter, IpcAdapter, SystemdAdapter, ThemeAdapter};
 use args::{
-    Cli, Commands, ConfigCommands, ExtCommands, ModeValue, ShellCommands, ThemeCommands,
-    ThemeModeAction, ThemeSeedAction, ThemeWallpaperAction, VisibilityAction, WindowCommands,
-    WorkspaceCommands,
+    BrightnessCommands, Cli, Commands, ConfigCommands, ExtCommands, ModeValue, ShellCommands,
+    ThemeCommands, ThemeModeAction, ThemeSeedAction, ThemeWallpaperAction, VisibilityAction,
+    WindowCommands, WorkspaceCommands,
 };
 use clap::{CommandFactory, Parser};
 use output::{CliOutput, EXIT_FAILURE, EXIT_INVALID_ARGS, EXIT_SUCCESS};
@@ -524,6 +524,54 @@ async fn main() {
                     ),
                 },
             },
+        },
+        Commands::Brightness { command } => match command {
+            BrightnessCommands::List => {
+                let (ddc_displays, ddc_perms) =
+                    shilpo_services::brightness::discover_ddc_displays();
+                let data = serde_json::json!({
+                    "displays": ddc_displays,
+                    "permissions_ok": ddc_perms,
+                });
+                let mut report = format!("Discovered DDC/CI Displays (Permissions OK: {ddc_perms}):\n");
+                for d in &ddc_displays {
+                    report.push_str(&format!(
+                        " - [{}] {} (Connector: {}, Brightness: {}%)\n",
+                        d.id,
+                        d.name,
+                        d.connector.as_deref().unwrap_or("<unknown>"),
+                        d.percentage
+                    ));
+                }
+                output.success("brightness.list", &data, Some(&report), Vec::new())
+            }
+            BrightnessCommands::Set { display, value } => {
+                let ipc = IpcAdapter::new();
+                let req = if let Some(disp_id) = display {
+                    shilpo_services::IpcRequest::SetDisplayBrightness {
+                        id: disp_id,
+                        percentage: value,
+                    }
+                } else {
+                    shilpo_services::IpcRequest::SetBrightness(value)
+                };
+                match ipc.request(req) {
+                    Ok(_) => output.success(
+                        "brightness.set",
+                        &serde_json::json!({ "value": value }),
+                        Some(&format!("Set brightness to {value}%")),
+                        Vec::new(),
+                    ),
+                    Err((code, msg)) => output.error(
+                        "brightness.set",
+                        "daemon_unavailable",
+                        &msg,
+                        None,
+                        Vec::new(),
+                        code,
+                    ),
+                }
+            }
         },
         Commands::Doctor { fix, first_login } => {
             let doctor = DoctorChecker::new();

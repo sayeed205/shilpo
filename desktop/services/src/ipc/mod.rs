@@ -50,6 +50,8 @@ pub enum IpcRequest {
     ShowOverview,
     HideOverview,
     ToggleOverview,
+    SetBrightness(u8),
+    SetDisplayBrightness { id: String, percentage: u8 },
     GetStatus,
     GetTelemetry,
 }

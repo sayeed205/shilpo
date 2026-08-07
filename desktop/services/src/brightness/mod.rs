@@ -1,16 +1,68 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+use ddc::Ddc;
+use ddc_i2c::from_i2c_device;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{debug, warn};
 
-/// Screen brightness status.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// VCP luminance (screen brightness) feature code standard.
+pub const VCP_LUMINANCE: u8 = 0x10;
+
+/// Encapsulates sysfs backlight device attributes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysfsDevice {
+    pub path: PathBuf,
+    pub name: String,
+}
+
+/// Brightness control hardware backend type.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum BrightnessBackend {
+    SysfsLogind {
+        sysfs_path: PathBuf,
+        device_name: String,
+    },
+    DdcCiDirect {
+        i2c_bus: u8,
+        vcp_code: u8,
+    },
+    DdcciSysfs {
+        sysfs_path: PathBuf,
+    },
+}
+
+impl BrightnessBackend {
+    pub fn is_ddc(&self) -> bool {
+        matches!(self, Self::DdcCiDirect { .. } | Self::DdcciSysfs { .. })
+    }
+}
+
+/// Discovered display brightness device representation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplayBrightnessInfo {
+    pub id: String,   // e.g. "sysfs:intel_backlight" or "ddc:i2c-3:dell-u2723qe"
+    pub name: String, // Friendly display model / device name
+    pub connector: Option<String>, // DRM connector name matching Wayland/Niri output (e.g. "eDP-1", "DP-1")
+    pub percentage: u8,            // Perceptual brightness percentage (0..=100)
+    pub is_primary: bool,
+    pub backend: BrightnessBackend,
+}
+
+/// Screen brightness status (multi-display aware with backward compatibility).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrightnessInfo {
     pub percentage: u8,
     pub available: bool,
     pub device_name: Option<String>,
+    pub displays: Vec<DisplayBrightnessInfo>,
+    pub primary_display_id: Option<String>,
+    pub permissions_ok: bool,
 }
 
 impl BrightnessInfo {
@@ -156,6 +208,189 @@ pub fn read_sysfs_brightness(sysfs_path: &Path) -> Option<SysfsBrightness> {
     })
 }
 
+/// Parsed EDID monitor metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EdidInfo {
+    pub vendor: String,
+    pub model: String,
+    pub serial: Option<String>,
+}
+
+/// Parses 128-byte raw EDID structure to extract vendor code, model name, and serial number.
+pub fn parse_edid_info(bytes: &[u8]) -> Option<EdidInfo> {
+    if bytes.len() < 128 || bytes[0..8] != [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00] {
+        return None;
+    }
+
+    let mfg = ((bytes[8] as u16) << 8) | (bytes[9] as u16);
+    let c1 = (((mfg >> 10) & 0x1F) as u8 + b'A' - 1) as char;
+    let c2 = (((mfg >> 5) & 0x1F) as u8 + b'A' - 1) as char;
+    let c3 = ((mfg & 0x1F) as u8 + b'A' - 1) as char;
+    let vendor = format!("{c1}{c2}{c3}");
+
+    let mut model = String::new();
+    let mut serial = None;
+
+    for offset in [54, 72, 90, 108] {
+        if offset + 18 > bytes.len() {
+            break;
+        }
+        let block = &bytes[offset..offset + 18];
+        if block[0..3] == [0, 0, 0] {
+            let tag = block[3];
+            if tag == 0xFC {
+                let text = String::from_utf8_lossy(&block[5..18]);
+                let cleaned = text
+                    .trim_matches(|c: char| {
+                        c == '\n' || c == '\r' || c == '\0' || c.is_whitespace()
+                    })
+                    .to_string();
+                if !cleaned.is_empty() {
+                    model = cleaned;
+                }
+            } else if tag == 0xFF {
+                let text = String::from_utf8_lossy(&block[5..18]);
+                let cleaned = text
+                    .trim_matches(|c: char| {
+                        c == '\n' || c == '\r' || c == '\0' || c.is_whitespace()
+                    })
+                    .to_string();
+                if !cleaned.is_empty() {
+                    serial = Some(cleaned);
+                }
+            }
+        }
+    }
+
+    if model.is_empty() {
+        let product_code = ((bytes[11] as u16) << 8) | (bytes[10] as u16);
+        model = format!("Display 0x{:04X}", product_code);
+    }
+
+    Some(EdidInfo {
+        vendor,
+        model,
+        serial,
+    })
+}
+
+/// Helper to scan DRM connector mapping and EDID metadata from `/sys/class/drm/`
+pub fn discover_drm_connectors() -> HashMap<u8, (String, Option<EdidInfo>)> {
+    let mut map = HashMap::new();
+    let drm_dir = Path::new("/sys/class/drm");
+    if let Ok(entries) = std::fs::read_dir(drm_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            if let Some(idx) = name.find('-') {
+                let connector = &name[idx + 1..];
+                let ddc_path = path.join("ddc");
+                if let Ok(target) = std::fs::read_link(&ddc_path)
+                    && let Some(target_str) = target.to_str()
+                    && let Some(i2c_idx) = target_str.rfind("i2c-")
+                    && let Ok(bus) = target_str[i2c_idx + 4..].parse::<u8>()
+                {
+                    let edid_path = path.join("edid");
+                    let edid_info = if let Ok(bytes) = std::fs::read(&edid_path) {
+                        parse_edid_info(&bytes)
+                    } else {
+                        None
+                    };
+                    map.insert(bus, (connector.to_string(), edid_info));
+                }
+            }
+        }
+    }
+    map
+}
+
+/// Discovers existing `/dev/i2c-*` device node paths dynamically.
+pub fn discover_i2c_bus_paths() -> Vec<(u8, PathBuf)> {
+    let mut buses = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/dev") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if let Some(num_str) = name_str.strip_prefix("i2c-")
+                && let Ok(bus) = num_str.parse::<u8>()
+            {
+                buses.push((bus, entry.path()));
+            }
+        }
+    }
+    buses.sort_by_key(|(bus, _)| *bus);
+    buses
+}
+
+/// Probes `/dev/i2c-*` devices for DDC/CI compatible external displays.
+pub fn discover_ddc_displays() -> (Vec<DisplayBrightnessInfo>, bool) {
+    let mut displays = Vec::new();
+    let mut permissions_ok = true;
+    let connector_map = discover_drm_connectors();
+    let buses = discover_i2c_bus_paths();
+
+    for (bus, path) in buses {
+        if std::fs::File::options()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .is_err()
+        {
+            permissions_ok = false;
+        }
+
+        if let Ok(mut dev) = from_i2c_device(&path)
+            && let Ok(vcp) = dev.get_vcp_feature(VCP_LUMINANCE)
+        {
+            let max = vcp.maximum();
+            let curr = vcp.value();
+            let percentage = if max > 0 {
+                ((curr as f64 / max as f64) * 100.0).round() as u8
+            } else {
+                0
+            };
+
+            let (connector, edid_info) = match connector_map.get(&bus) {
+                Some((c, e)) => (Some(c.clone()), e.clone()),
+                None => (None, None),
+            };
+
+            let (display_name, display_id) = if let Some(ref edid) = edid_info {
+                let name_str = format!("{} {}", edid.vendor, edid.model).trim().to_string();
+                let slug = name_str.to_lowercase().replace(' ', "-");
+                (name_str, format!("ddc:i2c-{bus}:{slug}"))
+            } else if let Some(ref conn) = connector {
+                (
+                    format!("External Display ({conn})"),
+                    format!("ddc:i2c-{bus}"),
+                )
+            } else {
+                (
+                    format!("External Display (i2c-{bus})"),
+                    format!("ddc:i2c-{bus}"),
+                )
+            };
+
+            displays.push(DisplayBrightnessInfo {
+                id: display_id,
+                name: display_name,
+                connector,
+                percentage: percentage.min(100),
+                is_primary: false,
+                backend: BrightnessBackend::DdcCiDirect {
+                    i2c_bus: bus,
+                    vcp_code: VCP_LUMINANCE,
+                },
+            });
+        }
+    }
+
+    (displays, permissions_ok)
+}
+
 /// Abstracted trait for setting brightness on hardware via DBus or IPC.
 pub trait BrightnessSetter: Send + Sync + 'static {
     fn set_brightness(
@@ -298,6 +533,11 @@ impl UdevMonitor for SystemUdevMonitor {
                                                         if curr.percentage != sysfs.percentage || !curr.available {
                                                             curr.percentage = sysfs.percentage;
                                                             curr.available = true;
+                                                            if let Some(ref pid) = curr.primary_display_id
+                                                                && let Some(disp) = curr.displays.iter_mut().find(|d| d.id == *pid)
+                                                            {
+                                                                disp.percentage = sysfs.percentage;
+                                                            }
                                                             true
                                                         } else {
                                                             false
@@ -321,11 +561,17 @@ impl UdevMonitor for SystemUdevMonitor {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum BrightnessCmd {
+    SetDisplay { id: String, percentage: u8 },
+    SetAll { percentage: u8 },
+}
+
 /// System screen brightness service.
 pub struct BrightnessService {
     tx: watch::Sender<BrightnessInfo>,
     rx: watch::Receiver<BrightnessInfo>,
-    cmd_tx: Option<mpsc::UnboundedSender<u8>>,
+    cmd_tx: Option<mpsc::Sender<BrightnessCmd>>,
     shutdown_tx: Option<watch::Sender<bool>>,
     _udev_thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -359,25 +605,68 @@ impl BrightnessService {
         setter: Arc<S>,
         monitor: M,
     ) -> Result<Self> {
-        let (device, sysfs) = Self::discover_and_read_initial(sysfs_base)?;
+        let (displays, primary_device, primary_sysfs) = Self::discover_initial_displays(sysfs_base);
+
+        let available = !displays.is_empty();
+        let primary_id = displays.first().map(|d| d.id.clone());
+        let primary_pct = primary_sysfs
+            .as_ref()
+            .map(|s| s.percentage)
+            .or_else(|| displays.first().map(|d| d.percentage))
+            .unwrap_or(0);
+        let primary_name = primary_device.as_ref().map(|d| d.name.clone());
+        let max_raw = primary_sysfs.as_ref().map(|s| s.max_raw).unwrap_or(100);
 
         let initial_info = BrightnessInfo {
-            percentage: sysfs.percentage,
-            available: true,
-            device_name: Some(device.name.clone()),
+            percentage: primary_pct,
+            available,
+            device_name: primary_name.clone(),
+            displays: displays.clone(),
+            primary_display_id: primary_id,
+            permissions_ok: true,
         };
 
         let (tx, rx) = watch::channel(initial_info);
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<u8>();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<BrightnessCmd>(64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        Self::spawn_dbus_worker(cmd_rx, setter, device.name.clone(), sysfs.max_raw);
-        let udev_thread = monitor.listen(
-            tx.clone(),
-            device.sysfs_path.clone(),
-            device.name.clone(),
-            shutdown_rx,
-        );
+        let tx_ddc = tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let (ddc_displays, ddc_perms) = discover_ddc_displays();
+            if !ddc_displays.is_empty() || !ddc_perms {
+                tx_ddc.send_if_modified(|curr| {
+                    let mut modified = false;
+                    if !ddc_displays.is_empty() {
+                        curr.displays.extend(ddc_displays);
+                        curr.available = true;
+                        if curr.primary_display_id.is_none() {
+                            curr.primary_display_id = curr.displays.first().map(|d| d.id.clone());
+                            curr.percentage =
+                                curr.displays.first().map(|d| d.percentage).unwrap_or(0);
+                        }
+                        modified = true;
+                    }
+                    if !ddc_perms {
+                        curr.permissions_ok = false;
+                        modified = true;
+                    }
+                    modified
+                });
+            }
+        });
+
+        Self::spawn_coalesced_worker(cmd_rx, setter, displays, max_raw);
+
+        let udev_thread = if let Some(ref device) = primary_device {
+            monitor.listen(
+                tx.clone(),
+                device.sysfs_path.clone(),
+                device.name.clone(),
+                shutdown_rx,
+            )
+        } else {
+            None
+        };
 
         Ok(Self {
             tx,
@@ -388,28 +677,107 @@ impl BrightnessService {
         })
     }
 
-    fn discover_and_read_initial(sysfs_base: &Path) -> Result<(BacklightDevice, SysfsBrightness)> {
-        let device = discover_primary_backlight(sysfs_base)
-            .context("no compatible backlight device found in sysfs")?;
-
-        let sysfs = read_sysfs_brightness(&device.sysfs_path)
-            .context("failed to read backlight sysfs attributes")?;
-
-        Ok((device, sysfs))
+    fn discover_initial_displays(
+        sysfs_base: &Path,
+    ) -> (
+        Vec<DisplayBrightnessInfo>,
+        Option<BacklightDevice>,
+        Option<SysfsBrightness>,
+    ) {
+        let mut displays = Vec::new();
+        if let Some(device) = discover_primary_backlight(sysfs_base)
+            && let Some(sysfs) = read_sysfs_brightness(&device.sysfs_path)
+        {
+            displays.push(DisplayBrightnessInfo {
+                id: format!("sysfs:{}", device.name),
+                name: format!("Internal Display ({})", device.name),
+                connector: Some("eDP-1".to_string()),
+                percentage: sysfs.percentage,
+                is_primary: true,
+                backend: BrightnessBackend::SysfsLogind {
+                    sysfs_path: device.sysfs_path.clone(),
+                    device_name: device.name.clone(),
+                },
+            });
+            return (displays, Some(device), Some(sysfs));
+        }
+        (displays, None, None)
     }
 
-    fn spawn_dbus_worker<S: BrightnessSetter>(
-        mut cmd_rx: mpsc::UnboundedReceiver<u8>,
+    fn spawn_coalesced_worker<S: BrightnessSetter>(
+        mut cmd_rx: mpsc::Receiver<BrightnessCmd>,
         setter: Arc<S>,
-        device_name: String,
-        max_raw: u32,
+        displays: Vec<DisplayBrightnessInfo>,
+        primary_max_raw: u32,
     ) {
         tokio::spawn(async move {
-            while let Some(target_pct) = cmd_rx.recv().await {
-                let target_pct = target_pct.min(100);
-                let target_raw =
-                    ((target_pct as u64 * max_raw as u64) as f64 / 100.0).round() as u32;
-                let _ = setter.set_brightness(&device_name, target_raw).await;
+            let mut pending: HashMap<String, u8> = HashMap::new();
+            let display_map: HashMap<String, DisplayBrightnessInfo> =
+                displays.into_iter().map(|d| (d.id.clone(), d)).collect();
+
+            let queue_cmd = |cmd: BrightnessCmd, pending: &mut HashMap<String, u8>| match cmd {
+                BrightnessCmd::SetDisplay { id, percentage } => {
+                    pending.insert(id, percentage.min(100));
+                }
+                BrightnessCmd::SetAll { percentage } => {
+                    let pct = percentage.min(100);
+                    for id in display_map.keys() {
+                        pending.insert(id.clone(), pct);
+                    }
+                }
+            };
+
+            while let Some(cmd) = cmd_rx.recv().await {
+                queue_cmd(cmd, &mut pending);
+
+                while let Ok(cmd) = cmd_rx.try_recv() {
+                    queue_cmd(cmd, &mut pending);
+                }
+
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+                for (id, target_pct) in pending.drain() {
+                    if let Some(display) = display_map.get(&id) {
+                        match &display.backend {
+                            BrightnessBackend::SysfsLogind { device_name, .. } => {
+                                let target_raw =
+                                    ((target_pct as u64 * primary_max_raw as u64) as f64 / 100.0)
+                                        .round() as u32;
+                                let _ = setter.set_brightness(device_name, target_raw).await;
+                            }
+                            BrightnessBackend::DdcCiDirect { i2c_bus, vcp_code } => {
+                                let bus = *i2c_bus;
+                                let vcp = *vcp_code;
+                                let pct = target_pct;
+                                tokio::task::spawn_blocking(move || {
+                                    let dev_path = format!("/dev/i2c-{}", bus);
+                                    if let Ok(mut dev) = from_i2c_device(dev_path) {
+                                        let _ = dev.set_vcp_feature(vcp, pct as u16);
+                                    }
+                                })
+                                .await
+                                .ok();
+                            }
+                            BrightnessBackend::DdcciSysfs { sysfs_path } => {
+                                let path = sysfs_path.clone();
+                                let pct = target_pct;
+                                tokio::task::spawn_blocking(move || {
+                                    if let Some(sysfs) = read_sysfs_brightness(&path) {
+                                        let target_raw =
+                                            ((pct as f64 / 100.0) * sysfs.max_raw as f64).round()
+                                                as u32;
+                                        let _ = std::fs::write(
+                                            path.join("brightness"),
+                                            target_raw.to_string(),
+                                        );
+                                    }
+                                })
+                                .await
+                                .ok();
+                            }
+                        }
+                    }
+                }
             }
         });
     }
@@ -431,10 +799,57 @@ impl BrightnessService {
         }
 
         current.percentage = percentage;
+        for disp in &mut current.displays {
+            disp.percentage = percentage;
+        }
         let _ = self.tx.send(current);
 
         if let Some(ref cmd_tx) = self.cmd_tx {
-            let _ = cmd_tx.send(percentage);
+            let _ = cmd_tx.try_send(BrightnessCmd::SetAll { percentage });
+        }
+    }
+
+    pub fn set_display_brightness(&self, display_id: &str, percentage: u8) {
+        let percentage = percentage.min(100);
+        let mut current = self.brightness_info();
+        if let Some(disp) = current.displays.iter_mut().find(|d| d.id == display_id) {
+            disp.percentage = percentage;
+        }
+        if current.primary_display_id.as_deref() == Some(display_id) {
+            current.percentage = percentage;
+        }
+        let _ = self.tx.send(current);
+
+        if let Some(ref cmd_tx) = self.cmd_tx {
+            let _ = cmd_tx.try_send(BrightnessCmd::SetDisplay {
+                id: display_id.to_string(),
+                percentage,
+            });
+        }
+    }
+
+    pub fn adjust_display_brightness(&self, display_id: &str, delta: i8) {
+        let current = self.brightness_info();
+        if let Some(disp) = current.displays.iter().find(|d| d.id == display_id) {
+            let new_pct = apply_brightness_delta(disp.percentage, delta);
+            self.set_display_brightness(display_id, new_pct);
+        }
+    }
+
+    pub fn adjust_focused_brightness(&self, focused_connector: &str, delta: i8) {
+        let current = self.brightness_info();
+        if let Some(disp) = current
+            .displays
+            .iter()
+            .find(|d| d.connector.as_deref() == Some(focused_connector))
+        {
+            let target_id = disp.id.clone();
+            self.adjust_display_brightness(&target_id, delta);
+        } else if let Some(ref primary_id) = current.primary_display_id {
+            self.adjust_display_brightness(primary_id, delta);
+        } else {
+            let new_pct = apply_brightness_delta(current.percentage, delta);
+            self.set_brightness(new_pct);
         }
     }
 
@@ -442,6 +857,72 @@ impl BrightnessService {
         let target = target_percentage.min(100);
         let log_target = BrightnessInfo::perceptual_percent_to_raw(target);
         self.set_brightness(log_target);
+    }
+
+    /// Asynchronous re-scan for display hotplug events.
+    pub fn rescan_displays(&self) {
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let (ddc_displays, ddc_perms) = discover_ddc_displays();
+            tx.send_if_modified(|curr| {
+                curr.displays.retain(|d| !d.backend.is_ddc());
+                if !ddc_displays.is_empty() {
+                    curr.displays.extend(ddc_displays);
+                    curr.available = true;
+                }
+                if !ddc_perms {
+                    curr.permissions_ok = false;
+                }
+                true
+            });
+        });
+    }
+}
+
+/// Clamps brightness percentage relative adjustment to [0, 100].
+pub fn apply_brightness_delta(current: u8, delta: i8) -> u8 {
+    (current as i16 + delta as i16).clamp(0, 100) as u8
+}
+
+/// Mock DDC/CI Hardware Adapter supporting dynamic display attach/detach, delays, and error injection.
+#[derive(Default)]
+pub struct MockDdcAdapter {
+    pub displays: StdMutex<Vec<DisplayBrightnessInfo>>,
+    pub delay_ms: StdMutex<u64>,
+    pub inject_error: StdMutex<bool>,
+    pub write_history: Arc<StdMutex<Vec<(String, u8)>>>,
+}
+
+impl MockDdcAdapter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn attach_display(&self, display: DisplayBrightnessInfo) {
+        self.displays.lock().unwrap().push(display);
+    }
+
+    pub fn detach_display(&self, id: &str) {
+        self.displays.lock().unwrap().retain(|d| d.id != id);
+    }
+
+    pub fn set_display_brightness(&self, id: &str, percentage: u8) -> Result<()> {
+        if *self.inject_error.lock().unwrap() {
+            anyhow::bail!("Mock I2C hardware error");
+        }
+        let delay = *self.delay_ms.lock().unwrap();
+        if delay > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+        }
+        let mut list = self.displays.lock().unwrap();
+        if let Some(d) = list.iter_mut().find(|d| d.id == id) {
+            d.percentage = percentage;
+        }
+        self.write_history
+            .lock()
+            .unwrap()
+            .push((id.to_string(), percentage));
+        Ok(())
     }
 }
 
@@ -456,7 +937,6 @@ impl Drop for BrightnessService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as StdMutex;
     use tempfile::TempDir;
 
     #[derive(Default)]
@@ -512,6 +992,9 @@ mod tests {
                                         percentage: sysfs.percentage,
                                         available: true,
                                         device_name: Some(device_name.clone()),
+                                        displays: vec![],
+                                        primary_display_id: None,
+                                        permissions_ok: true,
                                     });
                                 }
                             }
@@ -530,6 +1013,7 @@ mod tests {
         assert_eq!(BrightnessInfo::default().percentage, 0);
         assert!(!BrightnessInfo::default().available);
         assert_eq!(BrightnessInfo::default().device_name, None);
+        assert!(BrightnessInfo::default().displays.is_empty());
     }
 
     #[test]
@@ -541,18 +1025,58 @@ mod tests {
     }
 
     #[test]
+    fn test_mock_ddc_adapter_operations() {
+        let adapter = MockDdcAdapter::new();
+        let disp = DisplayBrightnessInfo {
+            id: "ddc:i2c-2:test-mon".into(),
+            name: "Test Monitor".into(),
+            connector: Some("DP-1".into()),
+            percentage: 50,
+            is_primary: false,
+            backend: BrightnessBackend::DdcCiDirect {
+                i2c_bus: 2,
+                vcp_code: VCP_LUMINANCE,
+            },
+        };
+        adapter.attach_display(disp);
+        assert_eq!(adapter.displays.lock().unwrap().len(), 1);
+
+        adapter
+            .set_display_brightness("ddc:i2c-2:test-mon", 80)
+            .unwrap();
+        assert_eq!(adapter.displays.lock().unwrap()[0].percentage, 80);
+
+        adapter.detach_display("ddc:i2c-2:test-mon");
+        assert!(adapter.displays.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_edid_parsing() {
+        let mut raw_edid = vec![0u8; 128];
+        raw_edid[0..8].copy_from_slice(&[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]);
+        // Vendor "DEL" -> 0x10AC
+        raw_edid[8] = 0x10;
+        raw_edid[9] = 0xAC;
+        // Descriptor block 0xFC (Model Name "U2723QE") at offset 54
+        raw_edid[54..58].copy_from_slice(&[0x00, 0x00, 0x00, 0xFC]);
+        raw_edid[59..66].copy_from_slice(b"U2723QE");
+
+        let info = parse_edid_info(&raw_edid).expect("should parse valid EDID header");
+        assert_eq!(info.vendor, "DEL");
+        assert_eq!(info.model, "U2723QE");
+    }
+
+    #[test]
     fn test_backlight_prioritization() {
         let temp_dir = TempDir::new().unwrap();
         let sysfs_base = temp_dir.path();
 
-        // Create firmware backlight: acpi_video0
         let acpi_dir = sysfs_base.join("acpi_video0");
         std::fs::create_dir(&acpi_dir).unwrap();
         std::fs::write(acpi_dir.join("brightness"), "10\n").unwrap();
         std::fs::write(acpi_dir.join("max_brightness"), "100\n").unwrap();
         std::fs::write(acpi_dir.join("type"), "firmware\n").unwrap();
 
-        // Create raw backlight: intel_backlight
         let intel_dir = sysfs_base.join("intel_backlight");
         std::fs::create_dir(&intel_dir).unwrap();
         std::fs::write(intel_dir.join("brightness"), "150\n").unwrap();
@@ -590,14 +1114,89 @@ mod tests {
         assert!(info.available);
         assert_eq!(info.percentage, 50);
         assert_eq!(info.device_name.as_deref(), Some("amdgpu_bl0"));
+        assert!(!info.displays.is_empty());
+        assert_eq!(info.displays[0].id, "sysfs:amdgpu_bl0");
 
         service.set_brightness(75);
         assert_eq!(service.brightness_info().percentage, 75);
 
-        tokio::task::yield_now().await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         let calls = setter.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0], ("amdgpu_bl0".to_string(), 75));
+    }
+
+    #[tokio::test]
+    async fn test_coalescing_engine_rapid_slider_drags() {
+        let temp_dir = TempDir::new().unwrap();
+        let sysfs_base = temp_dir.path();
+
+        let intel_dir = sysfs_base.join("intel_backlight");
+        std::fs::create_dir(&intel_dir).unwrap();
+        std::fs::write(intel_dir.join("brightness"), "50\n").unwrap();
+        std::fs::write(intel_dir.join("max_brightness"), "100\n").unwrap();
+        std::fs::write(intel_dir.join("type"), "raw\n").unwrap();
+
+        let setter = Arc::new(MockDbusSetter::default());
+        let (trigger_tx, _trigger_rx) = mpsc::unbounded_channel();
+        let monitor = MockUdevMonitor { trigger_tx };
+
+        let service =
+            BrightnessService::new_with_adapters(sysfs_base, setter.clone(), monitor).unwrap();
+
+        for i in 1..=50 {
+            service.set_brightness(i);
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
+        let calls = setter.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], ("intel_backlight".to_string(), 50));
+    }
+
+    #[tokio::test]
+    async fn test_focused_brightness_routing() {
+        let temp_dir = TempDir::new().unwrap();
+        let sysfs_base = temp_dir.path();
+
+        let intel_dir = sysfs_base.join("intel_backlight");
+        std::fs::create_dir(&intel_dir).unwrap();
+        std::fs::write(intel_dir.join("brightness"), "50\n").unwrap();
+        std::fs::write(intel_dir.join("max_brightness"), "100\n").unwrap();
+        std::fs::write(intel_dir.join("type"), "raw\n").unwrap();
+
+        let setter = Arc::new(MockDbusSetter::default());
+        let (trigger_tx, _trigger_rx) = mpsc::unbounded_channel();
+        let monitor = MockUdevMonitor { trigger_tx };
+
+        let service =
+            BrightnessService::new_with_adapters(sysfs_base, setter.clone(), monitor).unwrap();
+
+        service.adjust_focused_brightness("eDP-1", 10);
+        assert_eq!(service.brightness_info().percentage, 60);
+    }
+
+    #[tokio::test]
+    async fn test_multi_display_snapshot_aggregation() {
+        let temp_dir = TempDir::new().unwrap();
+        let sysfs_base = temp_dir.path();
+
+        let intel_dir = sysfs_base.join("intel_backlight");
+        std::fs::create_dir(&intel_dir).unwrap();
+        std::fs::write(intel_dir.join("brightness"), "40\n").unwrap();
+        std::fs::write(intel_dir.join("max_brightness"), "100\n").unwrap();
+        std::fs::write(intel_dir.join("type"), "raw\n").unwrap();
+
+        let setter = Arc::new(MockDbusSetter::default());
+        let (trigger_tx, _trigger_rx) = mpsc::unbounded_channel();
+        let monitor = MockUdevMonitor { trigger_tx };
+
+        let service =
+            BrightnessService::new_with_adapters(sysfs_base, setter.clone(), monitor).unwrap();
+        let info = service.brightness_info();
+        assert!(info.available);
+        assert_eq!(info.displays.len(), 1);
+        assert_eq!(info.displays[0].name, "Internal Display (intel_backlight)");
     }
 
     #[tokio::test]
@@ -606,26 +1205,5 @@ mod tests {
         let info = service.brightness_info();
         assert!(!info.available);
         assert_eq!(info.percentage, 0);
-    }
-
-    #[tokio::test]
-    async fn test_brightness_task_cancellation() {
-        let temp_dir = TempDir::new().unwrap();
-        let sysfs_base = temp_dir.path();
-
-        let intel_dir = sysfs_base.join("intel_backlight");
-        std::fs::create_dir(&intel_dir).unwrap();
-        std::fs::write(intel_dir.join("brightness"), "100\n").unwrap();
-        std::fs::write(intel_dir.join("max_brightness"), "200\n").unwrap();
-        std::fs::write(intel_dir.join("type"), "raw\n").unwrap();
-
-        let setter = Arc::new(MockDbusSetter::default());
-        let (trigger_tx, _trigger_rx) = mpsc::unbounded_channel();
-        let monitor = MockUdevMonitor { trigger_tx };
-
-        let service = BrightnessService::new_with_adapters(sysfs_base, setter, monitor).unwrap();
-        tokio::task::yield_now().await;
-        drop(service);
-        tokio::task::yield_now().await;
     }
 }
