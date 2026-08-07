@@ -1,9 +1,9 @@
 use crate::effects::{AuthorizedHostEffect, HostEffect};
 use crate::events::ExtensionEvent;
 use crate::manifest::{Capability, ExtensionManifest, ManifestError};
-use shilpo_ext_types::{CanonicalId, ContributionId, ExtensionId};
 use crate::view::{ViewLimits, ViewTree, ViewValidationError};
 use crate::{CircuitBreaker, DiagnosticCode, ExtensionDiagnostic};
+use shilpo_ext_types::{CanonicalId, ContributionId, ExtensionId};
 use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;

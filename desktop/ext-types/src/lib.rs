@@ -135,16 +135,7 @@ impl CanonicalId {
             contribution_id,
         }
     }
-
-    pub fn extension_id(&self) -> &ExtensionId {
-        &self.extension_id
-    }
-
-    pub fn contribution_id(&self) -> &ContributionId {
-        &self.contribution_id
-    }
 }
-
 
 impl FromStr for CanonicalId {
     type Err = IdError;
