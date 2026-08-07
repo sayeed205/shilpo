@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
 use gpui::{App, AppContext};
-use shilpo_theme::ThemeState;
-use shilpo_theme_daemon::ThemeClient;
+use shilpo_theme_daemon::{DaemonState, ThemeClient};
 
 use super::{ShellRuntime, surface_manager};
 
@@ -19,13 +18,14 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
     let theme_client_for_task = theme_client.clone();
     cx.spawn(async move |cx| {
         loop {
-            let state = match rx.recv().await {
-                Ok(state) => state,
+            let update = match rx.recv().await {
+                Ok(update) => update,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    theme_client_for_task.current_state()
+                    theme_client_for_task.current_update()
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
+            let state = update.state;
             cx.update(|cx: &mut App| {
                 shilpo_ui::Theme::global_mut(cx).apply_state(&state);
                 if cx.has_global::<ShellRuntime>() {
@@ -58,7 +58,7 @@ pub fn sync_wallpaper(cx: &mut App, initial_wallpaper_path: Option<PathBuf>) {
 }
 
 impl ShellRuntime {
-    pub(super) fn apply_theme_state(cx: &mut App, state: &ThemeState) {
+    pub(super) fn apply_theme_state(cx: &mut App, state: &DaemonState) {
         let runtime = cx.global_mut::<Self>();
         if let Some(path) = state.wallpaper_path.clone().filter(|path| path.is_file()) {
             runtime.current_wallpaper_path = Some(path);

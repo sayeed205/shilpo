@@ -1,5 +1,5 @@
+use crate::daemon::DaemonState;
 use anyhow::{Context, Result};
-use shilpo_theme::ThemeState;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -9,7 +9,7 @@ pub fn state_file_path() -> PathBuf {
     shilpo_config::state_dir().join("colors.json")
 }
 
-pub fn write_state_snapshot(state: &ThemeState) -> Result<PathBuf> {
+pub fn write_state_snapshot(state: &DaemonState) -> Result<PathBuf> {
     let path = state_file_path();
     let parent = path
         .parent()
@@ -28,7 +28,7 @@ pub fn write_state_snapshot(state: &ThemeState) -> Result<PathBuf> {
     let temp_path = parent.join(temp_name);
 
     let json =
-        serde_json::to_string_pretty(state).context("Failed to serialize ThemeState to JSON")?;
+        serde_json::to_string_pretty(state).context("Failed to serialize DaemonState to JSON")?;
 
     {
         let mut file = OpenOptions::new()
@@ -65,7 +65,7 @@ pub fn write_state_snapshot(state: &ThemeState) -> Result<PathBuf> {
     Ok(path)
 }
 
-pub fn read_state_snapshot() -> Option<ThemeState> {
+pub fn read_state_snapshot() -> Option<DaemonState> {
     let path = state_file_path();
     let content = fs::read_to_string(&path).ok()?;
     serde_json::from_str(&content).ok()
@@ -93,8 +93,11 @@ mod tests {
 
     #[test]
     fn test_atomic_persistence_and_permissions() {
-        let state = ThemeState {
-            revision: 42,
+        let state = DaemonState {
+            theme: shilpo_theme::ThemeState {
+                revision: 42,
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -106,7 +109,7 @@ mod tests {
         assert_eq!(permissions.mode() & 0o777, 0o600);
 
         let read_back = read_state_snapshot().expect("Failed to read snapshot");
-        assert_eq!(read_back.revision, 42);
+        assert_eq!(read_back.theme.revision, 42);
         assert_eq!(read_back, state);
     }
 }

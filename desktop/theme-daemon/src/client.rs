@@ -1,8 +1,9 @@
+use crate::daemon::{ChangeKind, DaemonState, ThemeUpdate};
 use crate::dbus::ThemeDbusProxy;
 use crate::persistence::read_state_snapshot;
 use anyhow::{Context, Result, anyhow};
 use futures_lite::stream::StreamExt;
-use shilpo_theme::{ColorSource, ThemeMode, ThemeState};
+use shilpo_theme::{ColorSource, ThemeMode};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -11,8 +12,8 @@ use zbus::Connection;
 
 #[derive(Clone)]
 pub struct ThemeClient {
-    current_state: Arc<Mutex<ThemeState>>,
-    tx: broadcast::Sender<ThemeState>,
+    current_state: Arc<Mutex<DaemonState>>,
+    tx: broadcast::Sender<ThemeUpdate>,
     dbus_conn: Arc<tokio::sync::RwLock<Option<Connection>>>,
 }
 
@@ -58,11 +59,21 @@ impl ThemeClient {
         tokio_handle().spawn(future)
     }
 
-    pub fn current_state(&self) -> ThemeState {
+    pub fn current_state(&self) -> DaemonState {
         self.current_state.lock().unwrap().clone()
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<ThemeState> {
+    /// Current state wrapped as a `full()` update, for lagged catch-up and
+    /// reconnect paths where no delta was observed.
+    pub fn current_update(&self) -> ThemeUpdate {
+        let state = self.current_state.lock().unwrap().clone();
+        ThemeUpdate {
+            state,
+            change_kind: ChangeKind::full(),
+        }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<ThemeUpdate> {
         self.tx.subscribe()
     }
 
@@ -99,9 +110,10 @@ impl ThemeClient {
                                             // 3. Process signals
                                             while let Some(signal) = signal_stream.next().await {
                                                 if let Ok(signal) = signal.args()
-                                                    && let Ok(state) = serde_json::from_str(&signal.state)
+                                                    && let Ok(update) =
+                                                        serde_json::from_str(&signal.state)
                                                 {
-                                                    client_clone.update_state_if_newer(state);
+                                                    client_clone.handle_signal_update(update);
                                                 }
                                             }
                                             warn!("D-Bus StateChanged signal stream ended; reconnecting...");
@@ -132,22 +144,31 @@ impl ThemeClient {
         });
     }
 
-    fn force_update_state(&self, new_state: ThemeState) {
+    fn force_update_state(&self, new_state: DaemonState) {
         let mut cur = self.current_state.lock().unwrap();
         *cur = new_state.clone();
-        let _ = self.tx.send(new_state);
+        let _ = self
+            .tx
+            .send(ThemeUpdate { state: new_state, change_kind: ChangeKind::full() });
     }
 
-    fn update_state_if_newer(&self, new_state: ThemeState) {
+    fn update_state_if_newer(&self, new_state: DaemonState) {
+        self.handle_signal_update(ThemeUpdate {
+            state: new_state,
+            change_kind: ChangeKind::full(),
+        });
+    }
+
+    fn handle_signal_update(&self, update: ThemeUpdate) {
         let mut cur = self.current_state.lock().unwrap();
-        if new_state.revision >= cur.revision {
-            *cur = new_state.clone();
-            let _ = self.tx.send(new_state);
+        if update.state.revision >= cur.revision {
+            *cur = update.state.clone();
+            let _ = self.tx.send(update);
         }
     }
 
     fn apply_response(&self, raw_state: String) -> Result<()> {
-        let state = serde_json::from_str(&raw_state).context("Invalid ThemeState response")?;
+        let state = serde_json::from_str(&raw_state).context("Invalid DaemonState response")?;
         self.force_update_state(state);
         Ok(())
     }
@@ -177,8 +198,8 @@ impl ThemeClient {
             .get_state()
             .await
             .map_err(|e| anyhow!("get_state failed: {e}"))?;
-        let state: ThemeState =
-            serde_json::from_str(&raw).context("Invalid ThemeState from get_state")?;
+        let state: DaemonState =
+            serde_json::from_str(&raw).context("Invalid DaemonState from get_state")?;
         self.update_state_if_newer(state);
         Ok(())
     }

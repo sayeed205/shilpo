@@ -125,16 +125,16 @@ impl SettingsView {
         let client_clone = theme_client.clone();
         cx.spawn(async move |this, cx| {
             loop {
-                let state = match rx.recv().await {
-                    Ok(state) => state,
+                let update = match rx.recv().await {
+                    Ok(update) => update,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        client_clone.current_state()
+                        client_clone.current_update()
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
-                let mut latest = state;
+                let mut latest = update.state;
                 while let Ok(newer) = rx.try_recv() {
-                    latest = newer;
+                    latest = newer.state;
                 }
                 cx.update(|cx: &mut App| {
                     shilpo_ui::Theme::global_mut(cx).apply_state(&latest);
