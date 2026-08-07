@@ -57,6 +57,10 @@ pub(crate) mod dbus {
         fn set_active_profile(&self, value: &str) -> zbus::Result<()>;
     }
 
+    /// Property names exposed by the daemon.
+    const ACTIVE_PROFILE_PROP: &str = "ActiveProfile";
+    const PROFILES_PROP: &str = "Profiles";
+
     /// D-Bus backed adapter for the power profiles daemon.
     pub(crate) struct ZbusPowerProfileAdapter;
 
@@ -70,55 +74,36 @@ pub(crate) mod dbus {
         }
     }
 
+    async fn setup_connection_and_proxies() -> zbus::Result<(
+        zbus::Connection,
+        PowerProfilesProxy<'static>,
+        zbus::fdo::PropertiesProxy<'static>,
+        zbus::fdo::PropertiesChangedStream,
+    )> {
+        let connection = zbus::Connection::system().await?;
+        let proxy = PowerProfilesProxy::new(&connection).await?;
+        let properties = properties_proxy(&connection).await?;
+        let changes = properties.receive_properties_changed().await?;
+        Ok((connection, proxy, properties, changes))
+    }
+
     async fn run_loop(
         tx: watch::Sender<PowerProfileInfo>,
         mut command_rx: mpsc::UnboundedReceiver<PowerProfileCommand>,
     ) {
         loop {
-            let connection = match zbus::Connection::system().await {
-                Ok(connection) => connection,
-                Err(error) => {
-                    retry_after_disconnect(
-                        &tx,
-                        format!("failed to connect to system bus: {error}"),
-                    )
-                    .await;
-                    continue;
-                }
-            };
-
-            let proxy = match PowerProfilesProxy::new(&connection).await {
-                Ok(proxy) => proxy,
-                Err(error) => {
-                    retry_after_disconnect(&tx, format!("failed to build daemon proxy: {error}"))
+            let (_connection, proxy, _properties, mut changes) =
+                match setup_connection_and_proxies().await {
+                    Ok(tuple) => tuple,
+                    Err(error) => {
+                        retry_after_disconnect(
+                            &tx,
+                            format!("failed to initialize power profile D-Bus connection: {error}"),
+                        )
                         .await;
-                    continue;
-                }
-            };
-
-            let properties = match properties_proxy(&connection).await {
-                Ok(properties) => properties,
-                Err(error) => {
-                    retry_after_disconnect(
-                        &tx,
-                        format!("failed to build properties proxy: {error}"),
-                    )
-                    .await;
-                    continue;
-                }
-            };
-
-            let mut changes = match properties.receive_properties_changed().await {
-                Ok(changes) => changes,
-                Err(error) => {
-                    retry_after_disconnect(
-                        &tx,
-                        format!("failed to watch property changes: {error}"),
-                    )
-                    .await;
-                    continue;
-                }
-            };
+                        continue;
+                    }
+                };
 
             if let Ok(active) = proxy.active_profile().await {
                 let _ = tx.send_replace(PowerProfileInfo::online(&active));
@@ -148,9 +133,10 @@ pub(crate) mod dbus {
                             continue;
                         };
                         if args.interface_name.as_str() == POWER_PROFILES_IFACE
-                            && (args.changed_properties.contains_key("ActiveProfile")
-                                || args.changed_properties.contains_key("Profiles")
-                                || args.invalidated_properties.contains(&"ActiveProfile"))
+                            && (args.changed_properties.contains_key(ACTIVE_PROFILE_PROP)
+                                || args.changed_properties.contains_key(PROFILES_PROP)
+                                || args.invalidated_properties.contains(&ACTIVE_PROFILE_PROP)
+                                || args.invalidated_properties.contains(&PROFILES_PROP))
                             && let Ok(active) = proxy.active_profile().await
                         {
                             let _ = tx.send_replace(PowerProfileInfo::online(&active));

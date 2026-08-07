@@ -130,9 +130,8 @@ impl PowerProfileService {
         self.tx.borrow().clone()
     }
 
-    /// Dispatches a profile change to the daemon and optimistically forwards
-    /// the requested state to subscribers. The daemon's own
-    /// `PropertiesChanged` signal confirms (or corrects) the state.
+    /// Dispatches a profile change to the daemon. The backend adapter applies
+    /// the change over D-Bus and publishes the updated state to subscribers.
     pub fn set_profile(&self, profile: PowerProfile) -> bool {
         let Some(command_tx) = &self.command_tx else {
             return false;
@@ -140,17 +139,9 @@ impl PowerProfileService {
         if !self.tx.borrow().available {
             return false;
         }
-        if command_tx
-            .send(PowerProfileCommand::Set(profile.clone()))
+        command_tx
+            .send(PowerProfileCommand::Set(profile))
             .is_ok()
-        {
-            let mut info = self.tx.borrow().clone();
-            info.active_profile = profile;
-            let _ = self.tx.send_replace(info);
-            true
-        } else {
-            false
-        }
     }
 
     /// Constructs a service backed by the given adapter. Test-only.
