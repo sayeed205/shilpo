@@ -116,6 +116,7 @@ mod tests {
 
     #[test]
     fn test_caffeine_service_toggle() {
+        let _guard = crate::test_support::serial_guard();
         let service = CaffeineService::new();
         let initial = service.is_active();
         assert_eq!(service.toggle(), !initial);
