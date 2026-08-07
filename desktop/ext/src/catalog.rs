@@ -1,5 +1,6 @@
 use crate::cli::ExtensionCli;
-use crate::manifest::{Capability, ExtensionId, ExtensionManifest, SUPPORTED_API_VERSION};
+use crate::manifest::{Capability, ExtensionManifest, SUPPORTED_API_VERSION};
+use shilpo_ext_types::ExtensionId;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use flate2::read::GzDecoder;

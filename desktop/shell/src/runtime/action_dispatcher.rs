@@ -1,4 +1,5 @@
 use gpui::App;
+use shilpo_ext_types::CanonicalId;
 use shilpo_services::CompositorCommand;
 
 use crate::{
@@ -42,7 +43,7 @@ impl ShellRuntime {
 
     pub fn register_extension_action(
         cx: &mut App,
-        id: shilpo_ext::CanonicalId,
+        id: CanonicalId,
         name: impl Into<String>,
         label: impl Into<String>,
     ) -> Result<ActionId, String> {

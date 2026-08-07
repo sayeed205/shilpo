@@ -21,6 +21,7 @@ use crate::{
 };
 
 use extension_host::ExtensionSurfaceSpec;
+use shilpo_ext_types::{CanonicalId, ExtensionId};
 
 pub struct ShellRuntime {
     pub(super) ipc_server: ShellIpcServer,
@@ -53,12 +54,12 @@ pub struct ShellRuntime {
     pub(super) extensions: Option<ExtensionCoordinator>,
     pub(super) extension_surfaces:
         HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
-    pub(super) extension_panel: Option<(WindowHandle<shilpo_ui::Root>, shilpo_ext::CanonicalId)>,
+    pub(super) extension_panel: Option<(WindowHandle<shilpo_ui::Root>, CanonicalId)>,
     pub(super) extension_output_ids: std::collections::HashSet<DisplayId>,
     pub(super) extension_tasks: std::collections::HashMap<
         (
             crate::extensions::ExtensionGeneration,
-            shilpo_ext::ExtensionId,
+            ExtensionId,
             String,
         ),
         gpui::Task<()>,

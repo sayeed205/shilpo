@@ -1,6 +1,7 @@
 use crate::effects::{AuthorizedHostEffect, HostEffect};
 use crate::events::ExtensionEvent;
-use crate::manifest::{CanonicalId, Capability, ExtensionId, ExtensionManifest, ManifestError};
+use crate::manifest::{Capability, ExtensionManifest, ManifestError};
+use shilpo_ext_types::{CanonicalId, ContributionId, ExtensionId};
 use crate::view::{ViewLimits, ViewTree, ViewValidationError};
 use crate::{CircuitBreaker, DiagnosticCode, ExtensionDiagnostic};
 use std::collections::HashMap;
@@ -395,7 +396,7 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             contribution_id, ..
         } = event
         {
-            let contribution_id = crate::manifest::ContributionId::new(contribution_id.clone())?;
+            let contribution_id = ContributionId::new(contribution_id.clone())?;
             if !registration
                 .manifest
                 .contributions
@@ -523,7 +524,7 @@ impl Default for ExtensionHost<InMemoryRuntime> {
 fn effect_is_unprivileged(effect: &HostEffect, manifest: &ExtensionManifest) -> bool {
     match effect {
         HostEffect::InvalidateView { contribution_id } => {
-            crate::manifest::ContributionId::new(contribution_id.clone())
+            ContributionId::new(contribution_id.clone())
                 .is_ok_and(|id| manifest.contributions.contains(&id))
         }
         HostEffect::StateRead { .. } | HostEffect::StateWrite { .. } => true,

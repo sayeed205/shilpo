@@ -4,10 +4,11 @@ use super::coordinator::{
 };
 use semver::Version;
 use shilpo_ext::{
-    AuthorizedHostEffectKind, CURRENT_SHILPO_VERSION, CanonicalId, Capability, CatalogPaths,
-    ContributionId, ExtensionCatalog, ExtensionEvent, ExtensionHost, ExtensionId,
-    ExtensionManifest, ExtensionRuntime, HostEffect, ViewTree, WasmModule,
+    AuthorizedHostEffectKind, CURRENT_SHILPO_VERSION, Capability, CatalogPaths,
+    ExtensionCatalog, ExtensionEvent, ExtensionHost, ExtensionManifest, ExtensionRuntime,
+    HostEffect, ViewTree, WasmModule,
 };
+use shilpo_ext_types::{CanonicalId, ContributionId, ExtensionId};
 use std::{
     collections::{BTreeMap, HashMap},
     fs,

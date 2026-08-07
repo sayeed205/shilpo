@@ -31,8 +31,7 @@ pub use effects::{
 };
 pub use events::{EventKind, ExtensionEvent};
 pub use manifest::{
-    CanonicalId, Capability, CapabilityKind, ContributionId, ExtensionId, ExtensionManifest,
-    IdError, ManifestError,
+    Capability, CapabilityKind, ExtensionManifest, ManifestError,
 };
 pub use view::{
     ContainerDirection, ContainerNode, LoadingIndicatorNode, SemanticColorToken, TextNode,
@@ -43,6 +42,7 @@ pub use wasm::{WasmModule, WasmRuntime};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shilpo_ext_types::{CanonicalId, ExtensionId};
     use flate2::read::GzDecoder;
     use std::collections::BTreeSet;
     use std::fs;

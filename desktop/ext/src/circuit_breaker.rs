@@ -1,4 +1,4 @@
-use crate::manifest::ExtensionId;
+use shilpo_ext_types::ExtensionId;
 use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 

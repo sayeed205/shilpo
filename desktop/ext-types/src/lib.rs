@@ -3,6 +3,7 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+/// Scoped error type for identifier parsing and validation.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum IdError {
     InvalidExtensionId(String),
@@ -30,6 +31,7 @@ impl fmt::Display for IdError {
 
 impl std::error::Error for IdError {}
 
+/// The package identity of an extension (reverse-domain notation, e.g. `io.github.alice`).
 #[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(transparent)]
 pub struct ExtensionId(String);
@@ -75,6 +77,7 @@ impl fmt::Display for ExtensionId {
     }
 }
 
+/// A single-segment identifier naming one contribution within an extension (e.g. `clock`).
 #[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(transparent)]
 pub struct ContributionId(String);
@@ -115,6 +118,9 @@ impl fmt::Display for ContributionId {
     }
 }
 
+/// The composed, globally-unique address of a contribution (`extension/contribution`).
+///
+/// Lookups and addressing across the system are keyed on this canonical identifier.
 #[derive(Clone, Debug, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[schemars(with = "String")]
 pub struct CanonicalId {
@@ -129,7 +135,16 @@ impl CanonicalId {
             contribution_id,
         }
     }
+
+    pub fn extension_id(&self) -> &ExtensionId {
+        &self.extension_id
+    }
+
+    pub fn contribution_id(&self) -> &ContributionId {
+        &self.contribution_id
+    }
 }
+
 
 impl FromStr for CanonicalId {
     type Err = IdError;

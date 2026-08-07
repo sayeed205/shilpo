@@ -23,4 +23,5 @@ shilpo-services.workspace = true
 shilpo-config.workspace = true
 shilpo-theme.workspace = true
 shilpo-theme-daemon.workspace = true
+shilpo-ext-types.workspace = true
 shilpo-ext.workspace = true
