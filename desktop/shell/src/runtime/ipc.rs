@@ -162,6 +162,21 @@ impl ShellRuntime {
                         _ => Ok(()),
                     };
                 }
+                IpcRequest::SetBrightness(pct) => {
+                    Self::dispatch_device_command(
+                        cx,
+                        crate::bar::service_worker::DeviceCommand::Brightness(pct),
+                    );
+                }
+                IpcRequest::SetDisplayBrightness { id, percentage } => {
+                    Self::dispatch_device_command(
+                        cx,
+                        crate::bar::service_worker::DeviceCommand::DisplayBrightness {
+                            id,
+                            percentage,
+                        },
+                    );
+                }
                 IpcRequest::GetStatus => {}
                 IpcRequest::GetTelemetry => {}
             }

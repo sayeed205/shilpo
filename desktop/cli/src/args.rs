@@ -82,6 +82,25 @@ pub enum Commands {
         #[command(subcommand)]
         command: ExtCommands,
     },
+    /// Display brightness controls
+    Brightness {
+        #[command(subcommand)]
+        command: BrightnessCommands,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum BrightnessCommands {
+    /// List detected displays and current brightness percentages
+    List,
+    /// Set brightness for a specific display or all displays
+    Set {
+        /// Target display connector or ID (e.g. "DP-1" or "ddc:i2c-3")
+        #[arg(long)]
+        display: Option<String>,
+        /// Target brightness percentage (0..=100)
+        value: u8,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]

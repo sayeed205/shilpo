@@ -572,10 +572,8 @@ impl DoctorChecker {
     }
 
     pub fn check_i2c_permissions(&self) -> DiagnosticItem {
-        let i2c_devs: Vec<PathBuf> = (0..=32)
-            .map(|i| PathBuf::from(format!("/dev/i2c-{i}")))
-            .filter(|p| p.exists())
-            .collect();
+        let i2c_buses = shilpo_services::brightness::discover_i2c_bus_paths();
+        let i2c_devs: Vec<PathBuf> = i2c_buses.into_iter().map(|(_, p)| p).collect();
 
         if i2c_devs.is_empty() {
             return DiagnosticItem {

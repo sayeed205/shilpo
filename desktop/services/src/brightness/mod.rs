@@ -1,6 +1,7 @@
 use anyhow::Result;
 use ddc::*;
 use ddc_i2c::from_i2c_device;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -8,15 +9,19 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{debug, warn};
 
+/// VCP luminance (screen brightness) feature code standard.
+pub const VCP_LUMINANCE: u8 = 0x10;
+
 /// Brightness control hardware backend type.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
 pub enum BrightnessBackend {
     SysfsLogind { sysfs_path: PathBuf, device_name: String },
     DdcCiDirect { bus_index: u8 },
 }
 
 /// Discovered display brightness device representation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DisplayBrightnessInfo {
     pub id: String,                 // e.g. "sysfs:intel_backlight" or "ddc:i2c-3"
     pub name: String,               // Friendly display model / device name
@@ -27,7 +32,7 @@ pub struct DisplayBrightnessInfo {
 }
 
 /// Screen brightness status (multi-display aware with backward compatibility).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrightnessInfo {
     pub percentage: u8,
     pub available: bool,
@@ -207,25 +212,38 @@ pub fn discover_drm_connectors() -> HashMap<u8, String> {
     map
 }
 
+/// Discovers existing `/dev/i2c-*` device node paths dynamically.
+pub fn discover_i2c_bus_paths() -> Vec<(u8, PathBuf)> {
+    let mut buses = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/dev") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if let Some(num_str) = name_str.strip_prefix("i2c-")
+                && let Ok(bus) = num_str.parse::<u8>()
+            {
+                buses.push((bus, entry.path()));
+            }
+        }
+    }
+    buses.sort_by_key(|(bus, _)| *bus);
+    buses
+}
+
 /// Probes `/dev/i2c-*` devices for DDC/CI compatible external displays.
 pub fn discover_ddc_displays() -> (Vec<DisplayBrightnessInfo>, bool) {
     let mut displays = Vec::new();
     let mut permissions_ok = true;
     let connector_map = discover_drm_connectors();
+    let buses = discover_i2c_bus_paths();
 
-    for bus in 0..=32 {
-        let dev_path = format!("/dev/i2c-{}", bus);
-        let path = Path::new(&dev_path);
-        if !path.exists() {
-            continue;
-        }
-
-        if std::fs::File::options().read(true).write(true).open(path).is_err() {
+    for (bus, path) in buses {
+        if std::fs::File::options().read(true).write(true).open(&path).is_err() {
             permissions_ok = false;
         }
 
-        if let Ok(mut dev) = from_i2c_device(&dev_path) {
-            if let Ok(vcp) = dev.get_vcp_feature(0x10) {
+        if let Ok(mut dev) = from_i2c_device(&path) {
+            if let Ok(vcp) = dev.get_vcp_feature(VCP_LUMINANCE) {
                 let max = vcp.maximum();
                 let curr = vcp.value();
                 let percentage = if max > 0 {
@@ -469,9 +487,7 @@ impl BrightnessService {
         setter: Arc<S>,
         monitor: M,
     ) -> Result<Self> {
-        let (mut displays, primary_device, primary_sysfs) = Self::discover_initial_displays(sysfs_base);
-        let (ddc_displays, ddc_perms) = discover_ddc_displays();
-        displays.extend(ddc_displays);
+        let (displays, primary_device, primary_sysfs) = Self::discover_initial_displays(sysfs_base);
 
         let available = !displays.is_empty();
         let primary_id = displays.first().map(|d| d.id.clone());
@@ -489,12 +505,36 @@ impl BrightnessService {
             device_name: primary_name.clone(),
             displays: displays.clone(),
             primary_display_id: primary_id,
-            permissions_ok: ddc_perms,
+            permissions_ok: true,
         };
 
         let (tx, rx) = watch::channel(initial_info);
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<BrightnessCmd>();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        let tx_ddc = tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let (ddc_displays, ddc_perms) = discover_ddc_displays();
+            if !ddc_displays.is_empty() || !ddc_perms {
+                tx_ddc.send_if_modified(|curr| {
+                    let mut modified = false;
+                    if !ddc_displays.is_empty() {
+                        curr.displays.extend(ddc_displays);
+                        curr.available = true;
+                        if curr.primary_display_id.is_none() {
+                            curr.primary_display_id = curr.displays.first().map(|d| d.id.clone());
+                            curr.percentage = curr.displays.first().map(|d| d.percentage).unwrap_or(0);
+                        }
+                        modified = true;
+                    }
+                    if !ddc_perms {
+                        curr.permissions_ok = false;
+                        modified = true;
+                    }
+                    modified
+                });
+            }
+        });
 
         Self::spawn_coalesced_worker(cmd_rx, setter, displays, max_raw);
 
@@ -554,31 +594,23 @@ impl BrightnessService {
                 .map(|d| (d.id.clone(), d))
                 .collect();
 
-            while let Some(cmd) = cmd_rx.recv().await {
-                match cmd {
-                    BrightnessCmd::SetDisplay { id, percentage } => {
-                        pending.insert(id, percentage.min(100));
-                    }
-                    BrightnessCmd::SetAll { percentage } => {
-                        let pct = percentage.min(100);
-                        for id in display_map.keys() {
-                            pending.insert(id.clone(), pct);
-                        }
+            let queue_cmd = |cmd: BrightnessCmd, pending: &mut HashMap<String, u8>| match cmd {
+                BrightnessCmd::SetDisplay { id, percentage } => {
+                    pending.insert(id, percentage.min(100));
+                }
+                BrightnessCmd::SetAll { percentage } => {
+                    let pct = percentage.min(100);
+                    for id in display_map.keys() {
+                        pending.insert(id.clone(), pct);
                     }
                 }
+            };
+
+            while let Some(cmd) = cmd_rx.recv().await {
+                queue_cmd(cmd, &mut pending);
 
                 while let Ok(cmd) = cmd_rx.try_recv() {
-                    match cmd {
-                        BrightnessCmd::SetDisplay { id, percentage } => {
-                            pending.insert(id, percentage.min(100));
-                        }
-                        BrightnessCmd::SetAll { percentage } => {
-                            let pct = percentage.min(100);
-                            for id in display_map.keys() {
-                                pending.insert(id.clone(), pct);
-                            }
-                        }
-                    }
+                    queue_cmd(cmd, &mut pending);
                 }
 
                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -599,7 +631,7 @@ impl BrightnessService {
                                     let dev_path = format!("/dev/i2c-{}", bus);
                                     if let Ok(mut dev) = from_i2c_device(dev_path) {
                                         let _ = dev.set_vcp_feature(
-                                            0x10,
+                                            VCP_LUMINANCE,
                                             pct as u16,
                                         );
                                     }
@@ -613,6 +645,7 @@ impl BrightnessService {
             }
         });
     }
+
 
     pub fn subscribe(&self) -> watch::Receiver<BrightnessInfo> {
         self.rx.clone()

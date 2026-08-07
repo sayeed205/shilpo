@@ -331,10 +331,13 @@ impl ActionDispatcher {
             }
             ActionInvocation::BrightnessUp => {
                 let info = ShellRuntime::device_snapshot(cx).brightness;
+                let connector = ShellRuntime::compositor(cx)
+                    .and_then(|c| c.current().focused_output.clone())
+                    .unwrap_or_else(|| "eDP-1".to_string());
                 ShellRuntime::dispatch_device_command(
                     cx,
                     crate::bar::service_worker::DeviceCommand::AdjustFocusedBrightness {
-                        connector: "eDP-1".to_string(),
+                        connector,
                         delta: 5,
                     },
                 );
@@ -349,10 +352,13 @@ impl ActionDispatcher {
             }
             ActionInvocation::BrightnessDown => {
                 let info = ShellRuntime::device_snapshot(cx).brightness;
+                let connector = ShellRuntime::compositor(cx)
+                    .and_then(|c| c.current().focused_output.clone())
+                    .unwrap_or_else(|| "eDP-1".to_string());
                 ShellRuntime::dispatch_device_command(
                     cx,
                     crate::bar::service_worker::DeviceCommand::AdjustFocusedBrightness {
-                        connector: "eDP-1".to_string(),
+                        connector,
                         delta: -5,
                     },
                 );
