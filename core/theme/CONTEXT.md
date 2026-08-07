@@ -44,6 +44,15 @@ _Avoid_: diff, effects, event
 
 **Scheme variant** (`scheme_variant`):
 The M3 style applied to a seed when generating a palette. `Auto` resolves to a
-concrete variant from the seed's chroma; any explicit variant pins the style for
-all future seeds.
+concrete variant — from the seed's chroma in core, or from an image-aware
+decision the producer injects when it materializes an external seed (the stored
+selection stays `Auto` so the next seed re-derives). Any explicit variant pins
+the style for all future seeds.
 _Avoid_: schema variant, algorithm, style
+
+**Resolved variant** (`resolved_variant`):
+The concrete `scheme_variant` actually applied to the current seed's palettes.
+When the selection is `Auto`, core resolves it from the seed's chroma, or the
+producer's injected resolution wins when one is supplied at materialization. An
+explicit selection is its own resolution.
+_Avoid_: effective variant, active variant, actual variant

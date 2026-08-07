@@ -3,11 +3,15 @@ use crate::dbus::{ActorMessage, ThemeDbusService};
 use crate::persistence::{read_state_snapshot, write_state_snapshot};
 use crate::portal::PortalObserver;
 use anyhow::Result;
+use image::DynamicImage;
 use image::imageops::FilterType;
 use mcu_material_color::{Hct, QuantizerCelebi, Score};
 use serde::{Deserialize, Serialize};
 use shilpo_config::ShellConfig;
-use shilpo_theme::{ColorSource, ThemeCommand, ThemeMode, ThemeState, generate_m3_palettes, reduce};
+use shilpo_theme::{
+    ColorSource, SchemeVariant, ThemeCommand, ThemeMode, ThemeState, generate_m3_palettes,
+    materialize_seed_with_variant, reduce, resolve_variant,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +27,11 @@ pub struct DaemonState {
     pub theme: ThemeState,
     pub wallpaper_path: Option<PathBuf>,
     pub wallpaper_seed: Option<u32>,
+    /// The variant the wallpaper's image statistics resolved for the current
+    /// wallpaper seed, so switching sources and re-materializing keeps the same
+    /// image-aware resolution instead of falling back to seed chroma.
+    #[serde(default)]
+    pub wallpaper_detected_variant: SchemeVariant,
     pub wallpaper_dir: PathBuf,
 }
 
@@ -32,6 +41,7 @@ impl DaemonState {
             theme: ThemeState::new(timestamp),
             wallpaper_path: None,
             wallpaper_seed: None,
+            wallpaper_detected_variant: SchemeVariant::Auto,
             wallpaper_dir: PathBuf::from("~/Pictures/Wallpapers"),
         }
     }
@@ -65,7 +75,11 @@ impl std::ops::DerefMut for DaemonState {
 pub enum DaemonCommand {
     Theme(ThemeCommand),
     SetWallpaperDirectory(PathBuf),
-    SetWallpaper { path: PathBuf, seed: u32 },
+    SetWallpaper {
+        path: PathBuf,
+        seed: u32,
+        detected_variant: SchemeVariant,
+    },
     PortalAppearanceChanged(Option<ThemeMode>),
 }
 
@@ -73,6 +87,7 @@ pub struct WallpaperTaskResult {
     pub op_id: u64,
     pub path: PathBuf,
     pub seed: u32,
+    pub detected_variant: SchemeVariant,
     pub error: Option<String>,
     pub reply: tokio::sync::oneshot::Sender<Result<DaemonState, String>>,
 }
@@ -316,21 +331,22 @@ impl ThemeDaemon {
         tokio::spawn(async move {
             info!(op_id, path = %path.display(), "Starting background wallpaper processing");
 
-            let seed = tokio::task::spawn_blocking({
+            let extraction = tokio::task::spawn_blocking({
                 let path = path.clone();
-                move || extract_seed_from_file(&path)
+                move || extract_wallpaper_seed_and_variant(&path)
             })
             .await
             .map_err(|error| error.to_string())
             .and_then(|result| result.map_err(|error| error.to_string()));
 
-            let seed = match seed {
-                Ok(seed) => seed,
+            let (seed, detected_variant) = match extraction {
+                Ok((seed, variant)) => (seed, variant),
                 Err(error) => {
                     let _ = tx.send(WallpaperTaskResult {
                         op_id,
                         path,
                         seed: 0,
+                        detected_variant: SchemeVariant::Auto,
                         error: Some(error),
                         reply,
                     });
@@ -365,6 +381,7 @@ impl ThemeDaemon {
                 op_id,
                 path,
                 seed,
+                detected_variant,
                 error,
                 reply,
             });
@@ -391,6 +408,7 @@ impl ThemeDaemon {
             .process_command(DaemonCommand::SetWallpaper {
                 path: res.path,
                 seed: res.seed,
+                detected_variant: res.detected_variant,
             })
             .await;
         let _ = res.reply.send(result);
@@ -575,7 +593,12 @@ fn apply_command(
                 if source == ColorSource::Wallpaper
                     && let Some(seed) = state.wallpaper_seed
                 {
-                    reduce(&mut state.theme, ThemeCommand::SetSeed(seed), now);
+                    materialize_seed_with_variant(
+                        &mut state.theme,
+                        seed,
+                        state.wallpaper_detected_variant,
+                        now,
+                    );
                 }
             }
             ThemeCommand::SetSchemeVariant(variant) => {
@@ -594,7 +617,11 @@ fn apply_command(
                 bump_revision(state, now);
             }
         }
-        DaemonCommand::SetWallpaper { path, seed } => {
+        DaemonCommand::SetWallpaper {
+            path,
+            seed,
+            detected_variant,
+        } => {
             let mut changed = false;
             if state.wallpaper_path.as_ref() != Some(&path) {
                 state.wallpaper_path = Some(path);
@@ -604,7 +631,12 @@ fn apply_command(
                 state.wallpaper_seed = Some(seed);
                 changed = true;
             }
-            let seed_applied = reduce(&mut state.theme, ThemeCommand::SetSeed(seed), now);
+            if state.wallpaper_detected_variant != detected_variant {
+                state.wallpaper_detected_variant = detected_variant;
+                changed = true;
+            }
+            let seed_applied =
+                materialize_seed_with_variant(&mut state.theme, seed, detected_variant, now);
             if changed && !seed_applied {
                 bump_revision(state, now);
             }
@@ -639,6 +671,7 @@ struct ChangeSnapshot {
     source_argb: u32,
     wallpaper_path: Option<PathBuf>,
     wallpaper_seed: Option<u32>,
+    wallpaper_detected_variant: shilpo_theme::SchemeVariant,
     wallpaper_dir: PathBuf,
 }
 
@@ -652,6 +685,7 @@ impl ChangeSnapshot {
             source_argb: state.theme.source_argb,
             wallpaper_path: state.wallpaper_path.clone(),
             wallpaper_seed: state.wallpaper_seed,
+            wallpaper_detected_variant: state.wallpaper_detected_variant,
             wallpaper_dir: state.wallpaper_dir.clone(),
         }
     }
@@ -666,6 +700,7 @@ impl ChangeSnapshot {
                 || self.scheme_variant != state.theme.scheme_variant,
             wallpaper: self.wallpaper_path != state.wallpaper_path
                 || self.wallpaper_seed != state.wallpaper_seed
+                || self.wallpaper_detected_variant != state.wallpaper_detected_variant
                 || self.wallpaper_dir != state.wallpaper_dir,
         }
     }
@@ -705,6 +740,7 @@ fn initial_state(
     }
     if let Some(variant) = configured_variant {
         state.theme.scheme_variant = variant;
+        state.theme.resolved_variant = resolve_variant(state.theme.source_argb, variant);
         let (light, dark) = generate_m3_palettes(state.theme.source_argb, variant);
         state.theme.light = light;
         state.theme.dark = dark;
@@ -712,10 +748,16 @@ fn initial_state(
     state
 }
 
-fn extract_seed_from_file(path: &Path) -> anyhow::Result<u32> {
+fn extract_wallpaper_seed_and_variant(path: &Path) -> anyhow::Result<(u32, SchemeVariant)> {
     let bytes = std::fs::read(path)?;
     let img = image::load_from_memory(&bytes)?;
 
+    let seed = extract_source_argb_from_image(&img)?;
+    let variant = auto_detect_variant(&img);
+    Ok((seed, variant))
+}
+
+fn extract_source_argb_from_image(img: &DynamicImage) -> anyhow::Result<u32> {
     let resized = img.resize(112, 112, FilterType::Triangle);
     let rgba = resized.to_rgba8();
 
@@ -737,6 +779,92 @@ fn extract_seed_from_file(path: &Path) -> anyhow::Result<u32> {
         .first()
         .copied()
         .ok_or_else(|| anyhow::anyhow!("Wallpaper contains no colorful pixels"))
+}
+
+fn auto_detect_variant(img: &DynamicImage) -> SchemeVariant {
+    let resized = img.resize(256, 256, FilterType::Triangle);
+    let rgba = resized.to_rgba8();
+
+    let mut total_sat = 0.0f32;
+    let mut hues = Vec::with_capacity(rgba.pixels().len());
+    let mut rg_diffs = Vec::with_capacity(rgba.pixels().len());
+    let mut yb_diffs = Vec::with_capacity(rgba.pixels().len());
+
+    for p in rgba.pixels() {
+        let r = p.0[0] as f32;
+        let g = p.0[1] as f32;
+        let b = p.0[2] as f32;
+
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let delta = max - min;
+
+        let sat = if max > 0.0 { delta / max } else { 0.0 };
+        total_sat += sat;
+
+        if delta > 0.0 {
+            let hue = if (max - r).abs() < f32::EPSILON {
+                (g - b) / delta + (if g < b { 6.0 } else { 0.0 })
+            } else if (max - g).abs() < f32::EPSILON {
+                (b - r) / delta + 2.0
+            } else {
+                (r - g) / delta + 4.0
+            };
+            hues.push(hue * 60.0);
+        }
+
+        let rg = (r - g).abs();
+        let yb = (0.5 * (r + g) - b).abs();
+        rg_diffs.push(rg);
+        yb_diffs.push(yb);
+    }
+
+    let count = rgba.pixels().len() as f32;
+    let mean_sat = (total_sat / count) * 255.0;
+
+    let mean_rg = rg_diffs.iter().sum::<f32>() / count;
+    let mean_yb = yb_diffs.iter().sum::<f32>() / count;
+    let std_rg = (rg_diffs.iter().map(|v| (v - mean_rg).powi(2)).sum::<f32>() / count).sqrt();
+    let std_yb = (yb_diffs.iter().map(|v| (v - mean_yb).powi(2)).sum::<f32>() / count).sqrt();
+    let colorfulness = (std_rg.powi(2) + std_yb.powi(2)).sqrt()
+        + 0.3 * (mean_rg.powi(2) + mean_yb.powi(2)).sqrt();
+
+    let mean_hue = if !hues.is_empty() {
+        hues.iter().sum::<f32>() / hues.len() as f32
+    } else {
+        0.0
+    };
+    let hue_spread = if !hues.is_empty() {
+        (hues.iter().map(|h| (h - mean_hue).powi(2)).sum::<f32>() / hues.len() as f32).sqrt()
+    } else {
+        0.0
+    };
+
+    if mean_sat < 20.0 {
+        return SchemeVariant::Monochrome;
+    }
+    if colorfulness < 30.0 {
+        if mean_sat < 55.0 {
+            return SchemeVariant::Neutral;
+        }
+        if hue_spread < 22.0 {
+            return SchemeVariant::Content;
+        }
+        return SchemeVariant::TonalSpot;
+    }
+    if colorfulness > 90.0 {
+        if hue_spread > 55.0 && mean_sat > 150.0 {
+            return SchemeVariant::Rainbow;
+        }
+        if mean_sat > 160.0 {
+            return SchemeVariant::Fidelity;
+        }
+        if hue_spread > 45.0 {
+            return SchemeVariant::Expressive;
+        }
+    }
+
+    SchemeVariant::TonalSpot
 }
 
 #[cfg(test)]
@@ -933,6 +1061,7 @@ mod tests {
                 ..Default::default()
             },
             wallpaper_seed: Some(WALLPAPER_SEED),
+            wallpaper_detected_variant: SchemeVariant::Expressive,
             ..Default::default()
         };
         let revision = state.theme.revision;
@@ -945,11 +1074,49 @@ mod tests {
 
         assert_eq!(state.theme.color_source, ColorSource::Wallpaper);
         assert_eq!(state.theme.source_argb, WALLPAPER_SEED);
+        assert_eq!(state.theme.resolved_variant, SchemeVariant::Expressive);
         assert_eq!(state.theme.palette_generated_at, TEST_NOW);
         assert_eq!(state.theme.revision, revision + 2);
         assert!(outcome.change_kind.source);
         assert!(outcome.change_kind.palette);
         assert!(!outcome.change_kind.mode);
+    }
+
+    #[test]
+    fn switching_away_and_back_to_wallpaper_keeps_image_aware_variant() {
+        let mut state = DaemonState {
+            theme: ThemeState {
+                color_source: ColorSource::Wallpaper,
+                custom_seed: Some(CUSTOM_SEED),
+                source_argb: WALLPAPER_SEED,
+                ..Default::default()
+            },
+            wallpaper_seed: Some(WALLPAPER_SEED),
+            wallpaper_detected_variant: SchemeVariant::Expressive,
+            ..Default::default()
+        };
+
+        apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::SetColorSource(ColorSource::Custom)),
+        )
+        .unwrap();
+        assert_eq!(state.theme.source_argb, CUSTOM_SEED);
+        assert_eq!(
+            state.theme.resolved_variant,
+            resolve_variant(CUSTOM_SEED, SchemeVariant::Auto)
+        );
+
+        apply(
+            &mut state,
+            DaemonCommand::Theme(ThemeCommand::SetColorSource(ColorSource::Wallpaper)),
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.color_source, ColorSource::Wallpaper);
+        assert_eq!(state.theme.source_argb, WALLPAPER_SEED);
+        assert_eq!(state.theme.resolved_variant, SchemeVariant::Expressive);
+        assert_eq!(state.theme.scheme_variant, SchemeVariant::Auto);
     }
 
     #[test]
@@ -1042,6 +1209,7 @@ mod tests {
             DaemonCommand::SetWallpaper {
                 path: path.clone(),
                 seed: WALLPAPER_SEED,
+                detected_variant: SchemeVariant::TonalSpot,
             },
         )
         .unwrap();
@@ -1066,6 +1234,7 @@ mod tests {
             DaemonCommand::SetWallpaper {
                 path: path.clone(),
                 seed: WALLPAPER_SEED,
+                detected_variant: SchemeVariant::TonalSpot,
             },
         )
         .unwrap();
@@ -1096,5 +1265,152 @@ mod tests {
         assert!(outcome.change_kind.variant);
         assert!(outcome.change_kind.palette);
         assert!(!outcome.change_kind.mode);
+    }
+
+    #[test]
+    fn test_auto_detect_variant_decision_branches() {
+        use image::{Rgba, RgbaImage};
+
+        fn solid(color: [u8; 3]) -> DynamicImage {
+            let mut img = RgbaImage::new(256, 256);
+            for pixel in img.pixels_mut() {
+                *pixel = Rgba([color[0], color[1], color[2], 255]);
+            }
+            DynamicImage::ImageRgba8(img)
+        }
+
+        fn vertical_bands(colors: &[[u8; 3]]) -> DynamicImage {
+            let mut img = RgbaImage::new(256, 256);
+            let band = 256 / colors.len();
+            for (y, pixel) in img.pixels_mut().enumerate() {
+                let row = y / 256;
+                let color = colors[(row / band).min(colors.len() - 1)];
+                *pixel = Rgba([color[0], color[1], color[2], 255]);
+            }
+            DynamicImage::ImageRgba8(img)
+        }
+
+        // mean_sat < 20 -> Monochrome (gray)
+        assert_eq!(auto_detect_variant(&solid([128, 128, 128])), SchemeVariant::Monochrome);
+        // low colorfulness + mean_sat < 55 -> Neutral
+        assert_eq!(auto_detect_variant(&solid([80, 90, 100])), SchemeVariant::Neutral);
+        // low colorfulness + hue_spread < 22 -> Content
+        assert_eq!(auto_detect_variant(&solid([50, 70, 80])), SchemeVariant::Content);
+        // low colorfulness + wide hue spread -> TonalSpot
+        assert_eq!(
+            auto_detect_variant(&vertical_bands(&[[50, 70, 80], [80, 70, 50]])),
+            SchemeVariant::TonalSpot
+        );
+        // high colorfulness + wide hue spread + high saturation -> Rainbow
+        assert_eq!(
+            auto_detect_variant(&vertical_bands(&[[255, 0, 0], [0, 0, 255]])),
+            SchemeVariant::Rainbow
+        );
+        // high colorfulness + high saturation, narrow hue spread -> Fidelity
+        assert_eq!(
+            auto_detect_variant(&vertical_bands(&[[255, 0, 0], [100, 0, 0]])),
+            SchemeVariant::Fidelity
+        );
+        // high colorfulness + wide hue spread with moderate saturation -> Expressive
+        assert_eq!(
+            auto_detect_variant(&vertical_bands(&[[255, 50, 50], [50, 50, 50], [50, 255, 50]])),
+            SchemeVariant::Expressive
+        );
+    }
+
+    #[test]
+    fn test_wallpaper_materialization_flow_with_synthetic_image() {
+        use image::{Rgba, RgbaImage};
+
+        // Synthetic wallpaper (solid blue) drives the full daemon materialization
+        // path: file -> seed + detected variant -> SetWallpaper -> state whose
+        // palettes match generating with the detected variant explicitly.
+        let path = std::env::temp_dir().join(format!(
+            "shilpo-wallpaper-materialization-{}.png",
+            std::process::id()
+        ));
+        let mut img = RgbaImage::new(64, 64);
+        for pixel in img.pixels_mut() {
+            *pixel = Rgba([0, 0, 255, 255]);
+        }
+        img.save(&path).unwrap();
+
+        let (seed, detected_variant) = extract_wallpaper_seed_and_variant(&path).unwrap();
+        assert_eq!(seed, 0xff0000ff);
+
+        let mut state = DaemonState::default();
+        let outcome = apply(
+            &mut state,
+            DaemonCommand::SetWallpaper {
+                path: path.clone(),
+                seed,
+                detected_variant,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.scheme_variant, SchemeVariant::Auto);
+        assert_eq!(state.theme.resolved_variant, detected_variant);
+        assert!(outcome.change_kind.wallpaper);
+        assert!(outcome.change_kind.palette);
+
+        let (expected_light, expected_dark) = generate_m3_palettes(seed, detected_variant);
+        assert_eq!(state.theme.light, expected_light);
+        assert_eq!(state.theme.dark, expected_dark);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn configured_variant_syncs_resolved_variant_on_startup() {
+        let state = initial_state(None, None, Some(SchemeVariant::Expressive));
+
+        assert_eq!(state.theme.scheme_variant, SchemeVariant::Expressive);
+        assert_eq!(state.theme.resolved_variant, SchemeVariant::Expressive);
+
+        let (expected_light, expected_dark) =
+            generate_m3_palettes(state.theme.source_argb, SchemeVariant::Expressive);
+        assert_eq!(state.theme.light, expected_light);
+        assert_eq!(state.theme.dark, expected_dark);
+    }
+
+    #[test]
+    fn test_wallpaper_materialization_with_detected_variant_preserves_auto() {
+        let mut state = DaemonState::default();
+        let path = PathBuf::from("/w/pic.png");
+        assert_eq!(state.theme.scheme_variant, SchemeVariant::Auto);
+
+        let _outcome = apply(
+            &mut state,
+            DaemonCommand::SetWallpaper {
+                path: path.clone(),
+                seed: WALLPAPER_SEED,
+                detected_variant: SchemeVariant::Expressive,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.scheme_variant, SchemeVariant::Auto);
+        assert_eq!(state.theme.resolved_variant, SchemeVariant::Expressive);
+    }
+
+    #[test]
+    fn test_wallpaper_materialization_honors_explicit_pin() {
+        let mut state = DaemonState::default();
+        state.theme.scheme_variant = SchemeVariant::TonalSpot;
+        let path = PathBuf::from("/w/pic.png");
+
+        let _outcome = apply(
+            &mut state,
+            DaemonCommand::SetWallpaper {
+                path: path.clone(),
+                seed: WALLPAPER_SEED,
+                detected_variant: SchemeVariant::Expressive,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(state.theme.scheme_variant, SchemeVariant::TonalSpot);
+        assert_eq!(state.theme.resolved_variant, SchemeVariant::TonalSpot);
     }
 }
