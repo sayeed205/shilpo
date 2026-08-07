@@ -31,6 +31,7 @@ pub struct ControlCenterView {
     focus_handle: FocusHandle,
     device_snapshot: crate::bar::service_worker::DeviceSnapshot,
     _device_snapshot_task: gpui::Task<()>,
+    _power_profile_task: gpui::Task<()>,
 }
 
 impl ControlCenterView {
@@ -38,7 +39,7 @@ impl ControlCenterView {
         let snapshot = ShellRuntime::device_snapshot(cx);
         let night_light_service = service_or_warn(NightLightService::new, "night_light");
         let bluetooth_service = service_or_warn(BluetoothService::new, "bluetooth");
-        let power_profile_service = service_or_warn(PowerProfileService::new, "power_profile");
+        let power_profile_service = Some(PowerProfileService::new());
         let screen_capture_service = service_or_warn(ScreenCaptureService::new, "screen_capture");
 
         let initial_is_recording = screen_capture_service
@@ -129,6 +130,30 @@ impl ControlCenterView {
             }
         });
 
+        let power_profile_receiver = power_profile_service
+            .as_ref()
+            .map(PowerProfileService::subscribe);
+        let _power_profile_task = cx.spawn(async move |this, cx| {
+            let Some(mut receiver) = power_profile_receiver else {
+                return;
+            };
+            loop {
+                if receiver.changed().await.is_err() {
+                    break;
+                }
+                let profile = receiver.borrow().active_profile.clone();
+                if this
+                    .update(cx, |view, cx| {
+                        view.active_power_profile = profile;
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
         Self {
             night_light_service,
             bluetooth_service,
@@ -144,6 +169,7 @@ impl ControlCenterView {
             focus_handle,
             device_snapshot: snapshot_clone,
             _device_snapshot_task,
+            _power_profile_task,
         }
     }
 
@@ -182,13 +208,11 @@ impl ControlCenterView {
 
     fn set_power_profile(&mut self, profile: PowerProfile, cx: &mut Context<Self>) {
         if let Some(service) = &self.power_profile_service {
-            if service.set_profile(profile.clone()) {
-                self.active_power_profile = profile;
-            }
+            service.set_profile(profile);
         } else {
             self.active_power_profile = profile;
+            cx.notify();
         }
-        cx.notify();
     }
 
     fn cycle_power_profile(&mut self, cx: &mut Context<Self>) {
