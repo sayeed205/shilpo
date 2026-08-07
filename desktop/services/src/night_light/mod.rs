@@ -1,6 +1,11 @@
+pub mod color;
+pub mod dbus;
+pub mod wayland;
+
 use anyhow::Result;
-use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::{mpsc, watch};
+use tracing::{info, warn};
 
 /// Represents status of the system night light / color temperature service.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,6 +14,17 @@ pub struct NightLightInfo {
     pub temperature_kelvin: u32,
     pub available: bool,
     pub backend_name: String,
+}
+
+impl Default for NightLightInfo {
+    fn default() -> Self {
+        Self {
+            is_active: false,
+            temperature_kelvin: 6500,
+            available: false,
+            backend_name: "none".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -39,138 +55,176 @@ pub fn should_use_dark_mode(schedule: &ThemeSchedule, current_hour: u8) -> bool 
     }
 }
 
-impl Default for NightLightInfo {
-    fn default() -> Self {
-        Self {
-            is_active: false,
-            temperature_kelvin: 6500,
-            available: false,
-            backend_name: "none".into(),
-        }
-    }
+#[derive(Debug)]
+enum NightLightCommand {
+    SetActive(bool),
+    SetTemperature(u32),
 }
 
-use crate::polled::PolledService;
-use std::time::Duration;
-use tokio::sync::watch;
+enum ActiveBackend {
+    WlrWayland(wayland::WlrGammaBackend),
+    Gnome(dbus::GnomeColorBackend<'static>),
+    Kde(dbus::KdeNightLightBackend<'static>),
+}
 
-/// Service managing Wayland night light color temperature via sunsetr / wlsunset / gammastep.
+/// Service managing Wayland night light color temperature via native WLR gamma control or DBus fallback.
 pub struct NightLightService {
-    polled: PolledService<NightLightInfo>,
-    _child_process: Arc<Mutex<Option<std::process::Child>>>,
+    tx: watch::Sender<NightLightInfo>,
+    cmd_tx: Option<mpsc::UnboundedSender<NightLightCommand>>,
+    _task: Option<Arc<tokio::task::JoinHandle<()>>>,
 }
 
 impl NightLightService {
     pub fn new() -> Result<Self> {
-        let (available, backend_name) = Self::detect_backend();
-        let initial = NightLightInfo {
-            is_active: false,
-            temperature_kelvin: 6500,
-            available,
-            backend_name,
-        };
-        let polled = PolledService::new(
-            initial,
-            Duration::from_secs(3),
-            None,
-            |current: &NightLightInfo| -> Result<NightLightInfo, std::convert::Infallible> {
-                let (available, backend_name) = Self::detect_backend();
-                let mut updated = current.clone();
-                updated.available = available;
-                updated.backend_name = backend_name;
-                Ok(updated)
-            },
-        );
+        let (tx, _) = watch::channel(NightLightInfo::default());
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<NightLightCommand>();
+
+        let tx_clone = tx.clone();
+        let task = tokio::spawn(async move {
+            run_backend_loop(tx_clone, &mut cmd_rx).await;
+        });
 
         Ok(Self {
-            polled,
-            _child_process: Arc::new(Mutex::new(None)),
+            tx,
+            cmd_tx: Some(cmd_tx),
+            _task: Some(Arc::new(task)),
         })
     }
 
     pub fn new_offline() -> Self {
+        let (tx, _) = watch::channel(NightLightInfo::default());
         Self {
-            polled: PolledService::new_offline(NightLightInfo::default()),
-            _child_process: Arc::new(Mutex::new(None)),
-        }
-    }
-
-    fn detect_backend() -> (bool, String) {
-        if Command::new("sunsetr").arg("--version").output().is_ok() {
-            (true, "sunsetr".into())
-        } else if Command::new("wlsunset").arg("-h").output().is_ok() {
-            (true, "wlsunset".into())
-        } else if Command::new("gammastep").arg("-h").output().is_ok() {
-            (true, "gammastep".into())
-        } else {
-            (false, "none".into())
+            tx,
+            cmd_tx: None,
+            _task: None,
         }
     }
 
     pub fn subscribe(&self) -> watch::Receiver<NightLightInfo> {
-        self.polled.subscribe()
+        self.tx.subscribe()
     }
 
     pub fn info(&self) -> NightLightInfo {
-        self.polled.get()
+        self.tx.borrow().clone()
     }
 
     pub fn set_active(&self, active: bool) -> bool {
-        let mut info_state = self.polled.get();
-        let mut process_lock = self._child_process.lock().unwrap();
-
-        if !info_state.available {
+        let current = self.info();
+        if !current.available {
             return false;
         }
 
-        if active {
-            match info_state.backend_name.as_str() {
-                "sunsetr" => {
-                    let _ = Command::new("sunsetr").args(["set", "3500"]).spawn();
-                }
-                "wlsunset" => {
-                    if let Some(mut child) = process_lock.take() {
-                        let _ = child.kill();
-                    }
-                    if let Ok(child) = Command::new("wlsunset")
-                        .args(["-t", "3500", "-T", "6500"])
-                        .spawn()
-                    {
-                        *process_lock = Some(child);
-                    }
-                }
-                "gammastep" => {
-                    let _ = Command::new("gammastep").args(["-O", "3500"]).spawn();
-                }
-                _ => {}
-            }
-            info_state.is_active = true;
-            info_state.temperature_kelvin = 3500;
-        } else {
-            match info_state.backend_name.as_str() {
-                "sunsetr" => {
-                    let _ = Command::new("sunsetr").args(["set", "6500"]).spawn();
-                }
-                "wlsunset" => {
-                    if let Some(mut child) = process_lock.take() {
-                        let _ = child.kill();
-                    }
-                }
-                "gammastep" => {
-                    let _ = Command::new("gammastep").arg("-x").spawn();
-                }
-                _ => {}
-            }
-            info_state.is_active = false;
-            info_state.temperature_kelvin = 6500;
+        if let Some(ref cmd_tx) = self.cmd_tx {
+            let _ = cmd_tx.send(NightLightCommand::SetActive(active));
         }
-        self.polled.send_replace(info_state);
+
+        let mut updated = current;
+        updated.is_active = active;
+        if active && updated.temperature_kelvin == 6500 {
+            updated.temperature_kelvin = 3500;
+        } else if !active {
+            updated.temperature_kelvin = 6500;
+        }
+        self.tx.send_replace(updated);
+        active
+    }
+
+    pub fn set_temperature(&self, kelvin: u32) -> bool {
+        let current = self.info();
+        if !current.available {
+            return false;
+        }
+
+        if let Some(ref cmd_tx) = self.cmd_tx {
+            let _ = cmd_tx.send(NightLightCommand::SetTemperature(kelvin));
+        }
+
+        let mut updated = current;
+        updated.temperature_kelvin = kelvin;
+        self.tx.send_replace(updated);
         true
     }
 
     pub fn toggle(&self) -> bool {
-        let active = self.polled.get().is_active;
+        let active = self.info().is_active;
         self.set_active(!active)
+    }
+}
+
+async fn run_backend_loop(
+    tx: watch::Sender<NightLightInfo>,
+    cmd_rx: &mut mpsc::UnboundedReceiver<NightLightCommand>,
+) {
+    let active_backend = if let Ok(backend) = wayland::WlrGammaBackend::try_init() {
+        info!("NightLightService using native WLR Wayland gamma control");
+        Some((
+            ActiveBackend::WlrWayland(backend),
+            "wlr-gamma-control".to_string(),
+        ))
+    } else if let Ok(conn) = zbus::Connection::session().await {
+        if let Ok(gnome) = dbus::GnomeColorBackend::try_init(&conn).await {
+            info!("NightLightService using GNOME DBus color service");
+            Some((ActiveBackend::Gnome(gnome), "gnome".to_string()))
+        } else if let Ok(kde) = dbus::KdeNightLightBackend::try_init(&conn).await {
+            info!("NightLightService using KDE DBus night light service");
+            Some((ActiveBackend::Kde(kde), "kde".to_string()))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let (mut backend, backend_name, available) = match active_backend {
+        Some((b, name)) => (Some(b), name, true),
+        None => (None, "none".to_string(), false),
+    };
+
+    let mut info = NightLightInfo {
+        is_active: false,
+        temperature_kelvin: 6500,
+        available,
+        backend_name,
+    };
+    tx.send_replace(info.clone());
+
+    if !available {
+        return;
+    }
+
+    while let Some(cmd) = cmd_rx.recv().await {
+        match cmd {
+            NightLightCommand::SetActive(active) => {
+                info.is_active = active;
+                if active && info.temperature_kelvin == 6500 {
+                    info.temperature_kelvin = 3500;
+                } else if !active {
+                    info.temperature_kelvin = 6500;
+                }
+            }
+            NightLightCommand::SetTemperature(kelvin) => {
+                info.temperature_kelvin = kelvin;
+            }
+        }
+
+        if let Some(ref mut b) = backend {
+            let res = match b {
+                ActiveBackend::WlrWayland(wlr) => {
+                    wlr.apply(info.is_active, info.temperature_kelvin)
+                }
+                ActiveBackend::Gnome(gnome) => {
+                    gnome.apply(info.is_active, info.temperature_kelvin).await
+                }
+                ActiveBackend::Kde(kde) => {
+                    kde.apply(info.is_active, info.temperature_kelvin).await
+                }
+            };
+            if let Err(e) = res {
+                warn!("Failed to apply night light settings: {:#}", e);
+            }
+        }
+
+        tx.send_replace(info.clone());
     }
 }
 

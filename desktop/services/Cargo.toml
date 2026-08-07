@@ -21,6 +21,9 @@ smol.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 libc = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+rustix = { version = "1", features = ["fs"] }
 shilpo-config = { path = "../config" }
 notify.workspace = true
 freedesktop-icons.workspace = true
