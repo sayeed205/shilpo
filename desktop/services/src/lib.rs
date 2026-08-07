@@ -23,7 +23,7 @@ pub use applications::{
     resolve_handler_for_uri, validate_drag_drop_payload,
 };
 pub use audio::{AudioDevice, AudioInfo, AudioPort, AudioService, AudioStream};
-pub use bluetooth::{BluetoothInfo, BluetoothService};
+pub use bluetooth::{BluetoothAddress, BluetoothDevice, BluetoothInfo, BluetoothService};
 pub use brightness::{BrightnessInfo, BrightnessService};
 pub use caffeine::{CaffeineInfo, CaffeineService};
 pub use clipboard::ClipboardService;

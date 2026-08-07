@@ -199,7 +199,9 @@ impl ControlCenterView {
 
     fn toggle_bluetooth(&mut self, cx: &mut Context<Self>) {
         if let Some(service) = &self.bluetooth_service {
-            self.bluetooth_active = service.toggle();
+            if let Ok(new_state) = service.toggle() {
+                self.bluetooth_active = new_state;
+            }
         } else {
             self.bluetooth_active = !self.bluetooth_active;
         }
