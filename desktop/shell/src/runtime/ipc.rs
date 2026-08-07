@@ -1,9 +1,5 @@
-use std::sync::Arc;
-
 use gpui::App;
-use shilpo_services::{
-    CompositorAdapter, CompositorCommand, CompositorSnapshot, IpcRequest, IpcStatus,
-};
+use shilpo_services::{CompositorCommand, IpcRequest, IpcStatus};
 
 use crate::{
     actions::ActionInvocation,
@@ -14,119 +10,9 @@ use crate::{
 use super::ShellRuntime;
 
 impl ShellRuntime {
-    pub fn is_dnd_active(cx: &App) -> bool {
-        if cx.has_global::<Self>() {
-            let runtime = cx.global::<Self>();
-            runtime
-                .service_hub
-                .as_ref()
-                .and_then(|hub| hub.notification.as_ref())
-                .map_or(runtime.session_state.dnd_active, |notification| {
-                    notification.is_dnd_enabled()
-                })
-        } else {
-            false
-        }
-    }
-
-    pub fn notification_history(cx: &App) -> Vec<shilpo_services::Notification> {
-        if cx.has_global::<Self>()
-            && let Some(notification) = cx
-                .global::<Self>()
-                .service_hub
-                .as_ref()
-                .and_then(|hub| hub.notification.as_ref())
-        {
-            notification.history()
-        } else {
-            Vec::new()
-        }
-    }
-
-    pub fn clear_notification_history(cx: &mut App) {
-        if cx.has_global::<Self>()
-            && let Some(notification) = cx
-                .global::<Self>()
-                .service_hub
-                .as_ref()
-                .and_then(|hub| hub.notification.as_ref())
-        {
-            notification.clear_history();
-        }
-    }
-
-    pub fn set_dnd_enabled(cx: &mut App, enabled: bool) {
-        if cx.has_global::<Self>() {
-            let runtime = cx.global_mut::<Self>();
-            runtime.session_state.dnd_active = enabled;
-            let path = runtime.session_path.clone();
-            let session = runtime.session_state.clone();
-            let _ = session.save_atomic(&path);
-
-            if let Some(ref hub) = runtime.service_hub
-                && let Some(ref notif) = hub.notification
-            {
-                notif.set_dnd_enabled(enabled);
-            }
-            if let Some(hub) = runtime.service_hub.as_mut() {
-                hub.notification_dnd = enabled;
-            }
-        }
-    }
-
-    pub fn app_scanner(cx: &App) -> Option<shilpo_services::AppScanner> {
-        if cx.has_global::<Self>()
-            && let Some(ref hub) = cx.global::<Self>().service_hub
-        {
-            Some(hub.app_scanner.clone())
-        } else {
-            None
-        }
-    }
-
-    pub fn compositor(cx: &App) -> Option<Arc<dyn CompositorAdapter>> {
-        if cx.has_global::<Self>()
-            && let Some(ref hub) = cx.global::<Self>().service_hub
-        {
-            Some(hub.compositor.clone())
-        } else {
-            None
-        }
-    }
-
-    pub fn compositor_snapshot(cx: &App) -> Arc<CompositorSnapshot> {
-        if cx.has_global::<Self>() {
-            cx.global::<Self>().latest_snapshot.clone()
-        } else {
-            Arc::new(CompositorSnapshot::default())
-        }
-    }
-
-    pub fn clipboard_history(cx: &App) -> Vec<shilpo_config::ClipboardItem> {
-        if cx.has_global::<Self>()
-            && let Some(ref hub) = cx.global::<Self>().service_hub
-        {
-            hub.clipboard.history()
-        } else {
-            Vec::new()
-        }
-    }
-
-    pub fn copy_clipboard_text(cx: &App, text: &str) {
-        if cx.has_global::<Self>()
-            && let Some(ref hub) = cx.global::<Self>().service_hub
-        {
-            let _ = hub.clipboard.copy_text(text);
-        }
-    }
-
-    pub fn workspace_overview(cx: &App) -> Vec<shilpo_services::WorkspaceInfo> {
-        Self::compositor_snapshot(cx).workspaces.clone()
-    }
-
     pub fn save_audio_preference(cx: &App, device: Option<String>, port: Option<String>) {
         if cx.has_global::<Self>()
-            && let Some(ref store) = cx.global::<Self>().heed_store
+            && let Some(store) = cx.global::<Self>().heed_store()
         {
             let mut pref = store.get_audio_preference().unwrap_or_default();
             if device.is_some() {
@@ -136,21 +22,6 @@ impl ShellRuntime {
                 pref.default_port = port;
             }
             let _ = store.save_audio_preference(&pref);
-        }
-    }
-
-    pub(crate) fn reserve_notification_generation(cx: &mut App) -> u64 {
-        let runtime = cx.global_mut::<Self>();
-        runtime.notification_generation = runtime.notification_generation.wrapping_add(1);
-        runtime.notification_generation
-    }
-
-    pub fn invoke_notification_action(cx: &App, id: u32, action_key: &str) {
-        if cx.has_global::<Self>()
-            && let Some(ref hub) = cx.global::<Self>().service_hub
-            && let Some(ref notif_service) = hub.notification
-        {
-            notif_service.invoke_action(id, action_key);
         }
     }
 
@@ -177,13 +48,9 @@ impl ShellRuntime {
                 .detach();
             }
             IpcRequest::ReloadConfig => {
-                let handle = cx
-                    .global::<Self>()
-                    .service_hub
-                    .as_ref()
-                    .map(|h| h.service_commands.clone());
-                let handle = handle
-                    .ok_or_else(|| ShellError::ActionFailed("service worker unavailable".into()))?;
+                let handle = Self::service_commands(cx).ok_or_else(|| {
+                    ShellError::ActionFailed("service worker unavailable".into())
+                })?;
                 service_worker::try_send_command(&handle, WorkerCommand::ReloadConfig)
                     .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
             }
@@ -195,16 +62,16 @@ impl ShellRuntime {
     pub fn record_recent_app(cx: &mut App, app_id: &str) {
         if cx.has_global::<Self>() {
             let runtime = cx.global_mut::<Self>();
-            runtime.session_state.record_recent_app(app_id);
-            let path = runtime.session_path.clone();
-            let session = runtime.session_state.clone();
+            runtime.session_state_mut().record_recent_app(app_id);
+            let path = runtime.session_path().clone();
+            let session = runtime.session_state().clone();
             let _ = session.save_atomic(&path);
         }
     }
 
     pub fn recent_apps(cx: &App) -> Vec<String> {
         if cx.has_global::<Self>() {
-            cx.global::<Self>().session_state.recent_apps.clone()
+            cx.global::<Self>().session_state().recent_apps.clone()
         } else {
             Vec::new()
         }
@@ -212,7 +79,7 @@ impl ShellRuntime {
 
     pub fn save_output_bar(cx: &mut App, output_name: &str, state: &shilpo_config::OutputBarState) {
         if cx.has_global::<Self>()
-            && let Some(store) = &cx.global::<Self>().heed_store
+            && let Some(store) = cx.global::<Self>().heed_store()
         {
             let _ = store.put_output_bar(output_name, state);
         }
@@ -220,7 +87,7 @@ impl ShellRuntime {
 
     pub fn load_output_bar(cx: &App, output_name: &str) -> Option<shilpo_config::OutputBarState> {
         if cx.has_global::<Self>()
-            && let Some(store) = &cx.global::<Self>().heed_store
+            && let Some(store) = cx.global::<Self>().heed_store()
         {
             store.get_output_bar(output_name).ok().flatten()
         } else {
@@ -229,16 +96,16 @@ impl ShellRuntime {
     }
 
     pub(super) fn drain_ipc(cx: &mut App) {
-        let requests = cx.global_mut::<Self>().ipc_server.pop_pending_requests();
+        let requests = cx.global_mut::<Self>().ipc_server_mut().pop_pending_requests();
         for request in requests {
             match request {
                 IpcRequest::ShowBar => {
-                    if cx.global::<Self>().bars.is_empty() {
+                    if !Self::has_bars(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                     }
                 }
                 IpcRequest::HideBar => {
-                    if !cx.global::<Self>().bars.is_empty() {
+                    if Self::has_bars(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                     }
                 }
@@ -246,12 +113,12 @@ impl ShellRuntime {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                 }
                 IpcRequest::ShowControlCenter => {
-                    if cx.global::<Self>().control_center.is_none() {
+                    if !Self::is_control_center_open(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
                     }
                 }
                 IpcRequest::HideControlCenter => {
-                    if cx.global::<Self>().control_center.is_some() {
+                    if Self::is_control_center_open(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
                     }
                 }
@@ -259,12 +126,12 @@ impl ShellRuntime {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
                 }
                 IpcRequest::ShowOverview => {
-                    if cx.global::<Self>().overview.is_none() {
+                    if !Self::is_overview_open(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
                     }
                 }
                 IpcRequest::HideOverview => {
-                    if cx.global::<Self>().overview.is_some() {
+                    if Self::is_overview_open(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
                     }
                 }
@@ -299,22 +166,23 @@ impl ShellRuntime {
                 IpcRequest::GetTelemetry => {}
             }
         }
-        cx.global::<Self>().publish_status();
+        Self::publish_status(cx);
     }
 
-    pub(super) fn publish_status(&self) {
+    pub(super) fn publish_status(cx: &mut App) {
+        let runtime = cx.global::<Self>();
         let status = IpcStatus {
-            running: self.readiness != shilpo_services::ReadinessState::Failed,
+            running: runtime.readiness() != shilpo_services::ipc::ReadinessState::Failed,
             instance_id: std::process::id().to_string(),
             pid: std::process::id(),
-            readiness: self.readiness,
-            bar: self.bar_state.clone(),
-            overview_visible: self.overview.is_some(),
-            control_center_visible: self.control_center.is_some(),
+            readiness: runtime.readiness(),
+            bar: runtime.surface_manager().bar_state(),
+            overview_visible: runtime.surface_manager().is_overview_open(),
+            control_center_visible: runtime.surface_manager().is_control_center_open(),
             health: shilpo_services::ServiceHealth::default(),
         };
 
-        self.ipc_server.update_status(status);
+        runtime.ipc_server().update_status(status);
     }
 }
 
@@ -379,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_controlled_wayland_compositor_smoke_suite() {
-        use shilpo_services::TestCompositorAdapter;
+        use shilpo_services::{CompositorAdapter, TestCompositorAdapter};
         let adapter = TestCompositorAdapter::new_default();
         assert!(adapter.current().workspaces.is_empty());
     }

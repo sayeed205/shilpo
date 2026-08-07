@@ -6,79 +6,104 @@ pub mod session;
 pub mod surface_manager;
 pub mod theme_manager;
 
+pub use action_dispatcher::ActionDispatcher;
+pub use extension_host::ExtensionHost;
 pub use service_hub::ServiceHub;
 pub use session::SessionContext;
+pub use surface_manager::SurfaceManager;
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use surface_manager::WindowClosedOutcome;
 
-use gpui::{App, AppContext, DisplayId, Entity, Global, Subscription, WindowHandle};
-use shilpo_services::{BarState, CompositorConnection, CompositorSnapshot, ShellIpcServer};
+use std::{path::PathBuf, sync::Arc};
 
-use crate::{
-    actions::{ActionId, ActionRegistry},
-    bar::{BarView, geometry::BarGeometry},
-    extensions::{ContributionSurface, ExtensionCoordinator},
-};
+use gpui::{App, AppContext, Global, Subscription};
+use shilpo_services::{CompositorSnapshot, ShellIpcServer};
 
-use extension_host::ExtensionSurfaceSpec;
-use shilpo_ext_types::{CanonicalId, ExtensionId};
+use crate::extensions::{ContributionSurface, ExtensionCoordinator};
 
+/// The shell runtime orchestrator: composes the deep service modules, watches
+/// the compositor stream, and routes lifecycle events between them.
+///
+/// Every component is private; the shell reaches them through the narrow
+/// `pub(super)` accessor surface below.
 pub struct ShellRuntime {
-    pub(super) ipc_server: ShellIpcServer,
-    pub(super) active_config: shilpo_config::ShellConfig,
-    pub(super) bars: HashMap<DisplayId, (WindowHandle<BarView>, crate::bar::BarSpec)>,
-    pub(super) last_bar_specs: Vec<(BarGeometry, bool)>,
-    pub(super) bar_state: BarState,
-    pub(super) readiness: shilpo_services::ipc::ReadinessState,
-    pub(super) control_center: Option<WindowHandle<shilpo_ui::Root>>,
-    pub(super) overview: Option<WindowHandle<shilpo_ui::Root>>,
-    pub(super) overview_entity: Option<Entity<crate::overview::WorkspaceOverview>>,
-    pub(super) overview_instance: u64,
-    pub(super) next_overview_instance: u64,
-    pub(super) overview_opened_workspace_id: Option<u64>,
-    pub(super) current_wallpaper_path: Option<PathBuf>,
-    pub(super) latest_snapshot: Arc<CompositorSnapshot>,
-    pub(super) notification: Option<(
-        u64,
-        u32,
-        WindowHandle<crate::notification::NotificationToastView>,
-    )>,
-    pub(super) notification_generation: u64,
-    pub(super) prior_window_id: Option<u64>,
-    pub(super) osd: Option<(
-        u64,
-        WindowHandle<shilpo_ui::Root>,
-        Entity<crate::osd::OsdView>,
-    )>,
-    pub(super) _osd_generation: u64,
-    pub(super) extensions: Option<ExtensionCoordinator>,
-    pub(super) extension_surfaces:
-        HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
-    pub(super) extension_panel: Option<(WindowHandle<shilpo_ui::Root>, CanonicalId)>,
-    pub(super) extension_output_ids: std::collections::HashSet<DisplayId>,
-    pub(super) extension_tasks: std::collections::HashMap<
-        (
-            crate::extensions::ExtensionGeneration,
-            ExtensionId,
-            String,
-        ),
-        gpui::Task<()>,
-    >,
-    pub(super) extension_location_service: shilpo_services::LocationService,
-    pub(super) actions: ActionRegistry,
-    pub(super) keybindings: crate::actions::KeybindingManager,
-    pub(super) session_state: shilpo_config::ShellSessionState,
-    pub(super) session_path: PathBuf,
-    pub heed_store: Option<Arc<shilpo_config::HeedSessionStore>>,
-    pub(super) _start_time: std::time::Instant,
-    pub(super) service_hub: Option<ServiceHub>,
-    pub(super) _window_closed: Option<Subscription>,
-    pub(super) _ipc_task: gpui::Task<()>,
+    ipc_server: ShellIpcServer,
+    active_config: shilpo_config::ShellConfig,
+    surface_manager: SurfaceManager,
+    action_dispatcher: ActionDispatcher,
+    extension_host: ExtensionHost,
+    service_hub: Option<ServiceHub>,
+    session_state: shilpo_config::ShellSessionState,
+    session_path: PathBuf,
+    heed_store: Option<Arc<shilpo_config::HeedSessionStore>>,
+    _start_time: std::time::Instant,
+    _window_closed: Option<Subscription>,
+    _ipc_task: gpui::Task<()>,
 }
 
 impl Global for ShellRuntime {}
 
 impl ShellRuntime {
+    pub(crate) fn ipc_server(&self) -> &ShellIpcServer {
+        &self.ipc_server
+    }
+
+    pub(crate) fn ipc_server_mut(&mut self) -> &mut ShellIpcServer {
+        &mut self.ipc_server
+    }
+
+    pub(crate) fn readiness(&self) -> shilpo_services::ipc::ReadinessState {
+        self.surface_manager.readiness()
+    }
+
+    pub(crate) fn session_state(&self) -> &shilpo_config::ShellSessionState {
+        &self.session_state
+    }
+
+    pub(crate) fn session_state_mut(&mut self) -> &mut shilpo_config::ShellSessionState {
+        &mut self.session_state
+    }
+
+    pub(crate) fn session_path(&self) -> &PathBuf {
+        &self.session_path
+    }
+
+    pub(crate) fn heed_store(&self) -> Option<&Arc<shilpo_config::HeedSessionStore>> {
+        self.heed_store.as_ref()
+    }
+
+    pub(crate) fn surface_manager(&self) -> &SurfaceManager {
+        &self.surface_manager
+    }
+
+    pub(crate) fn surface_manager_mut(&mut self) -> &mut SurfaceManager {
+        &mut self.surface_manager
+    }
+
+    pub(crate) fn action_dispatcher(&self) -> &ActionDispatcher {
+        &self.action_dispatcher
+    }
+
+    pub(crate) fn action_dispatcher_mut(&mut self) -> &mut ActionDispatcher {
+        &mut self.action_dispatcher
+    }
+
+    pub(crate) fn extension_host(&self) -> &ExtensionHost {
+        &self.extension_host
+    }
+
+    pub(crate) fn extension_host_mut(&mut self) -> &mut ExtensionHost {
+        &mut self.extension_host
+    }
+
+    pub(crate) fn service_hub(&self) -> Option<&ServiceHub> {
+        self.service_hub.as_ref()
+    }
+
+    pub(crate) fn service_hub_mut(&mut self) -> Option<&mut ServiceHub> {
+        self.service_hub.as_mut()
+    }
+
     pub fn active_config(cx: &App) -> shilpo_config::ShellConfig {
         if cx.has_global::<Self>() {
             cx.global::<Self>().active_config.clone()
@@ -87,14 +112,9 @@ impl ShellRuntime {
         }
     }
 
-    pub fn service_commands(cx: &App) -> Option<crate::bar::service_worker::CommandSender> {
+    pub(crate) fn set_active_config(cx: &mut App, config: &shilpo_config::ShellConfig) {
         if cx.has_global::<Self>() {
-            cx.global::<Self>()
-                .service_hub
-                .as_ref()
-                .map(|h| h.service_commands.clone())
-        } else {
-            None
+            cx.global_mut::<Self>().active_config = config.clone();
         }
     }
 
@@ -104,42 +124,26 @@ impl ShellRuntime {
         let hub = ServiceHub::start(cx.background_executor().clone(), &session);
         let extensions = ExtensionCoordinator::init(cx.background_executor().clone());
 
-        let compositor = hub.compositor.clone();
+        let compositor = hub.compositor();
         let latest_snapshot = surface_manager::attach_compositor_stream(&ipc_server, &compositor);
+        let surface_manager = SurfaceManager::new(
+            initial_wallpaper_path.clone(),
+            latest_snapshot.clone(),
+        );
+        let action_dispatcher = ActionDispatcher::new();
+        let extension_host = ExtensionHost::new(extensions);
 
         cx.set_global(Self {
             ipc_server,
             active_config: session.active_config,
-            bars: HashMap::new(),
-            last_bar_specs: Vec::new(),
-            bar_state: BarState::Starting,
-            readiness: shilpo_services::ipc::ReadinessState::Starting,
-            control_center: None,
-            overview: None,
-            overview_entity: None,
-            overview_instance: 0,
-            next_overview_instance: 0,
-            overview_opened_workspace_id: None,
-            current_wallpaper_path: initial_wallpaper_path.clone(),
-            latest_snapshot: latest_snapshot.clone(),
-            notification: None,
-            notification_generation: 0,
-            prior_window_id: None,
-            osd: None,
-            _osd_generation: 0,
-            extensions,
-            extension_surfaces: HashMap::new(),
-            extension_panel: None,
-            extension_output_ids: std::collections::HashSet::new(),
-            extension_tasks: std::collections::HashMap::new(),
-            extension_location_service: shilpo_services::LocationService::new(),
-            actions: ActionRegistry::default(),
-            keybindings: crate::actions::KeybindingManager::with_defaults(),
+            surface_manager,
+            action_dispatcher,
+            extension_host,
+            service_hub: Some(hub),
             session_state: session.session_state,
             session_path: session.session_path,
             heed_store: session.heed_store,
             _start_time: std::time::Instant::now(),
-            service_hub: Some(hub),
             _window_closed: None,
             _ipc_task: gpui::Task::ready(()),
         });
@@ -148,9 +152,9 @@ impl ShellRuntime {
         theme_manager::sync_wallpaper(cx, initial_wallpaper_path);
         Self::on_compositor_snapshot_changed(cx, latest_snapshot);
         Self::spawn_window_closed_watch(cx);
-        Self::sync_extension_actions(cx);
+        ExtensionHost::sync_extension_actions(cx);
         Self::spawn_drain_loop(cx);
-        cx.global::<Self>().publish_status();
+        Self::publish_status(cx);
     }
 
     fn spawn_window_closed_watch(cx: &mut App) {
@@ -158,60 +162,31 @@ impl ShellRuntime {
             if !cx.has_global::<ShellRuntime>() {
                 return;
             }
-            let runtime = cx.global_mut::<ShellRuntime>();
-            runtime
-                .bars
-                .retain(|_, (handle, _)| handle.window_id() != window_id);
-            runtime
-                .extension_surfaces
-                .retain(|_, (handle, _)| handle.window_id() != window_id);
-            if runtime.bars.is_empty() {
-                runtime.bar_state = BarState::Hidden;
-            }
-            let closed_control_center = if runtime
-                .control_center
-                .as_ref()
-                .is_some_and(|handle| handle.window_id() == window_id)
-            {
-                runtime.control_center = None;
-                true
-            } else {
-                false
-            };
-            let closed_extension_panel = if runtime
-                .extension_panel
-                .as_ref()
-                .is_some_and(|(handle, _)| handle.window_id() == window_id)
-            {
-                runtime.extension_panel.take().map(|(_, id)| id)
-            } else {
-                None
-            };
-            if runtime
-                .notification
-                .as_ref()
-                .is_some_and(|(_, _, handle)| handle.window_id() == window_id)
-            {
-                runtime.notification = None;
-            }
-            runtime.publish_status();
-            if closed_control_center {
-                ShellRuntime::dispatch_surface_lifecycle(
-                    cx,
-                    ContributionSurface::ControlCenter,
-                    false,
-                    340.,
-                    540.,
-                );
-            }
-            if let Some(contribution) = closed_extension_panel {
-                ShellRuntime::dispatch_extension_event(
-                    cx,
-                    shilpo_ext::ExtensionEvent::ContributionUnmounted {
-                        contribution_id: contribution.contribution_id.to_string(),
-                        instance_id: None,
-                    },
-                );
+            let outcome = cx
+                .global_mut::<ShellRuntime>()
+                .surface_manager
+                .handle_window_closed(window_id);
+            Self::publish_status(cx);
+            match outcome {
+                WindowClosedOutcome::Nothing => {}
+                WindowClosedOutcome::ControlCenter => {
+                    Self::dispatch_surface_lifecycle(
+                        cx,
+                        ContributionSurface::ControlCenter,
+                        false,
+                        340.,
+                        540.,
+                    );
+                }
+                WindowClosedOutcome::ExtensionPanel(contribution) => {
+                    Self::dispatch_extension_event(
+                        cx,
+                        shilpo_ext::ExtensionEvent::ContributionUnmounted {
+                            contribution_id: contribution.contribution_id.to_string(),
+                            instance_id: None,
+                        },
+                    );
+                }
             }
         });
         cx.global_mut::<Self>()._window_closed = Some(subscription);
@@ -224,7 +199,7 @@ impl ShellRuntime {
                     .timer(std::time::Duration::from_millis(100))
                     .await;
                 cx.update(Self::sync_displays);
-                cx.update(Self::drain_service_hub);
+                cx.update(ServiceHub::drain);
                 cx.update(Self::drain_extensions);
                 cx.update(Self::drain_ipc);
             }
@@ -236,59 +211,20 @@ impl ShellRuntime {
         if !cx.has_global::<Self>() {
             return;
         }
-        let (outputs_changed, overview_entity) = {
+        let outputs_changed = {
             let runtime = cx.global_mut::<Self>();
-            let outputs_changed = runtime.latest_snapshot.outputs != snapshot.outputs;
-            runtime.latest_snapshot = snapshot.clone();
-
-            let is_ready = snapshot.connection.is_ready();
-            if let Some(desc) = runtime.actions.descriptor_mut(&ActionId::FocusWorkspace) {
-                desc.enabled = is_ready && snapshot.capabilities.can_focus_workspace;
-            }
-            if let Some(desc) = runtime.actions.descriptor_mut(&ActionId::CreateWorkspace) {
-                desc.enabled = is_ready && snapshot.capabilities.can_create_workspace;
-            }
-            if let Some(desc) = runtime
-                .actions
-                .descriptor_mut(&ActionId::MoveWindowToWorkspace)
-            {
-                desc.enabled = is_ready && snapshot.capabilities.can_move_window;
-            }
-            if let Some(desc) = runtime.actions.descriptor_mut(&ActionId::FocusWindow) {
-                desc.enabled = is_ready && snapshot.capabilities.can_focus_window;
-            }
-            if let Some(desc) = runtime.actions.descriptor_mut(&ActionId::CloseWindow) {
-                desc.enabled = is_ready && snapshot.capabilities.can_close_window;
-            }
-
-            let bar_ok = matches!(runtime.bar_state, BarState::Visible | BarState::Hidden);
-            runtime.readiness = match &snapshot.connection {
-                CompositorConnection::Connecting => shilpo_services::ipc::ReadinessState::Starting,
-                CompositorConnection::Ready => {
-                    if bar_ok {
-                        shilpo_services::ipc::ReadinessState::Ready
-                    } else {
-                        shilpo_services::ipc::ReadinessState::Degraded
-                    }
-                }
-                CompositorConnection::Reconnecting { .. } => {
-                    shilpo_services::ipc::ReadinessState::Degraded
-                }
-                CompositorConnection::Stopped => shilpo_services::ipc::ReadinessState::Failed,
-            };
-
-            runtime.publish_status();
-            (outputs_changed, runtime.overview_entity.clone())
+            let changed = runtime.surface_manager.latest_snapshot().outputs != snapshot.outputs;
+            runtime.surface_manager.set_latest_snapshot(snapshot.clone());
+            changed
         };
-
-        if let Some(overview) = overview_entity {
-            overview.update(cx, |view, cx| view.update_snapshot(snapshot, cx));
-        }
-
-        Self::refresh_bars(cx);
-
+        cx.global_mut::<Self>()
+            .action_dispatcher
+            .update_enabled_for_snapshot(&snapshot);
+        cx.global_mut::<Self>().surface_manager.update_readiness();
+        Self::publish_status(cx);
+        SurfaceManager::refresh_bars(cx);
         if outputs_changed {
-            Self::reconcile_bars(cx);
+            SurfaceManager::reconcile_bars(cx);
         }
     }
 
@@ -296,54 +232,40 @@ impl ShellRuntime {
         if !cx.has_global::<Self>() {
             return;
         }
-        let shutdown_task = cx.global::<Self>().extensions.as_ref().map(|ext| {
-            ext.shutdown(
+        let shutdown_task = cx
+            .global::<Self>()
+            .extension_host
+            .shutdown_task(
                 cx.background_executor().clone(),
                 std::time::Duration::from_millis(300),
-            )
-        });
+            );
 
         cx.spawn(async move |cx| {
             if let Some(task) = shutdown_task {
                 let _ = task.await;
             }
             cx.update(|cx| {
-                let (
-                    bars,
-                    extension_surfaces,
-                    extension_panel,
-                    control_center,
-                    notification,
-                    _service_hub,
-                ) = {
-                    let runtime = cx.global_mut::<Self>();
-                    (
-                        std::mem::take(&mut runtime.bars),
-                        std::mem::take(&mut runtime.extension_surfaces),
-                        runtime.extension_panel.take(),
-                        runtime.control_center.take(),
-                        runtime.notification.take(),
-                        runtime.service_hub.take(),
-                    )
-                };
-                for (_, (handle, _)) in bars {
+                let windows = cx
+                    .global_mut::<Self>()
+                    .surface_manager
+                    .take_windows_for_shutdown();
+                for (_, (handle, _)) in windows.bars {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
-                for (_, (handle, _)) in extension_surfaces {
+                for (_, (handle, _)) in windows.extension_surfaces {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
-                if let Some((handle, _)) = extension_panel {
+                if let Some((handle, _)) = windows.extension_panel {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
-                if let Some(handle) = control_center {
+                if let Some(handle) = windows.control_center {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
-                if let Some((_, _, handle)) = notification {
+                if let Some((_, _, handle)) = windows.notification {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
-                let runtime = cx.global_mut::<Self>();
-                runtime.bar_state = BarState::Hidden;
-                runtime.publish_status();
+                cx.global_mut::<Self>().service_hub = None;
+                Self::publish_status(cx);
                 cx.quit();
             });
         })
