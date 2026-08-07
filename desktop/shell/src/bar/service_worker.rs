@@ -796,6 +796,7 @@ mod tests {
         let brightness = BrightnessInfo {
             percentage: 75,
             available: true,
+            device_name: None,
         };
         assert!(snapshot.apply(&WorkerUpdate::Brightness(brightness.clone())));
         assert_eq!(snapshot.brightness, brightness);
