@@ -1,6 +1,5 @@
 use anyhow::Result;
 use shilpo_capture::{capture_frame, create_backend};
-use shilpo_config::CaptureConfig;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -19,22 +18,21 @@ pub struct ScreenCaptureInfo {
     pub available: bool,
 }
 
+fn query_availability() -> bool {
+    create_backend()
+        .map(|b| b.enumerate_sources().map(|s| !s.is_empty()).unwrap_or(false))
+        .unwrap_or(false)
+}
+
 pub struct ScreenCaptureService {
     polled: PolledService<ScreenCaptureInfo>,
-    _capture_config: CaptureConfig,
 }
 
 impl ScreenCaptureService {
     pub fn new() -> Result<Self> {
-        let capture_config = CaptureConfig::default();
-
-        let available = create_backend()
-            .map(|b| b.enumerate_sources().map(|s| !s.is_empty()).unwrap_or(false))
-            .unwrap_or(false);
-
         let initial = ScreenCaptureInfo {
             is_recording: false,
-            available,
+            available: query_availability(),
         };
 
         let polled = PolledService::new(
@@ -42,29 +40,21 @@ impl ScreenCaptureService {
             Duration::from_secs(3),
             None,
             |current: &ScreenCaptureInfo| -> Result<ScreenCaptureInfo, std::convert::Infallible> {
-                let available = create_backend()
-                    .map(|b| b.enumerate_sources().map(|s| !s.is_empty()).unwrap_or(false))
-                    .unwrap_or(false);
                 let mut updated = current.clone();
-                updated.available = available;
+                updated.available = query_availability();
                 Ok(updated)
             },
         );
 
-        Ok(Self {
-            polled,
-            _capture_config: capture_config,
-        })
+        Ok(Self { polled })
     }
 
     pub fn new_offline() -> Self {
-        let capture_config = CaptureConfig::default();
         Self {
             polled: PolledService::new_offline(ScreenCaptureInfo {
                 is_recording: false,
                 available: false,
             }),
-            _capture_config: capture_config,
         }
     }
 

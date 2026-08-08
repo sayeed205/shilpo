@@ -65,7 +65,6 @@ pub mod popover;
 pub mod progress;
 pub mod radio;
 pub mod rating;
-pub mod recording;
 pub mod resizable;
 pub mod ripple;
 pub mod scroll;

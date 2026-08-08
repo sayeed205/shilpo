@@ -96,13 +96,7 @@ impl CaptureOverlayView {
             return;
         }
 
-        let image = crop_image(
-            &self.frame,
-            region.x as u32,
-            region.y as u32,
-            region.width,
-            region.height,
-        );
+        let image = crop_image(&self.frame, region);
         let result = match self.intent {
             CaptureIntent::Clipboard => copy_image_to_clipboard(&image).map_err(|e| e.to_string()),
             CaptureIntent::Annotation => {

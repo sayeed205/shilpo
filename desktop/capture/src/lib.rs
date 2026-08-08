@@ -21,8 +21,10 @@ pub fn capture_frame(output: Option<&str>) -> anyhow::Result<Frame> {
 }
 
 /// Crop a region from an RgbaImage
-pub fn crop_image(img: &image::RgbaImage, x: u32, y: u32, width: u32, height: u32) -> image::RgbaImage {
-    image::imageops::crop_imm(img, x, y, width, height).to_image()
+pub fn crop_image(img: &image::RgbaImage, region: Region) -> image::RgbaImage {
+    let x = region.x.max(0) as u32;
+    let y = region.y.max(0) as u32;
+    image::imageops::crop_imm(img, x, y, region.width, region.height).to_image()
 }
 
 /// Copy image to clipboard
