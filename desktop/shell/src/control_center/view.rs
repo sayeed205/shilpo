@@ -245,7 +245,6 @@ impl ControlCenterView {
         window.remove_window();
     }
 
-
     fn toggle_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if ShellRuntime::recording_state(cx).is_stoppable() {
             ShellRuntime::stop_recording(cx);

@@ -10,15 +10,19 @@ pub enum ScreenshotMode {
 
 /// Operation-driven non-probing Screen Capture service.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct ScreenCaptureService;
+pub struct ScreenCaptureService {
+    is_offline: bool,
+}
+
+use anyhow::Result;
 
 impl ScreenCaptureService {
-    pub fn new() -> Result<Self, ServiceError> {
-        Ok(Self)
+    pub fn new() -> Result<Self> {
+        Ok(Self { is_offline: false })
     }
 
     pub fn new_offline() -> Self {
-        Self
+        Self { is_offline: true }
     }
 
     /// Takes a screenshot of the specified mode and optional output path.
@@ -28,6 +32,12 @@ impl ScreenCaptureService {
         _mode: ScreenshotMode,
         output_path: Option<PathBuf>,
     ) -> Result<(), ServiceError> {
+        if self.is_offline {
+            return Err(ServiceError::ScreenCapture {
+                message: "Screen capture service is offline".to_string(),
+            });
+        }
+
         let backend = create_backend().map_err(|err| ServiceError::ScreenCapture {
             message: format!("Failed to create capture backend: {err}"),
         })?;
@@ -53,9 +63,11 @@ impl ScreenCaptureService {
         })?;
 
         if let Some(path) = output_path {
-            image.save(path).map_err(|err| ServiceError::ScreenCapture {
-                message: format!("Failed to save screenshot image: {err}"),
-            })?;
+            image
+                .save(path)
+                .map_err(|err| ServiceError::ScreenCapture {
+                    message: format!("Failed to save screenshot image: {err}"),
+                })?;
         } else {
             copy_image_to_clipboard(&image).map_err(|err| ServiceError::ScreenCapture {
                 message: format!("Failed to copy screenshot to clipboard: {err}"),
@@ -77,4 +89,3 @@ mod tests {
         assert!(res.is_err());
     }
 }
-

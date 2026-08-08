@@ -21,6 +21,7 @@ impl<State: Clone + Send + Sync + 'static> StateContext<State> {
         let _ = self.tx.send_replace(state);
     }
 
+    #[allow(dead_code)]
     pub fn update<F: FnOnce(&mut State)>(&self, f: F) {
         let mut current = self.tx.borrow().clone();
         f(&mut current);
@@ -78,6 +79,7 @@ impl<State: Clone + Send + Sync + 'static> StateRuntime<State> {
         self.tx.borrow().clone()
     }
 
+    #[allow(dead_code)]
     pub fn update<F: FnOnce(&mut State)>(&self, f: F) {
         let mut current = self.get();
         f(&mut current);
@@ -88,16 +90,27 @@ impl<State: Clone + Send + Sync + 'static> StateRuntime<State> {
         let _ = self.tx.send_replace(state);
     }
 
+    #[allow(dead_code)]
     pub fn is_offline(&self) -> bool {
         self._task.is_none()
     }
 }
 
 /// Crate-private runtime wrapping `StateRuntime` with command channel support.
-#[derive(Clone)]
 pub(crate) struct CommandRuntime<State: Clone + Send + Sync + 'static, Command: Send + 'static> {
     state: StateRuntime<State>,
     command_tx: Option<mpsc::UnboundedSender<Command>>,
+}
+
+impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> Clone
+    for CommandRuntime<State, Command>
+{
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            command_tx: self.command_tx.clone(),
+        }
+    }
 }
 
 impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> CommandRuntime<State, Command> {
@@ -148,10 +161,12 @@ impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> CommandRunti
         self.state.update(f);
     }
 
+    #[allow(dead_code)]
     pub fn send_replace(&self, state: State) {
         self.state.send_replace(state);
     }
 
+    #[allow(dead_code)]
     pub fn is_offline(&self) -> bool {
         self.state.is_offline()
     }

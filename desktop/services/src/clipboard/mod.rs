@@ -58,8 +58,6 @@ impl ClipboardStore for HeedClipboardStore {
     }
 }
 
-use tokio::sync::watch;
-
 use crate::runtime::{StateContext, StateRuntime};
 use tokio::sync::watch;
 
@@ -156,10 +154,9 @@ async fn run_clipboard_monitoring(
 ) {
     #[cfg(target_os = "linux")]
     {
-        let res = tokio::task::spawn_blocking(move || {
-            wayland_data_control_loop(ctx, store, last_error)
-        })
-        .await;
+        let res =
+            tokio::task::spawn_blocking(move || wayland_data_control_loop(ctx, store, last_error))
+                .await;
         if let Err(err) = res {
             tracing::debug!("Wayland data-control thread exited: {err}");
         }
@@ -179,10 +176,7 @@ fn wayland_data_control_loop(
     store: Option<Arc<dyn ClipboardStore>>,
     last_error: Arc<Mutex<Option<String>>>,
 ) {
-    use wayland_client::{
-        Connection, Dispatch, EventQueue, QueueHandle,
-        protocol::wl_seat,
-    };
+    use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, protocol::wl_seat};
     use wayland_protocols_wlr::data_control::v1::client::{
         zwlr_data_control_device_v1::{self, ZwlrDataControlDeviceV1},
         zwlr_data_control_manager_v1::{self, ZwlrDataControlManagerV1},
@@ -197,6 +191,7 @@ fn wayland_data_control_loop(
         offer_mime_types: Vec<String>,
         ctx: StateContext<Vec<ClipboardItem>>,
         store: Option<Arc<dyn ClipboardStore>>,
+        #[allow(dead_code)]
         last_error: Arc<Mutex<Option<String>>>,
     }
 
@@ -223,12 +218,8 @@ fn wayland_data_control_loop(
                         (),
                     ));
                 } else if interface == "wl_seat" && state.seat.is_none() {
-                    state.seat = Some(proxy.bind::<wl_seat::WlSeat, _, _>(
-                        name,
-                        version.min(1),
-                        qh,
-                        (),
-                    ));
+                    state.seat =
+                        Some(proxy.bind::<wl_seat::WlSeat, _, _>(name, version.min(1), qh, ()));
                 }
             }
         }
@@ -272,54 +263,54 @@ fn wayland_data_control_loop(
                     state.current_offer = Some(id);
                     state.offer_mime_types.clear();
                 }
-                zwlr_data_control_device_v1::Event::Selection { id } => {
-                    if let Some(offer) = id {
-                        let has_text = state.offer_mime_types.iter().any(|mime| {
-                            mime == "text/plain;charset=utf-8"
-                                || mime == "text/plain"
-                                || mime == "UTF8_STRING"
-                                || mime == "STRING"
-                        });
-                        if has_text {
-                            let (read_fd, write_fd) = match rustix::pipe::pipe() {
-                                Ok(fds) => fds,
-                                Err(_) => return,
-                            };
+                zwlr_data_control_device_v1::Event::Selection { id: Some(offer) } => {
+                    let has_text = state.offer_mime_types.iter().any(|mime| {
+                        mime == "text/plain;charset=utf-8"
+                            || mime == "text/plain"
+                            || mime == "UTF8_STRING"
+                            || mime == "STRING"
+                    });
+                    if has_text {
+                        let (read_fd, write_fd) = match rustix::pipe::pipe() {
+                            Ok(fds) => fds,
+                            Err(_) => return,
+                        };
 
-                            let target_mime = state
-                                .offer_mime_types
-                                .iter()
-                                .find(|m| m.as_str() == "text/plain;charset=utf-8")
-                                .cloned()
-                                .unwrap_or_else(|| "text/plain".to_string());
+                        let target_mime = state
+                            .offer_mime_types
+                            .iter()
+                            .find(|m| m.as_str() == "text/plain;charset=utf-8")
+                            .cloned()
+                            .unwrap_or_else(|| "text/plain".to_string());
 
-                            offer.receive(target_mime, write_fd.as_fd());
-                            drop(write_fd);
+                        use std::os::fd::AsFd;
+                        offer.receive(target_mime, write_fd.as_fd());
+                        drop(write_fd);
 
-                            use std::io::Read;
-                            let mut file = std::fs::File::from(read_fd);
-                            let mut text = String::new();
-                            if file.read_to_string(&mut text).is_ok() {
-                                let text = text.trim().to_string();
-                                if !text.is_empty() {
-                                    let mut current = state.ctx.get();
-                                    if current.first().is_none_or(|item| item.text != text) {
-                                        let id = chrono::Local::now().timestamp_millis() as u64;
-                                        let timestamp =
-                                            chrono::Local::now().format("%H:%M:%S").to_string();
-                                        let item = ClipboardItem {
-                                            id,
-                                            text,
-                                            timestamp,
-                                        };
-                                        current.insert(0, item.clone());
-                                        if current.len() > DEFAULT_CLIPBOARD_HISTORY_LIMIT {
-                                            current.pop();
-                                        }
-                                        state.ctx.send_replace(current);
-                                        if let Some(ref store) = state.store {
-                                            let _ = store.record(&item, DEFAULT_CLIPBOARD_HISTORY_LIMIT);
-                                        }
+                        use std::io::Read;
+                        let mut file = std::fs::File::from(read_fd);
+                        let mut text = String::new();
+                        if file.read_to_string(&mut text).is_ok() {
+                            let text = text.trim().to_string();
+                            if !text.is_empty() {
+                                let mut current = state.ctx.get();
+                                if current.first().is_none_or(|item| item.text != text) {
+                                    let id = chrono::Local::now().timestamp_millis() as u64;
+                                    let timestamp =
+                                        chrono::Local::now().format("%H:%M:%S").to_string();
+                                    let item = ClipboardItem {
+                                        id,
+                                        text,
+                                        timestamp,
+                                    };
+                                    current.insert(0, item.clone());
+                                    if current.len() > DEFAULT_CLIPBOARD_HISTORY_LIMIT {
+                                        current.pop();
+                                    }
+                                    state.ctx.send_replace(current);
+                                    if let Some(ref store) = state.store {
+                                        let _ =
+                                            store.record(&item, DEFAULT_CLIPBOARD_HISTORY_LIMIT);
                                     }
                                 }
                             }
@@ -388,7 +379,8 @@ fn wayland_data_control_loop(
         return;
     };
 
-    let device = manager.get_data_control_device(&seat, &qh, ());
+    let device = manager.get_data_device(&seat, &qh, ());
+
     app_state.device = Some(device);
 
     loop {
@@ -397,7 +389,6 @@ fn wayland_data_control_loop(
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

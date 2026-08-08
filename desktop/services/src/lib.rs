@@ -174,4 +174,3 @@ mod tests {
         assert!(!network.network_info().available);
     }
 }
-

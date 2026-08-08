@@ -1,5 +1,4 @@
-use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PowerProfile {
@@ -137,7 +136,6 @@ impl PowerProfileService {
         self.runtime.send_command(PowerProfileCommand::Set(profile))
     }
 }
-
 
 #[cfg(test)]
 mod tests {

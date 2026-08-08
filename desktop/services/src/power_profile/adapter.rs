@@ -5,15 +5,6 @@
 //! async event loop that watches the daemon for `PropertiesChanged` signals
 //! and forwards the updated state to the harness via a `watch::Sender`.
 
-use tokio::sync::{mpsc, watch};
-use tokio::task::JoinHandle;
-
-use super::{PowerProfileCommand, PowerProfileInfo};
-
-/// Channels handed to a backend when it is spawned.
-///
-/// The state sender lets the backend publish state; the command receiver lets
-/// the harness dispatch profile changes.
 use super::{PowerProfileCommand, PowerProfileInfo};
 use crate::runtime::CommandContext;
 
@@ -130,7 +121,8 @@ pub(crate) mod dbus {
             };
 
             if let Ok(active) = session.proxy.active_profile().await {
-                ctx.state.send_replace(PowerProfileInfo::from_daemon(&active));
+                ctx.state
+                    .send_replace(PowerProfileInfo::from_daemon(&active));
             } else {
                 ctx.state.send_replace(PowerProfileInfo::fallback());
             }
@@ -282,4 +274,3 @@ pub(crate) mod mock {
         }
     }
 }
-

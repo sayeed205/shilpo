@@ -125,8 +125,9 @@ fi
 exit 0
 SCRIPT
   chmod +x "$SHILPO_BUILD_DIR/release/shilpo"
-  touch "$SHILPO_BUILD_DIR/release/shilpo-shell" "$SHILPO_BUILD_DIR/release/shilpo-themed"
-  chmod +x "$SHILPO_BUILD_DIR/release/shilpo-shell" "$SHILPO_BUILD_DIR/release/shilpo-themed"
+  touch "$SHILPO_BUILD_DIR/release/shilpo-shell" "$SHILPO_BUILD_DIR/release/shilpo-settings" "$SHILPO_BUILD_DIR/release/shilpo-themed"
+  chmod +x "$SHILPO_BUILD_DIR/release/shilpo-shell" "$SHILPO_BUILD_DIR/release/shilpo-settings" "$SHILPO_BUILD_DIR/release/shilpo-themed"
+
   touch "$SHILPO_EXTENSION_TARGET_DIR/wasm32-wasip2/release/shilpo_weather_extension.wasm"
 fi
 echo "[mock cargo] $*"

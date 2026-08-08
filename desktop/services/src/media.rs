@@ -3,6 +3,7 @@ use anyhow::Result;
 use futures_lite::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tokio::sync::watch;
 
 #[cfg(target_os = "linux")]
 use zbus::proxy;
@@ -387,15 +388,21 @@ async fn run_mpris_loop(mut ctx: CommandContext<MediaInfo, MediaCommand>) {
 
         // Add D-Bus match rules so signal events fire for properties, seek, and name owner changes
         if let Ok(dbus_fdo) = zbus::fdo::DBusProxy::new(&connection).await {
-            let _ = dbus_fdo
-                .add_match("type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'")
-                .await;
-            let _ = dbus_fdo
-                .add_match("type='signal',interface='org.mpris.MediaPlayer2.Player',member='Seeked'")
-                .await;
-            let _ = dbus_fdo
-                .add_match("type='signal',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0namespace='org.mpris.MediaPlayer2'")
-                .await;
+            if let Ok(rule) = zbus::MatchRule::try_from(
+                "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'",
+            ) {
+                let _ = dbus_fdo.add_match_rule(rule).await;
+            }
+            if let Ok(rule) = zbus::MatchRule::try_from(
+                "type='signal',interface='org.mpris.MediaPlayer2.Player',member='Seeked'",
+            ) {
+                let _ = dbus_fdo.add_match_rule(rule).await;
+            }
+            if let Ok(rule) = zbus::MatchRule::try_from(
+                "type='signal',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0namespace='org.mpris.MediaPlayer2'",
+            ) {
+                let _ = dbus_fdo.add_match_rule(rule).await;
+            }
         }
 
         let mut selected_player_name =
@@ -474,7 +481,6 @@ impl MediaService {
         let _ = self.runtime.send_command(command);
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -657,7 +663,7 @@ mod tests {
         };
 
         let curr = info.current_position_secs();
-        assert!(curr >= 11.9 && curr <= 13.0);
+        assert!((11.9..=13.0).contains(&curr));
         assert!(info.progress() > 0.11);
     }
 
@@ -678,4 +684,3 @@ mod tests {
         assert_eq!(info.progress(), 0.1);
     }
 }
-

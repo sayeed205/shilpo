@@ -10,7 +10,8 @@ pub use wifi::{WifiAccessPoint, WifiSecurity};
 use anyhow::Result;
 use futures_lite::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
+
 use zbus::{Connection, MessageStream};
 
 /// Physical or virtual network device interface description.
@@ -277,7 +278,10 @@ impl NetworkService {
 
     /// Enable or disable Wi-Fi radio.
     pub fn set_wifi_enabled(&self, enabled: bool) -> Result<()> {
-        if self.runtime.send_command(NetworkCommand::SetWifiEnabled(enabled)) {
+        if self
+            .runtime
+            .send_command(NetworkCommand::SetWifiEnabled(enabled))
+        {
             Ok(())
         } else {
             Err(anyhow::anyhow!("Failed to send command to NetworkService"))
@@ -309,7 +313,10 @@ impl NetworkService {
     /// Deactivate an active network connection.
     pub fn deactivate_connection(&self, active_conn_path: &str) -> Result<()> {
         let path = active_conn_path.to_string();
-        if self.runtime.send_command(NetworkCommand::DeactivateConnection(path)) {
+        if self
+            .runtime
+            .send_command(NetworkCommand::DeactivateConnection(path))
+        {
             Ok(())
         } else {
             Err(anyhow::anyhow!("Failed to send command to NetworkService"))
@@ -329,7 +336,10 @@ impl NetworkService {
     /// Disconnect an active VPN connection by profile name or path.
     pub fn disconnect_vpn(&self, name_or_path: &str) -> Result<()> {
         let name = name_or_path.to_string();
-        if self.runtime.send_command(NetworkCommand::DisconnectVpn(name)) {
+        if self
+            .runtime
+            .send_command(NetworkCommand::DisconnectVpn(name))
+        {
             Ok(())
         } else {
             Err(anyhow::anyhow!("Failed to send command to NetworkService"))
@@ -338,7 +348,10 @@ impl NetworkService {
 
     /// Enable or disable airplane mode (disabling airplane mode restores Wi-Fi and WWAN radio status).
     pub fn set_airplane_mode_enabled(&self, enabled: bool) -> Result<()> {
-        if self.runtime.send_command(NetworkCommand::SetAirplaneModeEnabled(enabled)) {
+        if self
+            .runtime
+            .send_command(NetworkCommand::SetAirplaneModeEnabled(enabled))
+        {
             self.runtime.update(|info| {
                 info.airplane_mode = enabled;
                 info.wifi_enabled = !enabled;
@@ -355,7 +368,6 @@ impl NetworkService {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -477,7 +489,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_vpn_connection_selection_and_status() {
-        let service = NetworkService::new_offline();
+        let runtime = CommandRuntime::spawn(NetworkInfo::default(), |mut ctx| async move {
+            while ctx.command_rx.recv().await.is_some() {}
+        });
+
+        let service = NetworkService { runtime };
         let vpn = VpnConnection {
             id: "Corporate VPN".to_string(),
             uuid: "corp-vpn-uuid".to_string(),
@@ -495,28 +511,29 @@ mod tests {
         assert!(service.disconnect_vpn("Corporate VPN").is_ok());
     }
 
-    #[test]
-    fn test_network_commands_enqueued() {
-        let (command_tx, mut command_rx) = mpsc::channel::<NetworkCommand>(32);
-        let (watch_tx, _) = watch::channel(NetworkInfo::default());
-        let service = NetworkService {
-            tx: watch_tx,
-            _task: None,
-            command_tx: Some(command_tx),
-        };
+    #[tokio::test]
+    async fn test_network_commands_enqueued() {
+        use tokio::sync::mpsc;
+        let (cmd_tx, mut command_rx) = mpsc::unbounded_channel::<NetworkCommand>();
+        let runtime = CommandRuntime::spawn(NetworkInfo::default(), move |mut ctx| async move {
+            while let Some(cmd) = ctx.command_rx.recv().await {
+                let _ = cmd_tx.send(cmd);
+            }
+        });
+        let service = NetworkService { runtime };
 
         service.set_wifi_enabled(true).unwrap();
         assert_eq!(
-            command_rx.try_recv().unwrap(),
+            command_rx.recv().await.unwrap(),
             NetworkCommand::SetWifiEnabled(true)
         );
 
         service.scan_wifi().unwrap();
-        assert_eq!(command_rx.try_recv().unwrap(), NetworkCommand::ScanWifi);
+        assert_eq!(command_rx.recv().await.unwrap(), NetworkCommand::ScanWifi);
 
         service.connect_wifi("Home-WiFi", None).unwrap();
         assert_eq!(
-            command_rx.try_recv().unwrap(),
+            command_rx.recv().await.unwrap(),
             NetworkCommand::ConnectWifi {
                 ssid: "Home-WiFi".to_string(),
                 object_path: None,
@@ -525,25 +542,25 @@ mod tests {
 
         service.deactivate_connection("/path").unwrap();
         assert_eq!(
-            command_rx.try_recv().unwrap(),
+            command_rx.recv().await.unwrap(),
             NetworkCommand::DeactivateConnection("/path".to_string())
         );
 
         service.connect_vpn("VPN").unwrap();
         assert_eq!(
-            command_rx.try_recv().unwrap(),
+            command_rx.recv().await.unwrap(),
             NetworkCommand::ConnectVpn("VPN".to_string())
         );
 
         service.disconnect_vpn("VPN").unwrap();
         assert_eq!(
-            command_rx.try_recv().unwrap(),
+            command_rx.recv().await.unwrap(),
             NetworkCommand::DisconnectVpn("VPN".to_string())
         );
 
         service.set_airplane_mode_enabled(true).unwrap();
         assert_eq!(
-            command_rx.try_recv().unwrap(),
+            command_rx.recv().await.unwrap(),
             NetworkCommand::SetAirplaneModeEnabled(true)
         );
 

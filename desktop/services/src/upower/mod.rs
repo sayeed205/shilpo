@@ -117,10 +117,10 @@ async fn run_upower_loop(ctx: StateContext<BatteryInfo>) {
         ctx.send_replace(fetch_battery_snapshot(&proxy).await);
 
         while let Some(change) = changes.next().await {
-            if let Ok(args) = change.args() {
-                if args.interface_name == "org.freedesktop.UPower.Device" {
-                    ctx.send_replace(fetch_battery_snapshot(&proxy).await);
-                }
+            if let Ok(args) = change.args()
+                && args.interface_name == "org.freedesktop.UPower.Device"
+            {
+                ctx.send_replace(fetch_battery_snapshot(&proxy).await);
             }
         }
 
