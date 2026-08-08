@@ -46,7 +46,8 @@ pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_u
 pub use notifications::{Notification, NotificationService, NotificationUrgency};
 pub use polled::{BackoffConfig, PolledService};
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
-pub use screen_capture::{ScreenCaptureInfo, ScreenCaptureService, ScreenshotMode};
+pub use screen_capture::{ScreenCaptureService, ScreenshotMode};
+
 pub use tray::{TrayItem, TrayMenuItem, TrayService};
 pub use upower::{BatteryInfo, BatteryService};
 
@@ -136,13 +137,8 @@ mod tests {
             }
         );
 
-        let screen_capture = ScreenCaptureService::new_offline();
-        assert_eq!(
-            screen_capture.subscribe().borrow().clone(),
-            ScreenCaptureInfo::default()
-        );
-
         let tray = TrayService::new_offline();
+
         assert!(tray.subscribe().borrow().is_empty());
 
         let notif = NotificationService::new_offline();

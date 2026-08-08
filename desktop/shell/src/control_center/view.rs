@@ -237,13 +237,14 @@ impl ControlCenterView {
 
     fn take_screenshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(service) = &self.screen_capture_service {
-            service.take_screenshot(ScreenshotMode::Region, None);
+            let _ = service.take_screenshot(ScreenshotMode::Region, None);
         } else {
             ShellRuntime::open_capture_overlay(cx, shilpo_capture::CaptureIntent::Clipboard);
         }
         ShellRuntime::forget_control_center(cx);
         window.remove_window();
     }
+
 
     fn toggle_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if ShellRuntime::recording_state(cx).is_stoppable() {

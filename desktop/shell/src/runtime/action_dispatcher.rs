@@ -412,10 +412,11 @@ impl ActionDispatcher {
             }
             ActionInvocation::TakeScreenshot => {
                 if let Ok(capture) = shilpo_services::ScreenCaptureService::new() {
-                    capture.take_screenshot(shilpo_services::ScreenshotMode::Region, None);
+                    let _ = capture.take_screenshot(shilpo_services::ScreenshotMode::Region, None);
                 }
                 Ok(crate::actions::ActionResult::Immediate)
             }
+
             ActionInvocation::RecordScreen => {
                 let state = cx.global::<ShellRuntime>().capture_runtime.state();
                 if state.is_stoppable() {

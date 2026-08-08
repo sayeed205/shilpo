@@ -1,10 +1,6 @@
-use anyhow::Result;
+use crate::error::ServiceError;
 use shilpo_capture::{capture_frame, copy_image_to_clipboard, create_backend, frame_to_rgba};
 use std::path::PathBuf;
-use std::time::Duration;
-use tokio::sync::watch;
-
-use crate::polled::PolledService;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenshotMode {
@@ -12,81 +8,61 @@ pub enum ScreenshotMode {
     Region,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ScreenCaptureInfo {
-    pub is_recording: bool,
-    pub available: bool,
-}
-
-fn query_availability() -> bool {
-    create_backend()
-        .map(|b| {
-            b.enumerate_sources()
-                .map(|s| !s.is_empty())
-                .unwrap_or(false)
-        })
-        .unwrap_or(false)
-}
-
-pub struct ScreenCaptureService {
-    polled: PolledService<ScreenCaptureInfo>,
-}
+/// Operation-driven non-probing Screen Capture service.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScreenCaptureService;
 
 impl ScreenCaptureService {
-    pub fn new() -> Result<Self> {
-        let initial = ScreenCaptureInfo {
-            is_recording: false,
-            available: query_availability(),
-        };
-
-        let polled = PolledService::new(
-            initial,
-            Duration::from_secs(3),
-            None,
-            |current: &ScreenCaptureInfo| -> Result<ScreenCaptureInfo, std::convert::Infallible> {
-                let mut updated = current.clone();
-                updated.available = query_availability();
-                Ok(updated)
-            },
-        );
-
-        Ok(Self { polled })
+    pub fn new() -> Result<Self, ServiceError> {
+        Ok(Self)
     }
 
     pub fn new_offline() -> Self {
-        Self {
-            polled: PolledService::new_offline(ScreenCaptureInfo {
-                is_recording: false,
-                available: false,
-            }),
+        Self
+    }
+
+    /// Takes a screenshot of the specified mode and optional output path.
+    /// Backend availability is discovered dynamically on operation request.
+    pub fn take_screenshot(
+        &self,
+        _mode: ScreenshotMode,
+        output_path: Option<PathBuf>,
+    ) -> Result<(), ServiceError> {
+        let backend = create_backend().map_err(|err| ServiceError::ScreenCapture {
+            message: format!("Failed to create capture backend: {err}"),
+        })?;
+
+        let sources = backend
+            .enumerate_sources()
+            .map_err(|err| ServiceError::ScreenCapture {
+                message: format!("Failed to enumerate capture sources: {err}"),
+            })?;
+
+        if sources.is_empty() {
+            return Err(ServiceError::ScreenCapture {
+                message: "No capture sources available".to_string(),
+            });
         }
-    }
 
-    pub fn subscribe(&self) -> watch::Receiver<ScreenCaptureInfo> {
-        self.polled.subscribe()
-    }
+        let frame = capture_frame(None).map_err(|err| ServiceError::ScreenCapture {
+            message: format!("Failed to capture frame: {err}"),
+        })?;
 
-    pub fn info(&self) -> ScreenCaptureInfo {
-        self.polled.get()
-    }
+        let image = frame_to_rgba(&frame).map_err(|err| ServiceError::ScreenCapture {
+            message: format!("Failed to convert frame to RGBA: {err}"),
+        })?;
 
-    pub fn take_screenshot(&self, _mode: ScreenshotMode, output_path: Option<PathBuf>) -> bool {
-        let info_state = self.polled.get();
-        if !info_state.available {
-            return false;
-        }
-
-        let Ok(frame) = capture_frame(None) else {
-            return false;
-        };
-        let Ok(image) = frame_to_rgba(&frame) else {
-            return false;
-        };
         if let Some(path) = output_path {
-            image.save(path).is_ok()
+            image.save(path).map_err(|err| ServiceError::ScreenCapture {
+                message: format!("Failed to save screenshot image: {err}"),
+            })?;
         } else {
-            copy_image_to_clipboard(&image).is_ok()
+            copy_image_to_clipboard(&image).map_err(|err| ServiceError::ScreenCapture {
+                message: format!("Failed to copy screenshot to clipboard: {err}"),
+            })?;
         }
+
+        Ok(())
     }
 }
 
@@ -97,8 +73,8 @@ mod tests {
     #[test]
     fn test_screen_capture_offline() {
         let service = ScreenCaptureService::new_offline();
-        let info = service.info();
-        assert!(!info.available);
-        assert!(!service.take_screenshot(ScreenshotMode::Fullscreen, None));
+        let res = service.take_screenshot(ScreenshotMode::Fullscreen, None);
+        assert!(res.is_err());
     }
 }
+
