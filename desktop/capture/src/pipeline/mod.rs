@@ -24,6 +24,7 @@ use crate::types::{RecordingEvent, RecordingRequest, StreamConfig};
 
 pub struct RecordingPipeline {
     running: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     worker_handle: Option<JoinHandle<anyhow::Result<(PathBuf, Duration)>>>,
 }
 
@@ -38,7 +39,9 @@ impl RecordingPipeline {
         // doomed and makes shortcut failures visible to callers.
         let _ = create_backend()?;
         let running = Arc::new(AtomicBool::new(true));
+        let paused = Arc::new(AtomicBool::new(false));
         let running_flag = Arc::clone(&running);
+        let paused_flag = Arc::clone(&paused);
 
         let handle = thread::spawn(move || {
             let mut backend = create_backend()?;
@@ -52,8 +55,10 @@ impl RecordingPipeline {
                 .map_err(|e| anyhow::anyhow!("Capture stream timeout: {e}"))?;
 
             let mut encoder = VideoEncoder::new(first_frame.width, first_frame.height, &config)?;
-            let mut audio_encoder = AudioEncoder::new(config.container)?;
-            let mut muxer = Muxer::new(&config)?;
+            let mut audio_encoder = (request.audio != crate::types::AudioSource::None)
+                .then(|| AudioEncoder::new(config.container))
+                .transpose()?;
+            let mut muxer = Muxer::new(&config, &encoder, audio_encoder.as_ref())?;
 
             // Encode initial frame
             let transformed = transform_frame(&first_frame)?;
@@ -63,6 +68,10 @@ impl RecordingPipeline {
             }
 
             while running_flag.load(Ordering::SeqCst) {
+                if paused_flag.load(Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
                 // Drain video frames
                 while let Ok(frame) = frame_rx.try_recv() {
                     let transformed = transform_frame(&frame)?;
@@ -74,6 +83,9 @@ impl RecordingPipeline {
 
                 // Drain audio buffers
                 while let Ok(audio_buf) = audio_rx.try_recv() {
+                    let Some(audio_encoder) = audio_encoder.as_mut() else {
+                        anyhow::bail!("audio encoder is unavailable");
+                    };
                     let audio_packets = audio_encoder.encode_buffer(&audio_buf)?;
                     for packet in audio_packets {
                         muxer.write_audio_packet(&packet)?;
@@ -101,6 +113,7 @@ impl RecordingPipeline {
 
         Ok(Self {
             running,
+            paused,
             worker_handle: Some(handle),
         })
     }
@@ -114,5 +127,13 @@ impl RecordingPipeline {
         } else {
             anyhow::bail!("Pipeline not running")
         }
+    }
+
+    pub fn pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+    }
+
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
     }
 }

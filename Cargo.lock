@@ -8323,6 +8323,7 @@ name = "shilpo-capture"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arboard",
  "chrono",
  "crossbeam-channel",
  "crossbeam-utils",
@@ -8331,6 +8332,7 @@ dependencies = [
  "image",
  "leptonica-sys",
  "libspa",
+ "memfd",
  "parking_lot",
  "pipewire",
  "serde",

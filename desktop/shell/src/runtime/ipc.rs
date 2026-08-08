@@ -191,7 +191,11 @@ impl ShellRuntime {
                     shilpo_capture::RecordingCommand::Stop => Self::stop_recording(cx),
                     shilpo_capture::RecordingCommand::Pause => Self::pause_recording(cx),
                     shilpo_capture::RecordingCommand::Resume => Self::resume_recording(cx),
-                    shilpo_capture::RecordingCommand::Cancel => Self::stop_recording(cx),
+                    shilpo_capture::RecordingCommand::Cancel => {
+                        if cx.has_global::<Self>() {
+                            let _ = cx.global::<Self>().capture_runtime.controller().cancel();
+                        }
+                    }
                     shilpo_capture::RecordingCommand::Status => {}
                 },
             }

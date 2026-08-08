@@ -1,6 +1,6 @@
 use shilpo_capture::{
     AudioSource, CaptureIntent, RecordingController, RecordingRequest, RecordingSource,
-    RecordingState, capture_frame,
+    RecordingState, capture_frame, copy_image_to_clipboard, frame_to_rgba,
 };
 use shilpo_config::CaptureConfig;
 
@@ -43,10 +43,20 @@ impl ShellCaptureRuntime {
 
     pub fn capture_screenshot(
         &self,
-        _intent: CaptureIntent,
+        intent: CaptureIntent,
         _config: &CaptureConfig,
     ) -> anyhow::Result<()> {
-        let _frame = capture_frame(None)?;
+        let frame = capture_frame(None)?;
+        let image = frame_to_rgba(&frame)?;
+        match intent {
+            CaptureIntent::Clipboard => copy_image_to_clipboard(&image)?,
+            CaptureIntent::Annotation | CaptureIntent::Menu => {
+                let dir = _config.ensure_screenshot_dir()?;
+                let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+                image.save(dir.join(format!("Screenshot_{timestamp}.png")))?;
+            }
+            CaptureIntent::Ocr => anyhow::bail!("OCR capture requires the OCR feature"),
+        }
         Ok(())
     }
 }

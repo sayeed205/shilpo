@@ -73,14 +73,14 @@ impl RecordingController {
             Ok(())
         };
 
-        inner.state = RecordingState::Idle;
-        inner.start_time = None;
-        let _ = self
-            .event_tx
-            .send(RecordingEvent::StateChanged(inner.state));
-
         if let Err(error) = &result {
             let _ = self.event_tx.send(RecordingEvent::Error(error.to_string()));
+        } else {
+            inner.state = RecordingState::Idle;
+            inner.start_time = None;
+            let _ = self
+                .event_tx
+                .send(RecordingEvent::StateChanged(inner.state));
         }
         result
     }
@@ -88,6 +88,9 @@ impl RecordingController {
     pub fn pause(&self) -> anyhow::Result<()> {
         let mut inner = self.inner.lock();
         if let RecordingState::Recording { elapsed } = inner.state {
+            if let Some(pipeline) = inner.pipeline.as_ref() {
+                pipeline.pause();
+            }
             inner.state = RecordingState::Paused { elapsed };
             let _ = self
                 .event_tx
@@ -99,6 +102,9 @@ impl RecordingController {
     pub fn resume(&self) -> anyhow::Result<()> {
         let mut inner = self.inner.lock();
         if let RecordingState::Paused { elapsed } = inner.state {
+            if let Some(pipeline) = inner.pipeline.as_ref() {
+                pipeline.resume();
+            }
             inner.state = RecordingState::Recording { elapsed };
             let _ = self
                 .event_tx
@@ -108,7 +114,19 @@ impl RecordingController {
     }
 
     pub fn cancel(&self) -> anyhow::Result<()> {
-        self.stop()
+        let mut inner = self.inner.lock();
+        if !inner.state.is_active() {
+            return Ok(());
+        }
+        if let Some(mut pipeline) = inner.pipeline.take() {
+            let _ = pipeline.stop();
+        }
+        inner.start_time = None;
+        inner.state = RecordingState::Idle;
+        let _ = self
+            .event_tx
+            .send(RecordingEvent::StateChanged(inner.state));
+        Ok(())
     }
 
     pub fn state(&self) -> RecordingState {

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use shilpo_capture::{capture_frame, create_backend};
+use shilpo_capture::{capture_frame, copy_image_to_clipboard, create_backend, frame_to_rgba};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -70,14 +70,23 @@ impl ScreenCaptureService {
         self.polled.get()
     }
 
-    pub fn take_screenshot(&self, _mode: ScreenshotMode, _output_path: Option<PathBuf>) -> bool {
+    pub fn take_screenshot(&self, _mode: ScreenshotMode, output_path: Option<PathBuf>) -> bool {
         let info_state = self.polled.get();
         if !info_state.available {
             return false;
         }
 
-        let _frame = capture_frame(None);
-        true
+        let Ok(frame) = capture_frame(None) else {
+            return false;
+        };
+        let Ok(image) = frame_to_rgba(&frame) else {
+            return false;
+        };
+        if let Some(path) = output_path {
+            image.save(path).is_ok()
+        } else {
+            copy_image_to_clipboard(&image).is_ok()
+        }
     }
 }
 
