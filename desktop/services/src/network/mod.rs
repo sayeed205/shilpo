@@ -129,228 +129,233 @@ pub enum NetworkCommand {
     SetAirplaneModeEnabled(bool),
 }
 
+use crate::runtime::{CommandContext, CommandRuntime, StateContext};
+
 /// NetworkManager service providing zbus DBus control and real-time status updates.
+#[derive(Clone)]
 pub struct NetworkService {
-    tx: watch::Sender<NetworkInfo>,
-    _task: Option<tokio::task::JoinHandle<()>>,
-    command_tx: Option<mpsc::Sender<NetworkCommand>>,
+    runtime: CommandRuntime<NetworkInfo, NetworkCommand>,
 }
 
-impl Drop for NetworkService {
-    fn drop(&mut self) {
-        if let Some(task) = self._task.take() {
-            task.abort();
+impl Default for NetworkService {
+    fn default() -> Self {
+        Self::new_offline()
+    }
+}
+
+async fn fetch_and_publish(conn: &Connection, state: &StateContext<NetworkInfo>) {
+    let nm_state = dbus_client::get_nm_state(conn).await.unwrap_or(0);
+    let state_enum = NetworkState::from(nm_state);
+    let is_connected = nm_state == dbus_client::NM_STATE_CONNECTED_GLOBAL;
+    let wifi_enabled = dbus_client::get_wireless_enabled(conn)
+        .await
+        .unwrap_or(true);
+    let wwan_enabled = dbus_client::get_wwan_enabled(conn).await.unwrap_or(false);
+    let access_points = dbus_client::list_access_points(conn)
+        .await
+        .unwrap_or_default();
+    let active_vpns = dbus_client::list_active_vpns(conn)
+        .await
+        .unwrap_or_default();
+    let devices = dbus_client::list_network_devices(conn)
+        .await
+        .unwrap_or_default();
+    let (connection_type, ip_config) = dbus_client::get_primary_connection_info(conn)
+        .await
+        .unwrap_or(("none".to_string(), None));
+
+    let active_ssid = access_points
+        .iter()
+        .find(|ap| ap.is_connected)
+        .map(|ap| ap.ssid.clone());
+    let airplane_mode = !wifi_enabled && !wwan_enabled;
+
+    let info = NetworkInfo {
+        is_connected,
+        connection_type,
+        ssid: active_ssid,
+        wifi_enabled,
+        wwan_enabled,
+        airplane_mode,
+        access_points,
+        active_vpns,
+        devices,
+        state: state_enum,
+        ip_config,
+        available: true,
+    };
+    state.send_replace(info);
+}
+
+async fn run_network_loop(mut ctx: CommandContext<NetworkInfo, NetworkCommand>) {
+    loop {
+        let connection = match Connection::system().await {
+            Ok(conn) => conn,
+            Err(err) => {
+                tracing::debug!("NetworkManager D-Bus system connection failed: {err}; retrying");
+                ctx.state.send_replace(NetworkInfo::default());
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                continue;
+            }
+        };
+
+        fetch_and_publish(&connection, &ctx.state).await;
+
+        let mut stream = MessageStream::from(&connection);
+
+        loop {
+            tokio::select! {
+                cmd = ctx.command_rx.recv() => {
+                    match cmd {
+                        Some(cmd) => {
+                            match cmd {
+                                NetworkCommand::SetWifiEnabled(enabled) => {
+                                    let _ = dbus_client::set_wireless_enabled(&connection, enabled).await;
+                                }
+                                NetworkCommand::ScanWifi => {
+                                    let _ = dbus_client::request_wifi_scan(&connection).await;
+                                }
+                                NetworkCommand::ConnectWifi { ssid, object_path } => {
+                                    let _ = dbus_client::connect_wifi_ap(&connection, &ssid, object_path.as_deref()).await;
+                                }
+                                NetworkCommand::DeactivateConnection(path) => {
+                                    let _ = dbus_client::deactivate_connection(&connection, &path).await;
+                                }
+                                NetworkCommand::ConnectVpn(name_or_uuid) => {
+                                    let _ = dbus_client::connect_vpn(&connection, &name_or_uuid).await;
+                                }
+                                NetworkCommand::DisconnectVpn(name_or_path) => {
+                                    let _ = dbus_client::disconnect_vpn(&connection, &name_or_path).await;
+                                }
+                                NetworkCommand::SetAirplaneModeEnabled(enabled) => {
+                                    let _ = dbus_client::set_wireless_enabled(&connection, !enabled).await;
+                                    let _ = dbus_client::set_wwan_enabled(&connection, !enabled).await;
+                                }
+                            }
+                            fetch_and_publish(&connection, &ctx.state).await;
+                        }
+                        None => return,
+                    }
+                }
+                msg = stream.next() => {
+                    if msg.is_some() {
+                        fetch_and_publish(&connection, &ctx.state).await;
+                    } else {
+                        break;
+                    }
+                }
+            }
         }
+
+        ctx.state.send_replace(NetworkInfo::default());
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     }
 }
 
 impl NetworkService {
     /// Create a dummy offline `NetworkService` instance for UI testing and headless CI.
     pub fn new_offline() -> Self {
-        let (tx, _) = watch::channel(NetworkInfo::default());
-        Self {
-            tx,
-            _task: None,
-            command_tx: None,
-        }
+        let runtime = CommandRuntime::new_offline(NetworkInfo::default());
+        Self { runtime }
     }
 
     /// Instantiate a real `NetworkService` connected to system DBus with event-driven signal updates.
     pub fn new() -> Result<Self> {
-        let (tx, _) = watch::channel(NetworkInfo::default());
-        let (command_tx, mut command_rx) = mpsc::channel::<NetworkCommand>(32);
-
-        let tx_clone = tx.clone();
-        let task = tokio::spawn(async move {
-            let connection_opt = Connection::system().await.ok();
-
-            async fn fetch_and_publish(conn: &Connection, tx: &watch::Sender<NetworkInfo>) {
-                let nm_state = dbus_client::get_nm_state(conn).await.unwrap_or(0);
-                let state = NetworkState::from(nm_state);
-                let is_connected = nm_state == dbus_client::NM_STATE_CONNECTED_GLOBAL;
-                let wifi_enabled = dbus_client::get_wireless_enabled(conn)
-                    .await
-                    .unwrap_or(true);
-                let wwan_enabled = dbus_client::get_wwan_enabled(conn).await.unwrap_or(false);
-                let access_points = dbus_client::list_access_points(conn)
-                    .await
-                    .unwrap_or_default();
-                let active_vpns = dbus_client::list_active_vpns(conn)
-                    .await
-                    .unwrap_or_default();
-                let devices = dbus_client::list_network_devices(conn)
-                    .await
-                    .unwrap_or_default();
-                let (connection_type, ip_config) = dbus_client::get_primary_connection_info(conn)
-                    .await
-                    .unwrap_or(("none".to_string(), None));
-
-                let active_ssid = access_points
-                    .iter()
-                    .find(|ap| ap.is_connected)
-                    .map(|ap| ap.ssid.clone());
-                let airplane_mode = !wifi_enabled && !wwan_enabled;
-
-                let info = NetworkInfo {
-                    is_connected,
-                    connection_type,
-                    ssid: active_ssid,
-                    wifi_enabled,
-                    wwan_enabled,
-                    airplane_mode,
-                    access_points,
-                    active_vpns,
-                    devices,
-                    state,
-                    ip_config,
-                    available: true,
-                };
-                let _ = tx.send_replace(info);
-            }
-
-            if let Some(ref connection) = connection_opt {
-                fetch_and_publish(connection, &tx_clone).await;
-
-                let mut stream = MessageStream::from(connection);
-
-                loop {
-                    tokio::select! {
-                        cmd = command_rx.recv() => {
-                            match cmd {
-                                Some(cmd) => {
-                                    match cmd {
-                                        NetworkCommand::SetWifiEnabled(enabled) => {
-                                            let _ = dbus_client::set_wireless_enabled(connection, enabled).await;
-                                        }
-                                        NetworkCommand::ScanWifi => {
-                                            let _ = dbus_client::request_wifi_scan(connection).await;
-                                        }
-                                        NetworkCommand::ConnectWifi { ssid, object_path } => {
-                                            let _ = dbus_client::connect_wifi_ap(connection, &ssid, object_path.as_deref()).await;
-                                        }
-                                        NetworkCommand::DeactivateConnection(path) => {
-                                            let _ = dbus_client::deactivate_connection(connection, &path).await;
-                                        }
-                                        NetworkCommand::ConnectVpn(name_or_uuid) => {
-                                            let _ = dbus_client::connect_vpn(connection, &name_or_uuid).await;
-                                        }
-                                        NetworkCommand::DisconnectVpn(name_or_path) => {
-                                            let _ = dbus_client::disconnect_vpn(connection, &name_or_path).await;
-                                        }
-                                        NetworkCommand::SetAirplaneModeEnabled(enabled) => {
-                                            let _ = dbus_client::set_wireless_enabled(connection, !enabled).await;
-                                            let _ = dbus_client::set_wwan_enabled(connection, !enabled).await;
-                                        }
-                                    }
-                                    fetch_and_publish(connection, &tx_clone).await;
-                                }
-                                None => break,
-                            }
-                        }
-                        msg = stream.next() => {
-                            if msg.is_some() {
-                                fetch_and_publish(connection, &tx_clone).await;
-                            }
-                        }
-                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(10)) => {
-                            fetch_and_publish(connection, &tx_clone).await;
-                        }
-                    }
-                }
-            }
-        });
-
-        Ok(Self {
-            tx,
-            _task: Some(task),
-            command_tx: Some(command_tx),
-        })
+        let runtime = CommandRuntime::spawn(NetworkInfo::default(), run_network_loop);
+        Ok(Self { runtime })
     }
 
     /// Subscribe to real-time `NetworkInfo` updates via watch channel.
     pub fn subscribe(&self) -> watch::Receiver<NetworkInfo> {
-        self.tx.subscribe()
+        self.runtime.subscribe()
     }
 
     /// Retrieve the current snapshot of `NetworkInfo`.
     pub fn network_info(&self) -> NetworkInfo {
-        self.tx.borrow().clone()
+        self.runtime.get()
     }
 
     /// Enable or disable Wi-Fi radio.
     pub fn set_wifi_enabled(&self, enabled: bool) -> Result<()> {
-        if let Some(tx) = &self.command_tx {
-            tx.try_send(NetworkCommand::SetWifiEnabled(enabled))
-                .map_err(|e| anyhow::anyhow!("Failed to send command: {}", e))?;
+        if self.runtime.send_command(NetworkCommand::SetWifiEnabled(enabled)) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
         }
-        Ok(())
     }
 
     /// Request a Wi-Fi background scan.
     pub fn scan_wifi(&self) -> Result<()> {
-        if let Some(tx) = &self.command_tx {
-            tx.try_send(NetworkCommand::ScanWifi)
-                .map_err(|e| anyhow::anyhow!("Failed to send command: {}", e))?;
+        if self.runtime.send_command(NetworkCommand::ScanWifi) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
         }
-        Ok(())
     }
 
     /// Connect to a Wi-Fi network by SSID and optional access point path.
     pub fn connect_wifi(&self, ssid: &str, object_path: Option<&str>) -> Result<()> {
-        if let Some(tx) = &self.command_tx {
-            tx.try_send(NetworkCommand::ConnectWifi {
-                ssid: ssid.to_string(),
-                object_path: object_path.map(|s| s.to_string()),
-            })
-            .map_err(|e| anyhow::anyhow!("Failed to send command: {}", e))?;
+        let cmd = NetworkCommand::ConnectWifi {
+            ssid: ssid.to_string(),
+            object_path: object_path.map(|s| s.to_string()),
+        };
+        if self.runtime.send_command(cmd) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
         }
-        Ok(())
     }
 
     /// Deactivate an active network connection.
     pub fn deactivate_connection(&self, active_conn_path: &str) -> Result<()> {
         let path = active_conn_path.to_string();
-        if let Some(tx) = &self.command_tx {
-            tx.try_send(NetworkCommand::DeactivateConnection(path))
-                .map_err(|e| anyhow::anyhow!("Failed to send command: {}", e))?;
+        if self.runtime.send_command(NetworkCommand::DeactivateConnection(path)) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
         }
-        Ok(())
     }
 
     /// Connect to a VPN connection profile by name or UUID.
     pub fn connect_vpn(&self, name_or_uuid: &str) -> Result<()> {
         let name = name_or_uuid.to_string();
-        if let Some(tx) = &self.command_tx {
-            tx.try_send(NetworkCommand::ConnectVpn(name))
-                .map_err(|e| anyhow::anyhow!("Failed to send command: {}", e))?;
+        if self.runtime.send_command(NetworkCommand::ConnectVpn(name)) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
         }
-        Ok(())
     }
 
     /// Disconnect an active VPN connection by profile name or path.
     pub fn disconnect_vpn(&self, name_or_path: &str) -> Result<()> {
         let name = name_or_path.to_string();
-        if let Some(tx) = &self.command_tx {
-            tx.try_send(NetworkCommand::DisconnectVpn(name))
-                .map_err(|e| anyhow::anyhow!("Failed to send command: {}", e))?;
+        if self.runtime.send_command(NetworkCommand::DisconnectVpn(name)) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
         }
-        Ok(())
     }
 
     /// Enable or disable airplane mode (disabling airplane mode restores Wi-Fi and WWAN radio status).
     pub fn set_airplane_mode_enabled(&self, enabled: bool) -> Result<()> {
-        if let Some(tx) = &self.command_tx {
-            tx.try_send(NetworkCommand::SetAirplaneModeEnabled(enabled))
-                .map_err(|e| anyhow::anyhow!("Failed to send command: {}", e))?;
+        if self.runtime.send_command(NetworkCommand::SetAirplaneModeEnabled(enabled)) {
+            self.runtime.update(|info| {
+                info.airplane_mode = enabled;
+                info.wifi_enabled = !enabled;
+                info.wwan_enabled = !enabled;
+            });
+            Ok(())
+        } else {
+            self.runtime.update(|info| {
+                info.airplane_mode = enabled;
+                info.wifi_enabled = !enabled;
+                info.wwan_enabled = !enabled;
+            });
+            Ok(())
         }
-        let mut current = self.tx.borrow().clone();
-        current.airplane_mode = enabled;
-        current.wifi_enabled = !enabled;
-        current.wwan_enabled = !enabled;
-        let _ = self.tx.send_replace(current);
-        Ok(())
     }
 }
+
 
 #[cfg(test)]
 mod tests {
