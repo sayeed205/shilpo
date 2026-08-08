@@ -6,6 +6,14 @@
     "bar": {
       "$ref": "#/$defs/BarConfig"
     },
+    "capture": {
+      "$ref": "#/$defs/CaptureConfig",
+      "default": {
+        "default_selection": "rectangle",
+        "screenshot_dir": "~/Pictures/Screenshots",
+        "show_pointer": true
+      }
+    },
     "clock_format": {
       "type": [
         "string",
@@ -39,6 +47,17 @@
         "$ref": "#/$defs/OutputConfig"
       },
       "default": {}
+    },
+    "recording": {
+      "$ref": "#/$defs/RecordingConfig",
+      "default": {
+        "delay_seconds": 0,
+        "desktop_audio": true,
+        "directory": "~/Videos/recordings",
+        "framerate": 30,
+        "microphone": false,
+        "show_pointer": true
+      }
     },
     "startup": {
       "$ref": "#/$defs/StartupConfig",
@@ -195,6 +214,24 @@
         "center",
         "end"
       ]
+    },
+    "CaptureConfig": {
+      "type": "object",
+      "properties": {
+        "default_selection": {
+          "type": "string",
+          "default": "rectangle"
+        },
+        "screenshot_dir": {
+          "type": "string",
+          "default": "~/Pictures/Screenshots"
+        },
+        "show_pointer": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
     },
     "DesktopConfig": {
       "type": "object",
@@ -366,6 +403,40 @@
               "type": "null"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RecordingConfig": {
+      "type": "object",
+      "properties": {
+        "delay_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "desktop_audio": {
+          "type": "boolean",
+          "default": true
+        },
+        "directory": {
+          "type": "string",
+          "default": "~/Videos/recordings"
+        },
+        "framerate": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 30,
+          "minimum": 0
+        },
+        "microphone": {
+          "type": "boolean",
+          "default": false
+        },
+        "show_pointer": {
+          "type": "boolean",
+          "default": true
         }
       },
       "additionalProperties": false
