@@ -72,22 +72,29 @@ pub struct Frame {
 pub enum AudioSource {
     #[default]
     System,
-    Microphone,
-    Both,
     None,
 }
 
-/// Video recording capture target source
+/// Video recording capture target output source
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum RecordingSource {
-    Output(String),
-    Window(u64),
-    Region(Rect),
+pub struct RecordingSource {
+    pub name: String,
+    pub label: String,
 }
 
 impl RecordingSource {
     pub fn primary() -> Self {
-        Self::Output("primary".to_string())
+        Self {
+            name: "primary".to_string(),
+            label: "Primary Output".to_string(),
+        }
+    }
+
+    pub fn new(name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            label: label.into(),
+        }
     }
 }
 
@@ -206,34 +213,6 @@ pub enum RecordingEvent {
     FrameDropped,
 }
 
-/// Codec options for screen recording
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum Codec {
-    #[default]
-    H264,
-    H265,
-    Vp9,
-    Av1,
-}
-
-/// Container format options
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum Container {
-    #[default]
-    Mp4,
-    Mkv,
-    Webm,
-}
-
-/// Hardware acceleration setting
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum HwAccel {
-    #[default]
-    Auto,
-    Vaapi,
-    None,
-}
-
 /// Quality preset
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Quality {
@@ -244,13 +223,21 @@ pub enum Quality {
     Lossless,
 }
 
+impl Quality {
+    pub fn ffmpeg_params(&self) -> (u32, &'static str) {
+        match self {
+            Quality::Low => (28, "fast"),
+            Quality::Balanced => (23, "medium"),
+            Quality::High => (18, "slow"),
+            Quality::Lossless => (0, "ultrafast"),
+        }
+    }
+}
+
 /// Recording stream configuration settings
 #[derive(Debug, Clone)]
 pub struct StreamConfig {
     pub framerate: u32,
-    pub codec: Codec,
-    pub container: Container,
-    pub hardware_accel: HwAccel,
     pub quality: Quality,
     pub output_dir: PathBuf,
 }
@@ -266,9 +253,6 @@ impl Default for StreamConfig {
             .join("recordings");
         Self {
             framerate: 30,
-            codec: Codec::H264,
-            container: Container::Mp4,
-            hardware_accel: HwAccel::Auto,
             quality: Quality::Balanced,
             output_dir,
         }

@@ -18,11 +18,16 @@ use surface_manager::WindowClosedOutcome;
 
 use std::{path::PathBuf, sync::Arc};
 
-use gpui::{App, AppContext, Global, Subscription};
+use gpui::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};
+use gpui::{
+    App, AppContext, Bounds, Global, Size, Subscription, WindowBackgroundAppearance, WindowBounds,
+    WindowKind, WindowOptions, point, px,
+};
 use shilpo_capture::{AudioSource, CaptureIntent, RecordingSource, RecordingState};
 use shilpo_services::{CompositorSnapshot, ShellIpcServer};
 
 use crate::extensions::{ContributionSurface, ExtensionCoordinator};
+use crate::recording::RecordingChooserView;
 
 /// The shell runtime orchestrator: composes the deep service modules, watches
 /// the compositor stream, and routes lifecycle events between them.
@@ -283,8 +288,10 @@ impl ShellRuntime {
     }
 
     pub fn stop_recording(cx: &mut App) {
-        if cx.has_global::<Self>() {
-            let _ = cx.global::<Self>().capture_runtime.stop();
+        if cx.has_global::<Self>()
+            && let Err(error) = cx.global::<Self>().capture_runtime.stop()
+        {
+            tracing::error!(%error, "failed to stop recording");
         }
     }
 
@@ -312,16 +319,53 @@ impl ShellRuntime {
         AudioSource::System
     }
 
-    /// Start the default full-output recording. Source selection is intentionally
-    /// handled by the compositor/session picker; the shell action must never be a
-    /// silent no-op when that picker is unavailable.
     pub fn open_recording_chooser(cx: &mut App, audio: AudioSource) {
-        Self::start_selected_recording(cx, RecordingSource::primary(), audio);
+        let sources = match shilpo_capture::enumerate_sources() {
+            Ok(sources) if !sources.is_empty() => sources,
+            Ok(_) => {
+                tracing::warn!("no recordable outputs available");
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to enumerate recordable outputs");
+                return;
+            }
+        };
+        if sources.len() == 1 {
+            Self::start_selected_recording(cx, sources[0].clone(), audio);
+            return;
+        }
+
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                point(px(0.), px(0.)),
+                Size {
+                    width: px(640.),
+                    height: px(720.),
+                },
+            ))),
+            window_background: WindowBackgroundAppearance::Transparent,
+            kind: WindowKind::LayerShell(LayerShellOptions {
+                namespace: "recording-chooser".to_string(),
+                layer: Layer::Overlay,
+                anchor: Anchor::all(),
+                keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        if let Err(error) = cx.open_window(options, move |window, cx| {
+            RecordingChooserView::view(sources, audio, window, cx)
+        }) {
+            tracing::warn!(%error, "failed to open recording chooser");
+        }
     }
 
     pub fn start_selected_recording(cx: &mut App, source: RecordingSource, audio: AudioSource) {
-        if cx.has_global::<Self>() {
-            let _ = cx.global::<Self>().capture_runtime.start(source, audio);
+        if cx.has_global::<Self>()
+            && let Err(error) = cx.global::<Self>().capture_runtime.start(source, audio)
+        {
+            tracing::error!(%error, "failed to start recording");
         }
     }
 

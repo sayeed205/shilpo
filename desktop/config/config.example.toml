@@ -56,5 +56,4 @@ directory = "~/Videos/recordings"
 framerate = 30
 delay_seconds = 0
 desktop_audio = true
-microphone = false
 show_pointer = true

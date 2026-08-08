@@ -55,7 +55,6 @@
         "desktop_audio": true,
         "directory": "~/Videos/recordings",
         "framerate": 30,
-        "microphone": false,
         "show_pointer": true
       }
     },
@@ -429,10 +428,6 @@
           "format": "uint32",
           "default": 30,
           "minimum": 0
-        },
-        "microphone": {
-          "type": "boolean",
-          "default": false
         },
         "show_pointer": {
           "type": "boolean",

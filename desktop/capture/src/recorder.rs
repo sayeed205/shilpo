@@ -11,6 +11,8 @@ struct Inner {
     state: RecordingState,
     pipeline: Option<RecordingPipeline>,
     start_time: Option<Instant>,
+    paused_duration: Duration,
+    pause_started: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -28,6 +30,8 @@ impl RecordingController {
                 state: RecordingState::Idle,
                 pipeline: None,
                 start_time: None,
+                paused_duration: Duration::ZERO,
+                pause_started: None,
             })),
             event_tx,
             event_rx,
@@ -46,6 +50,8 @@ impl RecordingController {
         let pipeline = RecordingPipeline::start(request, config, self.event_tx.clone())?;
         inner.pipeline = Some(pipeline);
         inner.start_time = Some(Instant::now());
+        inner.paused_duration = Duration::ZERO;
+        inner.pause_started = None;
         inner.state = RecordingState::Recording {
             elapsed: Duration::ZERO,
         };
@@ -75,9 +81,18 @@ impl RecordingController {
 
         if let Err(error) = &result {
             let _ = self.event_tx.send(RecordingEvent::Error(error.to_string()));
+            inner.state = RecordingState::Idle;
+            inner.start_time = None;
+            inner.paused_duration = Duration::ZERO;
+            inner.pause_started = None;
+            let _ = self
+                .event_tx
+                .send(RecordingEvent::StateChanged(inner.state));
         } else {
             inner.state = RecordingState::Idle;
             inner.start_time = None;
+            inner.paused_duration = Duration::ZERO;
+            inner.pause_started = None;
             let _ = self
                 .event_tx
                 .send(RecordingEvent::StateChanged(inner.state));
@@ -91,6 +106,11 @@ impl RecordingController {
             if let Some(pipeline) = inner.pipeline.as_ref() {
                 pipeline.pause();
             }
+            let elapsed = inner
+                .start_time
+                .map(|start| start.elapsed().saturating_sub(inner.paused_duration))
+                .unwrap_or(elapsed);
+            inner.pause_started = Some(Instant::now());
             inner.state = RecordingState::Paused { elapsed };
             let _ = self
                 .event_tx
@@ -105,6 +125,13 @@ impl RecordingController {
             if let Some(pipeline) = inner.pipeline.as_ref() {
                 pipeline.resume();
             }
+            if let Some(started) = inner.pause_started.take() {
+                inner.paused_duration += started.elapsed();
+            }
+            let elapsed = inner
+                .start_time
+                .map(|start| start.elapsed().saturating_sub(inner.paused_duration))
+                .unwrap_or(elapsed);
             inner.state = RecordingState::Recording { elapsed };
             let _ = self
                 .event_tx
@@ -119,9 +146,11 @@ impl RecordingController {
             return Ok(());
         }
         if let Some(mut pipeline) = inner.pipeline.take() {
-            let _ = pipeline.stop();
+            let _ = pipeline.cancel();
         }
         inner.start_time = None;
+        inner.paused_duration = Duration::ZERO;
+        inner.pause_started = None;
         inner.state = RecordingState::Idle;
         let _ = self
             .event_tx
@@ -133,7 +162,7 @@ impl RecordingController {
         let mut inner = self.inner.lock();
         if let (RecordingState::Recording { .. }, Some(start)) = (inner.state, inner.start_time) {
             inner.state = RecordingState::Recording {
-                elapsed: start.elapsed(),
+                elapsed: start.elapsed().saturating_sub(inner.paused_duration),
             };
         }
         inner.state

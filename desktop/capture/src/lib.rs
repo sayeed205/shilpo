@@ -5,9 +5,9 @@ pub mod sources;
 pub mod types;
 
 pub use types::{
-    AudioSource, CaptureIntent, CaptureOutcome, Codec, Container, Frame, FrameData, FrameFormat,
-    HwAccel, Quality, RecordingCommand, RecordingEvent, RecordingRequest, RecordingSource,
-    RecordingState, Rect, Region, StreamConfig,
+    AudioSource, CaptureIntent, CaptureOutcome, Frame, FrameData, FrameFormat, Quality,
+    RecordingCommand, RecordingEvent, RecordingRequest, RecordingSource, RecordingState, Rect,
+    Region, StreamConfig,
 };
 
 pub use backend::create_backend;

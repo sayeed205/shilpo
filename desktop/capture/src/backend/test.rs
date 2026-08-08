@@ -17,7 +17,7 @@ impl TestBackend {
         }
     }
 
-    fn generate_solid_frame(
+    pub fn generate_solid_frame(
         width: u32,
         height: u32,
         color_r: u8,
@@ -83,8 +83,8 @@ impl CaptureBackend for TestBackend {
 
     fn enumerate_sources(&self) -> anyhow::Result<Vec<RecordingSource>> {
         Ok(vec![
-            RecordingSource::Output("HEADLESS-1".to_string()),
-            RecordingSource::Output("HEADLESS-2".to_string()),
+            RecordingSource::new("HEADLESS-1", "Headless Display 1"),
+            RecordingSource::new("HEADLESS-2", "Headless Display 2"),
         ])
     }
 

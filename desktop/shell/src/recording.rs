@@ -230,33 +230,14 @@ impl RecordingChooserView {
 }
 
 fn source_choices(sources: &[RecordingSource]) -> Vec<SourceChoice> {
-    let mut choices = Vec::new();
-    for source in sources {
-        match source {
-            RecordingSource::Output(name) => {
-                choices.push(SourceChoice {
-                    label: name.clone(),
-                    description: "Display Output".to_string(),
-                    source: source.clone(),
-                });
-            }
-            RecordingSource::Window(id) => {
-                choices.push(SourceChoice {
-                    label: format!("Window #{id}"),
-                    description: "Application Window".to_string(),
-                    source: source.clone(),
-                });
-            }
-            RecordingSource::Region(r) => {
-                choices.push(SourceChoice {
-                    label: format!("Region {}x{}", r.width, r.height),
-                    description: "Custom Region".to_string(),
-                    source: source.clone(),
-                });
-            }
-        }
-    }
-    choices
+    sources
+        .iter()
+        .map(|source| SourceChoice {
+            label: source.label.clone(),
+            description: "Display Output".to_string(),
+            source: source.clone(),
+        })
+        .collect()
 }
 
 impl Render for RecordingChooserView {
@@ -271,9 +252,12 @@ mod tests {
 
     #[test]
     fn source_choices_from_sources() {
-        let sources = vec![RecordingSource::Output("DP-1".into())];
+        let sources = vec![RecordingSource::new("DP-1", "DP-1 Output")];
         let choices = source_choices(&sources);
         assert_eq!(choices.len(), 1);
-        assert_eq!(choices[0].source, RecordingSource::Output("DP-1".into()));
+        assert_eq!(
+            choices[0].source,
+            RecordingSource::new("DP-1", "DP-1 Output")
+        );
     }
 }

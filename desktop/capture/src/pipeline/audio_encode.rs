@@ -1,5 +1,4 @@
 use crate::pipeline::audio_capture::AudioBuffer;
-use crate::types::Container;
 use ffmpeg::{Packet, Rational, codec, encoder, format, frame};
 
 pub struct EncodedAudioPacket {
@@ -9,17 +8,14 @@ pub struct EncodedAudioPacket {
 pub struct AudioEncoder {
     pub(crate) encoder: encoder::Audio,
     sample_index: i64,
+    fifo_buffer: Vec<f32>,
 }
 
 impl AudioEncoder {
-    pub fn new(container: Container) -> anyhow::Result<Self> {
+    pub fn new() -> anyhow::Result<Self> {
         ffmpeg::init()?;
-        let codec_id = match container {
-            Container::Webm => codec::Id::OPUS,
-            Container::Mp4 | Container::Mkv => codec::Id::AAC,
-        };
-        let codec = encoder::find(codec_id)
-            .ok_or_else(|| anyhow::anyhow!("requested FFmpeg audio encoder is unavailable"))?;
+        let codec = encoder::find(codec::Id::AAC)
+            .ok_or_else(|| anyhow::anyhow!("FFmpeg AAC audio encoder is unavailable"))?;
         let time_base = Rational(1, 48_000);
         let mut context = codec::context::Context::new_with_codec(codec)
             .encoder()
@@ -32,6 +28,7 @@ impl AudioEncoder {
         Ok(Self {
             encoder,
             sample_index: 0,
+            fifo_buffer: Vec::new(),
         })
     }
 
@@ -39,22 +36,79 @@ impl AudioEncoder {
         &mut self,
         buffer: &AudioBuffer,
     ) -> anyhow::Result<Vec<EncodedAudioPacket>> {
-        let samples = buffer.pcm_data.len() / buffer.channels.max(1) as usize;
-        let mut input = frame::Audio::new(
-            format::Sample::F32(format::sample::Type::Planar),
-            samples,
-            ffmpeg::channel_layout::ChannelLayout::STEREO,
-        );
-        for (index, sample) in buffer.pcm_data.iter().enumerate() {
-            let channel = index % 2;
-            let sample_index = index / 2;
-            let start = sample_index * std::mem::size_of::<f32>();
-            input.data_mut(channel)[start..start + 4].copy_from_slice(&sample.to_le_bytes());
-        }
-        input.set_pts(Some(self.sample_index));
-        self.sample_index += samples as i64;
-        self.encoder.send_frame(&input)?;
+        self.fifo_buffer.extend_from_slice(&buffer.pcm_data);
+        let channels = 2usize;
+        let frame_size = if self.encoder.frame_size() > 0 {
+            self.encoder.frame_size() as usize
+        } else {
+            1024
+        };
+        let required_floats = frame_size * channels;
         let mut packets = Vec::new();
+
+        while self.fifo_buffer.len() >= required_floats {
+            let chunk: Vec<f32> = self.fifo_buffer.drain(..required_floats).collect();
+            let mut input = frame::Audio::new(
+                format::Sample::F32(format::sample::Type::Planar),
+                frame_size,
+                ffmpeg::channel_layout::ChannelLayout::STEREO,
+            );
+            for (index, sample) in chunk.iter().enumerate() {
+                let channel = index % 2;
+                let sample_index = index / 2;
+                let plane = input.plane_mut::<f32>(channel);
+                if sample_index < plane.len() {
+                    plane[sample_index] = *sample;
+                }
+            }
+            input.set_pts(Some(self.sample_index));
+            self.sample_index += frame_size as i64;
+            self.encoder.send_frame(&input)?;
+
+            loop {
+                let mut packet = Packet::empty();
+                match self.encoder.receive_packet(&mut packet) {
+                    Ok(()) => packets.push(EncodedAudioPacket { packet }),
+                    Err(ffmpeg::Error::Eof) | Err(ffmpeg::Error::Other { errno: 11 }) => break,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+        Ok(packets)
+    }
+
+    pub fn flush(&mut self) -> anyhow::Result<Vec<EncodedAudioPacket>> {
+        let channels = 2usize;
+        let frame_size = if self.encoder.frame_size() > 0 {
+            self.encoder.frame_size() as usize
+        } else {
+            1024
+        };
+        let required_floats = frame_size * channels;
+        let mut packets = Vec::new();
+
+        if !self.fifo_buffer.is_empty() {
+            self.fifo_buffer.resize(required_floats, 0.0f32);
+            let chunk: Vec<f32> = self.fifo_buffer.drain(..required_floats).collect();
+            let mut input = frame::Audio::new(
+                format::Sample::F32(format::sample::Type::Planar),
+                frame_size,
+                ffmpeg::channel_layout::ChannelLayout::STEREO,
+            );
+            for (index, sample) in chunk.iter().enumerate() {
+                let channel = index % 2;
+                let sample_index = index / 2;
+                let plane = input.plane_mut::<f32>(channel);
+                if sample_index < plane.len() {
+                    plane[sample_index] = *sample;
+                }
+            }
+            input.set_pts(Some(self.sample_index));
+            self.sample_index += frame_size as i64;
+            let _ = self.encoder.send_frame(&input);
+        }
+
+        self.encoder.send_eof()?;
         loop {
             let mut packet = Packet::empty();
             match self.encoder.receive_packet(&mut packet) {

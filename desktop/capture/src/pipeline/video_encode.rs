@@ -18,7 +18,8 @@ impl VideoEncoder {
         ffmpeg::init()?;
         let codec = encoder::find(codec::Id::H264)
             .ok_or_else(|| anyhow::anyhow!("FFmpeg H.264 encoder is unavailable"))?;
-        let time_base = Rational(1, config.framerate.max(1) as i32);
+        let framerate = config.framerate.max(1) as i32;
+        let time_base = Rational(1, framerate);
         let mut context = codec::context::Context::new_with_codec(codec)
             .encoder()
             .video()?;
@@ -26,8 +27,12 @@ impl VideoEncoder {
         context.set_height(height);
         context.set_format(format::Pixel::YUV420P);
         context.set_time_base(time_base);
-        context.set_frame_rate(Some(time_base));
-        let encoder = context.open_as(codec)?;
+        context.set_frame_rate(Some(Rational(framerate, 1)));
+        let (crf, preset) = config.quality.ffmpeg_params();
+        let mut opts = ffmpeg::Dictionary::new();
+        opts.set("crf", &crf.to_string());
+        opts.set("preset", preset);
+        let encoder = context.open_as_with(codec, opts)?;
         let scaler = software::scaling::Context::get(
             format::Pixel::YUV420P,
             width,
@@ -57,14 +62,13 @@ impl VideoEncoder {
         self.frame_index += 1;
         let mut converted = frame::Video::empty();
         self.scaler.run(&input, &mut converted)?;
+        converted.set_pts(input.pts());
         self.encoder.send_frame(&converted)?;
         let mut packets = Vec::new();
         loop {
             let mut packet = Packet::empty();
             match self.encoder.receive_packet(&mut packet) {
                 Ok(()) => {
-                    packet.set_pts(Some(self.frame_index - 1));
-                    packet.set_dts(Some(self.frame_index - 1));
                     packets.push(EncodedPacket { packet });
                 }
                 Err(ffmpeg::Error::Eof) | Err(ffmpeg::Error::Other { errno: 11 }) => break,
@@ -81,8 +85,6 @@ impl VideoEncoder {
             let mut packet = Packet::empty();
             match self.encoder.receive_packet(&mut packet) {
                 Ok(()) => {
-                    packet.set_pts(Some(self.frame_index));
-                    packet.set_dts(Some(self.frame_index));
                     packets.push(EncodedPacket { packet });
                 }
                 Err(ffmpeg::Error::Eof) | Err(ffmpeg::Error::Other { errno: 11 }) => break,

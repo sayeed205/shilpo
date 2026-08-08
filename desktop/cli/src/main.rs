@@ -746,9 +746,11 @@ async fn main() {
                         Err(error) => Err(error),
                     }
                 }
-                RecordAction::Start => Ok(shilpo_capture::RecordingCommand::Start(
+                RecordAction::Start { output } => Ok(shilpo_capture::RecordingCommand::Start(
                     shilpo_capture::RecordingRequest {
-                        source: shilpo_capture::RecordingSource::primary(),
+                        source: output
+                            .map(|name| shilpo_capture::RecordingSource::new(&name, &name))
+                            .unwrap_or_else(shilpo_capture::RecordingSource::primary),
                         audio: shilpo_capture::AudioSource::System,
                     },
                 )),

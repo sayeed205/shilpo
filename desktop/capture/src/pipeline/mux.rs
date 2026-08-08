@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::pipeline::audio_encode::{AudioEncoder, EncodedAudioPacket};
 use crate::pipeline::video_encode::{EncodedPacket, VideoEncoder};
-use crate::types::{Container, StreamConfig};
+use crate::types::StreamConfig;
 use anyhow::Context;
 
 pub struct Muxer {
@@ -24,11 +24,7 @@ impl Muxer {
     ) -> anyhow::Result<Self> {
         ffmpeg::init()?;
         let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S-%3f");
-        let extension = match config.container {
-            Container::Mp4 => "mp4",
-            Container::Mkv => "mkv",
-            Container::Webm => "webm",
-        };
+        let extension = "mp4";
         fs::create_dir_all(&config.output_dir)?;
         let output_path = config
             .output_dir
@@ -91,8 +87,14 @@ impl Muxer {
         Ok(())
     }
 
-    pub fn finalize(mut self) -> anyhow::Result<(PathBuf, Duration)> {
-        let started = std::time::Instant::now();
+    pub fn cleanup(&mut self) {
+        self.output.take();
+        if self.temp_path.exists() {
+            let _ = fs::remove_file(&self.temp_path);
+        }
+    }
+
+    pub fn finalize(mut self, _duration: Duration) -> anyhow::Result<(PathBuf, Duration)> {
         if let Some(mut output) = self.output.take() {
             output
                 .write_trailer()
@@ -100,6 +102,14 @@ impl Muxer {
         }
         fs::rename(&self.temp_path, &self.output_path)
             .context("atomically publishing recording")?;
-        Ok((self.output_path, started.elapsed()))
+        Ok((self.output_path.clone(), _duration))
+    }
+}
+
+impl Drop for Muxer {
+    fn drop(&mut self) {
+        if self.output.is_some() {
+            let _ = fs::remove_file(&self.temp_path);
+        }
     }
 }

@@ -120,10 +120,6 @@ fn default_selection() -> String {
     "rectangle".to_string()
 }
 
-fn default_false() -> bool {
-    false
-}
-
 fn default_recording_dir() -> PathBuf {
     PathBuf::from("~/Videos/recordings")
 }
@@ -147,8 +143,6 @@ pub struct RecordingConfig {
     pub delay_seconds: u64,
     #[serde(default = "default_true")]
     pub desktop_audio: bool,
-    #[serde(default = "default_false")]
-    pub microphone: bool,
     #[serde(default = "default_true")]
     pub show_pointer: bool,
 }
@@ -160,7 +154,6 @@ impl Default for RecordingConfig {
             framerate: default_framerate(),
             delay_seconds: default_delay_seconds(),
             desktop_audio: true,
-            microphone: false,
             show_pointer: true,
         }
     }

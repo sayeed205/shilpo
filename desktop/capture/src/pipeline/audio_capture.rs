@@ -13,12 +13,14 @@ pub struct AudioBuffer {
 
 pub struct PipeWireAudioCapture {
     streaming: Arc<AtomicBool>,
+    worker_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl PipeWireAudioCapture {
     pub fn new() -> Self {
         Self {
             streaming: Arc::new(AtomicBool::new(false)),
+            worker_handle: None,
         }
     }
 
@@ -34,16 +36,20 @@ impl PipeWireAudioCapture {
         let (tx, rx) = crossbeam_channel::bounded(32);
         let running = Arc::clone(&self.streaming);
         running.store(true, Ordering::SeqCst);
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             if let Err(error) = run_pipewire_capture(source, running, tx) {
                 tracing::error!(%error, "PipeWire capture failed");
             }
         });
+        self.worker_handle = Some(handle);
         Ok(rx)
     }
 
     pub fn stop(&mut self) {
         self.streaming.store(false, Ordering::SeqCst);
+        if let Some(handle) = self.worker_handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -51,6 +57,7 @@ struct StreamData {
     sender: crossbeam_channel::Sender<AudioBuffer>,
     running: Arc<AtomicBool>,
     format: spa::param::audio::AudioInfoRaw,
+    mainloop: pipewire::main_loop::MainLoopRc,
 }
 
 fn run_pipewire_capture(
@@ -66,7 +73,7 @@ fn run_pipewire_capture(
         *pipewire::keys::MEDIA_TYPE => "Audio",
         *pipewire::keys::MEDIA_CATEGORY => "Capture",
         *pipewire::keys::MEDIA_ROLE => "Screen",
-        *pipewire::keys::STREAM_CAPTURE_SINK => if matches!(source, AudioSource::System | AudioSource::Both) { "true" } else { "false" },
+        *pipewire::keys::STREAM_CAPTURE_SINK => if source == AudioSource::System { "true" } else { "false" },
     };
     let stream = pipewire::stream::StreamBox::new(&core, "shilpo-recording", props)?;
     let _listener = stream
@@ -74,6 +81,7 @@ fn run_pipewire_capture(
             sender,
             running: Arc::clone(&running),
             format: Default::default(),
+            mainloop: mainloop.clone(),
         })
         .param_changed(|_, user_data, id, param| {
             if id == pipewire::spa::param::ParamType::Format.as_raw()
@@ -85,6 +93,7 @@ fn run_pipewire_capture(
         .process(|stream, user_data| {
             if !user_data.running.load(Ordering::SeqCst) {
                 stream.disconnect().ok();
+                user_data.mainloop.quit();
                 return;
             }
             let Some(mut buffer) = stream.dequeue_buffer() else {
@@ -129,6 +138,19 @@ fn run_pipewire_capture(
             | pipewire::stream::StreamFlags::RT_PROCESS,
         &mut params,
     )?;
+    let timer_loop = mainloop.clone();
+    let timer_running = Arc::clone(&running);
+    let timer = mainloop.loop_().add_timer(move |_| {
+        if !timer_running.load(Ordering::SeqCst) {
+            timer_loop.quit();
+        }
+    });
+    timer
+        .update_timer(
+            Some(std::time::Duration::from_millis(50)),
+            Some(std::time::Duration::from_millis(50)),
+        )
+        .into_result()?;
     mainloop.run();
     Ok(())
 }

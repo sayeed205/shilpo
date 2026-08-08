@@ -417,7 +417,12 @@ impl ActionDispatcher {
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::RecordScreen => {
-                ShellRuntime::open_recording_chooser(cx, shilpo_capture::AudioSource::System);
+                let state = cx.global::<ShellRuntime>().capture_runtime.state();
+                if state.is_stoppable() {
+                    ShellRuntime::stop_recording(cx);
+                } else {
+                    ShellRuntime::open_recording_chooser(cx, shilpo_capture::AudioSource::System);
+                }
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::Extension { id, payload } => {

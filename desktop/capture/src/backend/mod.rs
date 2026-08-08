@@ -23,17 +23,9 @@ pub trait CaptureBackend: Send {
     fn stop_stream(&mut self);
 }
 
-/// Factory function to create the appropriate backend using runtime protocol detection
+/// Factory function to create the appropriate backend
 pub fn create_backend() -> anyhow::Result<Box<dyn CaptureBackend>> {
-    if let Ok(backend) = ext_copy::ExtCopyBackend::new() {
-        tracing::info!("Using ext-image-copy-capture-v1 Wayland backend");
-        Ok(Box::new(backend))
-    } else if let Ok(backend) = wlr_screencopy::WlrScreencopyBackend::new() {
-        tracing::info!("Using wlr-screencopy-unstable-v1 Wayland backend");
-        Ok(Box::new(backend))
-    } else {
-        anyhow::bail!(
-            "no supported Wayland capture protocol is available (requires ext-image-copy-capture-v1 or zwlr-screencopy-manager-v1)"
-        )
-    }
+    let backend = wlr_screencopy::WlrScreencopyBackend::new()?;
+    tracing::info!("Using wlr-screencopy-unstable-v1 Wayland backend");
+    Ok(Box::new(backend))
 }

@@ -9,17 +9,11 @@ The crate lives in `desktop/` because it depends on Wayland protocols, PipeWire,
 Linux-specific. A future cross-platform abstraction layer can be extracted when macOS/Windows backends
 exist, but that's a hypothetical seam with one adapter today (ADR-0001 principle).
 
-## Dual Wayland protocol support with runtime detection
+## Wayland protocol support
 
-The `CaptureBackend` trait abstracts over two Wayland screencopy protocols:
-
-- `wlr-screencopy-unstable-v1` — the current primary, supported by Niri. SHM buffer delivery only.
-- `ext-image-copy-capture-v1` — the replacement standard (staging). DMA-BUF zero-copy support, window
-  capture. Not yet in Niri.
-
-Runtime detection tries `ext-image-copy-capture-v1` first, falls back to `wlr-screencopy-v1`. When Niri
-adds ext support, the upgrade is automatic. When `wlr-screencopy` is eventually removed, the fallback
-adapter is deleted.
+The first release uses `wlr-screencopy-unstable-v1`, which is the protocol currently supported by Niri
+and delivers frames through SHM buffers. `ext-image-copy-capture-v1` is intentionally deferred until the
+compositor support and DMA-BUF implementation are available; it is not part of the active runtime factory.
 
 **Rejected alternative:** XDG Desktop Portal (`ashpd`) as primary. The portal shows permission dialogs on
 every capture — unnecessary friction when Shilpo IS the trusted shell environment. Portal may be added as a
@@ -69,3 +63,19 @@ The WIP prototype at `crates/capture/` is not moved to `desktop/capture/` — it
 as reference. The WIP has a 1442-line god module (`worker.rs`), deprecated protocol code, PulseAudio
 dependency, hard-coded OCR dependencies, and mixed async patterns. A fresh implementation following the
 settled architecture is cleaner than move-then-refactor.
+
+## First Release Scope & Follow-up Items
+
+The initial production release delivers a truthful, rock-solid baseline:
+- **Screenshots**: Full output capture and bounded region selection.
+- **Recording**: Full display output recording only (H.264 video + AAC audio in MP4 container).
+- **Audio**: System audio or no audio.
+- **Protocol**: `wlr-screencopy-unstable-v1` active adapter with persistent session connection, SHM buffer row compaction, and non-blocking frame backpressure handling.
+
+### Deferred Follow-up Work
+The following features are intentionally deferred to follow-up issues:
+1. Window and custom region video recording.
+2. `ext-image-copy-capture-v1` DMA-BUF zero-copy backend protocol.
+3. VA-API hardware acceleration for video encoding.
+4. Additional video codecs (H.265, VP9, AV1) and container formats (MKV, WebM).
+5. Microphone audio capture and mixed system + microphone audio streams.

@@ -111,12 +111,16 @@ pub enum CaptureAction {
     Menu,
 }
 
-#[derive(Subcommand, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum RecordAction {
     /// Start recording, or stop and finalize the active recording
     Toggle,
-    /// Choose a window or screen and start video recording
-    Start,
+    /// Choose a display output and start video recording
+    Start {
+        /// Optional display output name to record (defaults to primary output)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
     /// Pause the active recording
     Pause,
     /// Resume the paused recording
