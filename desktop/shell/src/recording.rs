@@ -3,7 +3,7 @@ use gpui::{
     App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled,
     Subscription, Window, div,
 };
-use shilpo_capture::{RecordingAudio, RecordingSource};
+use shilpo_capture::{AudioSource, RecordingSource};
 use shilpo_ui::recording::{
     RecordingSourceOption, RecordingSourcePicker, RecordingSourcePickerEvent,
 };
@@ -16,8 +16,6 @@ struct SourceChoice {
     source: RecordingSource,
 }
 
-/// Shell adapter that binds compositor sources and recording actions to the
-/// reusable source-picker presentation.
 pub struct RecordingChooserView {
     picker: Entity<RecordingSourcePicker>,
     _picker_subscription: Subscription,
@@ -25,12 +23,12 @@ pub struct RecordingChooserView {
 
 impl RecordingChooserView {
     pub fn view(
-        catalog: shilpo_capture::RecordingSourceCatalog,
-        audio: RecordingAudio,
+        sources: Vec<RecordingSource>,
+        audio: AudioSource,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<shilpo_ui::Root> {
-        let chooser = cx.new(|cx| Self::new(catalog, audio, window, cx));
+        let chooser = cx.new(|cx| Self::new(sources, audio, window, cx));
         cx.new(|cx| {
             shilpo_ui::Root::new(chooser, window, cx)
                 .bordered(false)
@@ -39,12 +37,12 @@ impl RecordingChooserView {
     }
 
     fn new(
-        catalog: shilpo_capture::RecordingSourceCatalog,
-        audio: RecordingAudio,
+        sources_list: Vec<RecordingSource>,
+        audio: AudioSource,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let choices = source_choices(&catalog);
+        let choices = source_choices(&sources_list);
         let sources: Arc<Vec<RecordingSource>> =
             Arc::new(choices.iter().map(|choice| choice.source.clone()).collect());
         let options = choices
@@ -78,31 +76,32 @@ impl RecordingChooserView {
     }
 }
 
-fn source_choices(catalog: &shilpo_capture::RecordingSourceCatalog) -> Vec<SourceChoice> {
+fn source_choices(sources: &[RecordingSource]) -> Vec<SourceChoice> {
     let mut choices = Vec::new();
-    for output in &catalog.outputs {
-        choices.push(SourceChoice {
-            label: output.name.clone(),
-            description: match (&output.make, &output.model) {
-                (Some(make), Some(model)) => format!(
-                    "Screen · {make} {model} · {}×{}",
-                    output.logical_size.0, output.logical_size.1
-                ),
-                _ => format!(
-                    "Screen · {}×{}",
-                    output.logical_size.0, output.logical_size.1
-                ),
-            },
-            source: output.source(),
-        });
-    }
-
-    for captured_window in &catalog.windows {
-        choices.push(SourceChoice {
-            label: captured_window.title.clone(),
-            description: format!("Window · {}", captured_window.app_id),
-            source: captured_window.source(),
-        });
+    for source in sources {
+        match source {
+            RecordingSource::Output(name) => {
+                choices.push(SourceChoice {
+                    label: name.clone(),
+                    description: "Display Output".to_string(),
+                    source: source.clone(),
+                });
+            }
+            RecordingSource::Window(id) => {
+                choices.push(SourceChoice {
+                    label: format!("Window #{id}"),
+                    description: "Application Window".to_string(),
+                    source: source.clone(),
+                });
+            }
+            RecordingSource::Region(r) => {
+                choices.push(SourceChoice {
+                    label: format!("Region {}x{}", r.width, r.height),
+                    description: "Custom Region".to_string(),
+                    source: source.clone(),
+                });
+            }
+        }
     }
     choices
 }
@@ -116,39 +115,12 @@ impl Render for RecordingChooserView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shilpo_capture::{RecordableOutput, RecordableWindow, RecordingSourceCatalog};
 
     #[test]
-    fn source_choices_preserve_exact_capture_metadata() {
-        let catalog = RecordingSourceCatalog {
-            outputs: vec![RecordableOutput {
-                name: "DP-1".into(),
-                make: Some("Example".into()),
-                model: Some("Panel".into()),
-                logical_size: (1920, 1080),
-            }],
-            windows: vec![RecordableWindow {
-                identifier: "window-7".into(),
-                title: "Project".into(),
-                app_id: "dev.editor".into(),
-            }],
-        };
-
-        let choices = source_choices(&catalog);
-        assert_eq!(choices.len(), 2);
+    fn source_choices_from_sources() {
+        let sources = vec![RecordingSource::Output("DP-1".into())];
+        let choices = source_choices(&sources);
+        assert_eq!(choices.len(), 1);
         assert_eq!(choices[0].source, RecordingSource::Output("DP-1".into()));
-        assert_eq!(
-            choices[1].source,
-            RecordingSource::Window {
-                identifier: "window-7".into(),
-                app_id: "dev.editor".into(),
-                title: "Project".into(),
-            }
-        );
-    }
-
-    #[test]
-    fn empty_catalog_has_no_choices() {
-        assert!(source_choices(&RecordingSourceCatalog::default()).is_empty());
     }
 }
