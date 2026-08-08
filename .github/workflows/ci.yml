@@ -19,7 +19,7 @@ jobs:
 
       - name: Update Pacman & Install Build Toolchain
         run: |
-          pacman -Syu --noconfirm base-devel clang cmake git pkgconf rustup niri shellcheck bash gawk pciutils cargo-nextest
+          pacman -Syu --noconfirm base-devel clang cmake ffmpeg git pkgconf rustup niri shellcheck bash gawk pciutils cargo-nextest
 
       - name: Setup Rust Stable Toolchain
         run: |
