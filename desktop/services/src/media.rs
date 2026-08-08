@@ -3,6 +3,7 @@ use anyhow::Result;
 use futures_lite::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tokio::sync::watch;
 
 #[cfg(target_os = "linux")]
 use zbus::proxy;
@@ -21,7 +22,7 @@ pub enum PlaybackState {
 }
 
 /// Active media track and player info.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MediaInfo {
     pub player_id: String,
     pub title: String,
@@ -32,6 +33,32 @@ pub struct MediaInfo {
     pub can_go_next: bool,
     pub position_secs: f64,
     pub length_secs: f64,
+    #[serde(default = "default_rate")]
+    pub rate: f64,
+    #[serde(skip)]
+    pub observed_at: Option<std::time::Instant>,
+}
+
+fn default_rate() -> f64 {
+    1.0
+}
+
+impl Default for MediaInfo {
+    fn default() -> Self {
+        Self {
+            player_id: String::new(),
+            title: String::new(),
+            artist: String::new(),
+            art_url: String::new(),
+            playback_state: PlaybackState::Stopped,
+            can_play_pause: false,
+            can_go_next: false,
+            position_secs: 0.0,
+            length_secs: 0.0,
+            rate: 1.0,
+            observed_at: None,
+        }
+    }
 }
 
 impl MediaInfo {
@@ -39,9 +66,27 @@ impl MediaInfo {
         self.player_id.is_empty() || (self.title.is_empty() && self.artist.is_empty())
     }
 
+    pub fn current_position_secs(&self) -> f64 {
+        if self.playback_state == PlaybackState::Playing {
+            if let Some(obs) = self.observed_at {
+                let elapsed = obs.elapsed().as_secs_f64();
+                let extrapolated = self.position_secs + (elapsed * self.rate);
+                if self.length_secs > 0.0 {
+                    extrapolated.min(self.length_secs)
+                } else {
+                    extrapolated
+                }
+            } else {
+                self.position_secs
+            }
+        } else {
+            self.position_secs
+        }
+    }
+
     pub fn progress(&self) -> f32 {
         if self.length_secs > 0.0 {
-            (self.position_secs / self.length_secs).clamp(0.0, 1.0) as f32
+            (self.current_position_secs() / self.length_secs).clamp(0.0, 1.0) as f32
         } else {
             0.0
         }
@@ -91,6 +136,12 @@ pub trait MprisPlayer {
 
     #[zbus(property)]
     fn position(&self) -> zbus::Result<i64>;
+
+    #[zbus(property)]
+    fn rate(&self) -> zbus::Result<f64>;
+
+    #[zbus(signal)]
+    fn seeked(&self, position: i64) -> zbus::Result<()>;
 
     fn play_pause(&self) -> zbus::Result<()>;
     fn next(&self) -> zbus::Result<()>;
@@ -216,68 +267,171 @@ pub fn select_best_player(candidates: Vec<MediaInfo>) -> MediaInfo {
         .unwrap_or_default()
 }
 
-use tokio::sync::watch;
+use crate::runtime::{CommandContext, CommandRuntime, StateContext};
 
 /// MPRIS session D-Bus service for controlling and observing media playback.
+#[derive(Clone)]
 pub struct MediaService {
-    tx: watch::Sender<MediaInfo>,
-    command_tx: Option<tokio::sync::mpsc::UnboundedSender<MediaCommand>>,
-    _task: Option<tokio::task::JoinHandle<()>>,
+    runtime: CommandRuntime<MediaInfo, MediaCommand>,
 }
 
-impl Drop for MediaService {
-    fn drop(&mut self) {
-        if let Some(task) = self._task.take() {
-            task.abort();
-        }
+impl Default for MediaService {
+    fn default() -> Self {
+        Self::new_offline()
     }
 }
 
-impl MediaService {
-    pub fn new_offline() -> Self {
-        let (tx, _) = watch::channel(MediaInfo::default());
-        Self {
-            tx,
-            command_tx: None,
-            _task: None,
-        }
-    }
+#[cfg(target_os = "linux")]
+async fn fetch_and_publish_media(
+    connection: &zbus::Connection,
+    daemon_proxy: &DBusDaemonProxy<'_>,
+    state: &StateContext<MediaInfo>,
+) -> Option<String> {
+    let names = daemon_proxy.list_names().await.ok()?;
+    let player_names: Vec<String> = names
+        .into_iter()
+        .filter(|name| name.starts_with(MPRIS_PLAYER_PREFIX))
+        .collect();
 
-    pub fn new() -> Result<Self> {
-        let (tx, _) = watch::channel(MediaInfo::default());
+    let mut candidates = Vec::new();
+    let now = std::time::Instant::now();
 
-        #[cfg(target_os = "linux")]
+    for bus_name in &player_names {
+        if let Ok(builder) = MprisPlayerProxy::builder(connection).destination(bus_name.as_str())
+            && let Ok(player_proxy) = builder.build().await
         {
-            let (cmd_tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<MediaCommand>();
-            let tx_clone = tx.clone();
+            let status_str = player_proxy
+                .playback_status()
+                .await
+                .unwrap_or_else(|_| "Stopped".to_string());
+            let playback_state = match status_str.as_str() {
+                "Playing" => PlaybackState::Playing,
+                "Paused" => PlaybackState::Paused,
+                _ => PlaybackState::Stopped,
+            };
 
-            let task = tokio::spawn(async move {
-                loop {
-                    let connection = match zbus::Connection::session().await {
-                        Ok(conn) => conn,
-                        Err(_) => {
-                            let _ = tx_clone.send_replace(MediaInfo::default());
-                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                            continue;
-                        }
-                    };
+            let meta_map = player_proxy.metadata().await.unwrap_or_default();
+            let (title, artist, art_url, length_secs, meta_pos_secs) =
+                parse_mpris_metadata(&meta_map);
 
-                    let daemon_proxy = match DBusDaemonProxy::new(&connection).await {
-                        Ok(proxy) => proxy,
-                        Err(_) => {
-                            let _ = tx_clone.send_replace(MediaInfo::default());
-                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                            continue;
-                        }
-                    };
+            let dbus_pos_secs = player_proxy
+                .position()
+                .await
+                .map(|p| p as f64 / 1_000_000.0)
+                .unwrap_or(0.0);
 
-                    let mut selected_player_name: Option<String> = None;
-                    let mut owner_changes = daemon_proxy.receive_name_owner_changed().await.ok();
-                    let mut connection_lost = false;
+            let position_secs = if dbus_pos_secs > 0.0 {
+                dbus_pos_secs
+            } else {
+                meta_pos_secs
+            };
 
-                    loop {
-                        // Process pending commands first
-                        while let Ok(cmd) = rx.try_recv() {
+            let rate = player_proxy.rate().await.unwrap_or(1.0);
+            let can_play = player_proxy.can_play().await.unwrap_or(false);
+            let can_pause = player_proxy.can_pause().await.unwrap_or(false);
+            let can_go_next = player_proxy.can_go_next().await.unwrap_or(false);
+
+            candidates.push(MediaInfo {
+                player_id: bus_name.clone(),
+                title,
+                artist,
+                art_url,
+                playback_state,
+                can_play_pause: can_play || can_pause,
+                can_go_next,
+                position_secs,
+                length_secs,
+                rate,
+                observed_at: Some(now),
+            });
+        }
+    }
+
+    let previous = state.get();
+    let mut best = select_best_player(candidates);
+    if best.is_empty() && player_names.iter().any(|name| name == &previous.player_id) {
+        best = previous;
+    }
+    let active_player = if best.player_id.is_empty() {
+        None
+    } else {
+        Some(best.player_id.clone())
+    };
+
+    state.send_replace(best);
+    active_player
+}
+
+#[cfg(target_os = "linux")]
+fn is_media_signal(message: &zbus::Message) -> bool {
+    if message.message_type() != zbus::message::Type::Signal {
+        return false;
+    }
+    message
+        .header()
+        .interface()
+        .is_some_and(|iface| match iface.as_str() {
+            "org.freedesktop.DBus.Properties" => message
+                .header()
+                .path()
+                .is_some_and(|path| path.as_str().starts_with("/org/mpris/MediaPlayer2")),
+            "org.freedesktop.DBus" | "org.mpris.MediaPlayer2.Player" => true,
+            _ => false,
+        })
+}
+
+#[cfg(target_os = "linux")]
+async fn run_mpris_loop(mut ctx: CommandContext<MediaInfo, MediaCommand>) {
+    loop {
+        let connection = match zbus::Connection::session().await {
+            Ok(conn) => conn,
+            Err(err) => {
+                tracing::debug!("MPRIS D-Bus session connection failed: {err}; retrying");
+                ctx.state.send_replace(MediaInfo::default());
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+
+        let daemon_proxy = match DBusDaemonProxy::new(&connection).await {
+            Ok(proxy) => proxy,
+            Err(err) => {
+                tracing::debug!("DBusDaemonProxy failed: {err}; retrying");
+                ctx.state.send_replace(MediaInfo::default());
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+
+        // Add D-Bus match rules so signal events fire for properties, seek, and name owner changes
+        if let Ok(dbus_fdo) = zbus::fdo::DBusProxy::new(&connection).await {
+            if let Ok(rule) = zbus::MatchRule::try_from(
+                "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'",
+            ) {
+                let _ = dbus_fdo.add_match_rule(rule).await;
+            }
+            if let Ok(rule) = zbus::MatchRule::try_from(
+                "type='signal',interface='org.mpris.MediaPlayer2.Player',member='Seeked'",
+            ) {
+                let _ = dbus_fdo.add_match_rule(rule).await;
+            }
+            if let Ok(rule) = zbus::MatchRule::try_from(
+                "type='signal',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0namespace='org.mpris.MediaPlayer2'",
+            ) {
+                let _ = dbus_fdo.add_match_rule(rule).await;
+            }
+        }
+
+        let mut selected_player_name =
+            fetch_and_publish_media(&connection, &daemon_proxy, &ctx.state).await;
+
+        let mut stream = zbus::MessageStream::from(&connection);
+
+        loop {
+            tokio::select! {
+                cmd = ctx.command_rx.recv() => {
+                    match cmd {
+                        Some(cmd) => {
                             if let Some(ref bus_name) = selected_player_name
                                 && let Ok(builder) = MprisPlayerProxy::builder(&connection)
                                     .destination(bus_name.as_str())
@@ -292,149 +446,63 @@ impl MediaService {
                                     }
                                 }
                             }
+                            selected_player_name =
+                                fetch_and_publish_media(&connection, &daemon_proxy, &ctx.state).await;
                         }
-
-                        let names = match daemon_proxy.list_names().await {
-                            Ok(names) => names,
-                            Err(_) => {
-                                connection_lost = true;
-                                break;
-                            }
-                        };
-
-                        let player_names: Vec<String> = names
-                            .into_iter()
-                            .filter(|name| name.starts_with(MPRIS_PLAYER_PREFIX))
-                            .collect();
-
-                        let mut candidates = Vec::new();
-
-                        for bus_name in &player_names {
-                            if let Ok(builder) = MprisPlayerProxy::builder(&connection)
-                                .destination(bus_name.as_str())
-                                && let Ok(player_proxy) = builder.build().await
-                            {
-                                let status_str = player_proxy
-                                    .playback_status()
-                                    .await
-                                    .unwrap_or_else(|_| "Stopped".to_string());
-                                let playback_state = match status_str.as_str() {
-                                    "Playing" => PlaybackState::Playing,
-                                    "Paused" => PlaybackState::Paused,
-                                    _ => PlaybackState::Stopped,
-                                };
-
-                                let meta_map = player_proxy.metadata().await.unwrap_or_default();
-                                let (title, artist, art_url, length_secs, meta_pos_secs) =
-                                    parse_mpris_metadata(&meta_map);
-
-                                let dbus_pos_secs = player_proxy
-                                    .position()
-                                    .await
-                                    .map(|p| p as f64 / 1_000_000.0)
-                                    .unwrap_or(0.0);
-
-                                let position_secs = if dbus_pos_secs > 0.0 {
-                                    dbus_pos_secs
-                                } else {
-                                    meta_pos_secs
-                                };
-
-                                let can_play = player_proxy.can_play().await.unwrap_or(false);
-                                let can_pause = player_proxy.can_pause().await.unwrap_or(false);
-                                let can_go_next = player_proxy.can_go_next().await.unwrap_or(false);
-
-                                candidates.push(MediaInfo {
-                                    player_id: bus_name.clone(),
-                                    title,
-                                    artist,
-                                    art_url,
-                                    playback_state,
-                                    can_play_pause: can_play || can_pause,
-                                    can_go_next,
-                                    position_secs,
-                                    length_secs,
-                                });
-                            }
-                        }
-
-                        let previous = tx_clone.borrow().clone();
-                        let mut best = select_best_player(candidates);
-                        if best.is_empty()
-                            && player_names.iter().any(|name| name == &previous.player_id)
-                        {
-                            best = previous;
-                        }
-                        selected_player_name = if best.player_id.is_empty() {
-                            None
-                        } else {
-                            Some(best.player_id.clone())
-                        };
-
-                        let _ = tx_clone.send_replace(best);
-
-                        let refresh = tokio::time::sleep(tokio::time::Duration::from_millis(500));
-                        tokio::pin!(refresh);
-                        if let Some(stream) = owner_changes.as_mut() {
-                            let topology_changed = loop {
-                                tokio::select! {
-                                    _ = &mut refresh => break false,
-                                    signal = stream.next() => {
-                                        let Some(signal) = signal else {
-                                            connection_lost = true;
-                                            break true;
-                                        };
-                                        if signal.args().ok().is_some_and(|args| {
-                                            args.name.starts_with(MPRIS_PLAYER_PREFIX)
-                                        }) {
-                                            break true;
-                                        }
-                                    }
-                                }
-                            };
-                            if topology_changed {
-                                break;
-                            }
-                        } else {
-                            refresh.await;
-                        }
-                    }
-
-                    if connection_lost {
-                        let _ = tx_clone.send_replace(MediaInfo::default());
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        None => return,
                     }
                 }
-            });
-
-            Ok(Self {
-                tx,
-                command_tx: Some(cmd_tx),
-                _task: Some(task),
-            })
+                msg = stream.next() => {
+                    if let Some(Ok(msg)) = msg {
+                        if is_media_signal(&msg) {
+                            selected_player_name =
+                                fetch_and_publish_media(&connection, &daemon_proxy, &ctx.state)
+                                    .await;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
         }
 
+        ctx.state.send_replace(MediaInfo::default());
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    }
+}
+
+impl MediaService {
+    pub fn new_offline() -> Self {
+        let runtime = CommandRuntime::new_offline(MediaInfo::default());
+        Self { runtime }
+    }
+
+    pub fn new() -> Result<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            let runtime =
+                CommandRuntime::spawn(MediaInfo::default(), MediaInfo::default(), run_mpris_loop);
+            Ok(Self { runtime })
+        }
         #[cfg(not(target_os = "linux"))]
         {
-            Ok(Self {
-                tx,
-                command_tx: None,
-                _task: None,
-            })
+            Ok(Self::new_offline())
         }
     }
 
     pub fn subscribe(&self) -> watch::Receiver<MediaInfo> {
-        self.tx.subscribe()
+        self.runtime.subscribe()
     }
 
     pub fn media_info(&self) -> MediaInfo {
-        self.tx.borrow().clone()
+        self.runtime.get()
     }
 
-    pub fn send_command(&self, command: MediaCommand) {
-        if let Some(tx) = &self.command_tx {
-            let _ = tx.send(command);
+    pub fn send_command(&self, command: MediaCommand) -> Result<()> {
+        if self.runtime.send_command(command) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Failed to send command to MediaService"))
         }
     }
 }
@@ -604,5 +672,40 @@ mod tests {
             "org.mpris.MediaPlayer2.plasma-browser-integration"
         );
         assert_eq!(best.artist, "Fireship");
+    }
+
+    #[test]
+    fn test_position_extrapolation_when_playing() {
+        let info = MediaInfo {
+            player_id: "spotify".into(),
+            title: "Test".into(),
+            playback_state: PlaybackState::Playing,
+            position_secs: 10.0,
+            length_secs: 100.0,
+            rate: 1.0,
+            observed_at: Some(std::time::Instant::now() - std::time::Duration::from_secs(2)),
+            ..Default::default()
+        };
+
+        let curr = info.current_position_secs();
+        assert!((11.9..=13.0).contains(&curr));
+        assert!(info.progress() > 0.11);
+    }
+
+    #[test]
+    fn test_position_not_extrapolated_when_paused() {
+        let info = MediaInfo {
+            player_id: "spotify".into(),
+            title: "Test".into(),
+            playback_state: PlaybackState::Paused,
+            position_secs: 10.0,
+            length_secs: 100.0,
+            rate: 1.0,
+            observed_at: Some(std::time::Instant::now() - std::time::Duration::from_secs(5)),
+            ..Default::default()
+        };
+
+        assert_eq!(info.current_position_secs(), 10.0);
+        assert_eq!(info.progress(), 0.1);
     }
 }

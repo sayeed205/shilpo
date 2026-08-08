@@ -24,6 +24,9 @@ pub enum ServiceError {
         context: &'static str,
         message: String,
     },
+    ScreenCapture {
+        message: String,
+    },
 }
 
 impl fmt::Display for ServiceError {
@@ -39,6 +42,7 @@ impl fmt::Display for ServiceError {
             Self::Battery { message } => write!(f, "Battery service error: {message}"),
             Self::AppScanner { message } => write!(f, "Application scanner error: {message}"),
             Self::Ipc { context, message } => write!(f, "IPC error [{context}]: {message}"),
+            Self::ScreenCapture { message } => write!(f, "Screen capture service error: {message}"),
         }
     }
 }

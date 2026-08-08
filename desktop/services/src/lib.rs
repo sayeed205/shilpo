@@ -12,8 +12,8 @@ pub mod media;
 pub mod network;
 pub mod night_light;
 pub mod notifications;
-pub mod polled;
 pub mod power_profile;
+pub(crate) mod runtime;
 pub mod screen_capture;
 pub mod tray;
 pub mod upower;
@@ -43,9 +43,10 @@ pub use media::{MediaCommand, MediaInfo, MediaService, PlaybackState};
 pub use network::{NetworkCommand, NetworkInfo, NetworkService, VpnConnection};
 pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_use_dark_mode};
 pub use notifications::{Notification, NotificationService, NotificationUrgency};
-pub use polled::{BackoffConfig, PolledService};
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
-pub use screen_capture::{ScreenCaptureInfo, ScreenCaptureService, ScreenshotMode};
+
+pub use screen_capture::{ScreenCaptureService, ScreenshotMode};
+
 pub use tray::{TrayItem, TrayMenuItem, TrayService};
 pub use upower::{BatteryInfo, BatteryService};
 
@@ -135,13 +136,8 @@ mod tests {
             }
         );
 
-        let screen_capture = ScreenCaptureService::new_offline();
-        assert_eq!(
-            screen_capture.subscribe().borrow().clone(),
-            ScreenCaptureInfo::default()
-        );
-
         let tray = TrayService::new_offline();
+
         assert!(tray.subscribe().borrow().is_empty());
 
         let notif = NotificationService::new_offline();
@@ -149,5 +145,32 @@ mod tests {
 
         let clipboard = ClipboardService::with_custom_store(None);
         assert!(clipboard.subscribe().borrow().is_empty());
+    }
+
+    #[test]
+    fn test_service_clone_and_drop_ownership() {
+        let original = PowerProfileService::new_offline();
+        let clone = original.clone();
+
+        assert_eq!(original.info(), clone.info());
+        drop(original);
+
+        assert_eq!(clone.info(), PowerProfileInfo::fallback());
+    }
+
+    #[test]
+    fn test_offline_contract_guarantees() {
+        let battery = BatteryService::new().ok();
+        // BatteryService::new() in offline/unreachable env yields default unavailable info
+        if let Some(svc) = battery {
+            let info = svc.battery_info();
+            assert!(!info.is_present);
+        }
+
+        let media = MediaService::new_offline();
+        assert!(media.media_info().is_empty());
+
+        let network = NetworkService::new_offline();
+        assert!(!network.network_info().available);
     }
 }

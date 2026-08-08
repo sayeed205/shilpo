@@ -5,25 +5,17 @@
 //! async event loop that watches the daemon for `PropertiesChanged` signals
 //! and forwards the updated state to the harness via a `watch::Sender`.
 
-use tokio::sync::{mpsc, watch};
-use tokio::task::JoinHandle;
-
 use super::{PowerProfileCommand, PowerProfileInfo};
-
-/// Channels handed to a backend when it is spawned.
-///
-/// The state sender lets the backend publish state; the command receiver lets
-/// the harness dispatch profile changes.
-pub(crate) struct BackendChannels {
-    pub(crate) tx: watch::Sender<PowerProfileInfo>,
-    pub(crate) command_rx: mpsc::UnboundedReceiver<PowerProfileCommand>,
-}
+use crate::runtime::CommandContext;
 
 /// Seam between the harness and a concrete power profile backend.
 pub(crate) trait PowerProfileAdapter: Send + 'static {
-    /// Spawn the backend event loop. The loop owns `channels` and runs until
-    /// the harness is dropped.
-    fn spawn(self, channels: BackendChannels) -> JoinHandle<()>;
+    /// Run the backend event loop. The loop owns `ctx` and runs until
+    /// the service runtime is dropped.
+    fn run(
+        self,
+        ctx: CommandContext<PowerProfileInfo, PowerProfileCommand>,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static;
 }
 
 #[cfg(target_os = "linux")]
@@ -37,11 +29,10 @@ pub(crate) mod dbus {
     use std::time::Duration;
 
     use futures_lite::StreamExt;
-    use tokio::sync::watch;
-    use tokio::task::JoinHandle;
 
-    use super::{BackendChannels, PowerProfileAdapter};
+    use super::PowerProfileAdapter;
     use crate::power_profile::{PowerProfile, PowerProfileCommand, PowerProfileInfo};
+    use crate::runtime::{CommandContext, StateContext};
 
     /// The system bus name, object path, and interface of the daemon.
     const POWER_PROFILES_BUS: &str = "net.hadess.PowerProfiles";
@@ -81,8 +72,8 @@ pub(crate) mod dbus {
     pub(crate) struct ZbusPowerProfileAdapter;
 
     impl PowerProfileAdapter for ZbusPowerProfileAdapter {
-        fn spawn(self, channels: BackendChannels) -> JoinHandle<()> {
-            tokio::spawn(run_loop(channels))
+        async fn run(self, ctx: CommandContext<PowerProfileInfo, PowerProfileCommand>) {
+            run_loop(ctx).await;
         }
     }
 
@@ -117,33 +108,33 @@ pub(crate) mod dbus {
                     .any(|prop| *prop == ACTIVE_PROFILE_PROP || *prop == PROFILES_PROP))
     }
 
-    async fn run_loop(channels: BackendChannels) {
-        let BackendChannels { tx, mut command_rx } = channels;
+    async fn run_loop(mut ctx: CommandContext<PowerProfileInfo, PowerProfileCommand>) {
         loop {
             let session = match connect().await {
                 Ok(session) => session,
                 Err(error) => {
                     let msg =
                         format!("failed to initialize power profile D-Bus connection: {error}");
-                    reconnect(&tx, Some(&msg)).await;
+                    reconnect(&ctx.state, Some(&msg)).await;
                     continue;
                 }
             };
 
             if let Ok(active) = session.proxy.active_profile().await {
-                let _ = tx.send_replace(PowerProfileInfo::from_daemon(&active));
+                ctx.state
+                    .send_replace(PowerProfileInfo::from_daemon(&active));
             } else {
-                let _ = tx.send_replace(PowerProfileInfo::fallback());
+                ctx.state.send_replace(PowerProfileInfo::fallback());
             }
 
             let mut changes = session.changes;
 
             loop {
                 tokio::select! {
-                    command = command_rx.recv() => {
+                    command = ctx.command_rx.recv() => {
                         match command {
                             Some(PowerProfileCommand::Set(profile)) => {
-                                apply_set(&session.proxy, &tx, profile).await;
+                                apply_set(&session.proxy, &ctx.state, profile).await;
                             }
                             None => return,
                         }
@@ -161,13 +152,13 @@ pub(crate) mod dbus {
                             &args.invalidated_properties,
                         ) && let Ok(active) = session.proxy.active_profile().await
                         {
-                            let _ = tx.send_replace(PowerProfileInfo::from_daemon(&active));
+                            ctx.state.send_replace(PowerProfileInfo::from_daemon(&active));
                         }
                     }
                 }
             }
 
-            reconnect(&tx, None).await;
+            reconnect(&ctx.state, None).await;
         }
     }
 
@@ -177,24 +168,24 @@ pub(crate) mod dbus {
     /// reconciled with reality instead of trusting the rejected request.
     async fn apply_set(
         proxy: &PowerProfilesProxy<'_>,
-        tx: &watch::Sender<PowerProfileInfo>,
+        state: &StateContext<PowerProfileInfo>,
         profile: PowerProfile,
     ) {
         if proxy.set_active_profile(profile.as_str()).await.is_ok() {
-            let _ = tx.send_replace(PowerProfileInfo::online(profile));
+            state.send_replace(PowerProfileInfo::online(profile));
         } else if let Ok(active) = proxy.active_profile().await {
-            let _ = tx.send_replace(PowerProfileInfo::from_daemon(&active));
+            state.send_replace(PowerProfileInfo::from_daemon(&active));
         }
     }
 
     /// Marks the daemon offline and waits before the next reconnect attempt.
-    async fn reconnect(tx: &watch::Sender<PowerProfileInfo>, reason: Option<&str>) {
+    async fn reconnect(state: &StateContext<PowerProfileInfo>, reason: Option<&str>) {
         if let Some(msg) = reason {
             tracing::warn!("power profile: {msg}; reconnecting");
         } else {
             tracing::debug!("power profile: system bus connection lost; reconnecting");
         }
-        let _ = tx.send_replace(PowerProfileInfo::fallback());
+        state.send_replace(PowerProfileInfo::fallback());
         tokio::time::sleep(RECONNECT_DELAY).await;
     }
 
@@ -239,10 +230,10 @@ pub(crate) mod mock {
     //! In-memory backend that simulates `PropertiesChanged` events for tests.
 
     use tokio::sync::mpsc;
-    use tokio::task::JoinHandle;
 
-    use super::{BackendChannels, PowerProfileAdapter};
+    use super::PowerProfileAdapter;
     use crate::power_profile::{PowerProfileCommand, PowerProfileInfo};
+    use crate::runtime::CommandContext;
 
     /// Test backend whose event source is driven by the test.
     pub(crate) struct TestPowerProfileAdapter {
@@ -259,30 +250,27 @@ pub(crate) mod mock {
     }
 
     impl PowerProfileAdapter for TestPowerProfileAdapter {
-        fn spawn(mut self, channels: BackendChannels) -> JoinHandle<()> {
-            let BackendChannels { tx, mut command_rx } = channels;
-            tokio::spawn(async move {
-                loop {
-                    tokio::select! {
-                        command = command_rx.recv() => {
-                            match command {
-                                Some(PowerProfileCommand::Set(profile)) => {
-                                    let _ = tx.send_replace(PowerProfileInfo::online(profile));
-                                }
-                                None => return,
+        async fn run(mut self, mut ctx: CommandContext<PowerProfileInfo, PowerProfileCommand>) {
+            loop {
+                tokio::select! {
+                    command = ctx.command_rx.recv() => {
+                        match command {
+                            Some(PowerProfileCommand::Set(profile)) => {
+                                ctx.state.send_replace(PowerProfileInfo::online(profile));
                             }
+                            None => return,
                         }
-                        event = self.event_rx.recv() => {
-                            match event {
-                                Some(info) => {
-                                    let _ = tx.send_replace(info);
-                                }
-                                None => return,
+                    }
+                    event = self.event_rx.recv() => {
+                        match event {
+                            Some(info) => {
+                                ctx.state.send_replace(info);
                             }
+                            None => return,
                         }
                     }
                 }
-            })
+            }
         }
     }
 }

@@ -1178,6 +1178,7 @@ mod bar_view_tests {
             can_go_next: true,
             position_secs: 0.0,
             length_secs: 180.0,
+            ..Default::default()
         };
 
         let result = view.compute_worker_update(&WorkerUpdate::Media(media.clone()));

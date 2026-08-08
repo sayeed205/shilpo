@@ -35,63 +35,162 @@ impl BatteryInfo {
     }
 }
 
+use futures_lite::StreamExt;
+use std::time::Duration;
 use tokio::sync::watch;
 
-/// UPower battery service for tracking battery percentage and charging state.
-pub struct BatteryService {
-    tx: watch::Sender<BatteryInfo>,
-    _task: Option<tokio::task::JoinHandle<()>>,
+use crate::runtime::{StateContext, StateRuntime};
+
+const UPOWER_SERVICE: &str = "org.freedesktop.UPower";
+const DISPLAY_DEVICE_PATH: &str = "/org/freedesktop/UPower/devices/DisplayDevice";
+const RECONNECT_DELAY: Duration = Duration::from_secs(3);
+
+async fn fetch_battery_snapshot(proxy: &UPowerDisplayDeviceProxy<'_>) -> BatteryInfo {
+    match (
+        proxy.percentage().await,
+        proxy.state().await,
+        proxy.is_present().await,
+    ) {
+        (Ok(percentage), Ok(state), Ok(is_present)) => BatteryInfo {
+            percentage: percentage.clamp(0.0, 100.0) as u8,
+            is_charging: state == 1,
+            is_present,
+        },
+        _ => BatteryInfo::default(),
+    }
 }
 
-impl Drop for BatteryService {
-    fn drop(&mut self) {
-        if let Some(task) = self._task.take() {
-            task.abort();
+async fn run_upower_loop(ctx: StateContext<BatteryInfo>) {
+    loop {
+        let connection = match Connection::system().await {
+            Ok(conn) => conn,
+            Err(err) => {
+                tracing::debug!("UPower D-Bus system connection failed: {err}; retrying");
+                ctx.send_replace(BatteryInfo::default());
+                tokio::time::sleep(RECONNECT_DELAY).await;
+                continue;
+            }
+        };
+
+        let proxy = match UPowerDisplayDeviceProxy::new(&connection).await {
+            Ok(proxy) => proxy,
+            Err(err) => {
+                tracing::debug!("UPower DisplayDevice proxy failed: {err}; retrying");
+                ctx.send_replace(BatteryInfo::default());
+                tokio::time::sleep(RECONNECT_DELAY).await;
+                continue;
+            }
+        };
+
+        let properties = match zbus::fdo::PropertiesProxy::builder(&connection)
+            .destination(UPOWER_SERVICE)
+            .and_then(|b| b.path(DISPLAY_DEVICE_PATH))
+        {
+            Ok(builder) => match builder.build().await {
+                Ok(props) => props,
+                Err(err) => {
+                    tracing::debug!("UPower PropertiesProxy build failed: {err}; retrying");
+                    ctx.send_replace(BatteryInfo::default());
+                    tokio::time::sleep(RECONNECT_DELAY).await;
+                    continue;
+                }
+            },
+            Err(err) => {
+                tracing::debug!("UPower PropertiesProxy setup failed: {err}; retrying");
+                ctx.send_replace(BatteryInfo::default());
+                tokio::time::sleep(RECONNECT_DELAY).await;
+                continue;
+            }
+        };
+
+        let mut changes = match properties.receive_properties_changed().await {
+            Ok(stream) => stream,
+            Err(err) => {
+                tracing::debug!("UPower receive_properties_changed failed: {err}; retrying");
+                ctx.send_replace(BatteryInfo::default());
+                tokio::time::sleep(RECONNECT_DELAY).await;
+                continue;
+            }
+        };
+
+        // One initial DisplayDevice snapshot
+        ctx.send_replace(fetch_battery_snapshot(&proxy).await);
+
+        let owner_changes = if let Ok(dbus) = zbus::fdo::DBusProxy::new(&connection).await {
+            dbus.receive_name_owner_changed().await.ok()
+        } else {
+            None
+        };
+
+        if let Some(mut owner_changes) = owner_changes {
+            loop {
+                tokio::select! {
+                    change = changes.next() => {
+                        let Some(change) = change else { break; };
+                        if let Ok(args) = change.args()
+                            && args.interface_name == "org.freedesktop.UPower.Device"
+                        {
+                            ctx.send_replace(fetch_battery_snapshot(&proxy).await);
+                        }
+                    }
+                    owner = owner_changes.next() => {
+                        if let Some(owner) = owner
+                            && owner.args().ok().is_some_and(|args| args.name.as_str() == UPOWER_SERVICE)
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            while let Some(change) = changes.next().await {
+                if let Ok(args) = change.args()
+                    && args.interface_name == "org.freedesktop.UPower.Device"
+                {
+                    ctx.send_replace(fetch_battery_snapshot(&proxy).await);
+                }
+            }
         }
+
+        // Connection lost or stream terminated
+        ctx.send_replace(BatteryInfo::default());
+        tokio::time::sleep(RECONNECT_DELAY).await;
+    }
+}
+
+/// UPower battery service for tracking battery percentage and charging state event-driven.
+#[derive(Clone)]
+pub struct BatteryService {
+    runtime: StateRuntime<BatteryInfo>,
+}
+
+impl Default for BatteryService {
+    fn default() -> Self {
+        Self::new_offline()
     }
 }
 
 impl BatteryService {
     pub fn new() -> Result<Self> {
-        let (tx, _rx) = watch::channel(BatteryInfo::default());
+        let runtime = StateRuntime::spawn(
+            BatteryInfo::default(),
+            BatteryInfo::default(),
+            run_upower_loop,
+        );
+        Ok(Self { runtime })
+    }
 
-        // Attempt async connection and polling of UPower D-Bus
-        let tx_clone = tx.clone();
-        let task = tokio::spawn(async move {
-            if let Ok(connection) = Connection::system().await
-                && let Ok(proxy) = UPowerDisplayDeviceProxy::new(&connection).await
-            {
-                loop {
-                    let next_info = match (
-                        proxy.percentage().await,
-                        proxy.state().await,
-                        proxy.is_present().await,
-                    ) {
-                        (Ok(percentage), Ok(state), Ok(is_present)) => BatteryInfo {
-                            percentage: percentage.clamp(0.0, 100.0) as u8,
-                            is_charging: state == 1,
-                            is_present,
-                        },
-                        _ => BatteryInfo::default(),
-                    };
-                    let _ = tx_clone.send_replace(next_info);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                }
-            }
-        });
-
-        Ok(Self {
-            tx,
-            _task: Some(task),
-        })
+    pub fn new_offline() -> Self {
+        let runtime = StateRuntime::new_offline(BatteryInfo::default());
+        Self { runtime }
     }
 
     pub fn subscribe(&self) -> watch::Receiver<BatteryInfo> {
-        self.tx.subscribe()
+        self.runtime.subscribe()
     }
 
     pub fn battery_info(&self) -> BatteryInfo {
-        self.tx.borrow().clone()
+        self.runtime.get()
     }
 }
 

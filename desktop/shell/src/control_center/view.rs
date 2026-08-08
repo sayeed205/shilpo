@@ -219,7 +219,9 @@ impl ControlCenterView {
 
     fn set_power_profile(&mut self, profile: PowerProfile, cx: &mut Context<Self>) {
         if let Some(service) = &self.power_profile_service {
-            service.set_profile(profile);
+            if let Err(error) = service.set_profile(profile) {
+                tracing::debug!(%error, "power profile command rejected");
+            }
         } else {
             self.active_power_profile = profile;
             cx.notify();
@@ -237,7 +239,9 @@ impl ControlCenterView {
 
     fn take_screenshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(service) = &self.screen_capture_service {
-            service.take_screenshot(ScreenshotMode::Region, None);
+            if let Err(error) = service.take_screenshot(ScreenshotMode::Region, None) {
+                tracing::warn!(%error, "screen capture failed");
+            }
         } else {
             ShellRuntime::open_capture_overlay(cx, shilpo_capture::CaptureIntent::Clipboard);
         }
