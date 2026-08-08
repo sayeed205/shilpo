@@ -101,7 +101,7 @@ flowchart LR
 
 ### `shilpo-ext`
 
-`crates/ext` is the stable contract shared with extension authors. It owns:
+`desktop/ext` is the stable contract shared with extension authors. It owns:
 
 - identifiers and semantic-version compatibility types;
 - manifest parsing and validation;

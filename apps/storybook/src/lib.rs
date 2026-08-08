@@ -196,21 +196,22 @@ pub fn init(cx: &mut App) {
     themes::init(cx);
     stories::init(cx);
 
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(target_os = "linux")]
     {
-        let theme_client = futures_lite::future::block_on(shilpo_theme::ThemeClient::new());
+        let theme_client = futures_lite::future::block_on(shilpo_theme_daemon::ThemeClient::new());
         shilpo_ui::Theme::global_mut(cx).apply_state(&theme_client.current_state());
         let mut rx = theme_client.subscribe();
         let theme_client_for_task = theme_client.clone();
         cx.spawn(async move |cx| {
             loop {
-                let state = match rx.recv().await {
-                    Ok(state) => state,
+                let update = match rx.recv().await {
+                    Ok(update) => update,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        theme_client_for_task.current_state()
+                        theme_client_for_task.current_update()
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
+                let state = update.state;
                 cx.update(|cx| {
                     shilpo_ui::Theme::global_mut(cx).apply_state(&state);
                     cx.refresh_windows();

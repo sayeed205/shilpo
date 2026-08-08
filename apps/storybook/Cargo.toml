@@ -47,6 +47,7 @@ gpui_web.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "0.18" }
+shilpo-theme-daemon.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,38 @@
+[package]
+name = "shilpo-services"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui.workspace = true
+niri-ipc.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+zbus.workspace = true
+anyhow.workspace = true
+futures-lite.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+dirs.workspace = true
+smol.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+libc = "0.2"
+arboard = { version = "3", features = ["wayland-data-control"] }
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+rustix = { version = "1", features = ["fs"] }
+shilpo-config = { path = "../config" }
+shilpo-capture.workspace = true
+tokio-udev = { workspace = true }
+notify.workspace = true
+freedesktop-icons.workspace = true
+libpulse-binding.workspace = true
+ddc.workspace = true
+ddc-i2c.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
