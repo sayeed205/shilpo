@@ -38,7 +38,7 @@ impl PipeWireAudioCapture {
         // PipeWire main loop and audio stream thread
         thread::spawn(move || {
             // Initialize pipewire context if libpipewire is present
-            let _pw_init = pipewire::init();
+            pipewire::init();
 
             let sample_rate = 48000;
             let channels = 2;

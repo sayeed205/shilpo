@@ -29,6 +29,12 @@ pub struct Rect {
     pub height: u32,
 }
 
+impl Rect {
+    pub fn is_empty(&self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+}
+
 pub type Region = Rect;
 
 /// Pixel formats supported by frame buffers
@@ -141,19 +147,14 @@ impl RecordingCommand {
 }
 
 /// State of active screen recording session
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum RecordingState {
+    #[default]
     Idle,
     Selecting,
     Recording { elapsed: Duration },
     Paused { elapsed: Duration },
     Finalizing,
-}
-
-impl Default for RecordingState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 impl RecordingState {
@@ -163,6 +164,17 @@ impl RecordingState {
 
     pub fn is_recording(&self) -> bool {
         matches!(self, RecordingState::Recording { .. })
+    }
+
+    pub fn is_active(&self) -> bool {
+        matches!(self, RecordingState::Recording { .. } | RecordingState::Paused { .. } | RecordingState::Finalizing)
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        match self {
+            RecordingState::Recording { elapsed } | RecordingState::Paused { elapsed } => *elapsed,
+            _ => Duration::ZERO,
+        }
     }
 }
 

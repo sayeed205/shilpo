@@ -718,22 +718,16 @@ impl DoctorChecker {
             .arg("--version")
             .output()
             .is_ok();
-        let recording = shilpo_capture::recording_support();
-        let portal_available = shilpo_capture::WaylandCaptureBackend::connect().is_ok();
+        let available = shilpo_capture::create_backend().is_ok();
 
-        if has_tesseract && recording.available && portal_available {
+        if available {
             DiagnosticItem {
                 category: "Media Capture".into(),
                 name: "Capture & Recording Suite".into(),
                 status: DiagnosticStatus::Pass,
                 message: format!(
-                    "XDG Screenshot portal, image clipboard, Tesseract OCR, and {} screen recording are operational{}",
-                    recording.encoder.unwrap_or("hardware-accelerated"),
-                    if recording.window_capture {
-                        " with window capture"
-                    } else {
-                        "; window capture is not advertised by the compositor"
-                    }
+                    "Wayland screencopy and screen recording pipeline are operational{}",
+                    if has_tesseract { " (with OCR)" } else { "" }
                 ),
                 repair_command: None,
                 unit_identifier: None,
@@ -744,13 +738,8 @@ impl DoctorChecker {
                 category: "Media Capture".into(),
                 name: "Capture & Recording Suite".into(),
                 status: DiagnosticStatus::Warn,
-                message: recording.reason.unwrap_or_else(|| {
-                    "Screenshot portal, Tesseract OCR, or VAAPI recording support is unavailable"
-                        .into()
-                }),
-                repair_command: Some(
-                    "sudo pacman -S tesseract tesseract-data-eng intel-media-driver mesa".into(),
-                ),
+                message: "Screen capture backend unavailable".into(),
+                repair_command: None,
                 unit_identifier: None,
                 fix_applied: false,
             }

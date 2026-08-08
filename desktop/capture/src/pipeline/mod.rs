@@ -52,22 +52,18 @@ impl RecordingPipeline {
             let mut muxer = Muxer::new(&config)?;
 
             // Encode initial frame
-            if let Ok(transformed) = transform_frame(&first_frame) {
-                if let Ok(packets) = encoder.encode_frame(&transformed) {
-                    for packet in packets {
-                        let _ = muxer.write_video_packet(&packet);
-                    }
+            if let Ok(packets) = transform_frame(&first_frame).and_then(|t| encoder.encode_frame(&t)) {
+                for packet in packets {
+                    let _ = muxer.write_video_packet(&packet);
                 }
             }
 
             while running_flag.load(Ordering::SeqCst) {
                 // Drain video frames
                 while let Ok(frame) = frame_rx.try_recv() {
-                    if let Ok(transformed) = transform_frame(&frame) {
-                        if let Ok(packets) = encoder.encode_frame(&transformed) {
-                            for packet in packets {
-                                let _ = muxer.write_video_packet(&packet);
-                            }
+                    if let Ok(packets) = transform_frame(&frame).and_then(|t| encoder.encode_frame(&t)) {
+                        for packet in packets {
+                            let _ = muxer.write_video_packet(&packet);
                         }
                     }
                 }

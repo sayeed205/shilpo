@@ -239,17 +239,7 @@ impl ControlCenterView {
         if let Some(service) = &self.screen_capture_service {
             service.take_screenshot(ScreenshotMode::Region, None);
         } else {
-            let config = shilpo_config::CaptureConfig::default();
-            cx.background_executor()
-                .spawn(async move {
-                    let _ = shilpo_capture::open_selector(
-                        shilpo_capture::CaptureIntent::Clipboard,
-                        &config,
-                        None,
-                    )
-                    .await;
-                })
-                .detach();
+            ShellRuntime::open_capture_overlay(cx, shilpo_capture::CaptureIntent::Clipboard);
         }
         ShellRuntime::forget_control_center(cx);
         window.remove_window();

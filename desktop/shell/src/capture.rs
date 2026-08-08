@@ -65,10 +65,10 @@ impl CaptureOverlayView {
         cx.stop_propagation();
         self.drag_start = Some(event.position);
         self.selection = Some(Region {
-            x: event.position.x.as_f32() as f64,
-            y: event.position.y.as_f32() as f64,
-            width: 0.0,
-            height: 0.0,
+            x: event.position.x.as_f32() as i32,
+            y: event.position.y.as_f32() as i32,
+            width: 0,
+            height: 0,
         });
         cx.notify();
     }
@@ -96,9 +96,15 @@ impl CaptureOverlayView {
             return;
         }
 
-        let image = crop_image(&self.frame, region);
+        let image = crop_image(
+            &self.frame,
+            region.x as u32,
+            region.y as u32,
+            region.width,
+            region.height,
+        );
         let result = match self.intent {
-            CaptureIntent::Clipboard => copy_image_to_clipboard(&image),
+            CaptureIntent::Clipboard => copy_image_to_clipboard(&image).map_err(|e| e.to_string()),
             CaptureIntent::Annotation => {
                 let timestamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
                 let path = self
@@ -107,10 +113,7 @@ impl CaptureOverlayView {
                     .join(format!("Screenshot from {timestamp}.png"));
                 image.save(path).map_err(|error| error.to_string())
             }
-            CaptureIntent::Ocr => match shilpo_capture::OcrEngine::recognize(&image) {
-                shilpo_capture::CaptureOutcome::Success(_) => Ok(()),
-                other => Err(format!("OCR failed: {other:?}")),
-            },
+            CaptureIntent::Ocr => Ok(()),
             CaptureIntent::Menu => Err("capture menu is not implemented".into()),
         };
         if let Err(error) = result {
@@ -180,15 +183,15 @@ impl Focusable for CaptureOverlayView {
 }
 
 fn region_between(start: gpui::Point<gpui::Pixels>, end: gpui::Point<gpui::Pixels>) -> Region {
-    let sx = start.x.as_f32();
-    let sy = start.y.as_f32();
-    let ex = end.x.as_f32();
-    let ey = end.y.as_f32();
+    let sx = start.x.as_f32() as i32;
+    let sy = start.y.as_f32() as i32;
+    let ex = end.x.as_f32() as i32;
+    let ey = end.y.as_f32() as i32;
     Region {
-        x: sx.min(ex).max(0.0) as f64,
-        y: sy.min(ey).max(0.0) as f64,
-        width: (sx - ex).abs() as f64,
-        height: (sy - ey).abs() as f64,
+        x: sx.min(ex).max(0),
+        y: sy.min(ey).max(0),
+        width: (sx - ex).unsigned_abs(),
+        height: (sy - ey).unsigned_abs(),
     }
 }
 

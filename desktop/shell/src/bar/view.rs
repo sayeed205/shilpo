@@ -770,22 +770,20 @@ impl Render for BarView {
         let recording_state = ShellRuntime::recording_state(cx);
         let recording_visible = matches!(
             recording_state,
-            shilpo_capture::RecordingState::Starting { .. }
-                | shilpo_capture::RecordingState::Recording { .. }
+            shilpo_capture::RecordingState::Recording { .. }
                 | shilpo_capture::RecordingState::Paused { .. }
-                | shilpo_capture::RecordingState::Finalizing { .. }
+                | shilpo_capture::RecordingState::Finalizing
         );
         let center = h_flex()
             .gap_2()
             .child(center)
             .when(recording_visible, |section| {
                 let label = match &recording_state {
-                    shilpo_capture::RecordingState::Starting { .. } => "Starting…".into(),
                     shilpo_capture::RecordingState::Paused { .. } => format!(
                         "Paused {}",
                         format_recording_elapsed(recording_state.elapsed())
                     ),
-                    shilpo_capture::RecordingState::Finalizing { .. } => "Saving…".into(),
+                    shilpo_capture::RecordingState::Finalizing => "Saving…".into(),
                     _ => format!(
                         "REC {}",
                         format_recording_elapsed(recording_state.elapsed())

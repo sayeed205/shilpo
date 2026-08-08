@@ -95,12 +95,10 @@ impl RecordingController {
 
     pub fn state(&self) -> RecordingState {
         let mut inner = self.inner.lock();
-        if let RecordingState::Recording { .. } = inner.state {
-            if let Some(start) = inner.start_time {
-                inner.state = RecordingState::Recording {
-                    elapsed: start.elapsed(),
-                };
-            }
+        if let (RecordingState::Recording { .. }, Some(start)) = (inner.state, inner.start_time) {
+            inner.state = RecordingState::Recording {
+                elapsed: start.elapsed(),
+            };
         }
         inner.state
     }

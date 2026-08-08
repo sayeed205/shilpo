@@ -7,7 +7,7 @@ mod tests;
 use adapters::{DoctorChecker, ExtAdapter, IpcAdapter, SystemdAdapter, ThemeAdapter};
 use args::{
     BrightnessCommands, CaptureAction, Cli, Commands, ConfigCommands, ExtCommands, ModeValue,
-    RecordAction, RecordAudio, ShellCommands, ThemeCommands, ThemeModeAction, ThemeSeedAction,
+    RecordAction, ShellCommands, ThemeCommands, ThemeModeAction, ThemeSeedAction,
     ThemeWallpaperAction, VisibilityAction, WindowCommands, WorkspaceCommands,
 };
 use clap::{CommandFactory, Parser};
@@ -730,7 +730,12 @@ async fn main() {
                                 Ok(shilpo_capture::RecordingCommand::Stop)
                             }
                             Some(shilpo_services::IpcResult::Record(_)) => {
-                                Ok(record_start_command(None, None, RecordAudio::Configured))
+                                Ok(shilpo_capture::RecordingCommand::Start(
+                                    shilpo_capture::RecordingRequest {
+                                        source: shilpo_capture::RecordingSource::primary(),
+                                        audio: shilpo_capture::AudioSource::System,
+                                    },
+                                ))
                             }
                             result => Err((
                                 1,
@@ -740,11 +745,12 @@ async fn main() {
                         Err(error) => Err(error),
                     }
                 }
-                RecordAction::Start {
-                    output,
-                    path,
-                    audio,
-                } => Ok(record_start_command(output, path, audio)),
+                RecordAction::Start => Ok(shilpo_capture::RecordingCommand::Start(
+                    shilpo_capture::RecordingRequest {
+                        source: shilpo_capture::RecordingSource::primary(),
+                        audio: shilpo_capture::AudioSource::System,
+                    },
+                )),
                 RecordAction::Pause => Ok(shilpo_capture::RecordingCommand::Pause),
                 RecordAction::Resume => Ok(shilpo_capture::RecordingCommand::Resume),
                 RecordAction::Stop => Ok(shilpo_capture::RecordingCommand::Stop),
@@ -770,27 +776,6 @@ async fn main() {
     };
 
     std::process::exit(exit_code);
-}
-
-fn record_start_command(
-    output: Option<String>,
-    path: Option<std::path::PathBuf>,
-    audio: RecordAudio,
-) -> shilpo_capture::RecordingCommand {
-    shilpo_capture::RecordingCommand::Start(shilpo_capture::RecordingRequest {
-        source: output.map_or_else(
-            shilpo_capture::RecordingSource::primary,
-            shilpo_capture::RecordingSource::Output,
-        ),
-        audio: match audio {
-            RecordAudio::Configured => shilpo_capture::RecordingAudio::Configured,
-            RecordAudio::None => shilpo_capture::RecordingAudio::None,
-            RecordAudio::Desktop => shilpo_capture::RecordingAudio::Desktop,
-            RecordAudio::Microphone => shilpo_capture::RecordingAudio::Microphone,
-            RecordAudio::Both => shilpo_capture::RecordingAudio::DesktopAndMicrophone,
-        },
-        path,
-    })
 }
 
 fn parse_duration(s: Option<&str>) -> Result<Duration, String> {

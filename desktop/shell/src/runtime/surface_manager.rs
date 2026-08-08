@@ -272,6 +272,7 @@ impl SurfaceManager {
         self.latest_snapshot = snapshot;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn bar_state(&self) -> BarState {
         self.bar_state.clone()
     }
