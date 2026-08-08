@@ -411,7 +411,12 @@ impl DeviceServices {
             }
             DeviceCommand::Media(m) => {
                 if let Some(ref media) = self.media.instance {
-                    media.send_command(*m);
+                    if let Err(error) = media.send_command(*m) {
+                        let _ = updates.try_send(WorkerUpdate::CommandRejected {
+                            command: cmd.clone(),
+                            reason: error.to_string(),
+                        });
+                    }
                 } else {
                     let _ = updates.try_send(WorkerUpdate::CommandRejected {
                         command: cmd.clone(),

@@ -22,7 +22,6 @@ pub enum PlaybackState {
 }
 
 /// Active media track and player info.
-/// Active media track and player info.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MediaInfo {
     pub player_id: String,
@@ -364,6 +363,24 @@ async fn fetch_and_publish_media(
 }
 
 #[cfg(target_os = "linux")]
+fn is_media_signal(message: &zbus::Message) -> bool {
+    if message.message_type() != zbus::message::Type::Signal {
+        return false;
+    }
+    message
+        .header()
+        .interface()
+        .is_some_and(|iface| match iface.as_str() {
+            "org.freedesktop.DBus.Properties" => message
+                .header()
+                .path()
+                .is_some_and(|path| path.as_str().starts_with("/org/mpris/MediaPlayer2")),
+            "org.freedesktop.DBus" | "org.mpris.MediaPlayer2.Player" => true,
+            _ => false,
+        })
+}
+
+#[cfg(target_os = "linux")]
 async fn run_mpris_loop(mut ctx: CommandContext<MediaInfo, MediaCommand>) {
     loop {
         let connection = match zbus::Connection::session().await {
@@ -436,9 +453,12 @@ async fn run_mpris_loop(mut ctx: CommandContext<MediaInfo, MediaCommand>) {
                     }
                 }
                 msg = stream.next() => {
-                    if msg.is_some() {
-                        selected_player_name =
-                            fetch_and_publish_media(&connection, &daemon_proxy, &ctx.state).await;
+                    if let Some(Ok(msg)) = msg {
+                        if is_media_signal(&msg) {
+                            selected_player_name =
+                                fetch_and_publish_media(&connection, &daemon_proxy, &ctx.state)
+                                    .await;
+                        }
                     } else {
                         break;
                     }
@@ -460,7 +480,8 @@ impl MediaService {
     pub fn new() -> Result<Self> {
         #[cfg(target_os = "linux")]
         {
-            let runtime = CommandRuntime::spawn(MediaInfo::default(), run_mpris_loop);
+            let runtime =
+                CommandRuntime::spawn(MediaInfo::default(), MediaInfo::default(), run_mpris_loop);
             Ok(Self { runtime })
         }
         #[cfg(not(target_os = "linux"))]
@@ -477,8 +498,12 @@ impl MediaService {
         self.runtime.get()
     }
 
-    pub fn send_command(&self, command: MediaCommand) {
-        let _ = self.runtime.send_command(command);
+    pub fn send_command(&self, command: MediaCommand) -> Result<()> {
+        if self.runtime.send_command(command) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Failed to send command to MediaService"))
+        }
     }
 }
 

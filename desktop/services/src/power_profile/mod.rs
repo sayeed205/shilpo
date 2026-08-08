@@ -104,9 +104,11 @@ impl PowerProfileService {
     #[cfg(target_os = "linux")]
     fn from_adapter(adapter: impl PowerProfileAdapter) -> Self {
         Self {
-            runtime: CommandRuntime::spawn(PowerProfileInfo::fallback(), move |ctx| {
-                adapter.run(ctx)
-            }),
+            runtime: CommandRuntime::spawn(
+                PowerProfileInfo::fallback(),
+                PowerProfileInfo::fallback(),
+                move |ctx| adapter.run(ctx),
+            ),
         }
     }
 
@@ -129,11 +131,17 @@ impl PowerProfileService {
     /// Returns `true` if the service is online and the command was sent.
     /// Subscribers observe state changes through the watch channel when
     /// the daemon confirms the update.
-    pub fn set_profile(&self, profile: PowerProfile) -> bool {
+    pub fn set_profile(&self, profile: PowerProfile) -> anyhow::Result<()> {
         if !self.runtime.get().available {
-            return false;
+            return Err(anyhow::anyhow!("Power profile service is offline"));
         }
-        self.runtime.send_command(PowerProfileCommand::Set(profile))
+        if self.runtime.send_command(PowerProfileCommand::Set(profile)) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "Failed to send command to PowerProfileService"
+            ))
+        }
     }
 }
 
@@ -150,7 +158,7 @@ mod tests {
         let info = service.info();
         assert!(!info.available);
         assert_eq!(info.active_profile, PowerProfile::Balanced);
-        assert!(!service.set_profile(PowerProfile::PowerSaver));
+        assert!(service.set_profile(PowerProfile::PowerSaver).is_err());
     }
 
     #[test]
@@ -222,7 +230,7 @@ mod tests {
         let mut receiver = service.subscribe();
 
         assert!(!receiver.borrow().available);
-        assert!(!service.set_profile(PowerProfile::PowerSaver));
+        assert!(service.set_profile(PowerProfile::PowerSaver).is_err());
 
         events
             .send(PowerProfileInfo::from_daemon("balanced"))
@@ -235,7 +243,7 @@ mod tests {
         assert_eq!(receiver.borrow().active_profile, PowerProfile::Balanced);
         assert!(receiver.borrow().available);
 
-        assert!(service.set_profile(PowerProfile::PowerSaver));
+        assert!(service.set_profile(PowerProfile::PowerSaver).is_ok());
         assert!(
             tokio::time::timeout(Duration::from_secs(1), receiver.changed())
                 .await

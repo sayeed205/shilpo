@@ -188,6 +188,22 @@ async fn fetch_and_publish(conn: &Connection, state: &StateContext<NetworkInfo>)
     state.send_replace(info);
 }
 
+fn is_network_signal(message: &zbus::Message) -> bool {
+    if message.message_type() != zbus::message::Type::Signal {
+        return false;
+    }
+    message.header().interface().is_some_and(|iface| {
+        let name = iface.as_str();
+        match name {
+            "org.freedesktop.DBus.Properties" | "org.freedesktop.DBus.ObjectManager" => message
+                .header()
+                .path()
+                .is_some_and(|path| path.as_str().starts_with("/org/freedesktop/NetworkManager")),
+            _ => name.starts_with("org.freedesktop.NetworkManager"),
+        }
+    })
+}
+
 async fn run_network_loop(mut ctx: CommandContext<NetworkInfo, NetworkCommand>) {
     loop {
         let connection = match Connection::system().await {
@@ -201,6 +217,22 @@ async fn run_network_loop(mut ctx: CommandContext<NetworkInfo, NetworkCommand>) 
         };
 
         fetch_and_publish(&connection, &ctx.state).await;
+
+        if let Ok(dbus) = zbus::fdo::DBusProxy::new(&connection).await {
+            for rule_text in [
+                "type='signal',interface='org.freedesktop.DBus.Properties'",
+                "type='signal',interface='org.freedesktop.DBus.ObjectManager'",
+                "type='signal',interface='org.freedesktop.NetworkManager'",
+                "type='signal',interface='org.freedesktop.NetworkManager.Device'",
+                "type='signal',interface='org.freedesktop.NetworkManager.Device.Wireless'",
+                "type='signal',interface='org.freedesktop.NetworkManager.AccessPoint'",
+                "type='signal',interface='org.freedesktop.NetworkManager.ActiveConnection'",
+            ] {
+                if let Ok(rule) = zbus::MatchRule::try_from(rule_text) {
+                    let _ = dbus.add_match_rule(rule).await;
+                }
+            }
+        }
 
         let mut stream = MessageStream::from(&connection);
 
@@ -239,8 +271,10 @@ async fn run_network_loop(mut ctx: CommandContext<NetworkInfo, NetworkCommand>) 
                     }
                 }
                 msg = stream.next() => {
-                    if msg.is_some() {
-                        fetch_and_publish(&connection, &ctx.state).await;
+                    if let Some(Ok(msg)) = msg {
+                        if is_network_signal(&msg) {
+                            fetch_and_publish(&connection, &ctx.state).await;
+                        }
                     } else {
                         break;
                     }
@@ -262,7 +296,11 @@ impl NetworkService {
 
     /// Instantiate a real `NetworkService` connected to system DBus with event-driven signal updates.
     pub fn new() -> Result<Self> {
-        let runtime = CommandRuntime::spawn(NetworkInfo::default(), run_network_loop);
+        let runtime = CommandRuntime::spawn(
+            NetworkInfo::default(),
+            NetworkInfo::default(),
+            run_network_loop,
+        );
         Ok(Self { runtime })
     }
 
@@ -352,19 +390,9 @@ impl NetworkService {
             .runtime
             .send_command(NetworkCommand::SetAirplaneModeEnabled(enabled))
         {
-            self.runtime.update(|info| {
-                info.airplane_mode = enabled;
-                info.wifi_enabled = !enabled;
-                info.wwan_enabled = !enabled;
-            });
             Ok(())
         } else {
-            self.runtime.update(|info| {
-                info.airplane_mode = enabled;
-                info.wifi_enabled = !enabled;
-                info.wwan_enabled = !enabled;
-            });
-            Ok(())
+            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
         }
     }
 }
@@ -489,9 +517,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_vpn_connection_selection_and_status() {
-        let runtime = CommandRuntime::spawn(NetworkInfo::default(), |mut ctx| async move {
-            while ctx.command_rx.recv().await.is_some() {}
-        });
+        let runtime = CommandRuntime::spawn(
+            NetworkInfo::default(),
+            NetworkInfo::default(),
+            |mut ctx| async move { while ctx.command_rx.recv().await.is_some() {} },
+        );
 
         let service = NetworkService { runtime };
         let vpn = VpnConnection {
@@ -515,11 +545,15 @@ mod tests {
     async fn test_network_commands_enqueued() {
         use tokio::sync::mpsc;
         let (cmd_tx, mut command_rx) = mpsc::unbounded_channel::<NetworkCommand>();
-        let runtime = CommandRuntime::spawn(NetworkInfo::default(), move |mut ctx| async move {
-            while let Some(cmd) = ctx.command_rx.recv().await {
-                let _ = cmd_tx.send(cmd);
-            }
-        });
+        let runtime = CommandRuntime::spawn(
+            NetworkInfo::default(),
+            NetworkInfo::default(),
+            move |mut ctx| async move {
+                while let Some(cmd) = ctx.command_rx.recv().await {
+                    let _ = cmd_tx.send(cmd);
+                }
+            },
+        );
         let service = NetworkService { runtime };
 
         service.set_wifi_enabled(true).unwrap();
@@ -564,13 +598,10 @@ mod tests {
             NetworkCommand::SetAirplaneModeEnabled(true)
         );
 
-        let info = service.network_info();
-        assert!(info.airplane_mode);
-        assert!(!info.wifi_enabled);
-
         service.set_airplane_mode_enabled(false).unwrap();
-        let info_off = service.network_info();
-        assert!(!info_off.airplane_mode);
-        assert!(info_off.wifi_enabled);
+        assert_eq!(
+            command_rx.recv().await.unwrap(),
+            NetworkCommand::SetAirplaneModeEnabled(false)
+        );
     }
 }

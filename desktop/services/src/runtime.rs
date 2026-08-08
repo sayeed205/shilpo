@@ -1,19 +1,38 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use tokio::sync::{mpsc, watch};
 
 struct TaskHandle {
     handle: tokio::task::JoinHandle<()>,
+    cancellation: Cancellation,
 }
 
 impl Drop for TaskHandle {
     fn drop(&mut self) {
+        self.cancellation.cancel();
         self.handle.abort();
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct Cancellation(Arc<AtomicBool>);
+
+impl Cancellation {
+    fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
     }
 }
 
 /// Context provided to state-only background tasks.
 pub(crate) struct StateContext<State: Clone + Send + Sync + 'static> {
     tx: watch::Sender<State>,
+    pub(crate) cancellation: Cancellation,
 }
 
 impl<State: Clone + Send + Sync + 'static> StateContext<State> {
@@ -52,17 +71,26 @@ impl<State: Clone + Send + Sync + 'static> StateRuntime<State> {
         Self { tx, _task: None }
     }
 
-    pub fn spawn<F, Fut>(initial: State, f: F) -> Self
+    pub fn spawn<F, Fut>(initial: State, offline: State, f: F) -> Self
     where
-        F: FnOnce(StateContext<State>) -> Fut,
+        F: FnOnce(StateContext<State>) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         let (tx, _) = watch::channel(initial);
-        let ctx = StateContext { tx: tx.clone() };
+        let cancellation = Cancellation::default();
+        let ctx = StateContext {
+            tx: tx.clone(),
+            cancellation: cancellation.clone(),
+        };
+        let task_tx = tx.clone();
 
         let task = if let Ok(handle) = tokio::runtime::Handle::try_current() {
             Some(Arc::new(TaskHandle {
-                handle: handle.spawn(f(ctx)),
+                handle: handle.spawn(async move {
+                    f(ctx).await;
+                    let _ = task_tx.send_replace(offline);
+                }),
+                cancellation,
             }))
         } else {
             None
@@ -121,13 +149,13 @@ impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> CommandRunti
         }
     }
 
-    pub fn spawn<F, Fut>(initial: State, f: F) -> Self
+    pub fn spawn<F, Fut>(initial: State, offline: State, f: F) -> Self
     where
-        F: FnOnce(CommandContext<State, Command>) -> Fut,
+        F: FnOnce(CommandContext<State, Command>) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let state = StateRuntime::spawn(initial, move |state_ctx| {
+        let state = StateRuntime::spawn(initial, offline, move |state_ctx| {
             let cmd_ctx = CommandContext {
                 state: state_ctx,
                 command_rx,
@@ -135,10 +163,8 @@ impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> CommandRunti
             f(cmd_ctx)
         });
 
-        Self {
-            state,
-            command_tx: Some(command_tx),
-        }
+        let command_tx = (!state.is_offline()).then_some(command_tx);
+        Self { state, command_tx }
     }
 
     pub fn subscribe(&self) -> watch::Receiver<State> {
@@ -155,10 +181,6 @@ impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> CommandRunti
         } else {
             false
         }
-    }
-
-    pub fn update<F: FnOnce(&mut State)>(&self, f: F) {
-        self.state.update(f);
     }
 
     #[allow(dead_code)]
@@ -193,7 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_command_runtime_dispatch() {
-        let runtime = CommandRuntime::spawn(0, |mut ctx| async move {
+        let runtime = CommandRuntime::spawn(0, -1, |mut ctx| async move {
             while let Some(cmd) = ctx.command_rx.recv().await {
                 match cmd {
                     1 => ctx.state.send_replace(100),
@@ -217,7 +239,7 @@ mod tests {
     async fn test_shared_clone_ownership_and_cancellation() {
         let (drop_tx, mut drop_rx) = mpsc::channel::<()>(1);
 
-        let runtime1 = StateRuntime::spawn(0, move |_ctx| async move {
+        let runtime1 = StateRuntime::spawn(0, 0, move |_ctx| async move {
             let _sentinel = drop_tx;
             tokio::time::sleep(Duration::from_secs(60)).await;
         });
@@ -233,5 +255,13 @@ mod tests {
         drop(runtime2);
         tokio::task::yield_now().await;
         assert!(drop_rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_backend_exit_publishes_offline_state() {
+        let runtime = StateRuntime::spawn(1, 0, |_ctx| async {});
+        let mut rx = runtime.subscribe();
+        assert!(rx.changed().await.is_ok());
+        assert_eq!(*rx.borrow(), 0);
     }
 }

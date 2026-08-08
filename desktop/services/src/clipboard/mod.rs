@@ -95,9 +95,13 @@ impl ClipboardService {
         let store_clone = store.clone();
         let last_error_clone = last_error.clone();
 
-        let runtime = StateRuntime::spawn(initial_history, move |ctx| async move {
-            run_clipboard_monitoring(ctx, store_clone, last_error_clone).await;
-        });
+        let runtime = StateRuntime::spawn(
+            initial_history.clone(),
+            initial_history,
+            move |ctx| async move {
+                run_clipboard_monitoring(ctx, store_clone, last_error_clone).await;
+            },
+        );
 
         Self {
             runtime,
@@ -176,19 +180,20 @@ fn wayland_data_control_loop(
     store: Option<Arc<dyn ClipboardStore>>,
     last_error: Arc<Mutex<Option<String>>>,
 ) {
-    use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, protocol::wl_seat};
-    use wayland_protocols_wlr::data_control::v1::client::{
-        zwlr_data_control_device_v1::{self, ZwlrDataControlDeviceV1},
-        zwlr_data_control_manager_v1::{self, ZwlrDataControlManagerV1},
-        zwlr_data_control_offer_v1::{self, ZwlrDataControlOfferV1},
+    use wayland_client::{
+        Connection, Dispatch, EventQueue, Proxy, QueueHandle, backend::ObjectId, protocol::wl_seat,
+    };
+    use wayland_protocols::ext::data_control::v1::client::{
+        ext_data_control_device_v1::{self, ExtDataControlDeviceV1},
+        ext_data_control_manager_v1::{self, ExtDataControlManagerV1},
+        ext_data_control_offer_v1::{self, ExtDataControlOfferV1},
     };
 
     struct AppState {
-        manager: Option<ZwlrDataControlManagerV1>,
+        manager: Option<ExtDataControlManagerV1>,
         seat: Option<wl_seat::WlSeat>,
-        device: Option<ZwlrDataControlDeviceV1>,
-        current_offer: Option<ZwlrDataControlOfferV1>,
-        offer_mime_types: Vec<String>,
+        device: Option<ExtDataControlDeviceV1>,
+        offer_mime_types: std::collections::HashMap<ObjectId, Vec<String>>,
         ctx: StateContext<Vec<ClipboardItem>>,
         store: Option<Arc<dyn ClipboardStore>>,
         #[allow(dead_code)]
@@ -210,8 +215,8 @@ fn wayland_data_control_loop(
                 version,
             } = event
             {
-                if interface == "zwlr_data_control_manager_v1" {
-                    state.manager = Some(proxy.bind::<ZwlrDataControlManagerV1, _, _>(
+                if interface == "ext_data_control_manager_v1" {
+                    state.manager = Some(proxy.bind::<ExtDataControlManagerV1, _, _>(
                         name,
                         version.min(2),
                         qh,
@@ -225,11 +230,11 @@ fn wayland_data_control_loop(
         }
     }
 
-    impl Dispatch<ZwlrDataControlManagerV1, ()> for AppState {
+    impl Dispatch<ExtDataControlManagerV1, ()> for AppState {
         fn event(
             _: &mut Self,
-            _: &ZwlrDataControlManagerV1,
-            _: zwlr_data_control_manager_v1::Event,
+            _: &ExtDataControlManagerV1,
+            _: ext_data_control_manager_v1::Event,
             _: &(),
             _: &Connection,
             _: &QueueHandle<Self>,
@@ -249,35 +254,38 @@ fn wayland_data_control_loop(
         }
     }
 
-    impl Dispatch<ZwlrDataControlDeviceV1, ()> for AppState {
+    impl Dispatch<ExtDataControlDeviceV1, ()> for AppState {
         fn event(
             state: &mut Self,
-            _: &ZwlrDataControlDeviceV1,
-            event: zwlr_data_control_device_v1::Event,
+            _: &ExtDataControlDeviceV1,
+            event: ext_data_control_device_v1::Event,
             _: &(),
-            _: &Connection,
+            conn: &Connection,
             _: &QueueHandle<Self>,
         ) {
             match event {
-                zwlr_data_control_device_v1::Event::DataOffer { id } => {
-                    state.current_offer = Some(id);
-                    state.offer_mime_types.clear();
+                ext_data_control_device_v1::Event::DataOffer { id } => {
+                    state.offer_mime_types.insert(id.id(), Vec::new());
                 }
-                zwlr_data_control_device_v1::Event::Selection { id: Some(offer) } => {
-                    let has_text = state.offer_mime_types.iter().any(|mime| {
+                ext_data_control_device_v1::Event::Selection { id: Some(offer) } => {
+                    let mime_types = state
+                        .offer_mime_types
+                        .get(&offer.id())
+                        .cloned()
+                        .unwrap_or_default();
+                    let has_text = mime_types.iter().any(|mime| {
                         mime == "text/plain;charset=utf-8"
                             || mime == "text/plain"
                             || mime == "UTF8_STRING"
                             || mime == "STRING"
                     });
-                    if has_text {
+                    if has_text && !state.ctx.cancellation.is_cancelled() {
                         let (read_fd, write_fd) = match rustix::pipe::pipe() {
                             Ok(fds) => fds,
                             Err(_) => return,
                         };
 
-                        let target_mime = state
-                            .offer_mime_types
+                        let target_mime = mime_types
                             .iter()
                             .find(|m| m.as_str() == "text/plain;charset=utf-8")
                             .cloned()
@@ -286,11 +294,34 @@ fn wayland_data_control_loop(
                         use std::os::fd::AsFd;
                         offer.receive(target_mime, write_fd.as_fd());
                         drop(write_fd);
+                        // The receive request is buffered by Wayland; flush it before
+                        // reading, otherwise the compositor cannot write the offer.
+                        let _ = conn.flush();
 
                         use std::io::Read;
+                        if let Ok(flags) = rustix::fs::fcntl_getfl(&read_fd) {
+                            let _ = rustix::fs::fcntl_setfl(
+                                &read_fd,
+                                flags | rustix::fs::OFlags::NONBLOCK,
+                            );
+                        }
                         let mut file = std::fs::File::from(read_fd);
-                        let mut text = String::new();
-                        if file.read_to_string(&mut text).is_ok() {
+                        let mut bytes = Vec::new();
+                        let mut buffer = [0u8; 4096];
+                        while !state.ctx.cancellation.is_cancelled() && bytes.len() < 1_048_576 {
+                            match file.read(&mut buffer) {
+                                Ok(0) => break,
+                                Ok(read) => bytes.extend_from_slice(&buffer[..read]),
+                                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                    std::thread::sleep(std::time::Duration::from_millis(5));
+                                }
+                                Err(_) => {
+                                    bytes.clear();
+                                    break;
+                                }
+                            }
+                        }
+                        if let Ok(text) = String::from_utf8(bytes) {
                             let text = text.trim().to_string();
                             if !text.is_empty() {
                                 let mut current = state.ctx.get();
@@ -322,17 +353,21 @@ fn wayland_data_control_loop(
         }
     }
 
-    impl Dispatch<ZwlrDataControlOfferV1, ()> for AppState {
+    impl Dispatch<ExtDataControlOfferV1, ()> for AppState {
         fn event(
             state: &mut Self,
-            _: &ZwlrDataControlOfferV1,
-            event: zwlr_data_control_offer_v1::Event,
+            proxy: &ExtDataControlOfferV1,
+            event: ext_data_control_offer_v1::Event,
             _: &(),
             _: &Connection,
             _: &QueueHandle<Self>,
         ) {
-            if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
-                state.offer_mime_types.push(mime_type);
+            if let ext_data_control_offer_v1::Event::Offer { mime_type } = event {
+                state
+                    .offer_mime_types
+                    .entry(proxy.id())
+                    .or_default()
+                    .push(mime_type);
             }
         }
     }
@@ -357,8 +392,7 @@ fn wayland_data_control_loop(
         manager: None,
         seat: None,
         device: None,
-        current_offer: None,
-        offer_mime_types: Vec::new(),
+        offer_mime_types: std::collections::HashMap::new(),
         ctx,
         store,
         last_error: last_error.clone(),
@@ -372,7 +406,7 @@ fn wayland_data_control_loop(
     }
 
     let (Some(manager), Some(seat)) = (app_state.manager.take(), app_state.seat.take()) else {
-        tracing::debug!("Wayland compositor does not support zwlr_data_control_manager_v1");
+        tracing::debug!("Wayland compositor does not support ext_data_control_manager_v1");
         if let Ok(mut lock) = last_error.lock() {
             *lock = Some("Wayland ext-data-control protocol unavailable".to_string());
         }
@@ -383,10 +417,12 @@ fn wayland_data_control_loop(
 
     app_state.device = Some(device);
 
-    loop {
-        if event_queue.blocking_dispatch(&mut app_state).is_err() {
+    while !app_state.ctx.cancellation.is_cancelled() {
+        if event_queue.dispatch_pending(&mut app_state).is_err() {
             break;
         }
+        let _ = conn.flush();
+        std::thread::sleep(std::time::Duration::from_millis(25));
     }
 }
 

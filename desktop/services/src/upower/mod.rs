@@ -116,11 +116,39 @@ async fn run_upower_loop(ctx: StateContext<BatteryInfo>) {
         // One initial DisplayDevice snapshot
         ctx.send_replace(fetch_battery_snapshot(&proxy).await);
 
-        while let Some(change) = changes.next().await {
-            if let Ok(args) = change.args()
-                && args.interface_name == "org.freedesktop.UPower.Device"
-            {
-                ctx.send_replace(fetch_battery_snapshot(&proxy).await);
+        let owner_changes = if let Ok(dbus) = zbus::fdo::DBusProxy::new(&connection).await {
+            dbus.receive_name_owner_changed().await.ok()
+        } else {
+            None
+        };
+
+        if let Some(mut owner_changes) = owner_changes {
+            loop {
+                tokio::select! {
+                    change = changes.next() => {
+                        let Some(change) = change else { break; };
+                        if let Ok(args) = change.args()
+                            && args.interface_name == "org.freedesktop.UPower.Device"
+                        {
+                            ctx.send_replace(fetch_battery_snapshot(&proxy).await);
+                        }
+                    }
+                    owner = owner_changes.next() => {
+                        if let Some(owner) = owner
+                            && owner.args().ok().is_some_and(|args| args.name.as_str() == UPOWER_SERVICE)
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            while let Some(change) = changes.next().await {
+                if let Ok(args) = change.args()
+                    && args.interface_name == "org.freedesktop.UPower.Device"
+                {
+                    ctx.send_replace(fetch_battery_snapshot(&proxy).await);
+                }
             }
         }
 
@@ -144,7 +172,11 @@ impl Default for BatteryService {
 
 impl BatteryService {
     pub fn new() -> Result<Self> {
-        let runtime = StateRuntime::spawn(BatteryInfo::default(), run_upower_loop);
+        let runtime = StateRuntime::spawn(
+            BatteryInfo::default(),
+            BatteryInfo::default(),
+            run_upower_loop,
+        );
         Ok(Self { runtime })
     }
 
