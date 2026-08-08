@@ -11,8 +11,8 @@ jobs:
     name: Arch Linux Container Verification
     runs-on: ubuntu-latest
     env:
-      PKG_CONFIG_PATH: /usr/lib/ffmpeg4.4/pkgconfig
-      LD_LIBRARY_PATH: /usr/lib/ffmpeg4.4
+      PKG_CONFIG_PATH: /opt/ffmpeg-8.0/lib/pkgconfig:/usr/lib/pkgconfig
+      LD_LIBRARY_PATH: /opt/ffmpeg-8.0/lib:/usr/lib
     container:
       image: archlinux:latest
 
@@ -22,7 +22,31 @@ jobs:
 
       - name: Update Pacman & Install Build Toolchain
         run: |
-          pacman -Syu --noconfirm base-devel clang cmake ffmpeg4.4 git pkgconf rustup niri shellcheck bash gawk pciutils cargo-nextest
+          pacman -Syu --noconfirm base-devel clang cmake curl git libxkbcommon-x11 nasm pkgconf rustup niri shellcheck bash gawk pciutils cargo-nextest
+
+      - name: Build FFmpeg 8.0.1
+        run: |
+          curl -fsSLO https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz
+          tar -xf ffmpeg-8.0.1.tar.xz
+          cd ffmpeg-8.0.1
+          ./configure \
+            --prefix=/opt/ffmpeg-8.0 \
+            --disable-autodetect \
+            --disable-debug \
+            --disable-doc \
+            --disable-everything \
+            --disable-programs \
+            --disable-static \
+            --enable-avcodec \
+            --enable-avdevice \
+            --enable-avfilter \
+            --enable-avformat \
+            --enable-pic \
+            --enable-shared \
+            --enable-swresample \
+            --enable-swscale
+          make -j"$(nproc)"
+          make install
 
       - name: Setup Rust Stable Toolchain
         run: |
