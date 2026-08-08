@@ -1,0 +1,30 @@
+[
+  {
+    "label": "Clippy: Workspace",
+    "command": "cargo clippy --workspace --all-targets --all-features",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "reveal": "always",
+    "use_new_terminal": false,
+  },
+  {
+    "label": "Test: Nextest",
+    "command": "cargo nextest run --workspace --all-features",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "reveal": "always",
+    "use_new_terminal": false,
+  },
+  {
+    "label": "Coverage: LLVM",
+    "command": "cargo llvm-cov nextest --workspace --all-features",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "reveal": "always",
+    "use_new_terminal": false,
+  },
+  {
+    "label": "Format: Workspace",
+    "command": "cargo fmt --all",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "reveal": "always",
+    "use_new_terminal": false,
+  },
+]
