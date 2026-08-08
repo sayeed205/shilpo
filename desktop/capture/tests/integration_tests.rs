@@ -1,16 +1,14 @@
-use std::path::PathBuf;
-use std::time::Duration;
-
 use shilpo_capture::backend::CaptureBackend;
 use shilpo_capture::backend::test::TestBackend;
 use shilpo_capture::{
-    AudioSource, RecordingCommand, RecordingController, RecordingRequest, RecordingSource,
-    RecordingState, StreamConfig, capture_frame, create_backend, enumerate_sources,
+    Frame, FrameFormat, Rect, Region, capture_frame, copy_image_to_clipboard, create_backend,
+    crop_image, frame_to_rgba,
 };
+use std::time::Instant;
 
 #[test]
 #[ignore = "requires a live Wayland compositor"]
-fn production_backend_never_falls_back_to_synthetic_frames() {
+fn production_backend_one_shot_capture() {
     let mut backend = create_backend().expect("native backend should be available");
     let frame = backend
         .capture_frame(None)
@@ -26,153 +24,130 @@ fn test_capture_frame_api() {
 }
 
 #[test]
-#[ignore = "requires a live Wayland compositor"]
-fn test_enumerate_sources() {
-    let sources = enumerate_sources().expect("source enumeration should work");
-    assert!(!sources.is_empty());
-}
-
-#[test]
-fn test_test_backend_stream() {
+fn test_test_backend_capture() {
     let mut backend = TestBackend::new();
-    let config = StreamConfig {
-        framerate: 30,
-        ..Default::default()
-    };
-    let rx = backend
-        .start_stream(&RecordingSource::primary(), &config)
-        .expect("start_stream works");
-
-    let frame = rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("receive frame from stream");
-    assert_eq!(frame.width, 1280);
-    assert_eq!(frame.height, 720);
-
-    backend.stop_stream();
+    let frame = backend
+        .capture_frame(None)
+        .expect("TestBackend capture_frame");
+    assert_eq!(frame.width, 1920);
+    assert_eq!(frame.height, 1080);
 }
 
 #[test]
-#[ignore = "requires a live Wayland compositor"]
-fn test_recording_controller_lifecycle() {
-    let controller = RecordingController::new();
-    assert_eq!(controller.state(), RecordingState::Idle);
-
-    let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let config = StreamConfig {
-        framerate: 30,
-        output_dir: PathBuf::from(temp_dir.path()),
-        ..Default::default()
+fn test_pixel_format_conversions() {
+    // ARGB / XRGB conversion: [B, G, R, A] -> [R, G, B, A]
+    let argb_frame = Frame {
+        data: vec![10, 20, 30, 255],
+        width: 1,
+        height: 1,
+        format: FrameFormat::Argb8888,
+        timestamp: Instant::now(),
     };
+    let rgba = frame_to_rgba(&argb_frame).expect("convert ARGB to RGBA");
+    assert_eq!(rgba.get_pixel(0, 0).0, [30, 20, 10, 255]);
 
-    let request = RecordingRequest {
-        source: RecordingSource::primary(),
-        audio: AudioSource::None,
+    let xrgb_frame = Frame {
+        data: vec![10, 20, 30, 0],
+        width: 1,
+        height: 1,
+        format: FrameFormat::Xrgb8888,
+        timestamp: Instant::now(),
     };
+    let rgba = frame_to_rgba(&xrgb_frame).expect("convert XRGB to RGBA");
+    assert_eq!(rgba.get_pixel(0, 0).0, [30, 20, 10, 255]);
 
-    // Start recording
-    controller
-        .start(request, config)
-        .expect("recording should start");
-    assert!(controller.state().is_recording());
-    controller.pause().expect("pause should work");
-    assert!(matches!(controller.state(), RecordingState::Paused { .. }));
-    controller.resume().expect("resume should work");
-    assert!(controller.state().is_recording());
-    controller.stop().expect("recording should finalize");
-    assert_eq!(controller.state(), RecordingState::Idle);
+    // ABGR / XBGR conversion: [R, G, B, A] -> [R, G, B, A]
+    let abgr_frame = Frame {
+        data: vec![30, 20, 10, 200],
+        width: 1,
+        height: 1,
+        format: FrameFormat::Abgr8888,
+        timestamp: Instant::now(),
+    };
+    let rgba = frame_to_rgba(&abgr_frame).expect("convert ABGR to RGBA");
+    assert_eq!(rgba.get_pixel(0, 0).0, [30, 20, 10, 200]);
+
+    let xbgr_frame = Frame {
+        data: vec![30, 20, 10, 0],
+        width: 1,
+        height: 1,
+        format: FrameFormat::Xbgr8888,
+        timestamp: Instant::now(),
+    };
+    let rgba = frame_to_rgba(&xbgr_frame).expect("convert XBGR to RGBA");
+    assert_eq!(rgba.get_pixel(0, 0).0, [30, 20, 10, 255]);
 }
 
 #[test]
-fn test_command_validation() {
-    let idle_state = RecordingState::Idle;
-    let rec_state = RecordingState::Recording {
-        elapsed: Duration::from_secs(5),
+fn test_truncated_frame_buffer_error() {
+    let truncated_frame = Frame {
+        data: vec![0; 10], // Expected 10 * 10 * 4 = 400 bytes
+        width: 10,
+        height: 10,
+        format: FrameFormat::Argb8888,
+        timestamp: Instant::now(),
     };
-
-    let start_cmd = RecordingCommand::Start(RecordingRequest {
-        source: RecordingSource::primary(),
-        audio: AudioSource::None,
-    });
-
-    assert!(start_cmd.validate(&idle_state).is_ok());
-    assert!(start_cmd.validate(&rec_state).is_err());
-    assert!(RecordingCommand::Stop.validate(&rec_state).is_ok());
-    assert!(RecordingCommand::Stop.validate(&idle_state).is_err());
+    let result = frame_to_rgba(&truncated_frame);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("truncated"));
 }
 
 #[test]
-fn test_media_pipeline_integration_mp4() {
-    let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let output_dir = temp_dir.path().to_path_buf();
+fn test_region_cropping_and_bounds() {
+    let mut img = image::RgbaImage::new(100, 100);
+    for pixel in img.pixels_mut() {
+        pixel.0 = [255, 0, 0, 255];
+    }
 
-    let config = StreamConfig {
-        framerate: 30,
-        quality: shilpo_capture::Quality::Balanced,
-        output_dir,
+    // Normal crop
+    let region = Region {
+        x: 10,
+        y: 10,
+        width: 20,
+        height: 20,
     };
+    let cropped = crop_image(&img, region);
+    assert_eq!(cropped.width(), 20);
+    assert_eq!(cropped.height(), 20);
 
-    let first_frame = TestBackend::generate_solid_frame(640, 480, 255, 0, 0);
-    let _transformed = shilpo_capture::pipeline::transform::transform_frame(&first_frame)
-        .expect("transform frame");
-    let mut encoder = shilpo_capture::pipeline::video_encode::VideoEncoder::new(640, 480, &config)
-        .expect("create video encoder");
-    let mut audio_encoder =
-        shilpo_capture::pipeline::audio_encode::AudioEncoder::new().expect("create audio encoder");
-    let mut muxer =
-        shilpo_capture::pipeline::mux::Muxer::new(&config, &encoder, Some(&audio_encoder))
-            .expect("create muxer");
+    // Empty region
+    let empty_region = Rect {
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 10,
+    };
+    assert!(empty_region.is_empty());
+    let cropped_empty = crop_image(&img, empty_region);
+    assert_eq!(cropped_empty.width(), 0);
+    assert_eq!(cropped_empty.height(), 0);
 
-    for i in 0..10 {
-        let frame = TestBackend::generate_solid_frame(640, 480, i * 20, 100, 150);
-        let transformed =
-            shilpo_capture::pipeline::transform::transform_frame(&frame).expect("transform frame");
-        let packets = encoder.encode_frame(&transformed).expect("encode frame");
-        for pkt in packets {
-            muxer.write_video_packet(&pkt).expect("write video packet");
-        }
+    // Out of bounds crop
+    let oob_region = Region {
+        x: 90,
+        y: 90,
+        width: 50,
+        height: 50,
+    };
+    let cropped_oob = crop_image(&img, oob_region);
+    assert_eq!(cropped_oob.width(), 10);
+    assert_eq!(cropped_oob.height(), 10);
 
-        let audio_buf = shilpo_capture::pipeline::audio_capture::AudioBuffer {
-            pcm_data: vec![0.1f32; 960 * 2],
-            sample_rate: 48000,
-            channels: 2,
-        };
-        let audio_pkts = audio_encoder
-            .encode_buffer(&audio_buf)
-            .expect("encode audio");
-        for apkt in audio_pkts {
-            muxer.write_audio_packet(&apkt).expect("write audio packet");
-        }
-    }
+    // Completely outside
+    let outside_region = Region {
+        x: 200,
+        y: 200,
+        width: 10,
+        height: 10,
+    };
+    let cropped_outside = crop_image(&img, outside_region);
+    assert_eq!(cropped_outside.width(), 0);
+    assert_eq!(cropped_outside.height(), 0);
+}
 
-    for pkt in encoder.flush().expect("flush video") {
-        muxer
-            .write_video_packet(&pkt)
-            .expect("write flushed packet");
-    }
-    for pkt in audio_encoder.flush().expect("flush audio") {
-        muxer
-            .write_audio_packet(&pkt)
-            .expect("write flushed audio packet");
-    }
-
-    let (final_path, _duration) = muxer
-        .finalize(Duration::from_secs(1))
-        .expect("finalize muxer");
-    assert!(final_path.exists());
-    assert_eq!(final_path.extension().unwrap(), "mp4");
-
-    ffmpeg::init().unwrap();
-    let ictx = ffmpeg::format::input(&final_path).expect("open input mp4 file");
-    let video_stream = ictx
-        .streams()
-        .best(ffmpeg::media::Type::Video)
-        .expect("video stream exists");
-    assert_eq!(video_stream.parameters().id(), ffmpeg::codec::Id::H264);
-
-    let audio_stream = ictx
-        .streams()
-        .best(ffmpeg::media::Type::Audio)
-        .expect("audio stream exists");
-    assert_eq!(audio_stream.parameters().id(), ffmpeg::codec::Id::AAC);
+#[test]
+#[ignore = "requires a running Wayland clipboard manager"]
+fn test_clipboard_copy() {
+    let img = image::RgbaImage::new(10, 10);
+    copy_image_to_clipboard(&img).expect("clipboard copy should succeed");
 }

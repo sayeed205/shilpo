@@ -1,5 +1,4 @@
 pub mod action_dispatcher;
-pub mod capture;
 pub mod extension_host;
 pub mod ipc;
 pub mod service_hub;
@@ -8,7 +7,6 @@ pub mod surface_manager;
 pub mod theme_manager;
 
 pub use action_dispatcher::ActionDispatcher;
-pub use capture::ShellCaptureRuntime;
 pub use extension_host::ExtensionHost;
 pub use service_hub::ServiceHub;
 pub use session::SessionContext;
@@ -20,14 +18,13 @@ use std::{path::PathBuf, sync::Arc};
 
 use gpui::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};
 use gpui::{
-    App, AppContext, Bounds, Global, Size, Subscription, WindowBackgroundAppearance, WindowBounds,
-    WindowKind, WindowOptions, point, px,
+    App, AppContext, Global, Subscription, WindowBackgroundAppearance, WindowKind, WindowOptions,
 };
-use shilpo_capture::{AudioSource, CaptureIntent, RecordingSource, RecordingState};
+use shilpo_capture::{CaptureIntent, capture_frame, frame_to_rgba};
 use shilpo_services::{CompositorSnapshot, ShellIpcServer};
 
+use crate::capture::CaptureOverlayView;
 use crate::extensions::{ContributionSurface, ExtensionCoordinator};
-use crate::recording::RecordingChooserView;
 
 /// The shell runtime orchestrator: composes the deep service modules, watches
 /// the compositor stream, and routes lifecycle events between them.
@@ -40,7 +37,6 @@ pub struct ShellRuntime {
     surface_manager: SurfaceManager,
     action_dispatcher: ActionDispatcher,
     extension_host: ExtensionHost,
-    capture_runtime: ShellCaptureRuntime,
     service_hub: Option<ServiceHub>,
     session_state: shilpo_config::ShellSessionState,
     session_path: PathBuf,
@@ -146,7 +142,6 @@ impl ShellRuntime {
             surface_manager,
             action_dispatcher,
             extension_host,
-            capture_runtime: ShellCaptureRuntime::new(),
             service_hub: Some(hub),
             session_state: session.session_state,
             session_path: session.session_path,
@@ -279,74 +274,22 @@ impl ShellRuntime {
         .detach();
     }
 
-    pub fn recording_state(cx: &App) -> RecordingState {
-        if cx.has_global::<Self>() {
-            cx.global::<Self>().capture_runtime.state()
-        } else {
-            RecordingState::Idle
+    pub fn open_capture_overlay(cx: &mut App, intent: CaptureIntent) {
+        if !cx.has_global::<Self>() {
+            return;
         }
-    }
-
-    pub fn stop_recording(cx: &mut App) {
-        if cx.has_global::<Self>()
-            && let Err(error) = cx.global::<Self>().capture_runtime.stop()
-        {
-            tracing::error!(%error, "failed to stop recording");
-        }
-    }
-
-    pub fn toggle_recording(cx: &mut App) {
-        if Self::recording_state(cx).is_stoppable() {
-            Self::stop_recording(cx);
-        } else {
-            Self::start_selected_recording(cx, RecordingSource::primary(), AudioSource::System);
-        }
-    }
-
-    pub fn pause_recording(cx: &mut App) {
-        if cx.has_global::<Self>() {
-            let _ = cx.global::<Self>().capture_runtime.pause();
-        }
-    }
-
-    pub fn resume_recording(cx: &mut App) {
-        if cx.has_global::<Self>() {
-            let _ = cx.global::<Self>().capture_runtime.resume();
-        }
-    }
-
-    pub fn configured_recording_audio(_cx: &App) -> AudioSource {
-        AudioSource::System
-    }
-
-    pub fn open_recording_chooser(cx: &mut App, audio: AudioSource) {
-        let sources = match shilpo_capture::enumerate_sources() {
-            Ok(sources) if !sources.is_empty() => sources,
-            Ok(_) => {
-                tracing::warn!("no recordable outputs available");
-                return;
-            }
+        let config = cx.global::<Self>().active_config.capture.clone();
+        let frame = match capture_frame(None).and_then(|frame| frame_to_rgba(&frame)) {
+            Ok(frame) => frame,
             Err(error) => {
-                tracing::warn!(%error, "failed to enumerate recordable outputs");
+                tracing::warn!(%error, "failed to prepare screenshot overlay");
                 return;
             }
         };
-        if sources.len() == 1 {
-            Self::start_selected_recording(cx, sources[0].clone(), audio);
-            return;
-        }
-
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                point(px(0.), px(0.)),
-                Size {
-                    width: px(640.),
-                    height: px(720.),
-                },
-            ))),
             window_background: WindowBackgroundAppearance::Transparent,
             kind: WindowKind::LayerShell(LayerShellOptions {
-                namespace: "recording-chooser".to_string(),
+                namespace: "capture-overlay".to_string(),
                 layer: Layer::Overlay,
                 anchor: Anchor::all(),
                 keyboard_interactivity: KeyboardInteractivity::Exclusive,
@@ -355,29 +298,9 @@ impl ShellRuntime {
             ..Default::default()
         };
         if let Err(error) = cx.open_window(options, move |window, cx| {
-            RecordingChooserView::view(sources, audio, window, cx)
+            CaptureOverlayView::view(frame, intent, config, window, cx)
         }) {
-            tracing::warn!(%error, "failed to open recording chooser");
-        }
-    }
-
-    pub fn start_selected_recording(cx: &mut App, source: RecordingSource, audio: AudioSource) {
-        if cx.has_global::<Self>()
-            && let Err(error) = cx.global::<Self>().capture_runtime.start(source, audio)
-        {
-            tracing::error!(%error, "failed to start recording");
-        }
-    }
-
-    pub fn forget_recording_chooser(_cx: &mut App) {}
-
-    pub fn open_capture_overlay(cx: &mut App, intent: CaptureIntent) {
-        if cx.has_global::<Self>() {
-            let config = cx.global::<Self>().active_config.capture.clone();
-            let _ = cx
-                .global::<Self>()
-                .capture_runtime
-                .capture_screenshot(intent, &config);
+            tracing::warn!(%error, "failed to open capture overlay");
         }
     }
 }

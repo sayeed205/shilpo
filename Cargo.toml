@@ -52,10 +52,6 @@ wayland-protocols = { version = "0.32", features = ["staging", "unstable"] }
 wayland-protocols-wlr = "0.3"
 libc = "0.2"
 
-# In-process screen recording: DMA-BUF capture, VAAPI/FFmpeg encoding, WebM muxing, PipeWire audio.
-ffmpeg = { package = "ffmpeg-next", version = "8" }
-ffmpeg-sys = { package = "ffmpeg-sys-next", version = "8" }
-pipewire = "0.10"
 drm = "0.15"
 mio = { version = "1", features = ["os-poll", "os-ext"] }
 

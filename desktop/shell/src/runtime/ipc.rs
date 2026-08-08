@@ -184,20 +184,6 @@ impl ShellRuntime {
                 IpcRequest::Capture(intent) => {
                     Self::open_capture_overlay(cx, intent);
                 }
-                IpcRequest::Record(cmd) => match cmd {
-                    shilpo_capture::RecordingCommand::Start(req) => {
-                        Self::start_selected_recording(cx, req.source, req.audio);
-                    }
-                    shilpo_capture::RecordingCommand::Stop => Self::stop_recording(cx),
-                    shilpo_capture::RecordingCommand::Pause => Self::pause_recording(cx),
-                    shilpo_capture::RecordingCommand::Resume => Self::resume_recording(cx),
-                    shilpo_capture::RecordingCommand::Cancel => {
-                        if cx.has_global::<Self>() {
-                            let _ = cx.global::<Self>().capture_runtime.controller().cancel();
-                        }
-                    }
-                    shilpo_capture::RecordingCommand::Status => {}
-                },
             }
         }
         Self::publish_status(cx);
@@ -215,7 +201,6 @@ impl ShellRuntime {
             },
             overview_visible: runtime.surface_manager.is_overview_open(),
             control_center_visible: runtime.surface_manager.is_control_center_open(),
-            recording: Self::recording_state(cx),
             health: shilpo_services::ServiceHealth::default(),
             instance_id: std::process::id().to_string(),
             pid: std::process::id(),

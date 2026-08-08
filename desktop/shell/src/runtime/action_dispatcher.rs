@@ -411,24 +411,10 @@ impl ActionDispatcher {
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::TakeScreenshot => {
-                if let Ok(capture) = shilpo_services::ScreenCaptureService::new()
-                    && let Err(error) =
-                        capture.take_screenshot(shilpo_services::ScreenshotMode::Region, None)
-                {
-                    tracing::warn!(%error, "screen capture action failed");
-                }
+                ShellRuntime::open_capture_overlay(cx, shilpo_capture::CaptureIntent::Clipboard);
                 Ok(crate::actions::ActionResult::Immediate)
             }
 
-            ActionInvocation::RecordScreen => {
-                let state = cx.global::<ShellRuntime>().capture_runtime.state();
-                if state.is_stoppable() {
-                    ShellRuntime::stop_recording(cx);
-                } else {
-                    ShellRuntime::open_recording_chooser(cx, shilpo_capture::AudioSource::System);
-                }
-                Ok(crate::actions::ActionResult::Immediate)
-            }
             ActionInvocation::Extension { id, payload } => {
                 if !cx.global::<ShellRuntime>().extension_host().is_loaded() {
                     return Err(ShellError::ActionFailed(format!(

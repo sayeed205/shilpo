@@ -87,11 +87,6 @@ pub enum Commands {
         #[command(subcommand)]
         action: CaptureAction,
     },
-    /// Native screen recording pipeline and session control
-    Record {
-        #[command(subcommand)]
-        action: RecordAction,
-    },
     /// Display brightness controls
     Brightness {
         #[command(subcommand)]
@@ -109,28 +104,6 @@ pub enum CaptureAction {
     Ocr,
     /// Open the capture menu (selection shape chooser)
     Menu,
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
-pub enum RecordAction {
-    /// Start recording, or stop and finalize the active recording
-    Toggle,
-    /// Choose a display output and start video recording
-    Start {
-        /// Optional display output name to record (defaults to primary output)
-        #[arg(short, long)]
-        output: Option<String>,
-    },
-    /// Pause the active recording
-    Pause,
-    /// Resume the paused recording
-    Resume,
-    /// Stop and finalize the recording
-    Stop,
-    /// Cancel and discard the recording
-    Cancel,
-    /// Query the current recording state
-    Status,
 }
 
 #[derive(Subcommand, Debug, Clone)]

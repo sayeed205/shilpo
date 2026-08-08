@@ -5,10 +5,7 @@ use gpui::{
     KeyDownEvent, ParentElement, Render, Role, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px, relative,
 };
-use shilpo_services::{
-    BluetoothService, NightLightService, PowerProfile, PowerProfileService, ScreenCaptureService,
-    ScreenshotMode,
-};
+use shilpo_services::{BluetoothService, NightLightService, PowerProfile, PowerProfileService};
 use shilpo_ui::{
     ActiveTheme, Colorize, FocusTrapElement, Icon, IconName, Sizable, StyledExt, h_flex,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
@@ -20,13 +17,11 @@ pub struct ControlCenterView {
     pub night_light_service: Option<NightLightService>,
     pub bluetooth_service: Option<BluetoothService>,
     pub power_profile_service: Option<PowerProfileService>,
-    pub screen_capture_service: Option<ScreenCaptureService>,
     volume_state: Entity<SliderState>,
     brightness_state: Entity<SliderState>,
     dnd_active: bool,
     night_light_active: bool,
     bluetooth_active: bool,
-    recording_state: shilpo_capture::RecordingState,
     brightness_accordion_expanded: bool,
     active_power_profile: PowerProfile,
     focus_handle: FocusHandle,
@@ -41,9 +36,6 @@ impl ControlCenterView {
         let night_light_service = service_or_warn(NightLightService::new, "night_light");
         let bluetooth_service = service_or_warn(BluetoothService::new, "bluetooth");
         let power_profile_service = Some(PowerProfileService::new());
-        let screen_capture_service = service_or_warn(ScreenCaptureService::new, "screen_capture");
-
-        let initial_recording_state = ShellRuntime::recording_state(cx);
 
         let initial_bluetooth = bluetooth_service
             .as_ref()
@@ -121,11 +113,6 @@ impl ControlCenterView {
                     if replace_device_snapshot_if_changed(&mut view.device_snapshot, snapshot) {
                         cx.notify();
                     }
-                    let recording_state = ShellRuntime::recording_state(cx);
-                    if view.recording_state != recording_state {
-                        view.recording_state = recording_state;
-                        cx.notify();
-                    }
                 });
                 if res.is_err() {
                     break;
@@ -161,13 +148,11 @@ impl ControlCenterView {
             night_light_service,
             bluetooth_service,
             power_profile_service,
-            screen_capture_service,
             volume_state,
             brightness_state,
             dnd_active: initial_dnd,
             night_light_active: initial_night_light,
             bluetooth_active: initial_bluetooth,
-            recording_state: initial_recording_state,
             brightness_accordion_expanded: false,
             active_power_profile: initial_power_profile,
             focus_handle,
@@ -238,41 +223,9 @@ impl ControlCenterView {
     }
 
     fn take_screenshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(service) = &self.screen_capture_service {
-            if let Err(error) = service.take_screenshot(ScreenshotMode::Region, None) {
-                tracing::warn!(%error, "screen capture failed");
-            }
-        } else {
-            ShellRuntime::open_capture_overlay(cx, shilpo_capture::CaptureIntent::Clipboard);
-        }
+        ShellRuntime::open_capture_overlay(cx, shilpo_capture::CaptureIntent::Clipboard);
         ShellRuntime::forget_control_center(cx);
         window.remove_window();
-    }
-
-    fn toggle_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if ShellRuntime::recording_state(cx).is_stoppable() {
-            ShellRuntime::stop_recording(cx);
-        } else {
-            ShellRuntime::forget_control_center(cx);
-            window.remove_window();
-            let audio = ShellRuntime::configured_recording_audio(cx);
-            ShellRuntime::open_recording_chooser(cx, audio);
-        }
-        cx.notify();
-    }
-
-    fn toggle_recording_pause(&mut self, cx: &mut Context<Self>) {
-        if matches!(
-            self.recording_state,
-            shilpo_capture::RecordingState::Paused { .. }
-        ) {
-            ShellRuntime::resume_recording(cx);
-        } else if matches!(
-            self.recording_state,
-            shilpo_capture::RecordingState::Recording { .. }
-        ) {
-            ShellRuntime::pause_recording(cx);
-        }
     }
 
     fn select_audio_device(&mut self, device_id: &str, is_input: bool, cx: &mut Context<Self>) {
@@ -362,18 +315,6 @@ fn service_or_warn<T>(create: impl FnOnce() -> anyhow::Result<T>, name: &str) ->
             tracing::warn!(error = %error, service = name, "control-center service unavailable");
             None
         }
-    }
-}
-
-fn format_recording_elapsed(elapsed: std::time::Duration) -> String {
-    let total_seconds = elapsed.as_secs();
-    let hours = total_seconds / 3_600;
-    let minutes = total_seconds % 3_600 / 60;
-    let seconds = total_seconds % 60;
-    if hours > 0 {
-        format!("{hours:02}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes:02}:{seconds:02}")
     }
 }
 
@@ -474,22 +415,6 @@ impl Render for ControlCenterView {
         };
         let bt_fg = if self.bluetooth_active {
             cx.theme().on_primary_container
-        } else {
-            cx.theme().on_surface_variant
-        };
-
-        let is_recording = self.recording_state.is_active();
-        let is_paused = matches!(
-            self.recording_state,
-            shilpo_capture::RecordingState::Paused { .. }
-        );
-        let record_bg = if is_recording {
-            cx.theme().error_container
-        } else {
-            cx.theme().surface_container_highest
-        };
-        let record_fg = if is_recording {
-            cx.theme().on_error_container
         } else {
             cx.theme().on_surface_variant
         };
@@ -699,7 +624,7 @@ impl Render for ControlCenterView {
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.take_screenshot(window, cx);
                                             }))
-                                            .w(relative(0.5))
+                                            .w_full()
                                             .px_3()
                                             .py_2()
                                             .rounded_xl()
@@ -709,83 +634,8 @@ impl Render for ControlCenterView {
                                             .items_center()
                                             .child(Icon::new(IconName::ResizeWindow).size(px(16.)))
                                             .child(div().text_xs().font_bold().child("Screenshot")),
-                                    )
-                                    // Screen Record Button
-                                    .child(
-                                        h_flex()
-                                            .id("cc-toggle-record")
-                                            .role(Role::Button)
-                                            .aria_label("Record Screen Video")
-                                            .cursor_pointer()
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.toggle_recording(window, cx);
-                                            }))
-                                            .w(relative(0.5))
-                                            .px_3()
-                                            .py_2()
-                                            .rounded_xl()
-                                            .bg(record_bg)
-                                            .text_color(record_fg)
-                                            .gap_2_5()
-                                            .items_center()
-                                            .child(
-                                                Icon::new(if is_recording {
-                                                    IconName::Close
-                                                } else {
-                                                    IconName::PlayArrow
-                                                })
-                                                .size(px(16.)),
-                                            )
-                                            .child(div().text_xs().font_bold().child(
-                                                if is_recording { "Stop" } else { "Record" },
-                                            )),
                                     ),
-                            )
-                            .when(is_recording, |grid| {
-                                grid.child(
-                                    h_flex()
-                                        .id("cc-recording-status")
-                                        .justify_between()
-                                        .items_center()
-                                        .px_3()
-                                        .py_2()
-                                        .rounded_xl()
-                                        .bg(cx.theme().error_container.opacity(0.7))
-                                        .child(div().text_xs().font_bold().child(format!(
-                                            "{}  {}",
-                                            if is_paused { "Paused" } else { "Recording" },
-                                            format_recording_elapsed(
-                                                self.recording_state.elapsed()
-                                            )
-                                        )))
-                                        .child(
-                                            h_flex()
-                                                .id("cc-toggle-recording-pause")
-                                                .role(Role::Button)
-                                                .aria_label(if is_paused {
-                                                    "Resume screen recording"
-                                                } else {
-                                                    "Pause screen recording"
-                                                })
-                                                .cursor_pointer()
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.toggle_recording_pause(cx);
-                                                }))
-                                                .gap_1p5()
-                                                .child(
-                                                    Icon::new(if is_paused {
-                                                        IconName::PlayArrowFill
-                                                    } else {
-                                                        IconName::PauseFill
-                                                    })
-                                                    .size(px(15.)),
-                                                )
-                                                .child(div().text_xs().font_bold().child(
-                                                    if is_paused { "Resume" } else { "Pause" },
-                                                )),
-                                        ),
-                                )
-                            }),
+                            ),
                     )
                     // Power Profile Selector Pills
                     .child(

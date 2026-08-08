@@ -14,7 +14,6 @@ pub mod night_light;
 pub mod notifications;
 pub mod power_profile;
 pub(crate) mod runtime;
-pub mod screen_capture;
 pub mod tray;
 pub mod upower;
 
@@ -44,8 +43,6 @@ pub use network::{NetworkCommand, NetworkInfo, NetworkService, VpnConnection};
 pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_use_dark_mode};
 pub use notifications::{Notification, NotificationService, NotificationUrgency};
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
-
-pub use screen_capture::{ScreenCaptureService, ScreenshotMode};
 
 pub use tray::{TrayItem, TrayMenuItem, TrayService};
 pub use upower::{BatteryInfo, BatteryService};

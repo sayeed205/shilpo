@@ -35,8 +35,6 @@ pub struct ShellConfig {
     pub startup: StartupConfig,
     #[serde(default)]
     pub capture: CaptureConfig,
-    #[serde(default)]
-    pub recording: RecordingConfig,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -118,57 +116,6 @@ fn default_screenshot_dir() -> PathBuf {
 
 fn default_selection() -> String {
     "rectangle".to_string()
-}
-
-fn default_recording_dir() -> PathBuf {
-    PathBuf::from("~/Videos/recordings")
-}
-
-fn default_framerate() -> u32 {
-    30
-}
-
-fn default_delay_seconds() -> u64 {
-    0
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct RecordingConfig {
-    #[serde(default = "default_recording_dir")]
-    pub directory: PathBuf,
-    #[serde(default = "default_framerate")]
-    pub framerate: u32,
-    #[serde(default = "default_delay_seconds")]
-    pub delay_seconds: u64,
-    #[serde(default = "default_true")]
-    pub desktop_audio: bool,
-    #[serde(default = "default_true")]
-    pub show_pointer: bool,
-}
-
-impl Default for RecordingConfig {
-    fn default() -> Self {
-        Self {
-            directory: default_recording_dir(),
-            framerate: default_framerate(),
-            delay_seconds: default_delay_seconds(),
-            desktop_audio: true,
-            show_pointer: true,
-        }
-    }
-}
-
-impl RecordingConfig {
-    pub fn resolved_directory(&self) -> PathBuf {
-        expand_home_path(&self.directory)
-    }
-
-    pub fn ensure_directory(&self) -> std::io::Result<PathBuf> {
-        let dir = self.resolved_directory();
-        fs::create_dir_all(&dir)?;
-        Ok(dir)
-    }
 }
 
 /// Resolve Shilpo XDG configuration directory (`$XDG_CONFIG_HOME/shilpo` or `$HOME/.config/shilpo`).
@@ -629,7 +576,6 @@ impl Default for ShellConfig {
             locale: None,
             startup: StartupConfig::default(),
             capture: CaptureConfig::default(),
-            recording: RecordingConfig::default(),
         }
     }
 }
@@ -924,13 +870,6 @@ impl ShellConfig {
                     "must be 'rectangle' or 'ellipse'",
                 ));
             }
-        }
-
-        if self.recording.framerate == 0 || self.recording.framerate > 240 {
-            d.push(ConfigDiagnostic::new(
-                "recording.framerate",
-                "must be greater than 0 and at most 240",
-            ));
         }
 
         if d.is_empty() {

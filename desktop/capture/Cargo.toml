@@ -20,14 +20,6 @@ wayland-backend.workspace = true
 wayland-protocols.workspace = true
 wayland-protocols-wlr.workspace = true
 
-ffmpeg.workspace = true
-ffmpeg-sys.workspace = true
-pipewire.workspace = true
-spa = { package = "libspa", version = "0.10" }
-
-crossbeam-channel = "0.5"
-parking_lot = "0.12"
-crossbeam-utils = "0.8"
 memfd = "0.6"
 
 tesseract = { version = "0.15", optional = true }

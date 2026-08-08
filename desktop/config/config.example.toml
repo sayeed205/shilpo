@@ -50,10 +50,3 @@ end = ["builtin:sysinfo", "builtin:network", "builtin:bluetooth", "builtin:caffe
 screenshot_dir = "~/Pictures/Screenshots"
 show_pointer = true
 default_selection = "rectangle"
-
-[recording]
-directory = "~/Videos/recordings"
-framerate = 30
-delay_seconds = 0
-desktop_audio = true
-show_pointer = true

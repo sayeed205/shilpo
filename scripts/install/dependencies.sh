@@ -4,7 +4,7 @@
 
 SHILPO_BUILD_PACKAGES=(
   base-devel clang cmake git pkgconf rustup
-  alsa-lib ffmpeg fontconfig glib2 libdrm libva libxcb libxkbcommon-x11
+  alsa-lib fontconfig glib2 libdrm libva libxcb libxkbcommon-x11
   openssl pipewire sqlite vulkan-icd-loader wayland zstd
 )
 

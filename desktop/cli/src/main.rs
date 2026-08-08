@@ -7,8 +7,8 @@ mod tests;
 use adapters::{DoctorChecker, ExtAdapter, IpcAdapter, SystemdAdapter, ThemeAdapter};
 use args::{
     BrightnessCommands, CaptureAction, Cli, Commands, ConfigCommands, ExtCommands, ModeValue,
-    RecordAction, ShellCommands, ThemeCommands, ThemeModeAction, ThemeSeedAction,
-    ThemeWallpaperAction, VisibilityAction, WindowCommands, WorkspaceCommands,
+    ShellCommands, ThemeCommands, ThemeModeAction, ThemeSeedAction, ThemeWallpaperAction,
+    VisibilityAction, WindowCommands, WorkspaceCommands,
 };
 use clap::{CommandFactory, Parser};
 use output::{CliOutput, EXIT_FAILURE, EXIT_INVALID_ARGS, EXIT_SUCCESS};
@@ -716,63 +716,6 @@ async fn main() {
                 }
                 Err((code, msg)) => {
                     output.error("capture", "ipc_failed", &msg, None, Vec::new(), code)
-                }
-            }
-        }
-        Commands::Record { action } => {
-            let ipc = IpcAdapter::new();
-            let cmd = match action {
-                RecordAction::Toggle => {
-                    match ipc.record(shilpo_capture::RecordingCommand::Status) {
-                        Ok(response) => match response.result {
-                            Some(shilpo_services::IpcResult::Record(state))
-                                if state.is_stoppable() =>
-                            {
-                                Ok(shilpo_capture::RecordingCommand::Stop)
-                            }
-                            Some(shilpo_services::IpcResult::Record(_)) => {
-                                Ok(shilpo_capture::RecordingCommand::Start(
-                                    shilpo_capture::RecordingRequest {
-                                        source: shilpo_capture::RecordingSource::primary(),
-                                        audio: shilpo_capture::AudioSource::System,
-                                    },
-                                ))
-                            }
-                            result => Err((
-                                1,
-                                format!("unexpected recording status response: {result:?}"),
-                            )),
-                        },
-                        Err(error) => Err(error),
-                    }
-                }
-                RecordAction::Start { output } => Ok(shilpo_capture::RecordingCommand::Start(
-                    shilpo_capture::RecordingRequest {
-                        source: output
-                            .map(|name| shilpo_capture::RecordingSource::new(&name, &name))
-                            .unwrap_or_else(shilpo_capture::RecordingSource::primary),
-                        audio: shilpo_capture::AudioSource::System,
-                    },
-                )),
-                RecordAction::Pause => Ok(shilpo_capture::RecordingCommand::Pause),
-                RecordAction::Resume => Ok(shilpo_capture::RecordingCommand::Resume),
-                RecordAction::Stop => Ok(shilpo_capture::RecordingCommand::Stop),
-                RecordAction::Cancel => Ok(shilpo_capture::RecordingCommand::Cancel),
-                RecordAction::Status => Ok(shilpo_capture::RecordingCommand::Status),
-            };
-            let result = cmd.and_then(|cmd| ipc.record(cmd));
-            match result {
-                Ok(resp) => {
-                    let text = format!("Recording result: {:?}", resp.result);
-                    output.success(
-                        "record",
-                        &serde_json::to_value(&resp.result).unwrap_or_default(),
-                        Some(&text),
-                        Vec::new(),
-                    )
-                }
-                Err((code, msg)) => {
-                    output.error("record", "ipc_failed", &msg, None, Vec::new(), code)
                 }
             }
         }

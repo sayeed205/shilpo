@@ -113,13 +113,6 @@ impl IpcAdapter {
         self.checked_request(IpcRequest::Capture(intent))
     }
 
-    pub fn record(
-        &self,
-        cmd: shilpo_capture::RecordingCommand,
-    ) -> Result<shilpo_services::IpcResponse, (i32, String)> {
-        self.checked_request(IpcRequest::Record(cmd))
-    }
-
     fn checked_request(
         &self,
         request: IpcRequest,

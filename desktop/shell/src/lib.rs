@@ -12,7 +12,6 @@ pub mod notification;
 pub mod osd;
 pub mod overview;
 pub mod overview_search;
-pub mod recording;
 pub mod runtime;
 pub mod widgets;
 
