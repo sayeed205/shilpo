@@ -10,6 +10,9 @@ jobs:
   arch-desktop-ci:
     name: Arch Linux Container Verification
     runs-on: ubuntu-latest
+    env:
+      PKG_CONFIG_PATH: /usr/lib/ffmpeg4.4/pkgconfig
+      LD_LIBRARY_PATH: /usr/lib/ffmpeg4.4
     container:
       image: archlinux:latest
 
@@ -19,7 +22,7 @@ jobs:
 
       - name: Update Pacman & Install Build Toolchain
         run: |
-          pacman -Syu --noconfirm base-devel clang cmake ffmpeg git pkgconf rustup niri shellcheck bash gawk pciutils cargo-nextest
+          pacman -Syu --noconfirm base-devel clang cmake ffmpeg4.4 git pkgconf rustup niri shellcheck bash gawk pciutils cargo-nextest
 
       - name: Setup Rust Stable Toolchain
         run: |
