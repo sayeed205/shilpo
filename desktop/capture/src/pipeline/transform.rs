@@ -1,4 +1,4 @@
-use crate::types::{Frame, FrameData, FrameFormat};
+use crate::types::{Frame, FrameData};
 
 pub struct TransformedFrame {
     pub data: Vec<u8>,

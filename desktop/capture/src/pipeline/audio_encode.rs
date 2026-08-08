@@ -7,8 +7,8 @@ pub struct EncodedAudioPacket {
 }
 
 pub struct AudioEncoder {
-    sample_rate: u32,
-    channels: u32,
+    _sample_rate: u32,
+    _channels: u32,
     pts_counter: i64,
 }
 
@@ -20,8 +20,8 @@ impl AudioEncoder {
         };
 
         Ok(Self {
-            sample_rate: 48000,
-            channels: 2,
+            _sample_rate: 48000,
+            _channels: 2,
             pts_counter: 0,
         })
     }

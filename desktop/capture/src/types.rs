@@ -11,6 +11,15 @@ pub enum CaptureIntent {
     Menu,
 }
 
+/// Result/outcome of a screenshot capture operation
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum CaptureOutcome {
+    Accepted,
+    Copied,
+    Saved(PathBuf),
+    TextCopied(String),
+}
+
 /// Rectangular area definition
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Rect {
@@ -19,6 +28,8 @@ pub struct Rect {
     pub width: u32,
     pub height: u32,
 }
+
+pub type Region = Rect;
 
 /// Pixel formats supported by frame buffers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +103,43 @@ pub enum RecordingCommand {
     Status,
 }
 
+impl RecordingCommand {
+    pub fn validate(&self, current_state: &RecordingState) -> Result<(), &'static str> {
+        match self {
+            RecordingCommand::Start(_) => {
+                if matches!(current_state, RecordingState::Idle | RecordingState::Selecting) {
+                    Ok(())
+                } else {
+                    Err("recording session already active")
+                }
+            }
+            RecordingCommand::Stop => {
+                if matches!(current_state, RecordingState::Recording { .. } | RecordingState::Paused { .. }) {
+                    Ok(())
+                } else {
+                    Err("no active recording session to stop")
+                }
+            }
+            RecordingCommand::Pause => {
+                if matches!(current_state, RecordingState::Recording { .. }) {
+                    Ok(())
+                } else {
+                    Err("recording is not active")
+                }
+            }
+            RecordingCommand::Resume => {
+                if matches!(current_state, RecordingState::Paused { .. }) {
+                    Ok(())
+                } else {
+                    Err("recording is not paused")
+                }
+            }
+            RecordingCommand::Cancel => Ok(()),
+            RecordingCommand::Status => Ok(()),
+        }
+    }
+}
+
 /// State of active screen recording session
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RecordingState {
@@ -100,6 +148,22 @@ pub enum RecordingState {
     Recording { elapsed: Duration },
     Paused { elapsed: Duration },
     Finalizing,
+}
+
+impl Default for RecordingState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+impl RecordingState {
+    pub fn is_stoppable(&self) -> bool {
+        matches!(self, RecordingState::Recording { .. } | RecordingState::Paused { .. })
+    }
+
+    pub fn is_recording(&self) -> bool {
+        matches!(self, RecordingState::Recording { .. })
+    }
 }
 
 /// Events emitted by the recording pipeline

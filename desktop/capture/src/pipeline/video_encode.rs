@@ -1,6 +1,5 @@
-use std::path::PathBuf;
 use crate::pipeline::transform::TransformedFrame;
-use crate::types::{Codec, HwAccel, Quality, StreamConfig};
+use crate::types::{Codec, HwAccel, StreamConfig};
 
 pub struct EncodedPacket {
     pub data: Vec<u8>,
@@ -10,10 +9,10 @@ pub struct EncodedPacket {
 }
 
 pub struct VideoEncoder {
-    width: u32,
-    height: u32,
-    codec: Codec,
-    hw_accel: HwAccel,
+    _width: u32,
+    _height: u32,
+    _codec: Codec,
+    _hw_accel: HwAccel,
     pts_counter: i64,
 }
 
@@ -33,10 +32,10 @@ impl VideoEncoder {
         };
 
         Ok(Self {
-            width,
-            height,
-            codec: config.codec,
-            hw_accel,
+            _width: width,
+            _height: height,
+            _codec: config.codec,
+            _hw_accel: hw_accel,
             pts_counter: 0,
         })
     }

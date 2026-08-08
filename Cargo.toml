@@ -17,8 +17,7 @@ members = [
     "desktop/cli",
 
     # Other
-    "crates/capture",
-    "dotfiles/shilpo-dotfiles",
+    "desktop/capture",
     "apps/storybook",
 ]
 resolver = "2"
@@ -37,7 +36,7 @@ shilpo-config = { path = "desktop/config" }
 shilpo-ext-types = { path = "desktop/ext-types" }
 shilpo-ext = { path = "desktop/ext" }
 shilpo-theme-daemon = { path = "desktop/theme-daemon" }
-shilpo-capture = { path = "crates/capture" }
+shilpo-capture = { path = "desktop/capture" }
 
 niri-ipc = "26"
 zbus = "5"

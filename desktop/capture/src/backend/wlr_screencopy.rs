@@ -3,9 +3,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use wayland_client::protocol::wl_output::WlOutput;
-use wayland_client::protocol::wl_shm::WlShm;
-
 use crate::backend::CaptureBackend;
 use crate::types::{Frame, FrameData, FrameFormat, RecordingSource, StreamConfig};
 
