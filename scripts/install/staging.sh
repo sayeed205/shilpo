@@ -156,7 +156,7 @@ stage_and_commit_files() {
   # Remove only known iNiR/Quickshell-owned artifacts.  Personal browser
   # profiles and unrelated desktop configuration are intentionally untouched.
   if command -v systemctl >/dev/null 2>&1; then
-    run systemctl --user disable --now inir.service inir-super-overview.service || true
+    run systemctl --user disable --now inir.service inir-super-overview.service >/dev/null 2>&1 || true
   fi
   run rm -f \
     "$systemd_user_dir/inir.service" \

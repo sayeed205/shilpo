@@ -107,7 +107,7 @@ impl CaptureOverlayView {
                     .join(format!("Screenshot from {timestamp}.png"));
                 image.save(path).map_err(|error| error.to_string())
             }
-            CaptureIntent::Ocr => Ok(()),
+            CaptureIntent::Ocr => Err("OCR capture is not available yet".into()),
             CaptureIntent::Menu => Err("capture menu is not implemented".into()),
         };
         if let Err(error) = result {

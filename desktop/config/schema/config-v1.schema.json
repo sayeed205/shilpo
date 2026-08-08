@@ -48,16 +48,6 @@
       },
       "default": {}
     },
-    "recording": {
-      "$ref": "#/$defs/RecordingConfig",
-      "default": {
-        "delay_seconds": 0,
-        "desktop_audio": true,
-        "directory": "~/Videos/recordings",
-        "framerate": 30,
-        "show_pointer": true
-      }
-    },
     "startup": {
       "$ref": "#/$defs/StartupConfig",
       "default": {
@@ -402,36 +392,6 @@
               "type": "null"
             }
           ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "RecordingConfig": {
-      "type": "object",
-      "properties": {
-        "delay_seconds": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 0,
-          "minimum": 0
-        },
-        "desktop_audio": {
-          "type": "boolean",
-          "default": true
-        },
-        "directory": {
-          "type": "string",
-          "default": "~/Videos/recordings"
-        },
-        "framerate": {
-          "type": "integer",
-          "format": "uint32",
-          "default": 30,
-          "minimum": 0
-        },
-        "show_pointer": {
-          "type": "boolean",
-          "default": true
         }
       },
       "additionalProperties": false

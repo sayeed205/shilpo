@@ -1,9 +1,7 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsFd;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::Context;
 use memfd::MemfdOptions;
@@ -16,7 +14,7 @@ use wayland_protocols_wlr::screencopy::v1::client::{
 };
 
 use crate::backend::CaptureBackend;
-use crate::types::{Frame, FrameData, FrameFormat, RecordingSource, StreamConfig};
+use crate::types::{Frame, FrameFormat};
 
 struct OutputEntry {
     output: wl_output::WlOutput,
@@ -203,6 +201,8 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for CaptureState {
                 state.format = match shm_format {
                     wl_shm::Format::Argb8888 => FrameFormat::Argb8888,
                     wl_shm::Format::Xrgb8888 => FrameFormat::Xrgb8888,
+                    wl_shm::Format::Xbgr8888 => FrameFormat::Xbgr8888,
+                    wl_shm::Format::Abgr8888 => FrameFormat::Abgr8888,
                     _ => {
                         state.failed = Some("unsupported wl_shm format".into());
                         return;
@@ -222,10 +222,7 @@ wayland_client::delegate_noop!(CaptureState: ignore wl_shm::WlShm);
 wayland_client::delegate_noop!(CaptureState: ignore wl_shm_pool::WlShmPool);
 wayland_client::delegate_noop!(CaptureState: ignore wl_buffer::WlBuffer);
 
-pub struct WlrScreencopyBackend {
-    streaming: Arc<AtomicBool>,
-    stream_handle: Option<std::thread::JoinHandle<()>>,
-}
+pub struct WlrScreencopyBackend;
 
 impl WlrScreencopyBackend {
     pub fn new() -> anyhow::Result<Self> {
@@ -234,10 +231,7 @@ impl WlrScreencopyBackend {
         let qh = queue.handle();
         globals.bind::<ZwlrScreencopyManagerV1, _, _>(&qh, 1..=3, ())?;
         globals.bind::<wl_shm::WlShm, _, _>(&qh, 1..=1, ())?;
-        Ok(Self {
-            streaming: Arc::new(AtomicBool::new(false)),
-            stream_handle: None,
-        })
+        Ok(Self)
     }
 
     fn capture_once(&self, output_name: Option<&str>) -> anyhow::Result<Frame> {
@@ -281,7 +275,7 @@ impl WlrScreencopyBackend {
             pool.destroy();
         }
         Ok(Frame {
-            data: FrameData::Shm(data),
+            data,
             width: state.width,
             height: state.height,
             format: state.format,
@@ -293,141 +287,5 @@ impl WlrScreencopyBackend {
 impl CaptureBackend for WlrScreencopyBackend {
     fn capture_frame(&mut self, output: Option<&str>) -> anyhow::Result<Frame> {
         self.capture_once(output)
-    }
-
-    fn start_stream(
-        &mut self,
-        source: &RecordingSource,
-        config: &StreamConfig,
-    ) -> anyhow::Result<crossbeam_channel::Receiver<Frame>> {
-        let (tx, rx) = crossbeam_channel::bounded(4);
-        let running = Arc::clone(&self.streaming);
-        running.store(true, Ordering::SeqCst);
-        let target_name = source.name.clone();
-        let frame_delay = Duration::from_micros(1_000_000 / config.framerate.max(1) as u64);
-
-        self.stream_handle = Some(std::thread::spawn(move || {
-            let conn = match Connection::connect_to_env() {
-                Ok(conn) => conn,
-                Err(error) => {
-                    tracing::error!(%error, "Persistent Wayland connection failed");
-                    return;
-                }
-            };
-            let (globals, mut queue) = match registry_queue_init::<CaptureState>(&conn) {
-                Ok(res) => res,
-                Err(error) => {
-                    tracing::error!(%error, "Wayland registry init failed");
-                    return;
-                }
-            };
-            let qh = queue.handle();
-            let manager = match globals.bind::<ZwlrScreencopyManagerV1, _, _>(&qh, 1..=3, ()) {
-                Ok(m) => m,
-                Err(error) => {
-                    tracing::error!(%error, "Binding ZwlrScreencopyManagerV1 failed");
-                    return;
-                }
-            };
-            let shm = match globals.bind::<wl_shm::WlShm, _, _>(&qh, 1..=1, ()) {
-                Ok(s) => s,
-                Err(error) => {
-                    tracing::error!(%error, "Binding WlShm failed");
-                    return;
-                }
-            };
-
-            let mut state = CaptureState {
-                shm: Some(shm),
-                ..Default::default()
-            };
-
-            bind_outputs(&globals, &qh, &mut state);
-            let _ = queue.roundtrip(&mut state);
-            let target_output = match select_output(&state, Some(&target_name)) {
-                Ok(output) => output,
-                Err(error) => {
-                    tracing::error!(%error, "requested output is unavailable");
-                    return;
-                }
-            };
-
-            while running.load(Ordering::SeqCst) {
-                if let Some(buffer) = state.buffer.take() {
-                    buffer.destroy();
-                }
-                if let Some(pool) = state.pool.take() {
-                    pool.destroy();
-                }
-                state.ready = false;
-                state.failed = None;
-                manager.capture_output(0, &target_output, &qh, ());
-
-                while !state.ready && state.failed.is_none() && running.load(Ordering::SeqCst) {
-                    if let Err(err) = queue.blocking_dispatch(&mut state) {
-                        tracing::error!(%err, "Wayland queue dispatch failed");
-                        break;
-                    }
-                }
-
-                if state.failed.is_some() || !running.load(Ordering::SeqCst) {
-                    break;
-                }
-
-                if let Some(mut file) = state.file.take()
-                    && file.seek(SeekFrom::Start(0)).is_ok()
-                {
-                    let mut raw = vec![0; (state.stride * state.height) as usize];
-                    if file.read_exact(&mut raw).is_ok() {
-                        let row_bytes = (state.width * 4) as usize;
-                        let mut data = Vec::with_capacity(row_bytes * state.height as usize);
-                        for row in raw.chunks_exact(state.stride as usize) {
-                            data.extend_from_slice(&row[..row_bytes]);
-                        }
-                        let frame = Frame {
-                            data: FrameData::Shm(data),
-                            width: state.width,
-                            height: state.height,
-                            format: state.format,
-                            timestamp: Instant::now(),
-                        };
-                        if let Err(crossbeam_channel::TrySendError::Full(_)) = tx.try_send(frame) {
-                            tracing::debug!("Frame dropped due to channel backpressure");
-                        }
-                    }
-                }
-
-                std::thread::sleep(frame_delay);
-            }
-        }));
-
-        Ok(rx)
-    }
-
-    fn enumerate_sources(&self) -> anyhow::Result<Vec<RecordingSource>> {
-        let conn = Connection::connect_to_env().context("connecting to Wayland")?;
-        let (globals, mut queue) = registry_queue_init::<CaptureState>(&conn)?;
-        let qh = queue.handle();
-        let mut state = CaptureState::default();
-
-        bind_outputs(&globals, &qh, &mut state);
-        let _ = queue.roundtrip(&mut state);
-
-        anyhow::ensure!(
-            !state.outputs.is_empty(),
-            "no Wayland outputs are available"
-        );
-        Ok(state
-            .outputs
-            .into_iter()
-            .map(|output| RecordingSource::new(output.name, output.description))
-            .collect())
-    }
-
-    fn stop_stream(&mut self) {
-        self.streaming.store(false, Ordering::SeqCst);
-        if let Some(handle) = self.stream_handle.take() {
-            let _ = handle.join();
-        }
     }
 }

@@ -20,7 +20,6 @@ pub enum BuiltinActionId {
     BrightnessUp,
     BrightnessDown,
     TakeScreenshot,
-    RecordScreen,
 }
 
 impl BuiltinActionId {
@@ -41,7 +40,6 @@ impl BuiltinActionId {
         Self::BrightnessUp,
         Self::BrightnessDown,
         Self::TakeScreenshot,
-        Self::RecordScreen,
     ];
 
     fn name(self) -> &'static str {
@@ -62,7 +60,6 @@ impl BuiltinActionId {
             Self::BrightnessUp => "brightness_up",
             Self::BrightnessDown => "brightness_down",
             Self::TakeScreenshot => "take_screenshot",
-            Self::RecordScreen => "record_screen",
         }
     }
 
@@ -79,8 +76,7 @@ impl BuiltinActionId {
             | Self::VolumeMute
             | Self::BrightnessUp
             | Self::BrightnessDown
-            | Self::TakeScreenshot
-            | Self::RecordScreen => ActionInputRequirement::NoInput,
+            | Self::TakeScreenshot => ActionInputRequirement::NoInput,
             Self::FocusWorkspace => ActionInputRequirement::WorkspaceId,
             Self::FocusWindow | Self::CloseWindow => ActionInputRequirement::WindowId,
             Self::MoveWindowToWorkspace => ActionInputRequirement::WindowAndWorkspace,
@@ -127,7 +123,6 @@ impl ActionId {
     pub const BrightnessUp: Self = Self(Cow::Borrowed("builtin:brightness_up"));
     pub const BrightnessDown: Self = Self(Cow::Borrowed("builtin:brightness_down"));
     pub const TakeScreenshot: Self = Self(Cow::Borrowed("builtin:take_screenshot"));
-    pub const RecordScreen: Self = Self(Cow::Borrowed("builtin:record_screen"));
 
     pub fn name(&self) -> &str {
         self.0
@@ -229,7 +224,6 @@ pub enum ActionInvocation {
     BrightnessUp,
     BrightnessDown,
     TakeScreenshot,
-    RecordScreen,
     Extension {
         id: CanonicalId,
         payload: Option<serde_json::Value>,
@@ -274,7 +268,6 @@ impl ActionInvocation {
             Self::BrightnessUp => ActionId::BrightnessUp,
             Self::BrightnessDown => ActionId::BrightnessDown,
             Self::TakeScreenshot => ActionId::TakeScreenshot,
-            Self::RecordScreen => ActionId::RecordScreen,
             Self::Extension { id, .. } => ActionId::extension(id.clone()),
         }
     }
@@ -311,7 +304,6 @@ impl ActionInvocation {
                     BuiltinActionId::BrightnessUp => Ok(Self::BrightnessUp),
                     BuiltinActionId::BrightnessDown => Ok(Self::BrightnessDown),
                     BuiltinActionId::TakeScreenshot => Ok(Self::TakeScreenshot),
-                    BuiltinActionId::RecordScreen => Ok(Self::RecordScreen),
                     _ => unreachable!(),
                 },
                 Some(_) => Err(format!("action '{id}' does not accept input parameters")),
@@ -474,7 +466,6 @@ fn builtin_descriptor(id: BuiltinActionId) -> ActionDescriptor {
         BuiltinActionId::BrightnessUp => ("Increase Brightness", ActionCategory::System),
         BuiltinActionId::BrightnessDown => ("Decrease Brightness", ActionCategory::System),
         BuiltinActionId::TakeScreenshot => ("Take Screenshot", ActionCategory::System),
-        BuiltinActionId::RecordScreen => ("Record Screen Video", ActionCategory::System),
     };
     let id_action = action_id(id);
     ActionDescriptor {
@@ -505,7 +496,6 @@ fn action_id(id: BuiltinActionId) -> ActionId {
         BuiltinActionId::BrightnessUp => ActionId::BrightnessUp,
         BuiltinActionId::BrightnessDown => ActionId::BrightnessDown,
         BuiltinActionId::TakeScreenshot => ActionId::TakeScreenshot,
-        BuiltinActionId::RecordScreen => ActionId::RecordScreen,
     }
 }
 
@@ -704,10 +694,6 @@ mod tests {
         );
         assert_eq!(
             find_req(&ActionId::TakeScreenshot),
-            ActionInputRequirement::NoInput
-        );
-        assert_eq!(
-            find_req(&ActionId::RecordScreen),
             ActionInputRequirement::NoInput
         );
 

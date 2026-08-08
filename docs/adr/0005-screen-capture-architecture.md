@@ -1,81 +1,50 @@
-# Screen capture crate architecture
+# Screen capture crate architecture (Screenshot-Only)
 
-Shilpo's screen capture and recording feature (`shilpo-capture`) is a native implementation replacing the
-legacy `grim`/`wf-recorder` shell-out approach. This ADR records the key trade-offs.
+Shilpo's screen capture feature (`shilpo-capture`) is a native implementation replacing the
+legacy `grim` shell-out approach. This ADR records the key trade-offs and architecture.
+
+## Scope & Deferral of Screen Recording
+
+Screen recording was previously implemented using `ffmpeg-next` and PipeWire audio capture.
+Due to upstream FFmpeg ABI instability (such as FFmpeg 7/9 struct opaque migration breaking Rust bindings)
+and to keep the shell runtime lightweight and reliable, **screen recording has been completely removed**
+and intentionally deferred until the shell architecture stabilizes. No specific future recording backend
+(libobs, Avio, GStreamer, or CLI subprocess) is pre-selected.
+
+`shilpo-capture` is now a focused, deep module dedicated exclusively to one-shot screenshot capture.
 
 ## Crate placement: `desktop/capture` (Linux-only)
 
-The crate lives in `desktop/` because it depends on Wayland protocols, PipeWire, and FFmpeg — all
+The crate lives in `desktop/` because it depends on Wayland protocols (`wlr-screencopy-unstable-v1`) —
 Linux-specific. A future cross-platform abstraction layer can be extracted when macOS/Windows backends
-exist, but that's a hypothetical seam with one adapter today (ADR-0001 principle).
+exist (ADR-0001 principle).
 
 ## Wayland protocol support
 
-The first release uses `wlr-screencopy-unstable-v1`, which is the protocol currently supported by Niri
-and delivers frames through SHM buffers. `ext-image-copy-capture-v1` is intentionally deferred until the
-compositor support and DMA-BUF implementation are available; it is not part of the active runtime factory.
+Screen capture uses `wlr-screencopy-unstable-v1`, which is supported by Niri and delivers frames
+through SHM memory buffers (using `memfd` for anonymous buffer creation).
 
 **Rejected alternative:** XDG Desktop Portal (`ashpd`) as primary. The portal shows permission dialogs on
-every capture — unnecessary friction when Shilpo IS the trusted shell environment. Portal may be added as a
-third fallback for non-Niri compositors in the future.
+every capture — unnecessary friction when Shilpo IS the trusted shell environment.
 
-## PipeWire over PulseAudio
+## One-shot Capture Architecture
 
-Audio capture uses `pipewire-rs` natively instead of `libpulse-binding`. PipeWire is the standard audio
-framework on modern Linux desktops (Fedora, Ubuntu 22.04+, Arch). The WIP's PulseAudio code worked through
-PipeWire's compatibility layer, but native PipeWire offers better latency, proper screen audio capture, and
-aligns with the project's direction (services migrating to native APIs).
-
-## FFmpeg over GStreamer and libobs
-
-Encoding uses `ffmpeg-next` (Rust FFmpeg bindings).
-
-**Rejected: GStreamer** — adds 50-100MB of dependencies for pipeline abstraction that's unnecessary when we
-have an explicit fork-join pipeline with `crossbeam-channel`. FFmpeg is already 20-30MB and commonly
-pre-installed.
-
-**Rejected: libobs-rs** — OBS Studio bindings require the full OBS library chain (50-100MB+). OBS is
-designed as a standalone app with its own threading model and plugin architecture. Its Wayland capture goes
-through PipeWire portal anyway, so no advantage over direct screencopy. The dependency weight is
-unjustifiable for a desktop shell component.
-
-## Fork-join pipeline with `std::thread`
-
-The recording pipeline uses `std::thread` + `crossbeam-channel` with no async runtime dependency:
+The `shilpo-capture` API exposes synchronous functions for one-shot screen capture:
 
 ```
-Video: CaptureBackend → TransformStage → VideoEncodeStage ─┐
-                                                             ├→ MuxStage → File
-Audio: PipeWireCapture → AudioEncodeStage ──────────────────┘
+Wayland Compositor → wlr-screencopy → SHM Buffer → Frame → frame_to_rgba → RgbaImage
+                                                                            ├── Clipboard
+                                                                            ├── File Save (PNG)
+                                                                            └── Future OCR integration
 ```
 
-Each stage is a deep module with a small channel-based interface. The capture crate exposes a synchronous
-API (`RecordingController::start()`, `stop()`). The shell bridges to GPUI's async model at the integration
-layer.
+- `create_backend()` creates a `Box<dyn CaptureBackend>` providing `capture_frame(output: Option<&str>)`.
+- `frame_to_rgba()` converts pixel formats (ARGB8888, XRGB8888, ABGR8888, XBGR8888) into standard RGBA images with buffer truncation checking.
+- `crop_image()` handles rectangular region clipping with bounds enforcement.
+- `copy_image_to_clipboard()` writes RGBA image data to the system clipboard through the desktop clipboard integration.
 
-**Rejected: tokio async** — FFmpeg encoding and PipeWire capture are inherently blocking. Wrapping them in
-async adds complexity without benefit. Keeping the crate async-runtime-agnostic means it can be used from
-tokio, gpui, or bare std.
+## Supported Screenshot Workflow Scope
 
-## Rewrite over move
-
-The WIP prototype at `crates/capture/` is not moved to `desktop/capture/` — it's rewritten using the WIP
-as reference. The WIP has a 1442-line god module (`worker.rs`), deprecated protocol code, PulseAudio
-dependency, hard-coded OCR dependencies, and mixed async patterns. A fresh implementation following the
-settled architecture is cleaner than move-then-refactor.
-
-## First Release Scope & Follow-up Items
-
-The initial production release delivers a truthful, rock-solid baseline:
-- **Screenshots**: Full output capture and bounded region selection.
-- **Recording**: Full display output recording only (H.264 video + AAC audio in MP4 container).
-- **Audio**: System audio or no audio.
-- **Protocol**: `wlr-screencopy-unstable-v1` active adapter with persistent session connection, SHM buffer row compaction, and non-blocking frame backpressure handling.
-
-### Deferred Follow-up Work
-The following features are intentionally deferred to follow-up issues:
-1. Window and custom region video recording.
-2. `ext-image-copy-capture-v1` DMA-BUF zero-copy backend protocol.
-3. VA-API hardware acceleration for video encoding.
-4. Additional video codecs (H.265, VP9, AV1) and container formats (MKV, WebM).
-5. Microphone audio capture and mixed system + microphone audio streams.
+- **Fullscreen & Output Selection**: Primary or named display output capture.
+- **Region Selection**: Region cropping with bounds validation and empty region handling.
+- **Intents**: Clipboard copy and PNG save for annotation/menu workflows. OCR is reserved for a future feature and reports an explicit unavailable error today.

@@ -48,7 +48,7 @@ impl DoctorChecker {
             self.check_terminal_fonts_cursors(),
             self.check_i2c_permissions(),
             self.check_xdg_user_dirs(auto_fix),
-            self.check_capture_and_recording(),
+            self.check_capture(),
         ]
     }
 
@@ -713,7 +713,7 @@ impl DoctorChecker {
         }
     }
 
-    pub fn check_capture_and_recording(&self) -> DiagnosticItem {
+    pub fn check_capture(&self) -> DiagnosticItem {
         let has_tesseract = std::process::Command::new("tesseract")
             .arg("--version")
             .output()
@@ -723,10 +723,10 @@ impl DoctorChecker {
         if available {
             DiagnosticItem {
                 category: "Media Capture".into(),
-                name: "Capture & Recording Suite".into(),
+                name: "Screen Capture Suite".into(),
                 status: DiagnosticStatus::Pass,
                 message: format!(
-                    "Wayland screencopy and screen recording pipeline are operational{}",
+                    "Wayland screencopy screenshot backend is operational{}",
                     if has_tesseract { " (with OCR)" } else { "" }
                 ),
                 repair_command: None,
@@ -736,7 +736,7 @@ impl DoctorChecker {
         } else {
             DiagnosticItem {
                 category: "Media Capture".into(),
-                name: "Capture & Recording Suite".into(),
+                name: "Screen Capture Suite".into(),
                 status: DiagnosticStatus::Warn,
                 message: "Screen capture backend unavailable".into(),
                 repair_command: None,

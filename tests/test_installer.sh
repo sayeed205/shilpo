@@ -125,8 +125,8 @@ fi
 exit 0
 SCRIPT
   chmod +x "$SHILPO_BUILD_DIR/release/shilpo"
-  touch "$SHILPO_BUILD_DIR/release/shilpo-shell" "$SHILPO_BUILD_DIR/release/shilpo-themed"
-  chmod +x "$SHILPO_BUILD_DIR/release/shilpo-shell" "$SHILPO_BUILD_DIR/release/shilpo-themed"
+  touch "$SHILPO_BUILD_DIR/release/shilpo-shell" "$SHILPO_BUILD_DIR/release/shilpo-themed" "$SHILPO_BUILD_DIR/release/shilpo-settings"
+  chmod +x "$SHILPO_BUILD_DIR/release/shilpo-shell" "$SHILPO_BUILD_DIR/release/shilpo-themed" "$SHILPO_BUILD_DIR/release/shilpo-settings"
 
   touch "$SHILPO_EXTENSION_TARGET_DIR/wasm32-wasip2/release/shilpo_weather_extension.wasm"
 fi
@@ -350,13 +350,13 @@ assert_file_exists "$FAKE_HOME/.config/niri/config.kdl" "Preserves Niri configur
 assert_file_exists "$FAKE_HOME/.config/shilpo/config.toml" "Preserves Shilpo configuration"
 cleanup_test_env
 
-# Test 13: Dependency contract verification for native capture & recording
+# Test 13: Dependency contract verification for native capture
 setup_test_env
 source "$REPO_ROOT/scripts/install/dependencies.sh"
 all_pkgs="${SHILPO_BUILD_PACKAGES[*]} ${SHILPO_RUNTIME_PACKAGES[*]} ${SHILPO_DESKTOP_PACKAGES[*]}"
 assert_contains "$all_pkgs" "tesseract" "Dependency contract includes tesseract"
-assert_contains "$all_pkgs" "ffmpeg" "Dependency contract includes ffmpeg"
 assert_contains "$all_pkgs" "libdrm" "Dependency contract includes libdrm"
+assert_eq "false" "$([[ "$all_pkgs" == *"ffmpeg"* ]] && echo true || echo false)" "Dependency contract excludes ffmpeg"
 assert_eq "false" "$([[ "$all_pkgs" == *"grim"* ]] && echo true || echo false)" "Dependency contract excludes grim"
 assert_eq "false" "$([[ "$all_pkgs" == *"slurp"* ]] && echo true || echo false)" "Dependency contract excludes slurp"
 assert_eq "false" "$([[ "$all_pkgs" == *"wf-recorder"* ]] && echo true || echo false)" "Dependency contract excludes wf-recorder"

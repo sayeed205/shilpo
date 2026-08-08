@@ -1,18 +1,8 @@
 pub mod backend;
-pub mod pipeline;
-pub mod recorder;
-pub mod sources;
 pub mod types;
 
-pub use types::{
-    AudioSource, CaptureIntent, CaptureOutcome, Frame, FrameData, FrameFormat, Quality,
-    RecordingCommand, RecordingEvent, RecordingRequest, RecordingSource, RecordingState, Rect,
-    Region, StreamConfig,
-};
-
 pub use backend::create_backend;
-pub use recorder::RecordingController;
-pub use sources::enumerate_sources;
+pub use types::{CaptureIntent, CaptureOutcome, Frame, FrameFormat, Rect, Region};
 
 /// Capture a single frame from the specified output or primary output
 pub fn capture_frame(output: Option<&str>) -> anyhow::Result<Frame> {
@@ -49,10 +39,7 @@ pub fn copy_image_to_clipboard(_img: &image::RgbaImage) -> anyhow::Result<()> {
 
 /// Convert a captured frame into an owned RGBA image.
 pub fn frame_to_rgba(frame: &Frame) -> anyhow::Result<image::RgbaImage> {
-    let bytes = match &frame.data {
-        FrameData::Shm(bytes) => bytes,
-        FrameData::DmaBuf { .. } => anyhow::bail!("DMA-BUF conversion is not available"),
-    };
+    let bytes = &frame.data;
     let expected = frame.width as usize * frame.height as usize * 4;
     if bytes.len() < expected {
         anyhow::bail!(

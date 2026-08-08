@@ -12,7 +12,7 @@ use shilpo_config::{BarPosition, BarWidget, ShellConfig};
 use shilpo_services::{
     AudioInfo, BatteryInfo, BluetoothInfo, MediaInfo, NetworkInfo, Notification,
 };
-use shilpo_ui::{ActiveTheme, StyledExt, h_flex, v_flex};
+use shilpo_ui::{ActiveTheme, h_flex, v_flex};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -767,45 +767,6 @@ impl Render for BarView {
         let start = self.build_section("start", &widgets.start, side, is_floating, window, cx);
         let center = self.build_section("center", &widgets.center, side, is_floating, window, cx);
         let end = self.build_section("end", &widgets.end, side, is_floating, window, cx);
-        let recording_state = ShellRuntime::recording_state(cx);
-        let recording_visible = matches!(
-            recording_state,
-            shilpo_capture::RecordingState::Recording { .. }
-                | shilpo_capture::RecordingState::Paused { .. }
-                | shilpo_capture::RecordingState::Finalizing
-        );
-        let center = h_flex()
-            .gap_2()
-            .child(center)
-            .when(recording_visible, |section| {
-                let label = match &recording_state {
-                    shilpo_capture::RecordingState::Paused { .. } => format!(
-                        "Paused {}",
-                        format_recording_elapsed(recording_state.elapsed())
-                    ),
-                    shilpo_capture::RecordingState::Finalizing => "Saving…".into(),
-                    _ => format!(
-                        "REC {}",
-                        format_recording_elapsed(recording_state.elapsed())
-                    ),
-                };
-                section.child(
-                    h_flex()
-                        .id("bar-recording-status")
-                        .role(gpui::Role::Button)
-                        .aria_label("Stop screen recording")
-                        .cursor_pointer()
-                        .on_click(|_, _, cx| ShellRuntime::toggle_recording(cx))
-                        .gap_1p5()
-                        .px_2()
-                        .py_1()
-                        .rounded_full()
-                        .bg(cx.theme().error_container)
-                        .text_color(cx.theme().on_error_container)
-                        .child(div().size(px(7.)).rounded_full().bg(cx.theme().error))
-                        .child(div().text_xs().font_bold().child(label)),
-                )
-            });
 
         let bar_container = div()
             .when(side, |this| {
@@ -878,18 +839,6 @@ impl Render for BarView {
                 .child(bar_container.rounded_none().shadow_sm())
                 .into_any_element(),
         }
-    }
-}
-
-fn format_recording_elapsed(elapsed: Duration) -> String {
-    let total_seconds = elapsed.as_secs();
-    let hours = total_seconds / 3_600;
-    let minutes = total_seconds % 3_600 / 60;
-    let seconds = total_seconds % 60;
-    if hours > 0 {
-        format!("{hours:02}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes:02}:{seconds:02}")
     }
 }
 
