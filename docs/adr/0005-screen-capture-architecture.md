@@ -1,0 +1,71 @@
+# Screen capture crate architecture
+
+Shilpo's screen capture and recording feature (`shilpo-capture`) is a native implementation replacing the
+legacy `grim`/`wf-recorder` shell-out approach. This ADR records the key trade-offs.
+
+## Crate placement: `desktop/capture` (Linux-only)
+
+The crate lives in `desktop/` because it depends on Wayland protocols, PipeWire, and FFmpeg — all
+Linux-specific. A future cross-platform abstraction layer can be extracted when macOS/Windows backends
+exist, but that's a hypothetical seam with one adapter today (ADR-0001 principle).
+
+## Dual Wayland protocol support with runtime detection
+
+The `CaptureBackend` trait abstracts over two Wayland screencopy protocols:
+
+- `wlr-screencopy-unstable-v1` — the current primary, supported by Niri. SHM buffer delivery only.
+- `ext-image-copy-capture-v1` — the replacement standard (staging). DMA-BUF zero-copy support, window
+  capture. Not yet in Niri.
+
+Runtime detection tries `ext-image-copy-capture-v1` first, falls back to `wlr-screencopy-v1`. When Niri
+adds ext support, the upgrade is automatic. When `wlr-screencopy` is eventually removed, the fallback
+adapter is deleted.
+
+**Rejected alternative:** XDG Desktop Portal (`ashpd`) as primary. The portal shows permission dialogs on
+every capture — unnecessary friction when Shilpo IS the trusted shell environment. Portal may be added as a
+third fallback for non-Niri compositors in the future.
+
+## PipeWire over PulseAudio
+
+Audio capture uses `pipewire-rs` natively instead of `libpulse-binding`. PipeWire is the standard audio
+framework on modern Linux desktops (Fedora, Ubuntu 22.04+, Arch). The WIP's PulseAudio code worked through
+PipeWire's compatibility layer, but native PipeWire offers better latency, proper screen audio capture, and
+aligns with the project's direction (services migrating to native APIs).
+
+## FFmpeg over GStreamer and libobs
+
+Encoding uses `ffmpeg-next` (Rust FFmpeg bindings).
+
+**Rejected: GStreamer** — adds 50-100MB of dependencies for pipeline abstraction that's unnecessary when we
+have an explicit fork-join pipeline with `crossbeam-channel`. FFmpeg is already 20-30MB and commonly
+pre-installed.
+
+**Rejected: libobs-rs** — OBS Studio bindings require the full OBS library chain (50-100MB+). OBS is
+designed as a standalone app with its own threading model and plugin architecture. Its Wayland capture goes
+through PipeWire portal anyway, so no advantage over direct screencopy. The dependency weight is
+unjustifiable for a desktop shell component.
+
+## Fork-join pipeline with `std::thread`
+
+The recording pipeline uses `std::thread` + `crossbeam-channel` with no async runtime dependency:
+
+```
+Video: CaptureBackend → TransformStage → VideoEncodeStage ─┐
+                                                             ├→ MuxStage → File
+Audio: PipeWireCapture → AudioEncodeStage ──────────────────┘
+```
+
+Each stage is a deep module with a small channel-based interface. The capture crate exposes a synchronous
+API (`RecordingController::start()`, `stop()`). The shell bridges to GPUI's async model at the integration
+layer.
+
+**Rejected: tokio async** — FFmpeg encoding and PipeWire capture are inherently blocking. Wrapping them in
+async adds complexity without benefit. Keeping the crate async-runtime-agnostic means it can be used from
+tokio, gpui, or bare std.
+
+## Rewrite over move
+
+The WIP prototype at `crates/capture/` is not moved to `desktop/capture/` — it's rewritten using the WIP
+as reference. The WIP has a 1442-line god module (`worker.rs`), deprecated protocol code, PulseAudio
+dependency, hard-coded OCR dependencies, and mixed async patterns. A fresh implementation following the
+settled architecture is cleaner than move-then-refactor.
