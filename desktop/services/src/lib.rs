@@ -14,6 +14,7 @@ pub mod night_light;
 pub mod notifications;
 pub mod polled;
 pub mod power_profile;
+pub(crate) mod runtime;
 pub mod screen_capture;
 pub mod tray;
 pub mod upower;
