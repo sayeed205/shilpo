@@ -150,4 +150,32 @@ mod tests {
         let clipboard = ClipboardService::with_custom_store(None);
         assert!(clipboard.subscribe().borrow().is_empty());
     }
+
+    #[test]
+    fn test_service_clone_and_drop_ownership() {
+        let original = PowerProfileService::new_offline();
+        let clone = original.clone();
+
+        assert_eq!(original.info(), clone.info());
+        drop(original);
+
+        assert_eq!(clone.info(), PowerProfileInfo::fallback());
+    }
+
+    #[test]
+    fn test_offline_contract_guarantees() {
+        let battery = BatteryService::new().ok();
+        // BatteryService::new() in offline/unreachable env yields default unavailable info
+        if let Some(svc) = battery {
+            let info = svc.battery_info();
+            assert!(!info.is_present);
+        }
+
+        let media = MediaService::new_offline();
+        assert!(media.media_info().is_empty());
+
+        let network = NetworkService::new_offline();
+        assert!(!network.network_info().available);
+    }
 }
+
