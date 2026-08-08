@@ -1,5 +1,5 @@
 use schemars::JsonSchema;
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use std::fmt;
 use std::str::FromStr;
 

@@ -757,11 +757,7 @@ mod tests {
         assert_eq!(state.color_source, ColorSource::Wallpaper);
         let seed = 0xffab12cd;
 
-        let changed = reduce(
-            &mut state,
-            ThemeCommand::SetSeed(seed),
-            TEST_TIMESTAMP,
-        );
+        let changed = reduce(&mut state, ThemeCommand::SetSeed(seed), TEST_TIMESTAMP);
         assert!(changed);
         assert_eq!(state.source_argb, seed);
         assert_eq!(state.palette_generated_at, TEST_TIMESTAMP);

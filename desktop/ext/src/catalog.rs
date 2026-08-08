@@ -1,6 +1,5 @@
 use crate::cli::ExtensionCli;
 use crate::manifest::{Capability, ExtensionManifest, SUPPORTED_API_VERSION};
-use shilpo_ext_types::ExtensionId;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use flate2::read::GzDecoder;
@@ -10,6 +9,7 @@ use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use shilpo_ext_types::ExtensionId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};

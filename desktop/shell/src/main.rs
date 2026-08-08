@@ -1,4 +1,4 @@
-use gpui::{App, Bounds, DisplayId, point, px, size};
+use gpui::{App, Bounds, DisplayId, QuitMode, point, px, size};
 use shilpo_assets::Assets;
 use shilpo_config::ShellConfig;
 use shilpo_services::ShellIpcServer;
@@ -34,7 +34,13 @@ async fn main() {
         }
     }
 
-    let app = gpui_platform::application().with_assets(Assets);
+    // Shilpo is a supervised desktop daemon, not a document application. Its
+    // bar surfaces may temporarily be replaced by a full-screen capture layer;
+    // do not terminate the process merely because that transition leaves no
+    // ordinary windows mapped for a moment.
+    let app = gpui_platform::application()
+        .with_assets(Assets)
+        .with_quit_mode(QuitMode::Explicit);
     let ipc_server = match ShellIpcServer::new() {
         Ok(server) => server,
         Err(shilpo_services::IpcError::AlreadyRunning) => {

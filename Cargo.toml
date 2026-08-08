@@ -17,6 +17,7 @@ members = [
     "desktop/cli",
 
     # Other
+    "desktop/capture",
     "apps/storybook",
 ]
 resolver = "2"
@@ -35,14 +36,28 @@ shilpo-config = { path = "desktop/config" }
 shilpo-ext-types = { path = "desktop/ext-types" }
 shilpo-ext = { path = "desktop/ext" }
 shilpo-theme-daemon = { path = "desktop/theme-daemon" }
+shilpo-capture = { path = "desktop/capture" }
 
 niri-ipc = "26"
 zbus = "5"
-ashpd = { version = "0.13", default-features = false, features = ["async-io", "settings"] }
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "settings", "screencast", "screenshot"] }
 futures-lite = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tokio-udev = "0.10"
 chrono = "0.4"
+
+wayland-client = "0.31"
+wayland-backend = "0.3"
+wayland-protocols = { version = "0.32", features = ["staging", "unstable"] }
+wayland-protocols-wlr = "0.3"
+libc = "0.2"
+
+# In-process screen recording: DMA-BUF capture, VAAPI/FFmpeg encoding, WebM muxing, PipeWire audio.
+ffmpeg = { package = "ffmpeg-next", version = "8" }
+ffmpeg-sys = { package = "ffmpeg-sys-next", version = "8" }
+pipewire = "0.10"
+drm = "0.15"
+mio = { version = "1", features = ["os-poll", "os-ext"] }
 
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }

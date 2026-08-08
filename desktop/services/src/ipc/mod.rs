@@ -54,6 +54,8 @@ pub enum IpcRequest {
     SetDisplayBrightness { id: String, percentage: u8 },
     GetStatus,
     GetTelemetry,
+    Capture(shilpo_capture::CaptureIntent),
+    Record(shilpo_capture::RecordingCommand),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,6 +156,8 @@ pub struct IpcStatus {
     pub overview_visible: bool,
     pub control_center_visible: bool,
     #[serde(default)]
+    pub recording: shilpo_capture::RecordingState,
+    #[serde(default)]
     pub health: ServiceHealth,
 }
 
@@ -164,6 +168,8 @@ pub enum IpcResult {
     CommandApplied(CommandOutcome),
     Status(IpcStatus),
     Telemetry(ServiceHealth),
+    Capture(shilpo_capture::CaptureOutcome),
+    Record(shilpo_capture::RecordingState),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -838,6 +844,20 @@ fn handle_client(
     let is_status = matches!(&env.request, IpcRequest::GetStatus);
     let is_telemetry = matches!(&env.request, IpcRequest::GetTelemetry);
     let is_compositor = matches!(&env.request, IpcRequest::Compositor(_));
+    let is_record_status = matches!(
+        &env.request,
+        IpcRequest::Record(shilpo_capture::RecordingCommand::Status)
+    );
+    let record_error = match &env.request {
+        IpcRequest::Record(command) => command
+            .validate(&status.lock().unwrap().recording)
+            .err()
+            .map(|error| IpcErrorBody {
+                code: "invalid_recording_state".into(),
+                message: error.to_string(),
+            }),
+        _ => None,
+    };
     let queue_full =
         !is_status && !is_telemetry && !is_compositor && pending.lock().unwrap().len() >= MAX_QUEUE;
 
@@ -845,6 +865,11 @@ fn handle_client(
 
     let result = if is_status {
         Some(IpcResult::Status(status.lock().unwrap().clone()))
+    } else if is_record_status {
+        Some(IpcResult::Record(status.lock().unwrap().recording))
+    } else if let Some(error) = record_error {
+        err_body = Some(error);
+        None
     } else if is_telemetry {
         let mut health = status.lock().unwrap().health.clone();
         if let Some(b) = broker.lock().unwrap().as_ref() {

@@ -82,11 +82,55 @@ pub enum Commands {
         #[command(subcommand)]
         command: ExtCommands,
     },
+    /// Native screen capture and annotation
+    Capture {
+        #[command(subcommand)]
+        action: CaptureAction,
+    },
+    /// Native screen recording pipeline and session control
+    Record {
+        #[command(subcommand)]
+        action: RecordAction,
+    },
     /// Display brightness controls
     Brightness {
         #[command(subcommand)]
         command: BrightnessCommands,
     },
+}
+
+#[derive(Subcommand, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureAction {
+    /// Select a region and copy PNG to clipboard immediately
+    Region,
+    /// Select a region and open the annotation editor
+    Edit,
+    /// Select a region and run OCR, copying recognized text
+    Ocr,
+    /// Open the capture menu (selection shape chooser)
+    Menu,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum RecordAction {
+    /// Start recording, or stop and finalize the active recording
+    Toggle,
+    /// Choose a display output and start video recording
+    Start {
+        /// Optional display output name to record (defaults to primary output)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Pause the active recording
+    Pause,
+    /// Resume the paused recording
+    Resume,
+    /// Stop and finalize the recording
+    Stop,
+    /// Cancel and discard the recording
+    Cancel,
+    /// Query the current recording state
+    Status,
 }
 
 #[derive(Subcommand, Debug, Clone)]

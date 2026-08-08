@@ -3,8 +3,8 @@
 use super::{IpConfig, NetworkDevice, VpnConnection, WifiAccessPoint};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 use zbus::Connection;
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
 const NM_BUS_NAME: &str = "org.freedesktop.NetworkManager";
 const NM_OBJECT_PATH: &str = "/org/freedesktop/NetworkManager";
@@ -307,7 +307,12 @@ pub async fn list_access_points(conn: &Connection) -> Result<Vec<WifiAccessPoint
 /// Query settings dictionary for all saved NetworkManager connections.
 pub async fn list_all_connection_settings(
     conn: &Connection,
-) -> Result<Vec<(OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>)>> {
+) -> Result<
+    Vec<(
+        OwnedObjectPath,
+        HashMap<String, HashMap<String, OwnedValue>>,
+    )>,
+> {
     let list_reply = conn
         .call_method(
             Some(NM_BUS_NAME),
@@ -330,8 +335,9 @@ pub async fn list_all_connection_settings(
                 &(),
             )
             .await
-            && let Ok(settings) =
-                reply.body().deserialize::<HashMap<String, HashMap<String, OwnedValue>>>()
+            && let Ok(settings) = reply
+                .body()
+                .deserialize::<HashMap<String, HashMap<String, OwnedValue>>>()
         {
             result.push((setting_path, settings));
         }
@@ -486,11 +492,7 @@ pub async fn disconnect_vpn(conn: &Connection, name_or_path: &str) -> Result<()>
     anyhow::bail!("Active VPN '{name_or_path}' not found")
 }
 
-async fn get_first_address(
-    conn: &Connection,
-    config_path: &str,
-    iface: &str,
-) -> Option<String> {
+async fn get_first_address(conn: &Connection, config_path: &str, iface: &str) -> Option<String> {
     let addr_data: Vec<HashMap<String, OwnedValue>> =
         get_property(conn, config_path, iface, "AddressData")
             .await
@@ -576,4 +578,3 @@ pub async fn get_primary_connection_info(conn: &Connection) -> Result<(String, O
 
     Ok((connection_type, ip_config))
 }
-

@@ -48,6 +48,7 @@ impl DoctorChecker {
             self.check_terminal_fonts_cursors(),
             self.check_i2c_permissions(),
             self.check_xdg_user_dirs(auto_fix),
+            self.check_capture_and_recording(),
         ]
     }
 
@@ -161,10 +162,31 @@ impl DoctorChecker {
             .iter()
             .copied()
             .filter(|unit| {
-                !std::process::Command::new("systemctl")
+                let active = std::process::Command::new("systemctl")
                     .args(["--user", "is-active", "--quiet", unit])
                     .status()
-                    .is_ok_and(|status| status.success())
+                    .is_ok_and(|status| status.success());
+                if active {
+                    return false;
+                }
+
+                // `shilpo-first-login.service` is an intentional oneshot.
+                // After it completes successfully systemd reports it as
+                // inactive (or keeps it inactive when the marker exists).
+                // That is healthy and must not make doctor fail every login.
+                if *unit == "shilpo-first-login.service" {
+                    if shilpo_config::doctor_first_login_marker_path().exists() {
+                        return false;
+                    }
+                    return !std::process::Command::new("systemctl")
+                        .args(["--user", "show", "--property=Result", "--value", unit])
+                        .output()
+                        .is_ok_and(|output| {
+                            output.status.success()
+                                && String::from_utf8_lossy(&output.stdout).trim() == "success"
+                        });
+                }
+                true
             })
             .collect();
 
@@ -685,6 +707,39 @@ impl DoctorChecker {
                 repair_command: Some(
                     "mkdir -p ~/Pictures/Screenshots ~/Pictures/Wallpapers".into(),
                 ),
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        }
+    }
+
+    pub fn check_capture_and_recording(&self) -> DiagnosticItem {
+        let has_tesseract = std::process::Command::new("tesseract")
+            .arg("--version")
+            .output()
+            .is_ok();
+        let available = shilpo_capture::create_backend().is_ok();
+
+        if available {
+            DiagnosticItem {
+                category: "Media Capture".into(),
+                name: "Capture & Recording Suite".into(),
+                status: DiagnosticStatus::Pass,
+                message: format!(
+                    "Wayland screencopy and screen recording pipeline are operational{}",
+                    if has_tesseract { " (with OCR)" } else { "" }
+                ),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            }
+        } else {
+            DiagnosticItem {
+                category: "Media Capture".into(),
+                name: "Capture & Recording Suite".into(),
+                status: DiagnosticStatus::Warn,
+                message: "Screen capture backend unavailable".into(),
+                repair_command: None,
                 unit_identifier: None,
                 fix_applied: false,
             }

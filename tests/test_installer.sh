@@ -349,6 +349,20 @@ assert_file_exists "$FAKE_HOME/.config/niri/config.kdl" "Preserves Niri configur
 assert_file_exists "$FAKE_HOME/.config/shilpo/config.toml" "Preserves Shilpo configuration"
 cleanup_test_env
 
+# Test 13: Dependency contract verification for native capture & recording
+setup_test_env
+source "$REPO_ROOT/scripts/install/dependencies.sh"
+all_pkgs="${SHILPO_BUILD_PACKAGES[*]} ${SHILPO_RUNTIME_PACKAGES[*]} ${SHILPO_DESKTOP_PACKAGES[*]}"
+assert_contains "$all_pkgs" "tesseract" "Dependency contract includes tesseract"
+assert_contains "$all_pkgs" "ffmpeg" "Dependency contract includes ffmpeg"
+assert_contains "$all_pkgs" "libdrm" "Dependency contract includes libdrm"
+assert_eq "false" "$([[ "$all_pkgs" == *"grim"* ]] && echo true || echo false)" "Dependency contract excludes grim"
+assert_eq "false" "$([[ "$all_pkgs" == *"slurp"* ]] && echo true || echo false)" "Dependency contract excludes slurp"
+assert_eq "false" "$([[ "$all_pkgs" == *"wf-recorder"* ]] && echo true || echo false)" "Dependency contract excludes wf-recorder"
+assert_eq "false" "$([[ "$all_pkgs" == *"swappy"* ]] && echo true || echo false)" "Dependency contract excludes swappy"
+assert_eq "false" "$([[ "$all_pkgs" == *"wl-clipboard"* ]] && echo true || echo false)" "Dependency contract excludes wl-clipboard"
+cleanup_test_env
+
 printf '\n==================================================\n'
 printf 'Test Suite Summary: %d Passed, %d Failed\n' "$PASSED" "$FAILED"
 printf '==================================================\n'

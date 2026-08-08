@@ -87,7 +87,7 @@ binds {
 // Column / window resizing
     Mod+R {
         switch-preset-column-width ; }
-    Mod+Shift+R {
+    Mod+Ctrl+R {
         reset-window-height ; }
     Mod+Minus {
         set-column-width "-10%"; }
@@ -175,7 +175,9 @@ binds {
     XF86AudioPrev allow-when-locked=true {
         spawn "playerctl" "previous"; }
 
-// Screenshots
+// Screenshots & Capture
+    Super+Shift+S { spawn "shilpo" "capture" "region"; }
+    Super+Shift+R { spawn "shilpo" "record" "toggle"; }
     Print {
         screenshot ; }
     Mod+Print {

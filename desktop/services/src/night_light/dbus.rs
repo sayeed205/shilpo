@@ -52,7 +52,10 @@ impl<'a> GnomeColorBackend<'a> {
             .context("Failed to connect to GNOME SettingsDaemon.Color DBus proxy")?;
 
         // Check if property query works
-        let _ = proxy.night_light_enabled().await.context("GNOME Color DBus not available")?;
+        let _ = proxy
+            .night_light_enabled()
+            .await
+            .context("GNOME Color DBus not available")?;
 
         info!("Successfully initialized GNOME DBus night light backend");
         Ok(GnomeColorBackend {
@@ -80,7 +83,10 @@ impl<'a> KdeNightLightBackend<'a> {
             .await
             .context("Failed to connect to KDE KWin.NightLight DBus proxy")?;
 
-        let _ = proxy.enabled().await.context("KDE NightLight DBus not available")?;
+        let _ = proxy
+            .enabled()
+            .await
+            .context("KDE NightLight DBus not available")?;
 
         info!("Successfully initialized KDE DBus night light backend");
         Ok(KdeNightLightBackend {

@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::{
     ControlCenterView,
     actions::ActionInvocation,
-    bar::{BarView, BarSpec, OutputDescriptor, ReconciliationOp, geometry::BarGeometry},
+    bar::{BarSpec, BarView, OutputDescriptor, ReconciliationOp, geometry::BarGeometry},
     error::ShellError,
     extensions::{ContributionInstance, ContributionSurface},
     overview::{OverviewCloseReason, WorkspaceOverview},
@@ -226,8 +226,7 @@ pub struct SurfaceManager {
         Entity<crate::osd::OsdView>,
     )>,
     _osd_generation: u64,
-    extension_surfaces:
-        HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
+    extension_surfaces: HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
     extension_panel: Option<(WindowHandle<shilpo_ui::Root>, CanonicalId)>,
     extension_output_ids: HashSet<DisplayId>,
     readiness: shilpo_services::ipc::ReadinessState,
@@ -272,6 +271,7 @@ impl SurfaceManager {
         self.latest_snapshot = snapshot;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn bar_state(&self) -> BarState {
         self.bar_state.clone()
     }
@@ -373,9 +373,13 @@ impl SurfaceManager {
 
     /// Removes every surface belonging to a window that was just closed and
     /// reports which overlay was destroyed so the orchestrator can emit events.
-    pub(crate) fn handle_window_closed(&mut self, window_id: gpui::WindowId) -> WindowClosedOutcome {
+    pub(crate) fn handle_window_closed(
+        &mut self,
+        window_id: gpui::WindowId,
+    ) -> WindowClosedOutcome {
         let mut outcome = WindowClosedOutcome::Nothing;
-        self.bars.retain(|_, (handle, _)| handle.window_id() != window_id);
+        self.bars
+            .retain(|_, (handle, _)| handle.window_id() != window_id);
         self.extension_surfaces
             .retain(|_, (handle, _)| handle.window_id() != window_id);
         if self.bars.is_empty() {
@@ -546,7 +550,11 @@ impl SurfaceManager {
         }
     }
 
-    pub(crate) fn open_bar(cx: &mut App, geometry: &BarGeometry, with_display_geometry: bool) -> bool {
+    pub(crate) fn open_bar(
+        cx: &mut App,
+        geometry: &BarGeometry,
+        with_display_geometry: bool,
+    ) -> bool {
         let config = ShellRuntime::active_config(cx).bar;
         let spec = BarSpec::new(geometry.clone(), config, with_display_geometry);
         Self::open_bar_with_spec(cx, spec)
@@ -610,7 +618,13 @@ impl SurfaceManager {
             }
         }
 
-        if !mounted && !cx.global::<ShellRuntime>().surface_manager().bars.is_empty() {
+        if !mounted
+            && !cx
+                .global::<ShellRuntime>()
+                .surface_manager()
+                .bars
+                .is_empty()
+        {
             mounted = true;
         }
 
@@ -633,7 +647,8 @@ impl SurfaceManager {
         if !cx.global::<ShellRuntime>().surface_manager().has_bars() {
             Self::reconcile_bars(cx);
         } else {
-            let old_bars = std::mem::take(&mut cx.global_mut::<ShellRuntime>().surface_manager_mut().bars);
+            let old_bars =
+                std::mem::take(&mut cx.global_mut::<ShellRuntime>().surface_manager_mut().bars);
             for (_, (handle, _)) in old_bars {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             }
@@ -667,7 +682,12 @@ impl SurfaceManager {
     }
 
     pub(crate) fn toggle_overview(cx: &mut App) {
-        if cx.global::<ShellRuntime>().surface_manager().overview.is_some() {
+        if cx
+            .global::<ShellRuntime>()
+            .surface_manager()
+            .overview
+            .is_some()
+        {
             Self::close_overview(cx);
         } else {
             Self::open_or_focus_overview(cx);
@@ -815,7 +835,10 @@ impl SurfaceManager {
         Self::open_or_focus_overview_on_display(cx, None);
     }
 
-    pub(crate) fn open_or_focus_overview_on_display(cx: &mut App, target_display_id: Option<DisplayId>) {
+    pub(crate) fn open_or_focus_overview_on_display(
+        cx: &mut App,
+        target_display_id: Option<DisplayId>,
+    ) {
         if let Some(handle) = cx.global::<ShellRuntime>().surface_manager().overview {
             let _ = handle.update(cx, |_, window, _| window.activate_window());
             return;
@@ -953,7 +976,12 @@ impl SurfaceManager {
     }
 
     pub(crate) fn toggle_control_center(cx: &mut App) {
-        if cx.global::<ShellRuntime>().surface_manager().control_center.is_some() {
+        if cx
+            .global::<ShellRuntime>()
+            .surface_manager()
+            .control_center
+            .is_some()
+        {
             Self::close_control_center(cx);
         } else {
             Self::open_or_focus_control_center(cx);
@@ -975,7 +1003,13 @@ impl SurfaceManager {
             .control_center
             .take();
         let Some(handle) = handle else { return false };
-        ShellRuntime::dispatch_surface_lifecycle(cx, ContributionSurface::ControlCenter, false, 340., 540.);
+        ShellRuntime::dispatch_surface_lifecycle(
+            cx,
+            ContributionSurface::ControlCenter,
+            false,
+            340.,
+            540.,
+        );
         let _ = handle.update(cx, |_, window, _| window.remove_window());
         true
     }
@@ -1256,10 +1290,7 @@ impl SurfaceManager {
 
     /// Reconciles the extension desktop surfaces (bar widgets + config surfaces)
     /// against the desired instance layout.
-    pub(crate) fn reconcile_extension_surfaces(
-        cx: &mut App,
-        outputs: &[OutputDescriptor],
-    ) {
+    pub(crate) fn reconcile_extension_surfaces(cx: &mut App, outputs: &[OutputDescriptor]) {
         let config = ShellRuntime::active_config(cx);
         let mut instances = Vec::new();
 
@@ -1591,7 +1622,9 @@ impl ShellRuntime {
         cx: &App,
     ) -> Option<WindowHandle<crate::notification::NotificationToastView>> {
         if cx.has_global::<Self>() {
-            cx.global::<Self>().surface_manager().active_notification_handle()
+            cx.global::<Self>()
+                .surface_manager()
+                .active_notification_handle()
         } else {
             None
         }
@@ -1660,7 +1693,9 @@ fn readiness_for(
     bar_state: &BarState,
 ) -> shilpo_services::ipc::ReadinessState {
     match connection {
-        shilpo_services::CompositorConnection::Connecting => shilpo_services::ipc::ReadinessState::Starting,
+        shilpo_services::CompositorConnection::Connecting => {
+            shilpo_services::ipc::ReadinessState::Starting
+        }
         shilpo_services::CompositorConnection::Ready => {
             if matches!(bar_state, BarState::Visible | BarState::Hidden) {
                 shilpo_services::ipc::ReadinessState::Ready
@@ -1671,7 +1706,9 @@ fn readiness_for(
         shilpo_services::CompositorConnection::Reconnecting { .. } => {
             shilpo_services::ipc::ReadinessState::Degraded
         }
-        shilpo_services::CompositorConnection::Stopped => shilpo_services::ipc::ReadinessState::Failed,
+        shilpo_services::CompositorConnection::Stopped => {
+            shilpo_services::ipc::ReadinessState::Failed
+        }
     }
 }
 
@@ -1885,7 +1922,9 @@ mod tests {
             connection: shilpo_services::CompositorConnection::Ready,
             ..Default::default()
         };
-        harness.manager.set_latest_snapshot(Arc::new(ready_snapshot));
+        harness
+            .manager
+            .set_latest_snapshot(Arc::new(ready_snapshot));
         harness.manager.update_readiness();
         assert_eq!(
             harness.manager.readiness(),
@@ -1894,6 +1933,11 @@ mod tests {
 
         assert!(!harness.manager.has_extension_surface("inst-1"));
         let desired = HashMap::new();
-        assert!(harness.manager.stale_extension_surface_ids(&desired).is_empty());
+        assert!(
+            harness
+                .manager
+                .stale_extension_surface_ids(&desired)
+                .is_empty()
+        );
     }
 }

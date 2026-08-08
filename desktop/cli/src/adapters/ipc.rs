@@ -105,6 +105,38 @@ impl IpcAdapter {
     pub fn config_reload(&self) -> Result<(), (i32, String)> {
         self.request(IpcRequest::ReloadConfig)
     }
+
+    pub fn capture(
+        &self,
+        intent: shilpo_capture::CaptureIntent,
+    ) -> Result<shilpo_services::IpcResponse, (i32, String)> {
+        self.checked_request(IpcRequest::Capture(intent))
+    }
+
+    pub fn record(
+        &self,
+        cmd: shilpo_capture::RecordingCommand,
+    ) -> Result<shilpo_services::IpcResponse, (i32, String)> {
+        self.checked_request(IpcRequest::Record(cmd))
+    }
+
+    fn checked_request(
+        &self,
+        request: IpcRequest,
+    ) -> Result<shilpo_services::IpcResponse, (i32, String)> {
+        let response = self.client.send(request).map_err(map_ipc_error)?;
+        if response.ok {
+            Ok(response)
+        } else {
+            let error = response
+                .error
+                .unwrap_or(shilpo_services::ipc::IpcErrorBody {
+                    code: "operation_failed".into(),
+                    message: "shell rejected the request".into(),
+                });
+            Err((1, format!("{}: {}", error.code, error.message)))
+        }
+    }
 }
 
 fn map_ipc_error(error: shilpo_services::IpcError) -> (i32, String) {

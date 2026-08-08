@@ -15,6 +15,7 @@ shilpo-theme-daemon.workspace = true
 shilpo-config.workspace = true
 shilpo-ext-types.workspace = true
 shilpo-ext.workspace = true
+shilpo-capture = { path = "../capture" }
 
 anyhow.workspace = true
 dirs.workspace = true

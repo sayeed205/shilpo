@@ -1,8 +1,8 @@
+use anyhow::{Context, Result, anyhow};
+use rustix::fs::{MemfdFlags, memfd_create};
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::AsFd;
-use anyhow::{Context, Result, anyhow};
-use rustix::fs::{MemfdFlags, memfd_create};
 use tracing::{debug, error, info, warn};
 use wayland_client::{
     Connection, Dispatch, EventQueue, QueueHandle,
@@ -122,7 +122,10 @@ impl Dispatch<ZwlrGammaControlV1, usize> for WlrGammaState {
             }
             zwlr_gamma_control_v1::Event::Failed => {
                 state.failed = true;
-                error!("ZwlrGammaControlV1 reported failure for output {}", output_idx);
+                error!(
+                    "ZwlrGammaControlV1 reported failure for output {}",
+                    output_idx
+                );
             }
             _ => {}
         }
@@ -147,12 +150,13 @@ impl WlrGammaBackend {
         display.get_registry(&qh, ());
 
         // Initial roundtrip to populate registry globals
-        event_queue.roundtrip(&mut state).context("Failed initial Wayland roundtrip")?;
+        event_queue
+            .roundtrip(&mut state)
+            .context("Failed initial Wayland roundtrip")?;
 
-        let manager = state
-            .manager
-            .clone()
-            .ok_or_else(|| anyhow!("zwlr_gamma_control_manager_v1 global protocol not advertised"))?;
+        let manager = state.manager.clone().ok_or_else(|| {
+            anyhow!("zwlr_gamma_control_manager_v1 global protocol not advertised")
+        })?;
 
         // Bind gamma control for all discovered outputs
         for idx in 0..state.outputs.len() {
@@ -162,7 +166,9 @@ impl WlrGammaBackend {
         }
 
         // Second roundtrip to receive gamma_size events
-        event_queue.roundtrip(&mut state).context("Failed gamma control roundtrip")?;
+        event_queue
+            .roundtrip(&mut state)
+            .context("Failed gamma control roundtrip")?;
 
         if state.failed {
             return Err(anyhow!("Gamma control failed during initialization"));
@@ -206,7 +212,9 @@ impl WlrGammaBackend {
             }
         }
 
-        self.conn.flush().context("Failed to flush Wayland commands")?;
+        self.conn
+            .flush()
+            .context("Failed to flush Wayland commands")?;
         self.event_queue.dispatch_pending(&mut self.state)?;
 
         Ok(())

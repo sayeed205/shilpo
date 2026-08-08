@@ -26,4 +26,4 @@ shilpo-theme-daemon.workspace = true
 shilpo-ext-types.workspace = true
 shilpo-ext.workspace = true
 zbus.workspace = true
-
+shilpo-capture.workspace = true

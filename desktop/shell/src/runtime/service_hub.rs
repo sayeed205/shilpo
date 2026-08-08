@@ -224,7 +224,9 @@ impl ServiceHub {
     }
 
     pub(crate) fn is_dnd_enabled(&self) -> bool {
-        self.notification.as_ref().is_some_and(|n| n.is_dnd_enabled())
+        self.notification
+            .as_ref()
+            .is_some_and(|n| n.is_dnd_enabled())
     }
 
     /// Returns the persisted DND intent even when the notification service is offline.
@@ -426,10 +428,7 @@ impl ServiceHub {
                 }
             }
 
-            let handles = cx
-                .global::<ShellRuntime>()
-                .surface_manager()
-                .bar_handles();
+            let handles = cx.global::<ShellRuntime>().surface_manager().bar_handles();
             for handle in handles {
                 let updates_clone = updates.clone();
                 let _ = handle.update(cx, |bar_view, _window, cx| {
@@ -516,7 +515,9 @@ impl ShellRuntime {
             let runtime = cx.global::<Self>();
             runtime
                 .service_hub()
-                .map_or(runtime.session_state().dnd_active, |hub| hub.is_dnd_enabled())
+                .map_or(runtime.session_state().dnd_active, |hub| {
+                    hub.is_dnd_enabled()
+                })
         } else {
             false
         }

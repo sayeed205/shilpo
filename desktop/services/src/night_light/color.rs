@@ -46,7 +46,12 @@ pub fn kelvin_to_rgb(kelvin: u32) -> (f64, f64, f64) {
 
 /// Generates native-endian u16 gamma ramp byte buffer for zwlr_gamma_control_v1.
 /// Output format: [Red array (gamma_size * 2), Green array (gamma_size * 2), Blue array (gamma_size * 2)].
-pub fn generate_gamma_ramp(gamma_size: usize, r_factor: f64, g_factor: f64, b_factor: f64) -> Vec<u8> {
+pub fn generate_gamma_ramp(
+    gamma_size: usize,
+    r_factor: f64,
+    g_factor: f64,
+    b_factor: f64,
+) -> Vec<u8> {
     if gamma_size == 0 {
         return Vec::new();
     }

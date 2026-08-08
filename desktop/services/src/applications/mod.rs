@@ -172,6 +172,17 @@ impl Application {
     }
 }
 
+/// Launch desktop applications in their own systemd scope. Otherwise they
+/// inherit `shilpo-shell.service` and are terminated whenever the shell is
+/// restarted or upgraded.
+#[allow(dead_code)]
+fn scoped_app_command(argv: &[String]) -> Command {
+    let mut command = Command::new("systemd-run");
+    command.args(["--user", "--scope", "--quiet", "--collect", "--"]);
+    command.args(argv);
+    command
+}
+
 pub fn binary_exists(bin: &str) -> bool {
     let clean = bin.trim();
     if clean.is_empty() {
@@ -787,6 +798,27 @@ pub fn validate_drag_drop_payload(mime_type: &str, data: &[u8]) -> Vec<PathBuf> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_apps_launch_outside_the_shell_service_cgroup() {
+        let command = scoped_app_command(&["zed".into(), "--new".into()]);
+        assert_eq!(command.get_program(), "systemd-run");
+        assert_eq!(
+            command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            [
+                "--user",
+                "--scope",
+                "--quiet",
+                "--collect",
+                "--",
+                "zed",
+                "--new"
+            ]
+        );
+    }
 
     #[test]
     fn test_parse_uri_list_decoding_and_validation() {

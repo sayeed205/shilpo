@@ -30,9 +30,7 @@ pub use effects::{
     WallpaperSource,
 };
 pub use events::{EventKind, ExtensionEvent};
-pub use manifest::{
-    Capability, CapabilityKind, ExtensionManifest, ManifestError,
-};
+pub use manifest::{Capability, CapabilityKind, ExtensionManifest, ManifestError};
 pub use view::{
     ContainerDirection, ContainerNode, LoadingIndicatorNode, SemanticColorToken, TextNode,
     ViewLimits, ViewNode, ViewStyle, ViewTree, ViewValidationError,
@@ -42,8 +40,8 @@ pub use wasm::{WasmModule, WasmRuntime};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shilpo_ext_types::{CanonicalId, ExtensionId};
     use flate2::read::GzDecoder;
+    use shilpo_ext_types::{CanonicalId, ExtensionId};
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;

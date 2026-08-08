@@ -48,9 +48,8 @@ impl ShellRuntime {
                 .detach();
             }
             IpcRequest::ReloadConfig => {
-                let handle = Self::service_commands(cx).ok_or_else(|| {
-                    ShellError::ActionFailed("service worker unavailable".into())
-                })?;
+                let handle = Self::service_commands(cx)
+                    .ok_or_else(|| ShellError::ActionFailed("service worker unavailable".into()))?;
                 service_worker::try_send_command(&handle, WorkerCommand::ReloadConfig)
                     .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
             }
@@ -96,7 +95,10 @@ impl ShellRuntime {
     }
 
     pub(super) fn drain_ipc(cx: &mut App) {
-        let requests = cx.global_mut::<Self>().ipc_server_mut().pop_pending_requests();
+        let requests = cx
+            .global_mut::<Self>()
+            .ipc_server_mut()
+            .pop_pending_requests();
         for request in requests {
             match request {
                 IpcRequest::ShowBar => {
@@ -179,6 +181,23 @@ impl ShellRuntime {
                 }
                 IpcRequest::GetStatus => {}
                 IpcRequest::GetTelemetry => {}
+                IpcRequest::Capture(intent) => {
+                    Self::open_capture_overlay(cx, intent);
+                }
+                IpcRequest::Record(cmd) => match cmd {
+                    shilpo_capture::RecordingCommand::Start(req) => {
+                        Self::start_selected_recording(cx, req.source, req.audio);
+                    }
+                    shilpo_capture::RecordingCommand::Stop => Self::stop_recording(cx),
+                    shilpo_capture::RecordingCommand::Pause => Self::pause_recording(cx),
+                    shilpo_capture::RecordingCommand::Resume => Self::resume_recording(cx),
+                    shilpo_capture::RecordingCommand::Cancel => {
+                        if cx.has_global::<Self>() {
+                            let _ = cx.global::<Self>().capture_runtime.controller().cancel();
+                        }
+                    }
+                    shilpo_capture::RecordingCommand::Status => {}
+                },
             }
         }
         Self::publish_status(cx);
@@ -188,15 +207,19 @@ impl ShellRuntime {
         let runtime = cx.global::<Self>();
         let status = IpcStatus {
             running: runtime.readiness() != shilpo_services::ipc::ReadinessState::Failed,
+            readiness: runtime.readiness(),
+            bar: if runtime.surface_manager.has_bars() {
+                shilpo_services::ipc::BarState::Visible
+            } else {
+                shilpo_services::ipc::BarState::Hidden
+            },
+            overview_visible: runtime.surface_manager.is_overview_open(),
+            control_center_visible: runtime.surface_manager.is_control_center_open(),
+            recording: Self::recording_state(cx),
+            health: shilpo_services::ServiceHealth::default(),
             instance_id: std::process::id().to_string(),
             pid: std::process::id(),
-            readiness: runtime.readiness(),
-            bar: runtime.surface_manager().bar_state(),
-            overview_visible: runtime.surface_manager().is_overview_open(),
-            control_center_visible: runtime.surface_manager().is_control_center_open(),
-            health: shilpo_services::ServiceHealth::default(),
         };
-
         runtime.ipc_server().update_status(status);
     }
 }

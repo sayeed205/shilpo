@@ -179,6 +179,20 @@ impl ClipboardService {
         Ok(())
     }
 
+    pub fn copy_image(&self, image: &image::RgbaImage) -> Result<()> {
+        let mut board = arboard::Clipboard::new()?;
+        let width = image.width() as usize;
+        let height = image.height() as usize;
+        let bytes = image.as_raw();
+        let img_data = arboard::ImageData {
+            width,
+            height,
+            bytes: std::borrow::Cow::Borrowed(bytes),
+        };
+        board.set_image(img_data)?;
+        Ok(())
+    }
+
     pub fn clear_history(&self) -> Result<(), ClipboardPersistenceError> {
         if let Some(ref store) = self.store {
             store.clear()?;

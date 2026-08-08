@@ -1,5 +1,5 @@
-use std::{collections::HashMap, path::PathBuf};
 use shilpo_ext_types::{CanonicalId, ExtensionId};
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
     actions::{ActionId, ActionInvocation},
@@ -40,14 +40,19 @@ impl ExtensionHost {
         self.extensions.as_ref().map(|ext| ext.generation())
     }
 
-    pub(crate) fn descriptors_for(&self, surface: ContributionSurface) -> Vec<ContributionDescriptor> {
+    pub(crate) fn descriptors_for(
+        &self,
+        surface: ContributionSurface,
+    ) -> Vec<ContributionDescriptor> {
         self.extensions
             .as_ref()
             .map_or_else(Vec::new, |extensions| extensions.descriptors_for(surface))
     }
 
     pub(crate) fn view(&self, id: &CanonicalId) -> Option<shilpo_ext::ViewTree> {
-        self.extensions.as_ref().and_then(|extensions| extensions.view(id))
+        self.extensions
+            .as_ref()
+            .and_then(|extensions| extensions.view(id))
     }
 
     pub(crate) fn asset_path(&self, id: &CanonicalId, relative: &str) -> Result<PathBuf, String> {
@@ -83,12 +88,10 @@ impl ExtensionHost {
                 shilpo_ext::ExtensionEvent::PowerChanged {
                     percentage,
                     charging,
-                } => ExtensionCommand::Replaceable(
-                    crate::extensions::ReplaceableEvent::Power {
-                        percentage,
-                        charging,
-                    },
-                ),
+                } => ExtensionCommand::Replaceable(crate::extensions::ReplaceableEvent::Power {
+                    percentage,
+                    charging,
+                }),
                 shilpo_ext::ExtensionEvent::NetworkChanged { connected } => {
                     ExtensionCommand::Replaceable(crate::extensions::ReplaceableEvent::Network {
                         connected,
@@ -137,12 +140,10 @@ impl ExtensionHost {
                         instance_id: None,
                     }
                 };
-                if let Err(error) =
-                    ext.send_command(ExtensionCommand::Lifecycle {
-                        expected: expected_gen,
-                        event,
-                    })
-                {
+                if let Err(error) = ext.send_command(ExtensionCommand::Lifecycle {
+                    expected: expected_gen,
+                    event,
+                }) {
                     tracing::warn!(%error, "extension lifecycle event was not queued");
                 }
             }
@@ -151,11 +152,10 @@ impl ExtensionHost {
 
     pub(crate) fn send_instance_reconciliation(&mut self, desired: Vec<ContributionInstance>) {
         if let Some(ext) = &self.extensions
-            && let Err(error) =
-                ext.send_command(ExtensionCommand::ReconcileInstances {
-                    expected: ext.generation(),
-                    desired,
-                })
+            && let Err(error) = ext.send_command(ExtensionCommand::ReconcileInstances {
+                expected: ext.generation(),
+                desired,
+            })
         {
             tracing::warn!(%error, "extension instance reconciliation was not queued");
         }
@@ -198,12 +198,11 @@ impl ExtensionHost {
         event: shilpo_ext::ExtensionEvent,
     ) {
         if let Some(ext) = &self.extensions
-            && let Err(error) =
-                ext.send_command(ExtensionCommand::Response {
-                    expected,
-                    extension_id,
-                    event,
-                })
+            && let Err(error) = ext.send_command(ExtensionCommand::Response {
+                expected,
+                extension_id,
+                event,
+            })
         {
             tracing::warn!(%error, "extension response was not queued");
         }
@@ -221,7 +220,9 @@ impl ExtensionHost {
         executor: gpui::BackgroundExecutor,
         timeout: std::time::Duration,
     ) -> Option<gpui::Task<bool>> {
-        self.extensions.as_ref().map(|ext| ext.shutdown(executor, timeout))
+        self.extensions
+            .as_ref()
+            .map(|ext| ext.shutdown(executor, timeout))
     }
 
     fn task_count(&self) -> usize {
@@ -232,7 +233,11 @@ impl ExtensionHost {
         self.extension_tasks.contains_key(key)
     }
 
-    fn insert_task(&mut self, key: (ExtensionGeneration, ExtensionId, String), task: gpui::Task<()>) {
+    fn insert_task(
+        &mut self,
+        key: (ExtensionGeneration, ExtensionId, String),
+        task: gpui::Task<()>,
+    ) {
         self.extension_tasks.insert(key, task);
     }
 
@@ -393,7 +398,9 @@ impl ExtensionHost {
                 };
                 if !accepted {
                     let ext_id = extension_id.clone();
-                    cx.global_mut::<ShellRuntime>().extension_host_mut().send_response(
+                    cx.global_mut::<ShellRuntime>()
+                        .extension_host_mut()
+                        .send_response(
                         generation,
                         ext_id,
                         shilpo_ext::ExtensionEvent::HttpResponse {
@@ -505,7 +512,9 @@ impl ShellRuntime {
         id: &CanonicalId,
         relative: &str,
     ) -> Result<PathBuf, String> {
-        cx.global::<Self>().extension_host().asset_path(id, relative)
+        cx.global::<Self>()
+            .extension_host()
+            .asset_path(id, relative)
     }
 
     pub fn dispatch_extension_input(
@@ -515,13 +524,18 @@ impl ShellRuntime {
         event_id: impl Into<String>,
         value: Option<serde_json::Value>,
     ) {
-        cx.global_mut::<Self>()
-            .extension_host_mut()
-            .send_input(contribution, instance_id, event_id, value);
+        cx.global_mut::<Self>().extension_host_mut().send_input(
+            contribution,
+            instance_id,
+            event_id,
+            value,
+        );
     }
 
     pub fn dispatch_extension_event(cx: &mut App, event: shilpo_ext::ExtensionEvent) {
-        cx.global_mut::<Self>().extension_host_mut().send_event(event);
+        cx.global_mut::<Self>()
+            .extension_host_mut()
+            .send_event(event);
     }
 
     pub(crate) fn dispatch_surface_lifecycle(
@@ -613,6 +627,11 @@ mod tests {
         let harness = ExtensionHostTestHarness::new_offline();
         assert!(!harness.host.is_loaded());
         assert!(harness.host.generation().is_none());
-        assert!(harness.host.descriptors_for(ContributionSurface::Action).is_empty());
+        assert!(
+            harness
+                .host
+                .descriptors_for(ContributionSurface::Action)
+                .is_empty()
+        );
     }
 }

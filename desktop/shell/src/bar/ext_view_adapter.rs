@@ -3,9 +3,7 @@ use gpui::{
     App, AppContext, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement,
     Styled, Window, div, px,
 };
-use shilpo_ext::{
-    ContainerDirection, SemanticColorToken, ViewNode, ViewStyle, ViewTree,
-};
+use shilpo_ext::{ContainerDirection, SemanticColorToken, ViewNode, ViewStyle, ViewTree};
 use shilpo_ext_types::CanonicalId;
 use shilpo_ui::{
     ActiveTheme, Icon, Sizable, Size,

@@ -33,6 +33,10 @@ pub struct ShellConfig {
     pub locale: Option<String>,
     #[serde(default)]
     pub startup: StartupConfig,
+    #[serde(default)]
+    pub capture: CaptureConfig,
+    #[serde(default)]
+    pub recording: RecordingConfig,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -66,6 +70,105 @@ impl Default for DesktopConfig {
 
 fn default_wallpaper_dir() -> PathBuf {
     PathBuf::from("~/Pictures/Wallpapers")
+}
+
+pub fn expand_home_path(path: &Path) -> PathBuf {
+    if let (Ok(strip), Some(home)) = (path.strip_prefix("~"), dirs::home_dir()) {
+        return home.join(strip);
+    }
+    path.to_path_buf()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureConfig {
+    #[serde(default = "default_screenshot_dir")]
+    pub screenshot_dir: PathBuf,
+    #[serde(default = "default_true")]
+    pub show_pointer: bool,
+    #[serde(default = "default_selection")]
+    pub default_selection: String,
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self {
+            screenshot_dir: default_screenshot_dir(),
+            show_pointer: true,
+            default_selection: default_selection(),
+        }
+    }
+}
+
+impl CaptureConfig {
+    pub fn resolved_screenshot_dir(&self) -> PathBuf {
+        expand_home_path(&self.screenshot_dir)
+    }
+
+    pub fn ensure_screenshot_dir(&self) -> std::io::Result<PathBuf> {
+        let dir = self.resolved_screenshot_dir();
+        fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
+}
+
+fn default_screenshot_dir() -> PathBuf {
+    PathBuf::from("~/Pictures/Screenshots")
+}
+
+fn default_selection() -> String {
+    "rectangle".to_string()
+}
+
+fn default_recording_dir() -> PathBuf {
+    PathBuf::from("~/Videos/recordings")
+}
+
+fn default_framerate() -> u32 {
+    30
+}
+
+fn default_delay_seconds() -> u64 {
+    0
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RecordingConfig {
+    #[serde(default = "default_recording_dir")]
+    pub directory: PathBuf,
+    #[serde(default = "default_framerate")]
+    pub framerate: u32,
+    #[serde(default = "default_delay_seconds")]
+    pub delay_seconds: u64,
+    #[serde(default = "default_true")]
+    pub desktop_audio: bool,
+    #[serde(default = "default_true")]
+    pub show_pointer: bool,
+}
+
+impl Default for RecordingConfig {
+    fn default() -> Self {
+        Self {
+            directory: default_recording_dir(),
+            framerate: default_framerate(),
+            delay_seconds: default_delay_seconds(),
+            desktop_audio: true,
+            show_pointer: true,
+        }
+    }
+}
+
+impl RecordingConfig {
+    pub fn resolved_directory(&self) -> PathBuf {
+        expand_home_path(&self.directory)
+    }
+
+    pub fn ensure_directory(&self) -> std::io::Result<PathBuf> {
+        let dir = self.resolved_directory();
+        fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
 }
 
 /// Resolve Shilpo XDG configuration directory (`$XDG_CONFIG_HOME/shilpo` or `$HOME/.config/shilpo`).
@@ -525,6 +628,8 @@ impl Default for ShellConfig {
             temperature_unit: None,
             locale: None,
             startup: StartupConfig::default(),
+            capture: CaptureConfig::default(),
+            recording: RecordingConfig::default(),
         }
     }
 }
@@ -809,6 +914,23 @@ impl ShellConfig {
                     "must be an object",
                 ));
             }
+        }
+
+        match self.capture.default_selection.as_str() {
+            "rectangle" | "ellipse" => {}
+            _ => {
+                d.push(ConfigDiagnostic::new(
+                    "capture.default_selection",
+                    "must be 'rectangle' or 'ellipse'",
+                ));
+            }
+        }
+
+        if self.recording.framerate == 0 || self.recording.framerate > 240 {
+            d.push(ConfigDiagnostic::new(
+                "recording.framerate",
+                "must be greater than 0 and at most 240",
+            ));
         }
 
         if d.is_empty() {

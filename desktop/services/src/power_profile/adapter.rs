@@ -123,7 +123,8 @@ pub(crate) mod dbus {
             let session = match connect().await {
                 Ok(session) => session,
                 Err(error) => {
-                    let msg = format!("failed to initialize power profile D-Bus connection: {error}");
+                    let msg =
+                        format!("failed to initialize power profile D-Bus connection: {error}");
                     reconnect(&tx, Some(&msg)).await;
                     continue;
                 }
@@ -213,7 +214,11 @@ pub(crate) mod dbus {
             let empty = HashMap::new();
             let iface = POWER_PROFILES_IFACE;
 
-            assert!(is_relevant_change(iface, &changed_map(&["ActiveProfile"]), &[]));
+            assert!(is_relevant_change(
+                iface,
+                &changed_map(&["ActiveProfile"]),
+                &[]
+            ));
             assert!(is_relevant_change(iface, &changed_map(&["Profiles"]), &[]));
             assert!(is_relevant_change(iface, &empty, &["ActiveProfile"]));
             assert!(is_relevant_change(iface, &empty, &["Profiles"]));
