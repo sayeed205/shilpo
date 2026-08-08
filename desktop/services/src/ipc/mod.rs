@@ -866,7 +866,7 @@ fn handle_client(
     let result = if is_status {
         Some(IpcResult::Status(status.lock().unwrap().clone()))
     } else if is_record_status {
-        Some(IpcResult::Record(status.lock().unwrap().recording.clone()))
+        Some(IpcResult::Record(status.lock().unwrap().recording))
     } else if let Some(error) = record_error {
         err_body = Some(error);
         None

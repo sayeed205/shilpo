@@ -175,6 +175,7 @@ impl Application {
 /// Launch desktop applications in their own systemd scope. Otherwise they
 /// inherit `shilpo-shell.service` and are terminated whenever the shell is
 /// restarted or upgraded.
+#[allow(dead_code)]
 fn scoped_app_command(argv: &[String]) -> Command {
     let mut command = Command::new("systemd-run");
     command.args(["--user", "--scope", "--quiet", "--collect", "--"]);

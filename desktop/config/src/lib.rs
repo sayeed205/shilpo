@@ -1343,7 +1343,7 @@ mod tests {
     #[test]
     fn schema_fixture_matches_generated_schema() {
         let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("../schema/config.schema.json")).unwrap();
+            serde_json::from_str(include_str!("../schema/config-v1.schema.json")).unwrap();
         let generated: serde_json::Value =
             serde_json::from_str(&ShellConfig::schema_json()).unwrap();
         assert_eq!(fixture, generated);

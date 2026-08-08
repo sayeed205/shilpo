@@ -322,14 +322,4 @@ pub enum ExtCommands {
     Uninstall { id: String },
     /// Check for catalog extension updates
     CheckUpdates,
-    /// Manage extension release channel
-    Channel { id: String, channel: Option<String> },
-    /// Manage extension registry sources
-    Source {
-        #[arg(trailing_var_arg = true)]
-        args: Vec<String>,
-    },
-    /// Refresh extension registry sources
-    RefreshSources,
-    /// Sign extension package with key
-    S
+}

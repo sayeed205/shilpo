@@ -1,7 +1,11 @@
 use anyhow::Result;
-use shilpo_capture::{CaptureIntent, backend::create_production_backend, open_selector};
+use shilpo_capture::{capture_frame, create_backend};
 use shilpo_config::CaptureConfig;
 use std::path::PathBuf;
+use std::time::Duration;
+use tokio::sync::watch;
+
+use crate::polled::PolledService;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenshotMode {
@@ -15,35 +19,31 @@ pub struct ScreenCaptureInfo {
     pub available: bool,
 }
 
-use crate::polled::PolledService;
-use std::time::Duration;
-use tokio::sync::watch;
-
 pub struct ScreenCaptureService {
     polled: PolledService<ScreenCaptureInfo>,
-    capture_config: CaptureConfig,
+    _capture_config: CaptureConfig,
 }
 
 impl ScreenCaptureService {
     pub fn new() -> Result<Self> {
         let capture_config = CaptureConfig::default();
 
-        let available = create_production_backend()
-            .map(|backend| !backend.outputs().is_empty())
+        let available = create_backend()
+            .map(|b| b.enumerate_sources().map(|s| !s.is_empty()).unwrap_or(false))
             .unwrap_or(false);
 
         let initial = ScreenCaptureInfo {
             is_recording: false,
             available,
         };
-        
+
         let polled = PolledService::new(
             initial,
             Duration::from_secs(3),
             None,
             |current: &ScreenCaptureInfo| -> Result<ScreenCaptureInfo, std::convert::Infallible> {
-                let available = create_production_backend()
-                    .map(|backend| !backend.outputs().is_empty())
+                let available = create_backend()
+                    .map(|b| b.enumerate_sources().map(|s| !s.is_empty()).unwrap_or(false))
                     .unwrap_or(false);
                 let mut updated = current.clone();
                 updated.available = available;
@@ -53,7 +53,7 @@ impl ScreenCaptureService {
 
         Ok(Self {
             polled,
-            capture_config,
+            _capture_config: capture_config,
         })
     }
 
@@ -64,7 +64,7 @@ impl ScreenCaptureService {
                 is_recording: false,
                 available: false,
             }),
-            capture_config,
+            _capture_config: capture_config,
         }
     }
 
@@ -76,21 +76,13 @@ impl ScreenCaptureService {
         self.polled.get()
     }
 
-    pub fn take_screenshot(&self, mode: ScreenshotMode, _output_path: Option<PathBuf>) -> bool {
+    pub fn take_screenshot(&self, _mode: ScreenshotMode, _output_path: Option<PathBuf>) -> bool {
         let info_state = self.polled.get();
         if !info_state.available {
             return false;
         }
 
-        let intent = match mode {
-            ScreenshotMode::Fullscreen | ScreenshotMode::Region => CaptureIntent::Clipboard,
-        };
-
-        let config = self.capture_config.clone();
-        tokio::spawn(async move {
-            let _ = open_selector(intent, &config, None).await;
-        });
-
+        let _frame = capture_frame(None);
         true
     }
 }
