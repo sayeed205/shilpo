@@ -6,11 +6,7 @@ pub struct EncodedAudioPacket {
     pub pts: i64,
 }
 
-pub struct AudioEncoder {
-    _sample_rate: u32,
-    _channels: u32,
-    pts_counter: i64,
-}
+pub struct AudioEncoder {}
 
 impl AudioEncoder {
     pub fn new(container: Container) -> anyhow::Result<Self> {
@@ -19,21 +15,14 @@ impl AudioEncoder {
             Container::Mp4 | Container::Mkv => "aac",
         };
 
-        Ok(Self {
-            _sample_rate: 48000,
-            _channels: 2,
-            pts_counter: 0,
-        })
+        anyhow::bail!("FFmpeg audio encoder is not initialized")
     }
 
-    pub fn encode_buffer(&mut self, buffer: &AudioBuffer) -> anyhow::Result<Vec<EncodedAudioPacket>> {
-        self.pts_counter += buffer.pcm_data.len() as i64 / 2;
-
-        let packet = EncodedAudioPacket {
-            data: vec![0u8; 64], // Simulated encoded frame header/payload
-            pts: self.pts_counter,
-        };
-
-        Ok(vec![packet])
+    pub fn encode_buffer(
+        &mut self,
+        buffer: &AudioBuffer,
+    ) -> anyhow::Result<Vec<EncodedAudioPacket>> {
+        let _ = buffer;
+        anyhow::bail!("FFmpeg audio encoder is not initialized")
     }
 }

@@ -1,32 +1,26 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use shilpo_capture::backend::test::TestBackend;
 use shilpo_capture::backend::CaptureBackend;
+use shilpo_capture::backend::test::TestBackend;
 use shilpo_capture::{
-    capture_frame, create_backend, enumerate_sources, AudioSource, RecordingCommand,
-    RecordingController, RecordingRequest, RecordingSource, RecordingState, StreamConfig,
+    AudioSource, RecordingCommand, RecordingController, RecordingRequest, RecordingSource,
+    RecordingState, StreamConfig, capture_frame, create_backend, enumerate_sources,
 };
 
 #[test]
-fn test_create_backend_fallback() {
-    let mut backend = create_backend().expect("create_backend must return valid backend");
-    let frame = backend.capture_frame(None).expect("must capture frame");
-    assert!(frame.width > 0);
-    assert!(frame.height > 0);
+fn production_backend_never_falls_back_to_synthetic_frames() {
+    assert!(create_backend().is_err());
 }
 
 #[test]
 fn test_capture_frame_api() {
-    let frame = capture_frame(None).expect("capture_frame API works");
-    assert!(frame.width > 0);
-    assert!(frame.height > 0);
+    assert!(capture_frame(None).is_err());
 }
 
 #[test]
 fn test_enumerate_sources() {
-    let sources = enumerate_sources().expect("sources enumeration works");
-    assert!(!sources.is_empty());
+    assert!(enumerate_sources().is_err());
 }
 
 #[test]
@@ -67,20 +61,7 @@ fn test_recording_controller_lifecycle() {
     };
 
     // Start recording
-    controller
-        .start(request, config)
-        .expect("controller start works");
-    assert!(controller.state().is_recording());
-
-    // Pause & Resume
-    controller.pause().expect("pause works");
-    assert!(matches!(controller.state(), RecordingState::Paused { .. }));
-
-    controller.resume().expect("resume works");
-    assert!(controller.state().is_recording());
-
-    // Stop recording
-    controller.stop().expect("stop works");
+    assert!(controller.start(request, config).is_err());
     assert_eq!(controller.state(), RecordingState::Idle);
 }
 

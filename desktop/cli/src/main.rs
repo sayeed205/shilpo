@@ -533,7 +533,8 @@ async fn main() {
                     "displays": ddc_displays,
                     "permissions_ok": ddc_perms,
                 });
-                let mut report = format!("Discovered DDC/CI Displays (Permissions OK: {ddc_perms}):\n");
+                let mut report =
+                    format!("Discovered DDC/CI Displays (Permissions OK: {ddc_perms}):\n");
                 for d in &ddc_displays {
                     report.push_str(&format!(
                         " - [{}] {} (Connector: {}, Brightness: {}%)\n",

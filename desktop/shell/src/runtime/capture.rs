@@ -1,6 +1,6 @@
 use shilpo_capture::{
-    capture_frame, AudioSource, CaptureIntent, RecordingController, RecordingRequest,
-    RecordingSource, RecordingState,
+    AudioSource, CaptureIntent, RecordingController, RecordingRequest, RecordingSource,
+    RecordingState, capture_frame,
 };
 use shilpo_config::CaptureConfig;
 
@@ -41,7 +41,11 @@ impl ShellCaptureRuntime {
         self.controller.resume()
     }
 
-    pub fn capture_screenshot(&self, _intent: CaptureIntent, _config: &CaptureConfig) -> anyhow::Result<()> {
+    pub fn capture_screenshot(
+        &self,
+        _intent: CaptureIntent,
+        _config: &CaptureConfig,
+    ) -> anyhow::Result<()> {
         let _frame = capture_frame(None)?;
         Ok(())
     }

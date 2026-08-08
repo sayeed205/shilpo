@@ -113,14 +113,20 @@ impl RecordingCommand {
     pub fn validate(&self, current_state: &RecordingState) -> Result<(), &'static str> {
         match self {
             RecordingCommand::Start(_) => {
-                if matches!(current_state, RecordingState::Idle | RecordingState::Selecting) {
+                if matches!(
+                    current_state,
+                    RecordingState::Idle | RecordingState::Selecting
+                ) {
                     Ok(())
                 } else {
                     Err("recording session already active")
                 }
             }
             RecordingCommand::Stop => {
-                if matches!(current_state, RecordingState::Recording { .. } | RecordingState::Paused { .. }) {
+                if matches!(
+                    current_state,
+                    RecordingState::Recording { .. } | RecordingState::Paused { .. }
+                ) {
                     Ok(())
                 } else {
                     Err("no active recording session to stop")
@@ -152,14 +158,21 @@ pub enum RecordingState {
     #[default]
     Idle,
     Selecting,
-    Recording { elapsed: Duration },
-    Paused { elapsed: Duration },
+    Recording {
+        elapsed: Duration,
+    },
+    Paused {
+        elapsed: Duration,
+    },
     Finalizing,
 }
 
 impl RecordingState {
     pub fn is_stoppable(&self) -> bool {
-        matches!(self, RecordingState::Recording { .. } | RecordingState::Paused { .. })
+        matches!(
+            self,
+            RecordingState::Recording { .. } | RecordingState::Paused { .. }
+        )
     }
 
     pub fn is_recording(&self) -> bool {
@@ -167,7 +180,12 @@ impl RecordingState {
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(self, RecordingState::Recording { .. } | RecordingState::Paused { .. } | RecordingState::Finalizing)
+        matches!(
+            self,
+            RecordingState::Recording { .. }
+                | RecordingState::Paused { .. }
+                | RecordingState::Finalizing
+        )
     }
 
     pub fn elapsed(&self) -> Duration {
@@ -239,13 +257,20 @@ pub struct StreamConfig {
 
 impl Default for StreamConfig {
     fn default() -> Self {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let output_dir = std::env::var_os("XDG_VIDEOS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join("Videos"))
+            .join("recordings");
         Self {
             framerate: 30,
             codec: Codec::H264,
             container: Container::Mp4,
             hardware_accel: HwAccel::Auto,
             quality: Quality::Balanced,
-            output_dir: std::env::temp_dir(),
+            output_dir,
         }
     }
 }

@@ -48,9 +48,8 @@ impl ShellRuntime {
                 .detach();
             }
             IpcRequest::ReloadConfig => {
-                let handle = Self::service_commands(cx).ok_or_else(|| {
-                    ShellError::ActionFailed("service worker unavailable".into())
-                })?;
+                let handle = Self::service_commands(cx)
+                    .ok_or_else(|| ShellError::ActionFailed("service worker unavailable".into()))?;
                 service_worker::try_send_command(&handle, WorkerCommand::ReloadConfig)
                     .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
             }
@@ -96,7 +95,10 @@ impl ShellRuntime {
     }
 
     pub(super) fn drain_ipc(cx: &mut App) {
-        let requests = cx.global_mut::<Self>().ipc_server_mut().pop_pending_requests();
+        let requests = cx
+            .global_mut::<Self>()
+            .ipc_server_mut()
+            .pop_pending_requests();
         for request in requests {
             match request {
                 IpcRequest::ShowBar => {

@@ -247,13 +247,17 @@ impl ThemeDaemon {
             }
             ActorMessage::SetColorSource(source, reply) => {
                 let _ = reply.send(
-                    self.process_command(DaemonCommand::Theme(ThemeCommand::SetColorSource(source)))
-                        .await,
+                    self.process_command(DaemonCommand::Theme(ThemeCommand::SetColorSource(
+                        source,
+                    )))
+                    .await,
                 );
             }
             ActorMessage::SetSchemeVariant(variant, reply) => {
                 let res = self
-                    .process_command(DaemonCommand::Theme(ThemeCommand::SetSchemeVariant(variant)))
+                    .process_command(DaemonCommand::Theme(ThemeCommand::SetSchemeVariant(
+                        variant,
+                    )))
                     .await;
                 let config_path = self.config_path.clone();
                 tokio::task::spawn_blocking(move || {
@@ -427,8 +431,7 @@ impl ThemeDaemon {
                 state: self.state.clone(),
                 change_kind: outcome.change_kind,
             };
-            let raw_update =
-                serde_json::to_string(&update).map_err(|error| error.to_string())?;
+            let raw_update = serde_json::to_string(&update).map_err(|error| error.to_string())?;
             let _ = self
                 ._conn
                 .emit_signal(
@@ -602,7 +605,11 @@ fn apply_command(
                 }
             }
             ThemeCommand::SetSchemeVariant(variant) => {
-                reduce(&mut state.theme, ThemeCommand::SetSchemeVariant(variant), now);
+                reduce(
+                    &mut state.theme,
+                    ThemeCommand::SetSchemeVariant(variant),
+                    now,
+                );
             }
             ThemeCommand::SetCustomSeed(seed) => {
                 reduce(&mut state.theme, ThemeCommand::SetCustomSeed(seed), now);
@@ -644,8 +651,7 @@ fn apply_command(
         DaemonCommand::PortalAppearanceChanged(portal_mode) => {
             if let Some(pm) = portal_mode {
                 debug_assert!(pm != ThemeMode::System);
-                if state.theme.selected_mode == ThemeMode::System
-                    && state.theme.resolved_mode != pm
+                if state.theme.selected_mode == ThemeMode::System && state.theme.resolved_mode != pm
                 {
                     state.theme.resolved_mode = pm;
                     bump_revision(state, now);
@@ -826,8 +832,8 @@ fn auto_detect_variant(img: &DynamicImage) -> SchemeVariant {
     let mean_yb = yb_diffs.iter().sum::<f32>() / count;
     let std_rg = (rg_diffs.iter().map(|v| (v - mean_rg).powi(2)).sum::<f32>() / count).sqrt();
     let std_yb = (yb_diffs.iter().map(|v| (v - mean_yb).powi(2)).sum::<f32>() / count).sqrt();
-    let colorfulness = (std_rg.powi(2) + std_yb.powi(2)).sqrt()
-        + 0.3 * (mean_rg.powi(2) + mean_yb.powi(2)).sqrt();
+    let colorfulness =
+        (std_rg.powi(2) + std_yb.powi(2)).sqrt() + 0.3 * (mean_rg.powi(2) + mean_yb.powi(2)).sqrt();
 
     let mean_hue = if !hues.is_empty() {
         hues.iter().sum::<f32>() / hues.len() as f32
@@ -1041,11 +1047,7 @@ mod tests {
             ..Default::default()
         };
 
-        let outcome = apply(
-            &mut state,
-            DaemonCommand::Theme(ThemeCommand::ToggleMode),
-        )
-        .unwrap();
+        let outcome = apply(&mut state, DaemonCommand::Theme(ThemeCommand::ToggleMode)).unwrap();
 
         assert_eq!(state.theme.resolved_mode, ThemeMode::Dark);
         assert_eq!(outcome.dispatch_adapter_mode, Some(ThemeMode::Dark));
@@ -1260,7 +1262,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(state.theme.scheme_variant, shilpo_theme::SchemeVariant::Expressive);
+        assert_eq!(
+            state.theme.scheme_variant,
+            shilpo_theme::SchemeVariant::Expressive
+        );
         assert_eq!(state.theme.revision, revision + 1);
         assert!(outcome.change_kind.variant);
         assert!(outcome.change_kind.palette);
@@ -1291,11 +1296,20 @@ mod tests {
         }
 
         // mean_sat < 20 -> Monochrome (gray)
-        assert_eq!(auto_detect_variant(&solid([128, 128, 128])), SchemeVariant::Monochrome);
+        assert_eq!(
+            auto_detect_variant(&solid([128, 128, 128])),
+            SchemeVariant::Monochrome
+        );
         // low colorfulness + mean_sat < 55 -> Neutral
-        assert_eq!(auto_detect_variant(&solid([80, 90, 100])), SchemeVariant::Neutral);
+        assert_eq!(
+            auto_detect_variant(&solid([80, 90, 100])),
+            SchemeVariant::Neutral
+        );
         // low colorfulness + hue_spread < 22 -> Content
-        assert_eq!(auto_detect_variant(&solid([50, 70, 80])), SchemeVariant::Content);
+        assert_eq!(
+            auto_detect_variant(&solid([50, 70, 80])),
+            SchemeVariant::Content
+        );
         // low colorfulness + wide hue spread -> TonalSpot
         assert_eq!(
             auto_detect_variant(&vertical_bands(&[[50, 70, 80], [80, 70, 50]])),
@@ -1313,7 +1327,11 @@ mod tests {
         );
         // high colorfulness + wide hue spread with moderate saturation -> Expressive
         assert_eq!(
-            auto_detect_variant(&vertical_bands(&[[255, 50, 50], [50, 50, 50], [50, 255, 50]])),
+            auto_detect_variant(&vertical_bands(&[
+                [255, 50, 50],
+                [50, 50, 50],
+                [50, 255, 50]
+            ])),
             SchemeVariant::Expressive
         );
     }

@@ -20,7 +20,11 @@ pub struct ScreenCaptureInfo {
 
 fn query_availability() -> bool {
     create_backend()
-        .map(|b| b.enumerate_sources().map(|s| !s.is_empty()).unwrap_or(false))
+        .map(|b| {
+            b.enumerate_sources()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false)
+        })
         .unwrap_or(false)
 }
 

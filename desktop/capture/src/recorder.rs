@@ -36,7 +36,10 @@ impl RecordingController {
 
     pub fn start(&self, request: RecordingRequest, config: StreamConfig) -> anyhow::Result<()> {
         let mut inner = self.inner.lock();
-        if !matches!(inner.state, RecordingState::Idle | RecordingState::Selecting) {
+        if !matches!(
+            inner.state,
+            RecordingState::Idle | RecordingState::Selecting
+        ) {
             anyhow::bail!("Recording session already active");
         }
 
@@ -47,7 +50,9 @@ impl RecordingController {
             elapsed: Duration::ZERO,
         };
 
-        let _ = self.event_tx.send(RecordingEvent::StateChanged(inner.state));
+        let _ = self
+            .event_tx
+            .send(RecordingEvent::StateChanged(inner.state));
         Ok(())
     }
 
@@ -58,24 +63,35 @@ impl RecordingController {
         }
 
         inner.state = RecordingState::Finalizing;
-        let _ = self.event_tx.send(RecordingEvent::StateChanged(inner.state));
+        let _ = self
+            .event_tx
+            .send(RecordingEvent::StateChanged(inner.state));
 
-        if let Some(mut pipeline) = inner.pipeline.take() {
-            let _res = pipeline.stop();
-        }
+        let result = if let Some(mut pipeline) = inner.pipeline.take() {
+            pipeline.stop().map(|_| ())
+        } else {
+            Ok(())
+        };
 
         inner.state = RecordingState::Idle;
         inner.start_time = None;
-        let _ = self.event_tx.send(RecordingEvent::StateChanged(inner.state));
+        let _ = self
+            .event_tx
+            .send(RecordingEvent::StateChanged(inner.state));
 
-        Ok(())
+        if let Err(error) = &result {
+            let _ = self.event_tx.send(RecordingEvent::Error(error.to_string()));
+        }
+        result
     }
 
     pub fn pause(&self) -> anyhow::Result<()> {
         let mut inner = self.inner.lock();
         if let RecordingState::Recording { elapsed } = inner.state {
             inner.state = RecordingState::Paused { elapsed };
-            let _ = self.event_tx.send(RecordingEvent::StateChanged(inner.state));
+            let _ = self
+                .event_tx
+                .send(RecordingEvent::StateChanged(inner.state));
         }
         Ok(())
     }
@@ -84,7 +100,9 @@ impl RecordingController {
         let mut inner = self.inner.lock();
         if let RecordingState::Paused { elapsed } = inner.state {
             inner.state = RecordingState::Recording { elapsed };
-            let _ = self.event_tx.send(RecordingEvent::StateChanged(inner.state));
+            let _ = self
+                .event_tx
+                .send(RecordingEvent::StateChanged(inner.state));
         }
         Ok(())
     }

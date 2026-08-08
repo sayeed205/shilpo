@@ -7,8 +7,8 @@ pub mod transform;
 pub mod video_encode;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -33,6 +33,10 @@ impl RecordingPipeline {
         config: StreamConfig,
         event_tx: Sender<RecordingEvent>,
     ) -> anyhow::Result<Self> {
+        // Fail synchronously when the compositor/backend is unavailable. This
+        // prevents the shell from entering Recording while the worker is already
+        // doomed and makes shortcut failures visible to callers.
+        let _ = create_backend()?;
         let running = Arc::new(AtomicBool::new(true));
         let running_flag = Arc::clone(&running);
 
@@ -52,28 +56,27 @@ impl RecordingPipeline {
             let mut muxer = Muxer::new(&config)?;
 
             // Encode initial frame
-            if let Ok(packets) = transform_frame(&first_frame).and_then(|t| encoder.encode_frame(&t)) {
-                for packet in packets {
-                    let _ = muxer.write_video_packet(&packet);
-                }
+            let transformed = transform_frame(&first_frame)?;
+            let packets = encoder.encode_frame(&transformed)?;
+            for packet in packets {
+                muxer.write_video_packet(&packet)?;
             }
 
             while running_flag.load(Ordering::SeqCst) {
                 // Drain video frames
                 while let Ok(frame) = frame_rx.try_recv() {
-                    if let Ok(packets) = transform_frame(&frame).and_then(|t| encoder.encode_frame(&t)) {
-                        for packet in packets {
-                            let _ = muxer.write_video_packet(&packet);
-                        }
+                    let transformed = transform_frame(&frame)?;
+                    let packets = encoder.encode_frame(&transformed)?;
+                    for packet in packets {
+                        muxer.write_video_packet(&packet)?;
                     }
                 }
 
                 // Drain audio buffers
                 while let Ok(audio_buf) = audio_rx.try_recv() {
-                    if let Ok(audio_packets) = audio_encoder.encode_buffer(&audio_buf) {
-                        for packet in audio_packets {
-                            let _ = muxer.write_audio_packet(&packet);
-                        }
+                    let audio_packets = audio_encoder.encode_buffer(&audio_buf)?;
+                    for packet in audio_packets {
+                        muxer.write_audio_packet(&packet)?;
                     }
                 }
 
@@ -83,10 +86,8 @@ impl RecordingPipeline {
             backend.stop_stream();
             audio_capture.stop();
 
-            if let Ok(packets) = encoder.flush() {
-                for packet in packets {
-                    let _ = muxer.write_video_packet(&packet);
-                }
+            for packet in encoder.flush()? {
+                muxer.write_video_packet(&packet)?;
             }
 
             let (final_path, duration) = muxer.finalize()?;

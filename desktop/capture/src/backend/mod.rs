@@ -32,7 +32,8 @@ pub fn create_backend() -> anyhow::Result<Box<dyn CaptureBackend>> {
         tracing::info!("Using wlr-screencopy-unstable-v1 Wayland backend");
         Ok(Box::new(backend))
     } else {
-        tracing::warn!("No Wayland screencopy protocol available, falling back to test backend");
-        Ok(Box::new(test::TestBackend::new()))
+        anyhow::bail!(
+            "no supported Wayland capture protocol is available (requires ext-image-copy-capture-v1 or zwlr-screencopy-manager-v1)"
+        )
     }
 }

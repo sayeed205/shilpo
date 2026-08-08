@@ -168,11 +168,19 @@ impl NetworkService {
                 let nm_state = dbus_client::get_nm_state(conn).await.unwrap_or(0);
                 let state = NetworkState::from(nm_state);
                 let is_connected = nm_state == dbus_client::NM_STATE_CONNECTED_GLOBAL;
-                let wifi_enabled = dbus_client::get_wireless_enabled(conn).await.unwrap_or(true);
+                let wifi_enabled = dbus_client::get_wireless_enabled(conn)
+                    .await
+                    .unwrap_or(true);
                 let wwan_enabled = dbus_client::get_wwan_enabled(conn).await.unwrap_or(false);
-                let access_points = dbus_client::list_access_points(conn).await.unwrap_or_default();
-                let active_vpns = dbus_client::list_active_vpns(conn).await.unwrap_or_default();
-                let devices = dbus_client::list_network_devices(conn).await.unwrap_or_default();
+                let access_points = dbus_client::list_access_points(conn)
+                    .await
+                    .unwrap_or_default();
+                let active_vpns = dbus_client::list_active_vpns(conn)
+                    .await
+                    .unwrap_or_default();
+                let devices = dbus_client::list_network_devices(conn)
+                    .await
+                    .unwrap_or_default();
                 let (connection_type, ip_config) = dbus_client::get_primary_connection_info(conn)
                     .await
                     .unwrap_or(("none".to_string(), None));
@@ -544,4 +552,3 @@ mod tests {
         assert!(info_off.wifi_enabled);
     }
 }
-

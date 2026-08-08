@@ -1,5 +1,5 @@
 use crate::pipeline::transform::TransformedFrame;
-use crate::types::{Codec, HwAccel, StreamConfig};
+use crate::types::{HwAccel, StreamConfig};
 
 pub struct EncodedPacket {
     pub data: Vec<u8>,
@@ -8,13 +8,7 @@ pub struct EncodedPacket {
     pub dts: i64,
 }
 
-pub struct VideoEncoder {
-    _width: u32,
-    _height: u32,
-    _codec: Codec,
-    _hw_accel: HwAccel,
-    pts_counter: i64,
-}
+pub struct VideoEncoder;
 
 impl VideoEncoder {
     pub fn new(width: u32, height: u32, config: &StreamConfig) -> anyhow::Result<Self> {
@@ -31,27 +25,13 @@ impl VideoEncoder {
             HwAccel::None => HwAccel::None,
         };
 
-        Ok(Self {
-            _width: width,
-            _height: height,
-            _codec: config.codec,
-            _hw_accel: hw_accel,
-            pts_counter: 0,
-        })
+        let _ = (width, height, config, hw_accel);
+        anyhow::bail!("FFmpeg video encoder is not initialized")
     }
 
     pub fn encode_frame(&mut self, frame: &TransformedFrame) -> anyhow::Result<Vec<EncodedPacket>> {
-        self.pts_counter += 1;
-
-        // Form encoded packet
-        let packet = EncodedPacket {
-            data: frame.data.clone(),
-            is_keyframe: self.pts_counter % 30 == 1,
-            pts: self.pts_counter,
-            dts: self.pts_counter,
-        };
-
-        Ok(vec![packet])
+        let _ = frame;
+        anyhow::bail!("FFmpeg video encoder is not initialized")
     }
 
     pub fn flush(&mut self) -> anyhow::Result<Vec<EncodedPacket>> {

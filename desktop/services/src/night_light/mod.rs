@@ -215,9 +215,7 @@ async fn run_backend_loop(
                 ActiveBackend::Gnome(gnome) => {
                     gnome.apply(info.is_active, info.temperature_kelvin).await
                 }
-                ActiveBackend::Kde(kde) => {
-                    kde.apply(info.is_active, info.temperature_kelvin).await
-                }
+                ActiveBackend::Kde(kde) => kde.apply(info.is_active, info.temperature_kelvin).await,
             };
             if let Err(e) = res {
                 warn!("Failed to apply night light settings: {:#}", e);

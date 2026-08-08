@@ -1,7 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::types::AudioSource;
 
@@ -31,37 +29,8 @@ impl PipeWireAudioCapture {
             return Ok(rx);
         }
 
-        let (tx, rx) = crossbeam_channel::bounded(16);
-        let streaming = Arc::clone(&self.streaming);
-        streaming.store(true, Ordering::SeqCst);
-
-        // PipeWire main loop and audio stream thread
-        thread::spawn(move || {
-            // Initialize pipewire context if libpipewire is present
-            pipewire::init();
-
-            let sample_rate = 48000;
-            let channels = 2;
-
-            while streaming.load(Ordering::SeqCst) {
-                // Generate 20ms silence / audio buffer
-                let samples_per_buffer = (sample_rate as usize / 50) * channels as usize;
-                let pcm_data = vec![0.0f32; samples_per_buffer];
-
-                let buffer = AudioBuffer {
-                    pcm_data,
-                    sample_rate,
-                    channels,
-                };
-
-                if tx.send(buffer).is_err() {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(20));
-            }
-        });
-
-        Ok(rx)
+        let _ = source;
+        anyhow::bail!("PipeWire audio capture is not initialized")
     }
 
     pub fn stop(&mut self) {

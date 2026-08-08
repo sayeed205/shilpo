@@ -130,10 +130,8 @@ impl ShellRuntime {
 
         let compositor = hub.compositor();
         let latest_snapshot = surface_manager::attach_compositor_stream(&ipc_server, &compositor);
-        let surface_manager = SurfaceManager::new(
-            initial_wallpaper_path.clone(),
-            latest_snapshot.clone(),
-        );
+        let surface_manager =
+            SurfaceManager::new(initial_wallpaper_path.clone(), latest_snapshot.clone());
         let action_dispatcher = ActionDispatcher::new();
         let extension_host = ExtensionHost::new(extensions);
 
@@ -219,7 +217,9 @@ impl ShellRuntime {
         let outputs_changed = {
             let runtime = cx.global_mut::<Self>();
             let changed = runtime.surface_manager.latest_snapshot().outputs != snapshot.outputs;
-            runtime.surface_manager.set_latest_snapshot(snapshot.clone());
+            runtime
+                .surface_manager
+                .set_latest_snapshot(snapshot.clone());
             changed
         };
         cx.global_mut::<Self>()
@@ -237,13 +237,10 @@ impl ShellRuntime {
         if !cx.has_global::<Self>() {
             return;
         }
-        let shutdown_task = cx
-            .global::<Self>()
-            .extension_host
-            .shutdown_task(
-                cx.background_executor().clone(),
-                std::time::Duration::from_millis(300),
-            );
+        let shutdown_task = cx.global::<Self>().extension_host.shutdown_task(
+            cx.background_executor().clone(),
+            std::time::Duration::from_millis(300),
+        );
 
         cx.spawn(async move |cx| {
             if let Some(task) = shutdown_task {
@@ -315,7 +312,12 @@ impl ShellRuntime {
         AudioSource::System
     }
 
-    pub fn open_recording_chooser(_cx: &mut App, _audio: AudioSource) {}
+    /// Start the default full-output recording. Source selection is intentionally
+    /// handled by the compositor/session picker; the shell action must never be a
+    /// silent no-op when that picker is unavailable.
+    pub fn open_recording_chooser(cx: &mut App, audio: AudioSource) {
+        Self::start_selected_recording(cx, RecordingSource::primary(), audio);
+    }
 
     pub fn start_selected_recording(cx: &mut App, source: RecordingSource, audio: AudioSource) {
         if cx.has_global::<Self>() {
@@ -328,7 +330,10 @@ impl ShellRuntime {
     pub fn open_capture_overlay(cx: &mut App, intent: CaptureIntent) {
         if cx.has_global::<Self>() {
             let config = cx.global::<Self>().active_config.capture.clone();
-            let _ = cx.global::<Self>().capture_runtime.capture_screenshot(intent, &config);
+            let _ = cx
+                .global::<Self>()
+                .capture_runtime
+                .capture_screenshot(intent, &config);
         }
     }
 }

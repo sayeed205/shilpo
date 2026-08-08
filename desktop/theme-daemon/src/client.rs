@@ -147,9 +147,10 @@ impl ThemeClient {
     fn force_update_state(&self, new_state: DaemonState) {
         let mut cur = self.current_state.lock().unwrap();
         *cur = new_state.clone();
-        let _ = self
-            .tx
-            .send(ThemeUpdate { state: new_state, change_kind: ChangeKind::full() });
+        let _ = self.tx.send(ThemeUpdate {
+            state: new_state,
+            change_kind: ChangeKind::full(),
+        });
     }
 
     fn update_state_if_newer(&self, new_state: DaemonState) {

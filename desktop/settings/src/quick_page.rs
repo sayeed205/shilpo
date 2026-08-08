@@ -201,25 +201,19 @@ impl QuickPage {
                 let client = theme_client.clone();
                 Button::new(SharedString::from(format!("scheme-{ix}")))
                     .child(
-                        div()
-                            .h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(
-                                v_flex()
-                                    .items_start()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_medium()
-                                            .child(*label)
-                                            .when(variant == SchemeVariant::Auto && current_variant == SchemeVariant::Auto, |el| {
-                                                el.child(" → ")
-                                                    .child(Self::resolved_variant_label(state, cx))
-                                            }),
-                                    )
-                                    .child(Self::render_variant_preview(state, variant)),
-                            ),
+                        div().h_flex().gap_1().items_center().child(
+                            v_flex()
+                                .items_start()
+                                .child(div().text_sm().font_medium().child(*label).when(
+                                    variant == SchemeVariant::Auto
+                                        && current_variant == SchemeVariant::Auto,
+                                    |el| {
+                                        el.child(" → ")
+                                            .child(Self::resolved_variant_label(state, cx))
+                                    },
+                                ))
+                                .child(Self::render_variant_preview(state, variant)),
+                        ),
                     )
                     .selected(selected)
                     .small()
@@ -270,10 +264,7 @@ impl QuickPage {
                 let color = shilpo_ui::theme::argb_to_hsla(
                     u32::from_str_radix(&hex[1..], 16).unwrap_or(0) | 0xff000000,
                 );
-                div()
-                    .size(px(10.))
-                    .rounded_full()
-                    .bg(color)
+                div().size(px(10.)).rounded_full().bg(color)
             })
             .collect::<Vec<_>>();
         h_flex().gap_1().mt_0p5().children(chips)

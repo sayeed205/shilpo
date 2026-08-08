@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -17,7 +17,13 @@ impl TestBackend {
         }
     }
 
-    fn generate_solid_frame(width: u32, height: u32, color_r: u8, color_g: u8, color_b: u8) -> Frame {
+    fn generate_solid_frame(
+        width: u32,
+        height: u32,
+        color_r: u8,
+        color_g: u8,
+        color_b: u8,
+    ) -> Frame {
         let mut data = vec![0u8; (width * height * 4) as usize];
         for pixel in data.chunks_exact_mut(4) {
             pixel[0] = color_b;
@@ -106,7 +112,9 @@ mod tests {
             framerate: 30,
             ..Default::default()
         };
-        let rx = backend.start_stream(&RecordingSource::primary(), &config).unwrap();
+        let rx = backend
+            .start_stream(&RecordingSource::primary(), &config)
+            .unwrap();
         let frame = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(frame.width, 1280);
         backend.stop_stream();

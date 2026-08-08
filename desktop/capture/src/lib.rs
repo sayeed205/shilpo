@@ -6,8 +6,8 @@ pub mod types;
 
 pub use types::{
     AudioSource, CaptureIntent, CaptureOutcome, Codec, Container, Frame, FrameData, FrameFormat,
-    HwAccel, Quality, Rect, RecordingCommand, RecordingEvent, RecordingRequest, RecordingSource,
-    RecordingState, Region, StreamConfig,
+    HwAccel, Quality, RecordingCommand, RecordingEvent, RecordingRequest, RecordingSource,
+    RecordingState, Rect, Region, StreamConfig,
 };
 
 pub use backend::create_backend;
@@ -24,7 +24,12 @@ pub fn capture_frame(output: Option<&str>) -> anyhow::Result<Frame> {
 pub fn crop_image(img: &image::RgbaImage, region: Region) -> image::RgbaImage {
     let x = region.x.max(0) as u32;
     let y = region.y.max(0) as u32;
-    image::imageops::crop_imm(img, x, y, region.width, region.height).to_image()
+    if x >= img.width() || y >= img.height() || region.is_empty() {
+        return image::RgbaImage::new(0, 0);
+    }
+    let width = region.width.min(img.width() - x);
+    let height = region.height.min(img.height() - y);
+    image::imageops::crop_imm(img, x, y, width, height).to_image()
 }
 
 /// Copy image to clipboard

@@ -16,4 +16,3 @@ pub struct VpnConnection {
     /// DBus object path of the active connection or connection setting.
     pub object_path: String,
 }
-
