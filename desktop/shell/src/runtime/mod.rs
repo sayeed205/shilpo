@@ -189,6 +189,7 @@ impl ShellRuntime {
                 .global_mut::<ShellRuntime>()
                 .shell_surfaces
                 .handle_window_closed(window_id);
+            crate::bar::cards::adapter::CardCoordinator::forget_window(cx, window_id);
             Self::publish_status(cx);
             match outcome {
                 WindowClosedOutcome::Nothing => {}
@@ -257,6 +258,12 @@ impl ShellRuntime {
                 let _ = task.await;
             }
             cx.update(|cx| {
+                // Dismiss all card channels on shutdown.
+                crate::bar::cards::adapter::CardCoordinator::dispatch(
+                    cx,
+                    crate::bar::cards::model::CardRequest::Shutdown,
+                );
+                crate::bar::cards::adapter::CardCoordinator::destroy_all_bands(cx);
                 let windows = cx
                     .global_mut::<Self>()
                     .shell_surfaces
