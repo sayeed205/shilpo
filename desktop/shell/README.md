@@ -14,7 +14,7 @@ The shell is structured into modular layers:
 - **`shilpo-services`**: Background system services (Compositor IPC, Brightness, Audio, Application Scanner,
   Notifications, System Tray).
 - **`shilpo-config`**: Versioned TOML configuration & session state persistence.
-- **`shilpo-shell`**: Desktop bar, workspace overview, control center, and notification center runtime.
+- **`shilpo-shell`**: Desktop bar, workspace overview, notifications, and OSD runtime.
 
 ---
 
@@ -82,7 +82,6 @@ locale = "en-US" # en-US | bn-IN | ar-SA
 ### Available Commands
 
 - `ToggleOverview`: Toggles the workspace overview & spotlight search surface.
-- `ToggleControlCenter`: Toggles the control center overlay.
 - `ToggleNotifications`: Toggles the notification panel.
 - `ToggleNightLight`: Toggles night-light mode.
 - `SetDnd { enabled: bool }`: Updates Do Not Disturb mode.

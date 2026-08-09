@@ -18,7 +18,7 @@ pub trait UPowerDisplayDevice {
 }
 
 /// Battery state information.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BatteryInfo {
     pub percentage: u8,
     pub is_charging: bool,

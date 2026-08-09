@@ -4,7 +4,7 @@ use gpui::{
 };
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
 
-use crate::runtime::ShellRuntime;
+use crate::runtime::ShellSurfaces;
 
 /// Kind of On-Screen Display popup.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,7 +29,7 @@ pub struct OsdView {
 impl OsdView {
     pub fn new(kind: OsdKind, window: &mut Window, cx: &mut Context<Self>) -> Self {
         window.on_window_should_close(cx, |_, cx| {
-            ShellRuntime::forget_osd(cx);
+            ShellSurfaces::forget_osd(cx);
             true
         });
         Self { kind }

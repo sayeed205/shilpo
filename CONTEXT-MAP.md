@@ -21,14 +21,11 @@ library at its core.
 
 ### Linux Desktop (`desktop/`)
 
-- **Shell** (`desktop/shell`) — The main desktop shell daemon. Top bar, control center, workspace overview,
-  notifications, OSD, extension surface rendering, action registry, keybinding management. Also owns shell-specific
-  presentational widgets (Bluetooth, Network, SysInfo, Media, Caffeine).
-- **Settings** (`desktop/settings`) — Standalone control panel application. Material 3 settings UI with navigation rail,
-  category pages for network, bluetooth, themes, bar, desktop configuration. Same product as Shell, separate binary.
-- **Services** (`desktop/services`) — Linux system integration services. Wayland/Niri compositor IPC, audio, bluetooth,
-  brightness, caffeine, clipboard, location, media, network, night light, notifications, power profile, screen capture,
-  tray, upower, app scanning.
+- **Shell** (`desktop/shell`) — The main desktop shell daemon. Top bar, workspace overview, notifications, OSD, extension surface rendering, action registry, keybinding management. Also owns shell-specific presentational widgets (Bluetooth, Network, SysInfo, Media, Caffeine).
+- **Settings** (`desktop/settings`) — Standalone Linux control panel application. Material 3 settings UI with navigation rail and category pages for network, bluetooth, themes, bar, and desktop configuration. Same product as Shell, separate binary.
+- **Device Protocol** (`desktop/device-protocol`) — Desktop device protocol types (`DeviceDomain`, `DomainLifecycle`, `DomainState`, `CommandId`, `CommandOutcome`, `DeviceCommand`). Pure data types with exact protocol version check (`PROTOCOL_VERSION = 1`).
+- **Device Client** (`desktop/device-client`) — Desktop device client consumed by Shell and Settings. Manages DBus client connections, debounced control setters, and typed degraded state when daemon is unavailable.
+- **Services** (`desktop/services`) — Linux system integration services. Device daemon (`DeviceDaemonService`, production `SystemDeviceAdapter`, deterministic `InMemoryDeviceAdapter` for tests), Wayland/Niri compositor IPC, audio, bluetooth, brightness, caffeine, clipboard, location, media, network, night light, notifications, power profile, screen capture, tray, upower, app scanning.
 - **Config** (`desktop/config`) — Shell configuration management. TOML config loading/validation, XDG directory
   resolution, LMDB session storage via `heed`. Imports extension ID types from Ext Types for validating extension contribution
   references in config.
@@ -56,6 +53,10 @@ library at its core.
 - **Shell → UI**: Shell renders all UI using core M3 components.
 - **Shell → Theme Daemon**: Shell subscribes to theme daemon for system-wide theme synchronization.
 - **Shell → Services**: Shell wires system service data into presentational widgets via service worker channels.
+- **Shell → Device Client → Device Protocol**: Shell submits live device commands and observes per-domain daemon revisions through the typed client seam.
+- **Settings → Device Client → Device Protocol**: Settings uses the same daemon-owned device projection independently of Shell.
+- **Device Client → Device Daemon**: The client negotiates the exact protocol version and consumes typed DBus methods/signals from the Services-hosted daemon.
+- **Services → Device Protocol**: The device daemon owns command arbitration, per-domain queues, and Linux service adapters while remaining separate from the client.
 - **Shell → Config**: Shell loads and validates its configuration.
 - **Shell → Ext**: Shell hosts and coordinates extensions.
 - **Ext → Ext Types**: Ext re-exports extension ID types from Ext Types.

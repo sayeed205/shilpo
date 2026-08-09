@@ -5,7 +5,7 @@ use gpui::{
 use shilpo_ext_types::CanonicalId;
 use shilpo_ui::ActiveTheme;
 
-/// Generic adapter used by desktop, side-panel, control-center, settings, and
+/// Generic adapter used by desktop, side-panel, settings, and
 /// launcher contributions. Placement and lifecycle stay with the owning shell
 /// surface; only the validated declarative tree is shared.
 pub struct ExtensionSurfaceView {

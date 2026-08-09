@@ -8,7 +8,7 @@ use crate::{
     extensions::ContributionDescriptor,
 };
 
-use super::ShellRuntime;
+use super::{ShellRuntime, ShellSurfaces, shell_surfaces::SurfaceRequest};
 
 /// Owns the shell action registry and the keybinding table, plus the logic that
 /// maps `ActionInvocation`s onto shell behavior and compositor commands.
@@ -202,16 +202,12 @@ impl ActionDispatcher {
         }
 
         match invocation {
-            ActionInvocation::ToggleControlCenter => {
-                ShellRuntime::toggle_control_center(cx);
-                Ok(crate::actions::ActionResult::Immediate)
-            }
             ActionInvocation::ToggleBar => {
-                ShellRuntime::toggle_bar(cx);
+                ShellSurfaces::request(cx, SurfaceRequest::ToggleBars);
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::ToggleOverview => {
-                ShellRuntime::toggle_overview(cx);
+                ShellSurfaces::request(cx, SurfaceRequest::ToggleOverview);
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::ReloadConfig => {
@@ -276,57 +272,60 @@ impl ActionDispatcher {
             ActionInvocation::VolumeUp => {
                 ShellRuntime::dispatch_device_command(
                     cx,
-                    crate::bar::service_worker::DeviceCommand::Audio(
-                        crate::bar::service_worker::AudioCommand::StepDefaultVolume(
-                            crate::bar::service_worker::VolumeStep::Up,
+                    shilpo_device_protocol::DeviceCommand::Audio(
+                        shilpo_device_protocol::AudioAction::SetVolume(
+                            (ShellRuntime::device_snapshot(cx).audio.volume + 5).min(100),
                         ),
                     ),
                 );
                 let info = ShellRuntime::device_snapshot(cx).audio;
                 let target_vol = (info.volume + 5).min(100);
-                ShellRuntime::show_osd(
+                ShellSurfaces::request(
                     cx,
-                    crate::osd::OsdKind::Volume {
+                    SurfaceRequest::ShowOsd(crate::osd::OsdKind::Volume {
                         level: target_vol as u32,
                         muted: info.is_muted,
-                    },
+                    }),
                 );
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::VolumeDown => {
                 ShellRuntime::dispatch_device_command(
                     cx,
-                    crate::bar::service_worker::DeviceCommand::Audio(
-                        crate::bar::service_worker::AudioCommand::StepDefaultVolume(
-                            crate::bar::service_worker::VolumeStep::Down,
+                    shilpo_device_protocol::DeviceCommand::Audio(
+                        shilpo_device_protocol::AudioAction::SetVolume(
+                            ShellRuntime::device_snapshot(cx)
+                                .audio
+                                .volume
+                                .saturating_sub(5),
                         ),
                     ),
                 );
                 let info = ShellRuntime::device_snapshot(cx).audio;
                 let target_vol = info.volume.saturating_sub(5);
-                ShellRuntime::show_osd(
+                ShellSurfaces::request(
                     cx,
-                    crate::osd::OsdKind::Volume {
+                    SurfaceRequest::ShowOsd(crate::osd::OsdKind::Volume {
                         level: target_vol as u32,
                         muted: info.is_muted,
-                    },
+                    }),
                 );
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::VolumeMute => {
                 ShellRuntime::dispatch_device_command(
                     cx,
-                    crate::bar::service_worker::DeviceCommand::Audio(
-                        crate::bar::service_worker::AudioCommand::ToggleDefaultMute,
+                    shilpo_device_protocol::DeviceCommand::Audio(
+                        shilpo_device_protocol::AudioAction::ToggleMute,
                     ),
                 );
                 let info = ShellRuntime::device_snapshot(cx).audio;
-                ShellRuntime::show_osd(
+                ShellSurfaces::request(
                     cx,
-                    crate::osd::OsdKind::Volume {
+                    SurfaceRequest::ShowOsd(crate::osd::OsdKind::Volume {
                         level: info.volume as u32,
                         muted: !info.is_muted,
-                    },
+                    }),
                 );
                 Ok(crate::actions::ActionResult::Immediate)
             }
@@ -337,10 +336,9 @@ impl ActionDispatcher {
                     .unwrap_or_else(|| "eDP-1".to_string());
                 ShellRuntime::dispatch_device_command(
                     cx,
-                    crate::bar::service_worker::DeviceCommand::AdjustFocusedBrightness {
-                        connector: connector.clone(),
-                        delta: 5,
-                    },
+                    shilpo_device_protocol::DeviceCommand::Brightness(
+                        shilpo_device_protocol::BrightnessAction::StepUp,
+                    ),
                 );
                 let target_display = info
                     .displays
@@ -358,13 +356,13 @@ impl ActionDispatcher {
                     None => ((info.percentage + 5).min(100) as u32, None, Some(connector)),
                 };
 
-                ShellRuntime::show_osd(
+                ShellSurfaces::request(
                     cx,
-                    crate::osd::OsdKind::Brightness {
+                    SurfaceRequest::ShowOsd(crate::osd::OsdKind::Brightness {
                         level: target_pct,
                         display_name,
                         connector: connector_opt,
-                    },
+                    }),
                 );
                 Ok(crate::actions::ActionResult::Immediate)
             }
@@ -375,10 +373,9 @@ impl ActionDispatcher {
                     .unwrap_or_else(|| "eDP-1".to_string());
                 ShellRuntime::dispatch_device_command(
                     cx,
-                    crate::bar::service_worker::DeviceCommand::AdjustFocusedBrightness {
-                        connector: connector.clone(),
-                        delta: -5,
-                    },
+                    shilpo_device_protocol::DeviceCommand::Brightness(
+                        shilpo_device_protocol::BrightnessAction::StepDown,
+                    ),
                 );
                 let target_display = info
                     .displays
@@ -400,18 +397,21 @@ impl ActionDispatcher {
                     ),
                 };
 
-                ShellRuntime::show_osd(
+                ShellSurfaces::request(
                     cx,
-                    crate::osd::OsdKind::Brightness {
+                    SurfaceRequest::ShowOsd(crate::osd::OsdKind::Brightness {
                         level: target_pct,
                         display_name,
                         connector: connector_opt,
-                    },
+                    }),
                 );
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::TakeScreenshot => {
-                ShellRuntime::open_capture_overlay(cx, shilpo_capture::CaptureIntent::Clipboard);
+                ShellSurfaces::request(
+                    cx,
+                    SurfaceRequest::OpenCapture(shilpo_capture::CaptureIntent::Clipboard),
+                );
                 Ok(crate::actions::ActionResult::Immediate)
             }
 

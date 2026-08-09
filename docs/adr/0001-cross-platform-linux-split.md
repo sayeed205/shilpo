@@ -7,7 +7,7 @@ independent and cross-platform for third-party GPUI apps and future Shilpo cross
 ecosystem is inherently Linux-specific (Wayland, DBus, XDG, Niri).
 
 Cross-platform crates (`core/`): `shilpo-ui`, `shilpo-theme`, `shilpo-macros`, `shilpo-assets`. Linux-only crates
-(`desktop/`): `shilpo-shell`, `shilpo-settings`, `shilpo-services`, `shilpo-config`, `shilpo-ext`,
-`shilpo-theme-daemon`, `shilpo-cli`.
+(`desktop/`): `shilpo-shell`, `shilpo-settings`, `shilpo-services`, `shilpo-device-protocol`,
+`shilpo-device-client`, `shilpo-config`, `shilpo-ext`, `shilpo-theme-daemon`, `shilpo-cli`.
 
 `core/` crates must never depend on `desktop/` crates. `desktop/` crates may depend on `core/` crates freely.

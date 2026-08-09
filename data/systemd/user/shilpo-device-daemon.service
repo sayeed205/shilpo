@@ -1,0 +1,11 @@
+[Unit]
+Description=Shilpo device integration daemon
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/shilpo-device-daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
