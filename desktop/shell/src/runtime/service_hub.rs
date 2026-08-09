@@ -12,10 +12,10 @@ use crate::bar::service_worker::{
     self, CommandSender, DeviceCommand, UpdateReceiver, WorkerCommand, WorkerUpdate,
 };
 
-use super::{SessionContext, ShellRuntime, surface_manager::SurfaceManager};
+use super::{SessionContext, ShellRuntime, shell_surfaces::ShellSurfaces};
 
-/// Owns the platform service integrations (compositor, notifications, clipboard,
-/// app scanning) and the background service worker that reports device state.
+/// Owns shell-facing integrations (compositor, notifications, clipboard, app
+/// scanning) and the client bridge that reports device state from the daemon.
 ///
 /// All state is private: the shell reaches the services exclusively through the
 /// narrow method surface below.
@@ -60,7 +60,7 @@ impl ServiceHub {
     ) -> Self {
         let compositor: Arc<dyn shilpo_services::CompositorAdapter> =
             shilpo_services::NiriCompositorService::new();
-        let (device_services, availability) = crate::bar::service_worker::DeviceServices::new();
+        let device_client = shilpo_device_client::DeviceClient::new();
         let clipboard = shilpo_services::ClipboardService::with_store(session_store);
         let app_scanner = shilpo_services::AppScanner::new()
             .unwrap_or_else(|_| shilpo_services::AppScanner::new_empty());
@@ -90,7 +90,7 @@ impl ServiceHub {
             updates_tx,
             commands_rx,
             config_path.clone(),
-            device_services,
+            device_client,
         );
 
         let config_dir = config_path
@@ -151,7 +151,7 @@ impl ServiceHub {
             app_scanner,
             service_commands,
             device_snapshot: crate::bar::service_worker::DeviceSnapshot::default(),
-            availability,
+            availability: crate::bar::service_worker::ServiceAvailability::default(),
             notif_rx: Arc::new(Mutex::new(notif_rx)),
             notif_tx,
             updates_rx: Arc::new(Mutex::new(updates_rx)),
@@ -351,6 +351,9 @@ impl ServiceHub {
             crate::bar::service_worker::WorkerUpdate::CommandRejected { reason, .. } => {
                 tracing::warn!(%reason, "device command rejected")
             }
+            crate::bar::service_worker::WorkerUpdate::CommandOutcome(outcome) => {
+                tracing::debug!(?outcome, "device command reached terminal outcome");
+            }
             _ => {}
         }
     }
@@ -374,7 +377,10 @@ impl ServiceHub {
             .map(ServiceHub::drain_notifications)
             .unwrap_or_default();
         for notif in notifs {
-            crate::bar::view::open_notification_toast(cx, notif);
+            ShellSurfaces::request(
+                cx,
+                super::shell_surfaces::SurfaceRequest::ShowNotification(notif),
+            );
         }
 
         let updates = cx
@@ -393,8 +399,8 @@ impl ServiceHub {
                         crate::bar::service_worker::ConfigUpdate::Loaded(config),
                     ) => {
                         ShellRuntime::set_active_config(cx, config);
-                        SurfaceManager::sync_displays(cx);
-                        SurfaceManager::reconcile_bar_extension_instances(cx);
+                        ShellSurfaces::request(cx, super::SurfaceRequest::SyncDisplays);
+                        ShellSurfaces::reconcile_bar_extension_instances(cx);
                     }
                     crate::bar::service_worker::WorkerUpdate::Battery(info) => {
                         ShellRuntime::dispatch_extension_event(
@@ -428,7 +434,7 @@ impl ServiceHub {
                 }
             }
 
-            let handles = cx.global::<ShellRuntime>().surface_manager().bar_handles();
+            let handles = cx.global::<ShellRuntime>().shell_surfaces().bar_handles();
             for handle in handles {
                 let updates_clone = updates.clone();
                 let _ = handle.update(cx, |bar_view, _window, cx| {

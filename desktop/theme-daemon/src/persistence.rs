@@ -10,7 +10,10 @@ pub fn state_file_path() -> PathBuf {
 }
 
 pub fn write_state_snapshot(state: &DaemonState) -> Result<PathBuf> {
-    let path = state_file_path();
+    write_state_snapshot_to(state, &state_file_path())
+}
+
+pub fn write_state_snapshot_to(state: &DaemonState, path: &Path) -> Result<PathBuf> {
     let parent = path
         .parent()
         .context("Invalid state file parent directory")?;
@@ -18,12 +21,11 @@ pub fn write_state_snapshot(state: &DaemonState) -> Result<PathBuf> {
     fs::create_dir_all(parent)
         .with_context(|| format!("Failed to create state directory: {}", parent.display()))?;
 
-    cleanup_stale_temp_files(parent);
-
     let temp_name = format!(
-        "colors.json.tmp.{}.{}",
+        "colors.json.tmp.{}.{}.{}",
         std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        uuid::Uuid::new_v4().simple()
     );
     let temp_path = parent.join(temp_name);
 
@@ -50,7 +52,7 @@ pub fn write_state_snapshot(state: &DaemonState) -> Result<PathBuf> {
             .with_context(|| format!("Failed to sync temp state file: {}", temp_path.display()))?;
     }
 
-    fs::rename(&temp_path, &path).with_context(|| {
+    fs::rename(&temp_path, path).with_context(|| {
         format!(
             "Failed to rename {} to {}",
             temp_path.display(),
@@ -62,28 +64,13 @@ pub fn write_state_snapshot(state: &DaemonState) -> Result<PathBuf> {
         let _ = dir_file.sync_all();
     }
 
-    Ok(path)
+    Ok(path.to_path_buf())
 }
 
 pub fn read_state_snapshot() -> Option<DaemonState> {
     let path = state_file_path();
     let content = fs::read_to_string(&path).ok()?;
     serde_json::from_str(&content).ok()
-}
-
-fn cleanup_stale_temp_files(dir: &Path) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|name| name.starts_with("colors.json.tmp."))
-            {
-                let _ = fs::remove_file(path);
-            }
-        }
-    }
 }
 
 #[cfg(test)]

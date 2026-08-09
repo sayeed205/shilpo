@@ -4,11 +4,10 @@ use std::{
     sync::Arc,
 };
 
+use gpui::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};
 use gpui::{
     App, AppContext, Bounds, DisplayId, Entity, Pixels, Point, Size, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions,
-    layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
-    point, px, size,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, point, px, size,
 };
 use shilpo_ext_types::CanonicalId;
 use shilpo_services::{
@@ -18,15 +17,64 @@ use shilpo_theme_daemon::DaemonState;
 use uuid::Uuid;
 
 use crate::{
-    ControlCenterView,
     actions::ActionInvocation,
     bar::{BarSpec, BarView, OutputDescriptor, ReconciliationOp, geometry::BarGeometry},
     error::ShellError,
     extensions::{ContributionInstance, ContributionSurface},
     overview::{OverviewCloseReason, WorkspaceOverview},
 };
+use shilpo_capture::{CaptureIntent, capture_frame, frame_to_rgba};
 
 use super::ShellRuntime;
+
+#[derive(Clone, Copy)]
+pub(crate) struct OverviewLifecycleCallback {
+    instance: u64,
+}
+
+impl OverviewLifecycleCallback {
+    pub(crate) fn finish(self, cx: &mut App, reason: OverviewCloseReason) {
+        ShellSurfaces::finish_overview_close(cx, self.instance, reason);
+    }
+
+    pub(crate) fn window_closed(self, cx: &mut App) {
+        ShellSurfaces::forget_overview(cx, self.instance);
+    }
+
+    pub(crate) fn entity_ready(self, cx: &mut App, entity: Entity<WorkspaceOverview>) {
+        if cx
+            .global::<ShellRuntime>()
+            .shell_surfaces()
+            .overview_instance
+            == self.instance
+        {
+            cx.global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .overview_entity = Some(entity);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NotificationLifecycleCallback {
+    generation: u64,
+}
+
+impl std::fmt::Display for NotificationLifecycleCallback {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.generation.fmt(formatter)
+    }
+}
+
+impl NotificationLifecycleCallback {
+    pub(crate) fn forgotten(self, cx: &mut App) {
+        ShellSurfaces::forget_notification(cx, self.generation);
+    }
+
+    pub(crate) fn expired(self, cx: &mut App) {
+        ShellSurfaces::expire_notification(cx, self.generation);
+    }
+}
 
 pub(super) fn bar_window_options(
     geometry: &BarGeometry,
@@ -175,38 +223,111 @@ pub(crate) fn extension_settings(
     settings
 }
 
+/// Describes an active desktop surface managed by the shell.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ActiveSurfaceKind {
+    Bar,
+    Overview,
+    NotificationToast,
+    Osd,
+    ExtensionSurface(String),
+    ExtensionPanel(CanonicalId),
+    Capture,
+}
+
+/// Semantic requests accepted by the shell surface owner. Callers do not
+/// learn GPUI handles, geometry, focus handles, or transition generations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SurfaceRequest {
+    ToggleBars,
+    ToggleOverview,
+    OpenOverviewOnDisplay(Option<DisplayId>),
+    CloseOverview,
+    SyncDisplays,
+    OpenFallbackBar,
+    ShowOsd(crate::osd::OsdKind),
+    ShowNotification(shilpo_services::Notification),
+    OpenCapture(CaptureIntent),
+    OpenExtensionPanel(CanonicalId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum OverviewLifecycle {
+    #[default]
+    Closed,
+    Opening {
+        generation: u64,
+    },
+    Open {
+        generation: u64,
+    },
+    Closing {
+        generation: u64,
+    },
+}
+
+/// Lifecycle for transient shell-owned surfaces whose windows may be replaced
+/// or dismissed asynchronously.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SurfaceLifecycle {
+    #[default]
+    Closed,
+    Opening {
+        generation: u64,
+    },
+    Open {
+        generation: u64,
+    },
+    Closing {
+        generation: u64,
+    },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SurfaceSnapshot {
+    pub overview_open: bool,
+    pub overview_lifecycle: OverviewLifecycle,
+    pub bars_open: bool,
+    pub readiness: shilpo_services::ipc::ReadinessState,
+    pub notification_lifecycle: SurfaceLifecycle,
+    pub osd_lifecycle: SurfaceLifecycle,
+    pub extension_surface_count: usize,
+    pub extension_lifecycle: SurfaceLifecycle,
+    pub capture_lifecycle: SurfaceLifecycle,
+}
+
 /// The set of shell windows that must be torn down on shutdown.
 pub(crate) struct ShutdownWindows {
     pub(crate) bars: HashMap<DisplayId, (WindowHandle<BarView>, BarSpec)>,
     pub(crate) extension_surfaces:
         HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
     pub(crate) extension_panel: Option<(WindowHandle<shilpo_ui::Root>, CanonicalId)>,
-    pub(crate) control_center: Option<WindowHandle<shilpo_ui::Root>>,
     pub(crate) notification: Option<(
         u64,
         u32,
         WindowHandle<crate::notification::NotificationToastView>,
     )>,
+    pub(crate) capture: Option<(u64, WindowHandle<shilpo_ui::Root>)>,
 }
 
 /// What closed when a shell window was destroyed.
 pub(crate) enum WindowClosedOutcome {
     Nothing,
-    ControlCenter,
+    Capture,
     ExtensionPanel(CanonicalId),
 }
 
-/// Owns every shell window: the per-display bars, the control center, the
+/// Owns every shell window: the per-display bars, the overview, the
 /// workspace overview, notification toasts, the OSD, and the extension surfaces.
 ///
 /// Window handles and surface state are private; the shell interacts with the
 /// manager exclusively through the method surface below.
-pub struct SurfaceManager {
+pub struct ShellSurfaces {
     bars: HashMap<DisplayId, (WindowHandle<BarView>, BarSpec)>,
     last_bar_specs: Vec<(BarGeometry, bool)>,
     bar_state: BarState,
-    control_center: Option<WindowHandle<shilpo_ui::Root>>,
     overview: Option<WindowHandle<shilpo_ui::Root>>,
+    overview_lifecycle: OverviewLifecycle,
     overview_entity: Option<Entity<WorkspaceOverview>>,
     overview_instance: u64,
     next_overview_instance: u64,
@@ -219,20 +340,283 @@ pub struct SurfaceManager {
         WindowHandle<crate::notification::NotificationToastView>,
     )>,
     notification_generation: u64,
+    notification_lifecycle: SurfaceLifecycle,
     prior_window_id: Option<u64>,
     osd: Option<(
         u64,
         WindowHandle<shilpo_ui::Root>,
         Entity<crate::osd::OsdView>,
     )>,
-    _osd_generation: u64,
+    osd_generation: u64,
+    osd_lifecycle: SurfaceLifecycle,
+    extension_lifecycle: SurfaceLifecycle,
+    capture: Option<(u64, WindowHandle<shilpo_ui::Root>)>,
+    capture_generation: u64,
+    capture_lifecycle: SurfaceLifecycle,
     extension_surfaces: HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
     extension_panel: Option<(WindowHandle<shilpo_ui::Root>, CanonicalId)>,
     extension_output_ids: HashSet<DisplayId>,
     readiness: shilpo_services::ipc::ReadinessState,
 }
 
-impl SurfaceManager {
+impl ShellSurfaces {
+    pub fn is_overview_open(cx: &App) -> bool {
+        cx.has_global::<ShellRuntime>()
+            && cx
+                .global::<ShellRuntime>()
+                .shell_surfaces()
+                .overview_is_open()
+    }
+
+    pub fn has_bars(cx: &App) -> bool {
+        cx.has_global::<ShellRuntime>()
+            && cx.global::<ShellRuntime>().shell_surfaces().bars_are_open()
+    }
+
+    pub fn compositor_snapshot(cx: &App) -> Arc<CompositorSnapshot> {
+        if cx.has_global::<ShellRuntime>() {
+            cx.global::<ShellRuntime>()
+                .shell_surfaces()
+                .latest_snapshot()
+        } else {
+            Arc::new(CompositorSnapshot::default())
+        }
+    }
+
+    pub fn request(cx: &mut App, request: SurfaceRequest) {
+        match request {
+            SurfaceRequest::ToggleBars => Self::toggle_bar(cx),
+            SurfaceRequest::ToggleOverview => Self::toggle_overview(cx),
+            SurfaceRequest::OpenOverviewOnDisplay(display_id) => {
+                Self::open_or_focus_overview_on_display(cx, display_id)
+            }
+            SurfaceRequest::CloseOverview => Self::close_overview(cx),
+            SurfaceRequest::SyncDisplays => Self::sync_displays(cx),
+            SurfaceRequest::OpenFallbackBar => Self::open_fallback_bar(cx),
+            SurfaceRequest::ShowOsd(kind) => Self::show_osd(cx, kind),
+            SurfaceRequest::ShowNotification(notification) => {
+                Self::show_notification(cx, notification)
+            }
+            SurfaceRequest::OpenCapture(intent) => Self::open_capture(cx, intent),
+            SurfaceRequest::OpenExtensionPanel(contribution) => {
+                Self::open_extension_panel(cx, contribution)
+            }
+        }
+    }
+
+    pub(crate) fn open_capture(cx: &mut App, intent: CaptureIntent) {
+        Self::close_overview(cx);
+        Self::close_overview_competitors(cx);
+        Self::capture_prior_focus(cx);
+        if let Some((_, handle)) = cx
+            .global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .capture
+            .take()
+        {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+        let generation = {
+            let surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+            surfaces.capture_generation = surfaces.capture_generation.wrapping_add(1);
+            surfaces.capture_lifecycle = SurfaceLifecycle::Opening {
+                generation: surfaces.capture_generation,
+            };
+            surfaces.capture_generation
+        };
+        let config = ShellRuntime::active_config(cx).capture;
+        let frame = match capture_frame(None).and_then(|frame| frame_to_rgba(&frame)) {
+            Ok(frame) => frame,
+            Err(error) => {
+                cx.global_mut::<ShellRuntime>()
+                    .shell_surfaces_mut()
+                    .capture_lifecycle = SurfaceLifecycle::Closed;
+                Self::restore_prior_focus(cx);
+                tracing::warn!(%error, "failed to prepare screenshot overlay");
+                return;
+            }
+        };
+        let options = WindowOptions {
+            window_background: WindowBackgroundAppearance::Transparent,
+            kind: WindowKind::LayerShell(LayerShellOptions {
+                namespace: "capture-overlay".to_string(),
+                layer: Layer::Overlay,
+                anchor: Anchor::all(),
+                keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        match cx.open_window(options, move |window, cx| {
+            crate::capture::CaptureOverlayView::view(frame, intent, config, window, cx)
+        }) {
+            Ok(handle) => {
+                let surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+                surfaces.capture = Some((generation, handle));
+                surfaces.capture_lifecycle = SurfaceLifecycle::Open { generation };
+            }
+            Err(error) => {
+                cx.global_mut::<ShellRuntime>()
+                    .shell_surfaces_mut()
+                    .capture_lifecycle = SurfaceLifecycle::Closed;
+                Self::restore_prior_focus(cx);
+                tracing::warn!(%error, "failed to open capture overlay");
+            }
+        }
+    }
+
+    fn show_notification(cx: &mut App, notification: shilpo_services::Notification) {
+        use shilpo_config::BarPosition;
+
+        let timeout = crate::bar::view::notification_timeout(&notification);
+        let notification_id = notification.id;
+        let bar_config = ShellRuntime::active_config(cx).bar;
+        let bar_position = bar_config.position;
+        let bar_h = bar_config.height as f32;
+        let is_float = bar_config.style == shilpo_config::BarStyle::Float;
+        let float_margin_h = if is_float {
+            bar_config.margin.horizontal as f32
+        } else {
+            0.
+        };
+        let float_margin_v = if is_float {
+            bar_config.margin.vertical as f32
+        } else {
+            0.
+        };
+        let (display_bounds, display_id) = cx.primary_display().map_or_else(
+            || {
+                (
+                    Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
+                    None,
+                )
+            },
+            |display| (display.bounds(), Some(display.id())),
+        );
+        let gap = px(8.);
+        let window_size = size(
+            px(376.),
+            display_bounds.size.height - px(bar_h + float_margin_v) - gap - gap,
+        );
+        let (anchor, margin, origin) = match bar_position {
+            BarPosition::Top => (
+                Anchor::TOP | Anchor::RIGHT,
+                Some((gap, gap, px(0.), px(0.))),
+                point(
+                    display_bounds.origin.x + display_bounds.size.width - window_size.width - gap,
+                    display_bounds.origin.y + px(bar_h + float_margin_v) + gap,
+                ),
+            ),
+            BarPosition::Bottom => (
+                Anchor::BOTTOM | Anchor::RIGHT,
+                Some((px(0.), gap, gap, px(0.))),
+                point(
+                    display_bounds.origin.x + display_bounds.size.width - window_size.width - gap,
+                    display_bounds.origin.y + display_bounds.size.height
+                        - window_size.height
+                        - px(bar_h + float_margin_v)
+                        - gap,
+                ),
+            ),
+            BarPosition::Left => (
+                Anchor::TOP | Anchor::LEFT,
+                Some((gap, px(0.), px(0.), gap)),
+                point(
+                    display_bounds.origin.x + px(bar_h + float_margin_h) + gap,
+                    display_bounds.origin.y + gap,
+                ),
+            ),
+            BarPosition::Right => (
+                Anchor::TOP | Anchor::RIGHT,
+                Some((gap, gap, px(0.), px(0.))),
+                point(
+                    display_bounds.origin.x + display_bounds.size.width
+                        - window_size.width
+                        - px(bar_h + float_margin_h)
+                        - gap,
+                    display_bounds.origin.y + gap,
+                ),
+            ),
+        };
+        let options = WindowOptions {
+            titlebar: None,
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin,
+                size: window_size,
+            })),
+            display_id,
+            app_id: Some("shilpo-notification".to_string()),
+            window_background: WindowBackgroundAppearance::Transparent,
+            kind: WindowKind::LayerShell(LayerShellOptions {
+                namespace: "notification".to_string(),
+                layer: Layer::Overlay,
+                anchor,
+                margin,
+                keyboard_interactivity: KeyboardInteractivity::None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let generation = cx
+            .global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .next_notification_generation();
+        if let Some(handle) = cx
+            .global::<ShellRuntime>()
+            .shell_surfaces()
+            .notification_handle()
+            && handle
+                .update(cx, |view, window, cx| {
+                    view.push(
+                        notification.clone(),
+                        NotificationLifecycleCallback { generation },
+                        timeout,
+                        window,
+                        cx,
+                    );
+                })
+                .is_ok()
+        {
+            cx.global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .set_notification(generation, notification_id, handle);
+            return;
+        }
+        if let Ok(handle) = cx.open_window(options, move |window, cx| {
+            crate::notification::NotificationToastView::view(
+                notification.clone(),
+                NotificationLifecycleCallback { generation },
+                timeout,
+                bar_position,
+                window,
+                cx,
+            )
+        }) {
+            cx.global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .set_notification(generation, notification_id, handle);
+        }
+    }
+
+    pub fn snapshot(cx: &App) -> SurfaceSnapshot {
+        if cx.has_global::<ShellRuntime>() {
+            let surfaces = cx.global::<ShellRuntime>().shell_surfaces();
+            SurfaceSnapshot {
+                overview_open: surfaces.overview_is_open(),
+                overview_lifecycle: surfaces.overview_lifecycle,
+                bars_open: surfaces.bars_are_open(),
+                readiness: surfaces.readiness(),
+                notification_lifecycle: surfaces.notification_lifecycle,
+                osd_lifecycle: surfaces.osd_lifecycle,
+                extension_surface_count: surfaces.extension_surfaces.len(),
+                extension_lifecycle: surfaces.extension_lifecycle,
+                capture_lifecycle: surfaces.capture_lifecycle,
+            }
+        } else {
+            SurfaceSnapshot::default()
+        }
+    }
+
     pub fn new(
         initial_wallpaper_path: Option<PathBuf>,
         latest_snapshot: Arc<CompositorSnapshot>,
@@ -241,8 +625,8 @@ impl SurfaceManager {
             bars: HashMap::new(),
             last_bar_specs: Vec::new(),
             bar_state: BarState::Starting,
-            control_center: None,
             overview: None,
+            overview_lifecycle: OverviewLifecycle::Closed,
             overview_entity: None,
             overview_instance: 0,
             next_overview_instance: 0,
@@ -251,9 +635,15 @@ impl SurfaceManager {
             latest_snapshot,
             notification: None,
             notification_generation: 0,
+            notification_lifecycle: SurfaceLifecycle::Closed,
             prior_window_id: None,
             osd: None,
-            _osd_generation: 0,
+            osd_generation: 0,
+            osd_lifecycle: SurfaceLifecycle::Closed,
+            extension_lifecycle: SurfaceLifecycle::Closed,
+            capture: None,
+            capture_generation: 0,
+            capture_lifecycle: SurfaceLifecycle::Closed,
             extension_surfaces: HashMap::new(),
             extension_panel: None,
             extension_output_ids: HashSet::new(),
@@ -261,6 +651,32 @@ impl SurfaceManager {
         };
         manager.update_readiness();
         manager
+    }
+
+    pub fn active_surfaces(&self) -> Vec<ActiveSurfaceKind> {
+        let mut surfaces = Vec::new();
+        if self.bars_are_open() {
+            surfaces.push(ActiveSurfaceKind::Bar);
+        }
+        if self.overview_is_open() {
+            surfaces.push(ActiveSurfaceKind::Overview);
+        }
+        if self.notification.is_some() {
+            surfaces.push(ActiveSurfaceKind::NotificationToast);
+        }
+        if self.osd.is_some() {
+            surfaces.push(ActiveSurfaceKind::Osd);
+        }
+        for instance_id in self.extension_surfaces.keys() {
+            surfaces.push(ActiveSurfaceKind::ExtensionSurface(instance_id.clone()));
+        }
+        if let Some((_, canonical_id)) = &self.extension_panel {
+            surfaces.push(ActiveSurfaceKind::ExtensionPanel(canonical_id.clone()));
+        }
+        if self.capture.is_some() {
+            surfaces.push(ActiveSurfaceKind::Capture);
+        }
+        surfaces
     }
 
     pub(crate) fn latest_snapshot(&self) -> Arc<CompositorSnapshot> {
@@ -296,13 +712,20 @@ impl SurfaceManager {
         spec: ExtensionSurfaceSpec,
     ) {
         self.extension_surfaces.insert(instance_id, (handle, spec));
+        self.extension_lifecycle = SurfaceLifecycle::Open {
+            generation: self.extension_surfaces.len() as u64,
+        };
     }
 
     pub(crate) fn remove_extension_surface(
         &mut self,
         id: &str,
     ) -> Option<(WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)> {
-        self.extension_surfaces.remove(id)
+        let removed = self.extension_surfaces.remove(id);
+        if self.extension_surfaces.is_empty() {
+            self.extension_lifecycle = SurfaceLifecycle::Closed;
+        }
+        removed
     }
 
     pub(crate) fn stale_extension_surface_ids(
@@ -332,40 +755,40 @@ impl SurfaceManager {
         self.current_wallpaper_path.clone()
     }
 
-    pub(crate) fn is_overview_open(&self) -> bool {
+    pub(crate) fn overview_is_open(&self) -> bool {
         self.overview.is_some()
     }
 
-    pub(crate) fn is_control_center_open(&self) -> bool {
-        self.control_center.is_some()
-    }
-
-    pub(crate) fn has_bars(&self) -> bool {
+    pub(crate) fn bars_are_open(&self) -> bool {
         !self.bars.is_empty()
     }
 
-    pub(crate) fn begin_overview_instance(&mut self) -> u64 {
+    pub(crate) fn next_overview_instance(&mut self) -> u64 {
         self.next_overview_instance = self.next_overview_instance.wrapping_add(1);
         self.overview_instance = self.next_overview_instance;
         self.overview_instance
     }
 
-    pub(crate) fn reserve_notification_generation(&mut self) -> u64 {
+    pub(crate) fn next_notification_generation(&mut self) -> u64 {
         self.notification_generation = self.notification_generation.wrapping_add(1);
+        self.notification_lifecycle = SurfaceLifecycle::Opening {
+            generation: self.notification_generation,
+        };
         self.notification_generation
     }
 
-    pub(crate) fn register_notification(
+    pub(crate) fn set_notification(
         &mut self,
         generation: u64,
         notification_id: u32,
         handle: WindowHandle<crate::notification::NotificationToastView>,
     ) {
         self.notification = Some((generation, notification_id, handle));
+        self.notification_lifecycle = SurfaceLifecycle::Open { generation };
         tracing::warn!("[NOTIFTRACE] register_notification gen={generation} id={notification_id}");
     }
 
-    pub(crate) fn active_notification_handle(
+    pub(crate) fn notification_handle(
         &self,
     ) -> Option<WindowHandle<crate::notification::NotificationToastView>> {
         self.notification.as_ref().map(|(_, _, handle)| *handle)
@@ -385,14 +808,6 @@ impl SurfaceManager {
         if self.bars.is_empty() {
             self.bar_state = BarState::Hidden;
         }
-        if self
-            .control_center
-            .as_ref()
-            .is_some_and(|handle| handle.window_id() == window_id)
-        {
-            self.control_center = None;
-            outcome = WindowClosedOutcome::ControlCenter;
-        }
         let panel = self.extension_panel.take();
         if let Some((handle, id)) = panel {
             if handle.window_id() == window_id {
@@ -407,6 +822,16 @@ impl SurfaceManager {
             .is_some_and(|(_, _, handle)| handle.window_id() == window_id)
         {
             self.notification = None;
+            self.notification_lifecycle = SurfaceLifecycle::Closed;
+        }
+        if self
+            .capture
+            .as_ref()
+            .is_some_and(|(_, handle)| handle.window_id() == window_id)
+        {
+            self.capture = None;
+            self.capture_lifecycle = SurfaceLifecycle::Closed;
+            outcome = WindowClosedOutcome::Capture;
         }
         outcome
     }
@@ -414,12 +839,15 @@ impl SurfaceManager {
     /// Collects every open window so the orchestrator can tear them down during shutdown.
     pub(crate) fn take_windows_for_shutdown(&mut self) -> ShutdownWindows {
         self.bar_state = BarState::Hidden;
+        self.notification_lifecycle = SurfaceLifecycle::Closed;
+        self.osd_lifecycle = SurfaceLifecycle::Closed;
+        self.capture_lifecycle = SurfaceLifecycle::Closed;
         ShutdownWindows {
             bars: std::mem::take(&mut self.bars),
             extension_surfaces: std::mem::take(&mut self.extension_surfaces),
             extension_panel: self.extension_panel.take(),
-            control_center: self.control_center.take(),
             notification: self.notification.take(),
+            capture: self.capture.take(),
         }
     }
 
@@ -474,12 +902,12 @@ impl SurfaceManager {
             .or_else(|| display_uuid.map(|uuid| uuid.to_string()))
     }
 
-    pub(crate) fn sync_displays(cx: &mut App) {
+    pub fn sync_displays(cx: &mut App) {
         if !cx.has_global::<ShellRuntime>() {
             return;
         }
 
-        let snapshot = ShellRuntime::compositor_snapshot(cx);
+        let snapshot = Self::compositor_snapshot(cx);
 
         let current_outputs = cx
             .displays()
@@ -505,9 +933,9 @@ impl SurfaceManager {
             .map(|o| o.display_id)
             .collect::<HashSet<_>>();
         let changed = {
-            let surface_manager = cx.global_mut::<ShellRuntime>().surface_manager_mut();
-            if output_ids != surface_manager.extension_output_ids {
-                surface_manager.extension_output_ids = output_ids;
+            let shell_surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+            if output_ids != shell_surfaces.extension_output_ids {
+                shell_surfaces.extension_output_ids = output_ids;
                 true
             } else {
                 false
@@ -533,9 +961,9 @@ impl SurfaceManager {
 
         match view_result {
             Ok(handle) => {
-                let surface_manager = cx.global_mut::<ShellRuntime>().surface_manager_mut();
-                surface_manager.bars.insert(display_id, (handle, spec));
-                surface_manager.bar_state = BarState::Visible;
+                let shell_surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+                shell_surfaces.bars.insert(display_id, (handle, spec));
+                shell_surfaces.bar_state = BarState::Visible;
                 ShellRuntime::publish_status(cx);
                 true
             }
@@ -550,18 +978,23 @@ impl SurfaceManager {
         }
     }
 
-    pub(crate) fn open_bar(
-        cx: &mut App,
-        geometry: &BarGeometry,
-        with_display_geometry: bool,
-    ) -> bool {
+    fn open_fallback_bar(cx: &mut App) {
+        let geometry = BarGeometry::calculate(
+            DisplayId::new(0),
+            Bounds::new(point(px(0.), px(0.)), size(px(0.), px(0.))),
+            &ShellRuntime::active_config(cx).bar,
+        );
+        Self::open_bar(cx, &geometry, false);
+    }
+
+    pub fn open_bar(cx: &mut App, geometry: &BarGeometry, with_display_geometry: bool) -> bool {
         let config = ShellRuntime::active_config(cx).bar;
         let spec = BarSpec::new(geometry.clone(), config, with_display_geometry);
         Self::open_bar_with_spec(cx, spec)
     }
 
     pub(crate) fn reconcile_bars(cx: &mut App) {
-        let snapshot = ShellRuntime::compositor_snapshot(cx);
+        let snapshot = Self::compositor_snapshot(cx);
         let outputs = cx
             .displays()
             .into_iter()
@@ -584,7 +1017,7 @@ impl SurfaceManager {
         let ops = {
             let current_bars = cx
                 .global::<ShellRuntime>()
-                .surface_manager()
+                .shell_surfaces()
                 .bars
                 .iter()
                 .map(|(id, (_, spec))| (*id, spec.clone()))
@@ -605,7 +1038,7 @@ impl SurfaceManager {
                 ReconciliationOp::Remove(display_id) => {
                     if let Some((handle, _)) = cx
                         .global_mut::<ShellRuntime>()
-                        .surface_manager_mut()
+                        .shell_surfaces_mut()
                         .bars
                         .remove(&display_id)
                     {
@@ -618,62 +1051,56 @@ impl SurfaceManager {
             }
         }
 
-        if !mounted
-            && !cx
-                .global::<ShellRuntime>()
-                .surface_manager()
-                .bars
-                .is_empty()
-        {
+        if !mounted && !cx.global::<ShellRuntime>().shell_surfaces().bars.is_empty() {
             mounted = true;
         }
 
         if !mounted {
             cx.global_mut::<ShellRuntime>()
-                .surface_manager_mut()
+                .shell_surfaces_mut()
                 .set_bar_state(BarState::OpenFailed);
             ShellRuntime::publish_status(cx);
         }
     }
 
-    pub(crate) fn mark_bar_open_failed(cx: &mut App) {
+    pub fn mark_bar_open_failed(cx: &mut App) {
         cx.global_mut::<ShellRuntime>()
-            .surface_manager_mut()
+            .shell_surfaces_mut()
             .set_bar_state(BarState::OpenFailed);
         ShellRuntime::publish_status(cx);
     }
 
     pub(crate) fn toggle_bar(cx: &mut App) {
-        if !cx.global::<ShellRuntime>().surface_manager().has_bars() {
+        if !cx.global::<ShellRuntime>().shell_surfaces().bars_are_open() {
             Self::reconcile_bars(cx);
         } else {
             let old_bars =
-                std::mem::take(&mut cx.global_mut::<ShellRuntime>().surface_manager_mut().bars);
+                std::mem::take(&mut cx.global_mut::<ShellRuntime>().shell_surfaces_mut().bars);
             for (_, (handle, _)) in old_bars {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             }
-            let surface_manager = cx.global_mut::<ShellRuntime>().surface_manager_mut();
-            surface_manager.bar_state = BarState::Hidden;
-            surface_manager.last_bar_specs.clear();
+            let shell_surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+            shell_surfaces.bar_state = BarState::Hidden;
+            shell_surfaces.last_bar_specs.clear();
             ShellRuntime::publish_status(cx);
         }
     }
 
     pub(super) fn capture_prior_focus(cx: &mut App) {
-        let focused_window_id = ShellRuntime::compositor_snapshot(cx).focused_window_id;
-        let surface_manager = cx.global_mut::<ShellRuntime>().surface_manager_mut();
-        if surface_manager.control_center.is_none() && surface_manager.overview.is_none() {
-            surface_manager.prior_window_id = focused_window_id;
+        let focused_window_id = Self::compositor_snapshot(cx).focused_window_id;
+        let shell_surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+        if shell_surfaces.overview.is_none() {
+            shell_surfaces.prior_window_id = focused_window_id;
         }
     }
 
     pub(super) fn restore_prior_focus(cx: &mut App) {
         let prior_window_id = {
-            let surface_manager = cx.global_mut::<ShellRuntime>().surface_manager_mut();
-            if surface_manager.control_center.is_some() || surface_manager.overview.is_some() {
+            let shell_surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+            if shell_surfaces.overview.is_some() {
                 None
             } else {
-                surface_manager.prior_window_id.take()
+                shell_surfaces.prior_window_id.take()
             }
         };
         if let Some(window_id) = prior_window_id {
@@ -684,7 +1111,7 @@ impl SurfaceManager {
     pub(crate) fn toggle_overview(cx: &mut App) {
         if cx
             .global::<ShellRuntime>()
-            .surface_manager()
+            .shell_surfaces()
             .overview
             .is_some()
         {
@@ -695,9 +1122,16 @@ impl SurfaceManager {
     }
 
     pub(crate) fn close_overview(cx: &mut App) {
+        let generation = cx
+            .global::<ShellRuntime>()
+            .shell_surfaces()
+            .overview_instance;
+        cx.global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .overview_lifecycle = OverviewLifecycle::Closing { generation };
         let overview = cx
             .global::<ShellRuntime>()
-            .surface_manager()
+            .shell_surfaces()
             .overview_entity
             .clone();
         if let Some(overview) = overview {
@@ -713,13 +1147,14 @@ impl SurfaceManager {
         reason: OverviewCloseReason,
     ) {
         let (opened_workspace_id, handle) = {
-            let surface_manager = cx.global_mut::<ShellRuntime>().surface_manager_mut();
-            if surface_manager.overview_instance != instance_id {
+            let shell_surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+            if shell_surfaces.overview_instance != instance_id {
                 return;
             }
-            let opened_workspace_id = surface_manager.overview_opened_workspace_id.take();
-            let handle = surface_manager.overview.take();
-            surface_manager.overview_entity = None;
+            let opened_workspace_id = shell_surfaces.overview_opened_workspace_id.take();
+            let handle = shell_surfaces.overview.take();
+            shell_surfaces.overview_entity = None;
+            shell_surfaces.overview_lifecycle = OverviewLifecycle::Closed;
             (opened_workspace_id, handle)
         };
 
@@ -737,7 +1172,7 @@ impl SurfaceManager {
         if should_restore_overview_prior_focus(
             reason,
             opened_workspace_id,
-            ShellRuntime::compositor_snapshot(cx).focused_workspace_id,
+            Self::compositor_snapshot(cx).focused_workspace_id,
         ) {
             Self::restore_prior_focus(cx);
         }
@@ -747,13 +1182,14 @@ impl SurfaceManager {
 
     pub(crate) fn forget_overview(cx: &mut App, instance_id: u64) {
         let had_handle = {
-            let surface_manager = cx.global_mut::<ShellRuntime>().surface_manager_mut();
-            if surface_manager.overview_instance != instance_id {
+            let shell_surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+            if shell_surfaces.overview_instance != instance_id {
                 return;
             }
-            let had_handle = surface_manager.overview.take().is_some();
-            surface_manager.overview_entity = None;
-            surface_manager.overview_opened_workspace_id = None;
+            let had_handle = shell_surfaces.overview.take().is_some();
+            shell_surfaces.overview_entity = None;
+            shell_surfaces.overview_opened_workspace_id = None;
+            shell_surfaces.overview_lifecycle = OverviewLifecycle::Closed;
             had_handle
         };
 
@@ -798,7 +1234,7 @@ impl SurfaceManager {
     }
 
     pub(crate) fn refresh_bars(cx: &mut App) {
-        let handles = cx.global::<ShellRuntime>().surface_manager().bar_handles();
+        let handles = cx.global::<ShellRuntime>().shell_surfaces().bar_handles();
         for handle in handles {
             let _ = handle.update(cx, |_, _, cx| cx.notify());
         }
@@ -808,7 +1244,7 @@ impl SurfaceManager {
         if cx.has_global::<ShellRuntime>()
             && let Some(path) = cx
                 .global::<ShellRuntime>()
-                .surface_manager()
+                .shell_surfaces()
                 .current_wallpaper_path()
         {
             return Some(path);
@@ -822,11 +1258,11 @@ impl SurfaceManager {
             .unwrap_or_default()
     }
 
-    pub(crate) fn normalize_app_key(value: &str) -> String {
+    pub fn normalize_app_key(value: &str) -> String {
         crate::app_icons::normalize_app_key(value)
     }
 
-    pub(crate) fn app_icon_index(cx: &App) -> HashMap<String, PathBuf> {
+    pub fn app_icon_index(cx: &App) -> HashMap<String, PathBuf> {
         let apps = Self::overview_applications(cx);
         crate::app_icons::build_app_icon_index(apps)
     }
@@ -839,16 +1275,17 @@ impl SurfaceManager {
         cx: &mut App,
         target_display_id: Option<DisplayId>,
     ) {
-        if let Some(handle) = cx.global::<ShellRuntime>().surface_manager().overview {
+        if let Some(handle) = cx.global::<ShellRuntime>().shell_surfaces().overview {
             let _ = handle.update(cx, |_, window, _| window.activate_window());
             return;
         }
 
+        Self::close_overview_competitors(cx);
         Self::capture_prior_focus(cx);
         if let Some(discovered_wallpaper_path) = query_awww_wallpaper_path() {
             let theme_wallpaper_path = cx
                 .global::<ShellRuntime>()
-                .surface_manager()
+                .shell_surfaces()
                 .current_wallpaper_path
                 .as_deref();
             if discovered_wallpaper_needs_theme_sync(
@@ -856,7 +1293,7 @@ impl SurfaceManager {
                 &discovered_wallpaper_path,
             ) {
                 cx.global_mut::<ShellRuntime>()
-                    .surface_manager_mut()
+                    .shell_surfaces_mut()
                     .current_wallpaper_path = Some(discovered_wallpaper_path.clone());
 
                 shilpo_theme_daemon::ThemeClient::spawn_task(async move {
@@ -870,13 +1307,13 @@ impl SurfaceManager {
             }
         }
 
-        let _instance_id = cx
+        let instance_id = cx
             .global_mut::<ShellRuntime>()
-            .surface_manager_mut()
-            .begin_overview_instance();
-        let opened_workspace_id = ShellRuntime::compositor_snapshot(cx).focused_workspace_id;
+            .shell_surfaces_mut()
+            .next_overview_instance();
+        let opened_workspace_id = Self::compositor_snapshot(cx).focused_workspace_id;
         cx.global_mut::<ShellRuntime>()
-            .surface_manager_mut()
+            .shell_surfaces_mut()
             .overview_opened_workspace_id = opened_workspace_id;
 
         let window_size = size(px(1280.), px(720.));
@@ -906,12 +1343,26 @@ impl SurfaceManager {
             display_id,
         );
 
+        cx.global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .overview_lifecycle = OverviewLifecycle::Opening {
+            generation: instance_id,
+        };
         match cx.open_window(options, move |window, cx| {
-            WorkspaceOverview::view(window, cx)
+            WorkspaceOverview::view(
+                OverviewLifecycleCallback {
+                    instance: instance_id,
+                },
+                window,
+                cx,
+            )
         }) {
             Ok(handle) => {
-                let surface_manager = cx.global_mut::<ShellRuntime>().surface_manager_mut();
-                surface_manager.overview = Some(handle);
+                let shell_surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+                shell_surfaces.overview = Some(handle);
+                shell_surfaces.overview_lifecycle = OverviewLifecycle::Open {
+                    generation: instance_id,
+                };
                 ShellRuntime::dispatch_surface_lifecycle(
                     cx,
                     ContributionSurface::Launcher,
@@ -921,148 +1372,48 @@ impl SurfaceManager {
                 );
                 ShellRuntime::publish_status(cx);
             }
-            Err(error) => tracing::warn!(error = %error, "failed to open overview overlay"),
+            Err(error) => {
+                cx.global_mut::<ShellRuntime>()
+                    .shell_surfaces_mut()
+                    .overview_lifecycle = OverviewLifecycle::Closed;
+                tracing::warn!(error = %error, "failed to open overview overlay");
+            }
         }
     }
 
-    pub(crate) fn open_or_focus_control_center(cx: &mut App) {
-        if let Some(handle) = cx.global::<ShellRuntime>().surface_manager().control_center {
-            let _ = handle.update(cx, |_, window, _| window.activate_window());
-            return;
-        }
-
-        Self::capture_prior_focus(cx);
-
-        let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
-            (display.bounds(), Some(display.id()))
-        } else {
+    /// Overview is an exclusive focused surface. Bars remain mounted, while
+    /// transient overlays that could compete for focus are dismissed first.
+    fn close_overview_competitors(cx: &mut App) {
+        let (notification, osd, panel) = {
+            let surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
             (
-                Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
-                None,
+                surfaces.notification.take(),
+                surfaces.osd.take(),
+                surfaces.extension_panel.take(),
             )
         };
-
-        let cc_size = size(px(340.), px(540.));
-        let origin = point(
-            display_bounds.origin.x + display_bounds.size.width - cc_size.width - px(16.),
-            display_bounds.origin.y + px(48.),
-        );
-
-        let options = overlay_options(
-            "shilpo-control-center",
-            "control-center",
-            cc_size,
-            origin,
-            display_id,
-        );
-
-        match cx.open_window(options, move |window, cx| {
-            ControlCenterView::view(window, cx)
-        }) {
-            Ok(handle) => {
-                let surface_manager = cx.global_mut::<ShellRuntime>().surface_manager_mut();
-                surface_manager.control_center = Some(handle);
-                ShellRuntime::dispatch_surface_lifecycle(
-                    cx,
-                    ContributionSurface::ControlCenter,
-                    true,
-                    340.,
-                    540.,
-                );
-                ShellRuntime::publish_status(cx);
-            }
-            Err(error) => tracing::warn!(error = %error, "failed to open control center overlay"),
-        }
-    }
-
-    pub(crate) fn toggle_control_center(cx: &mut App) {
-        if cx
-            .global::<ShellRuntime>()
-            .surface_manager()
-            .control_center
-            .is_some()
-        {
-            Self::close_control_center(cx);
-        } else {
-            Self::open_or_focus_control_center(cx);
-        }
-    }
-
-    pub(crate) fn close_control_center(cx: &mut App) {
-        if !Self::remove_control_center_surface(cx) {
-            return;
-        }
-        Self::restore_prior_focus(cx);
-        ShellRuntime::publish_status(cx);
-    }
-
-    fn remove_control_center_surface(cx: &mut App) -> bool {
-        let handle = cx
-            .global_mut::<ShellRuntime>()
-            .surface_manager_mut()
-            .control_center
-            .take();
-        let Some(handle) = handle else { return false };
-        ShellRuntime::dispatch_surface_lifecycle(
-            cx,
-            ContributionSurface::ControlCenter,
-            false,
-            340.,
-            540.,
-        );
-        let _ = handle.update(cx, |_, window, _| window.remove_window());
-        true
-    }
-
-    pub(crate) fn forget_control_center(cx: &mut App) {
-        let had_handle = cx
-            .global_mut::<ShellRuntime>()
-            .surface_manager_mut()
-            .control_center
-            .take()
-            .is_some();
-        if had_handle {
-            ShellRuntime::dispatch_surface_lifecycle(
-                cx,
-                ContributionSurface::ControlCenter,
-                false,
-                340.,
-                540.,
-            );
-            Self::restore_prior_focus(cx);
-        }
-        ShellRuntime::publish_status(cx);
-    }
-
-    pub(crate) fn register_overview_entity(cx: &mut App, entity: Entity<WorkspaceOverview>) {
-        if cx.has_global::<ShellRuntime>() {
-            cx.global_mut::<ShellRuntime>()
-                .surface_manager_mut()
-                .overview_entity = Some(entity);
-        }
-    }
-
-    pub(crate) fn close_active_notification(cx: &mut App) {
-        let entry = cx
-            .global_mut::<ShellRuntime>()
-            .surface_manager_mut()
-            .notification
-            .take();
-        if let Some((_, notification_id, handle)) = entry {
-            tracing::warn!(
-                "[NOTIFTRACE] close_active_notification id={notification_id} removing window"
-            );
+        if let Some((_, notification_id, handle)) = notification {
             Self::dismiss_notification(cx, notification_id);
             let _ = handle.update(cx, |_, window, _| window.remove_window());
-        } else {
-            tracing::warn!("[NOTIFTRACE] close_active_notification no active entry");
         }
+        if let Some((_, handle, _)) = osd {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+        if let Some((handle, contribution)) = panel {
+            cx.global_mut::<ShellRuntime>()
+                .extension_host_mut()
+                .unmount_contribution(&contribution);
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+        let surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+        surfaces.notification_lifecycle = SurfaceLifecycle::Closed;
+        surfaces.osd_lifecycle = SurfaceLifecycle::Closed;
     }
 
     pub(crate) fn expire_notification(cx: &mut App, generation: u64) {
         let entry = cx
             .global_mut::<ShellRuntime>()
-            .surface_manager_mut()
+            .shell_surfaces_mut()
             .notification
             .take();
         let Some((current_generation, notification_id, handle)) = entry else {
@@ -1073,7 +1424,7 @@ impl SurfaceManager {
         };
         if current_generation != generation {
             cx.global_mut::<ShellRuntime>()
-                .surface_manager_mut()
+                .shell_surfaces_mut()
                 .notification = Some((current_generation, notification_id, handle));
             tracing::warn!(
                 "[NOTIFTRACE] expire_notification stale gen={generation} current={current_generation}; window NOT removed"
@@ -1083,21 +1434,27 @@ impl SurfaceManager {
         tracing::warn!(
             "[NOTIFTRACE] expire_notification(gen={generation}) id={notification_id} removing window"
         );
+        cx.global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .notification_lifecycle = SurfaceLifecycle::Closing { generation };
         Self::expire_notification_id(cx, notification_id);
         let _ = handle.update(cx, |_, window, _| window.remove_window());
+        cx.global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .notification_lifecycle = SurfaceLifecycle::Closed;
     }
 
     pub(crate) fn forget_notification(cx: &mut App, generation: u64) {
         let is_current = cx
             .global::<ShellRuntime>()
-            .surface_manager()
+            .shell_surfaces()
             .notification
             .as_ref()
             .is_some_and(|(current_generation, _, _)| *current_generation == generation);
         if is_current
             && let Some((_, notification_id, _)) = cx
                 .global_mut::<ShellRuntime>()
-                .surface_manager_mut()
+                .shell_surfaces_mut()
                 .notification
                 .take()
         {
@@ -1130,7 +1487,9 @@ impl SurfaceManager {
 
     pub(crate) fn forget_osd(cx: &mut App) {
         if cx.has_global::<ShellRuntime>() {
-            cx.global_mut::<ShellRuntime>().surface_manager_mut().osd = None;
+            let surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+            surfaces.osd = None;
+            surfaces.osd_lifecycle = SurfaceLifecycle::Closed;
         }
     }
 
@@ -1141,12 +1500,13 @@ impl SurfaceManager {
                 .await;
             cx.update(|cx: &mut gpui::App| {
                 if cx.has_global::<ShellRuntime>() {
-                    let surface_manager = cx.global_mut::<ShellRuntime>().surface_manager_mut();
-                    if let Some((current_gen, handle, _)) = &surface_manager.osd
+                    let shell_surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+                    if let Some((current_gen, handle, _)) = &shell_surfaces.osd
                         && *current_gen == generation
                     {
                         let window_handle = *handle;
-                        surface_manager.osd = None;
+                        shell_surfaces.osd = None;
+                        shell_surfaces.osd_lifecycle = SurfaceLifecycle::Closed;
                         let _ = window_handle.update(cx, |_, window, _| window.remove_window());
                     }
                 }
@@ -1158,7 +1518,7 @@ impl SurfaceManager {
     pub(crate) fn show_osd(cx: &mut App, kind: crate::osd::OsdKind) {
         let existing = cx
             .global_mut::<ShellRuntime>()
-            .surface_manager_mut()
+            .shell_surfaces_mut()
             .osd
             .take();
         if let Some((generation, window_handle, view_handle)) = existing {
@@ -1167,8 +1527,16 @@ impl SurfaceManager {
                 cx.notify();
             });
             let next_gen = generation + 1;
-            cx.global_mut::<ShellRuntime>().surface_manager_mut().osd =
+            cx.global_mut::<ShellRuntime>().shell_surfaces_mut().osd =
                 Some((next_gen, window_handle, view_handle));
+            cx.global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .osd_generation = next_gen;
+            cx.global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .osd_lifecycle = SurfaceLifecycle::Open {
+                generation: next_gen,
+            };
             Self::schedule_osd_dismiss(cx, next_gen);
             return;
         }
@@ -1217,23 +1585,26 @@ impl SurfaceManager {
         if let Ok(window_handle) = window_result
             && let Some(view_handle) = spawned_view.lock().unwrap().take()
         {
-            cx.global_mut::<ShellRuntime>().surface_manager_mut().osd =
+            cx.global_mut::<ShellRuntime>().shell_surfaces_mut().osd =
                 Some((1, window_handle, view_handle));
+            let surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+            surfaces.osd_generation = 1;
+            surfaces.osd_lifecycle = SurfaceLifecycle::Open { generation: 1 };
             Self::schedule_osd_dismiss(cx, 1);
         }
     }
 
     pub(crate) fn forget_bar(cx: &mut App) {
-        let surface_manager = cx.global_mut::<ShellRuntime>().surface_manager_mut();
-        surface_manager.bars.clear();
-        surface_manager.bar_state = BarState::Hidden;
+        let shell_surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
+        shell_surfaces.bars.clear();
+        shell_surfaces.bar_state = BarState::Hidden;
         ShellRuntime::publish_status(cx);
     }
 
-    pub(crate) fn open_extension_panel(cx: &mut App, contribution: CanonicalId) {
+    pub fn open_extension_panel(cx: &mut App, contribution: CanonicalId) {
         let existing = cx
             .global_mut::<ShellRuntime>()
-            .surface_manager_mut()
+            .shell_surfaces_mut()
             .extension_panel
             .take();
         if let Some((handle, current)) = existing {
@@ -1243,7 +1614,7 @@ impl SurfaceManager {
                     .is_ok()
             {
                 cx.global_mut::<ShellRuntime>()
-                    .surface_manager_mut()
+                    .shell_surfaces_mut()
                     .extension_panel = Some((handle, current));
                 return;
             }
@@ -1281,7 +1652,7 @@ impl SurfaceManager {
                     .extension_host_mut()
                     .mount_contribution(&contribution, 420., 600.);
                 cx.global_mut::<ShellRuntime>()
-                    .surface_manager_mut()
+                    .shell_surfaces_mut()
                     .extension_panel = Some((handle, contribution));
             }
             Err(error) => tracing::warn!(error = %error, "failed to open extension side panel"),
@@ -1294,7 +1665,7 @@ impl SurfaceManager {
         let config = ShellRuntime::active_config(cx);
         let mut instances = Vec::new();
 
-        let bars = cx.global::<ShellRuntime>().surface_manager().bars.clone();
+        let bars = cx.global::<ShellRuntime>().shell_surfaces().bars.clone();
         for (display_id, (_, spec)) in &bars {
             for (section, widgets) in [
                 ("start", &spec.config.widgets.start),
@@ -1362,12 +1733,12 @@ impl SurfaceManager {
 
         let stale = cx
             .global::<ShellRuntime>()
-            .surface_manager()
+            .shell_surfaces()
             .stale_extension_surface_ids(&desired_windows);
         for id in stale {
             if let Some((handle, _)) = cx
                 .global_mut::<ShellRuntime>()
-                .surface_manager_mut()
+                .shell_surfaces_mut()
                 .remove_extension_surface(&id)
             {
                 let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
@@ -1377,7 +1748,7 @@ impl SurfaceManager {
         for (instance_id, spec) in desired_windows {
             if cx
                 .global::<ShellRuntime>()
-                .surface_manager()
+                .shell_surfaces()
                 .has_extension_surface(&instance_id)
             {
                 continue;
@@ -1408,7 +1779,7 @@ impl SurfaceManager {
             }) {
                 Ok(handle) => {
                     cx.global_mut::<ShellRuntime>()
-                        .surface_manager_mut()
+                        .shell_surfaces_mut()
                         .store_extension_surface(instance_id, handle, spec);
                 }
                 Err(error) => tracing::warn!(
@@ -1422,7 +1793,7 @@ impl SurfaceManager {
     /// Reconciles the extension instances contributed through bar widgets.
     pub(crate) fn reconcile_bar_extension_instances(cx: &mut App) {
         let config = ShellRuntime::active_config(cx);
-        let bars = cx.global::<ShellRuntime>().surface_manager().bars.clone();
+        let bars = cx.global::<ShellRuntime>().shell_surfaces().bars.clone();
         let mut instances = Vec::new();
         for (display_id, (_, spec)) in &bars {
             for (section, widgets) in [
@@ -1452,16 +1823,15 @@ impl SurfaceManager {
     /// Applies a theme daemon state change to the wallpaper path and refreshes
     /// every surface that renders the wallpaper.
     pub(crate) fn apply_theme_state(cx: &mut App, state: &DaemonState) {
-        let (overview_entity, wallpaper_path, cc_handle, ov_handle) = {
+        let (overview_entity, wallpaper_path, ov_handle) = {
             let runtime = cx.global_mut::<ShellRuntime>();
             if let Some(path) = state.wallpaper_path.clone().filter(|path| path.is_file()) {
-                runtime.surface_manager_mut().current_wallpaper_path = Some(path);
+                runtime.shell_surfaces_mut().current_wallpaper_path = Some(path);
             }
             (
-                runtime.surface_manager().overview_entity(),
-                runtime.surface_manager().current_wallpaper_path(),
-                runtime.surface_manager().control_center,
-                runtime.surface_manager().overview,
+                runtime.shell_surfaces().overview_entity(),
+                runtime.shell_surfaces().current_wallpaper_path(),
+                runtime.shell_surfaces().overview,
             )
         };
 
@@ -1471,220 +1841,10 @@ impl SurfaceManager {
             });
         }
         Self::refresh_bars(cx);
-        if let Some(cc) = cc_handle {
-            let _ = cc.update(cx, |_, _, cx| cx.notify());
-        }
         if let Some(ov) = ov_handle {
             let _ = ov.update(cx, |_, _, cx| cx.notify());
         }
         cx.refresh_windows();
-    }
-}
-
-impl ShellRuntime {
-    pub fn sync_displays(cx: &mut App) {
-        SurfaceManager::sync_displays(cx);
-    }
-
-    pub fn open_bar_with_spec(cx: &mut App, spec: BarSpec) -> bool {
-        SurfaceManager::open_bar_with_spec(cx, spec)
-    }
-
-    pub fn open_bar(cx: &mut App, geometry: &BarGeometry, with_display_geometry: bool) -> bool {
-        SurfaceManager::open_bar(cx, geometry, with_display_geometry)
-    }
-
-    pub fn reconcile_bars(cx: &mut App) {
-        SurfaceManager::reconcile_bars(cx);
-    }
-
-    pub fn mark_bar_open_failed(cx: &mut App) {
-        SurfaceManager::mark_bar_open_failed(cx);
-    }
-
-    pub fn toggle_bar(cx: &mut App) {
-        SurfaceManager::toggle_bar(cx);
-    }
-
-    pub fn toggle_overview(cx: &mut App) {
-        SurfaceManager::toggle_overview(cx);
-    }
-
-    pub fn close_overview(cx: &mut App) {
-        SurfaceManager::close_overview(cx);
-    }
-
-    pub fn finish_overview_close(cx: &mut App, instance_id: u64, reason: OverviewCloseReason) {
-        SurfaceManager::finish_overview_close(cx, instance_id, reason);
-    }
-
-    pub fn forget_overview(cx: &mut App, instance_id: u64) {
-        SurfaceManager::forget_overview(cx, instance_id);
-    }
-
-    pub fn overview_focus_workspace(cx: &mut App, ws_id: u64) -> Result<(), ShellError> {
-        SurfaceManager::overview_focus_workspace(cx, ws_id)
-    }
-
-    pub fn overview_move_window(
-        cx: &mut App,
-        window_id: u64,
-        workspace_id: u64,
-    ) -> Result<(), ShellError> {
-        SurfaceManager::overview_move_window(cx, window_id, workspace_id)
-    }
-
-    pub fn overview_focus_window(cx: &mut App, window_id: u64) -> Result<(), ShellError> {
-        SurfaceManager::overview_focus_window(cx, window_id)
-    }
-
-    pub fn overview_reduced_motion(cx: &App) -> bool {
-        SurfaceManager::overview_reduced_motion(cx)
-    }
-
-    pub fn is_overview_open(cx: &App) -> bool {
-        if cx.has_global::<Self>() {
-            cx.global::<Self>().surface_manager().is_overview_open()
-        } else {
-            false
-        }
-    }
-
-    pub fn is_control_center_open(cx: &App) -> bool {
-        if cx.has_global::<Self>() {
-            cx.global::<Self>()
-                .surface_manager()
-                .is_control_center_open()
-        } else {
-            false
-        }
-    }
-
-    pub fn has_bars(cx: &App) -> bool {
-        if cx.has_global::<Self>() {
-            cx.global::<Self>().surface_manager().has_bars()
-        } else {
-            false
-        }
-    }
-
-    pub fn overview_wallpaper_path(cx: &App) -> Option<PathBuf> {
-        SurfaceManager::overview_wallpaper_path(cx)
-    }
-
-    pub fn overview_applications(cx: &App) -> Vec<shilpo_services::Application> {
-        SurfaceManager::overview_applications(cx)
-    }
-
-    pub fn normalize_app_key(value: &str) -> String {
-        SurfaceManager::normalize_app_key(value)
-    }
-
-    pub fn app_icon_index(cx: &App) -> HashMap<String, PathBuf> {
-        SurfaceManager::app_icon_index(cx)
-    }
-
-    pub fn begin_overview_instance(cx: &mut App) -> u64 {
-        cx.global_mut::<Self>()
-            .surface_manager_mut()
-            .begin_overview_instance()
-    }
-
-    pub fn open_or_focus_overview(cx: &mut App) {
-        SurfaceManager::open_or_focus_overview(cx);
-    }
-
-    pub fn open_or_focus_overview_on_display(cx: &mut App, target_display_id: Option<DisplayId>) {
-        SurfaceManager::open_or_focus_overview_on_display(cx, target_display_id);
-    }
-
-    pub fn open_or_focus_control_center(cx: &mut App) {
-        SurfaceManager::open_or_focus_control_center(cx);
-    }
-
-    pub fn toggle_control_center(cx: &mut App) {
-        SurfaceManager::toggle_control_center(cx);
-    }
-
-    pub fn close_control_center(cx: &mut App) {
-        SurfaceManager::close_control_center(cx);
-    }
-
-    pub fn forget_control_center(cx: &mut App) {
-        SurfaceManager::forget_control_center(cx);
-    }
-
-    pub fn register_overview_entity(cx: &mut App, entity: Entity<WorkspaceOverview>) {
-        SurfaceManager::register_overview_entity(cx, entity);
-    }
-
-    pub fn active_notification_handle(
-        cx: &App,
-    ) -> Option<WindowHandle<crate::notification::NotificationToastView>> {
-        if cx.has_global::<Self>() {
-            cx.global::<Self>()
-                .surface_manager()
-                .active_notification_handle()
-        } else {
-            None
-        }
-    }
-
-    pub fn register_notification(
-        cx: &mut App,
-        generation: u64,
-        notification_id: u32,
-        handle: WindowHandle<crate::notification::NotificationToastView>,
-    ) {
-        cx.global_mut::<Self>()
-            .surface_manager_mut()
-            .register_notification(generation, notification_id, handle);
-    }
-
-    pub fn close_active_notification(cx: &mut App) {
-        SurfaceManager::close_active_notification(cx);
-    }
-
-    pub fn expire_notification(cx: &mut App, generation: u64) {
-        SurfaceManager::expire_notification(cx, generation);
-    }
-
-    pub fn forget_notification(cx: &mut App, generation: u64) {
-        SurfaceManager::forget_notification(cx, generation);
-    }
-
-    pub fn forget_osd(cx: &mut App) {
-        SurfaceManager::forget_osd(cx);
-    }
-
-    pub fn show_osd(cx: &mut App, kind: crate::osd::OsdKind) {
-        SurfaceManager::show_osd(cx, kind);
-    }
-
-    pub fn forget_bar(cx: &mut App) {
-        SurfaceManager::forget_bar(cx);
-    }
-
-    pub fn open_extension_panel(cx: &mut App, contribution: CanonicalId) {
-        SurfaceManager::open_extension_panel(cx, contribution);
-    }
-
-    pub fn compositor_snapshot(cx: &App) -> Arc<CompositorSnapshot> {
-        if cx.has_global::<Self>() {
-            cx.global::<Self>().surface_manager().latest_snapshot()
-        } else {
-            Arc::new(CompositorSnapshot::default())
-        }
-    }
-
-    pub fn workspace_overview(cx: &App) -> Vec<shilpo_services::WorkspaceInfo> {
-        Self::compositor_snapshot(cx).workspaces.clone()
-    }
-
-    pub fn reserve_notification_generation(cx: &mut App) -> u64 {
-        cx.global_mut::<Self>()
-            .surface_manager_mut()
-            .reserve_notification_generation()
     }
 }
 
@@ -1717,13 +1877,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_surface_manager_initialization() {
+    fn test_shell_surfaces_initialization() {
         let snapshot = Arc::new(CompositorSnapshot::default());
-        let manager = SurfaceManager::new(Some(PathBuf::from("/wallpaper.png")), snapshot);
+        let manager = ShellSurfaces::new(Some(PathBuf::from("/wallpaper.png")), snapshot);
         assert_eq!(manager.bar_state(), BarState::Starting);
-        assert!(!manager.has_bars());
-        assert!(!manager.is_overview_open());
-        assert!(!manager.is_control_center_open());
+        assert!(!manager.bars_are_open());
+        assert!(!manager.overview_is_open());
         assert_eq!(
             manager.current_wallpaper_path(),
             Some(PathBuf::from("/wallpaper.png"))
@@ -1797,7 +1956,7 @@ mod tests {
         ];
         let bounds = Bounds::new(point(px(1920.), px(0.)), size(px(1920.), px(1080.)));
         assert_eq!(
-            SurfaceManager::output_name_for_bounds(bounds, &outputs),
+            ShellSurfaces::output_name_for_bounds(bounds, &outputs),
             Some("HDMI-A-1".into())
         );
     }
@@ -1805,19 +1964,85 @@ mod tests {
     #[test]
     fn overview_instances_advance_monotonically() {
         let snapshot = Arc::new(CompositorSnapshot::default());
-        let mut manager = SurfaceManager::new(None, snapshot);
-        let first = manager.begin_overview_instance();
-        let second = manager.begin_overview_instance();
+        let mut manager = ShellSurfaces::new(None, snapshot);
+        let first = manager.next_overview_instance();
+        let second = manager.next_overview_instance();
         assert!(second > first);
     }
 
     #[test]
     fn notification_generation_reserves_incrementally() {
         let snapshot = Arc::new(CompositorSnapshot::default());
-        let mut manager = SurfaceManager::new(None, snapshot);
-        let first = manager.reserve_notification_generation();
-        let second = manager.reserve_notification_generation();
+        let mut manager = ShellSurfaces::new(None, snapshot);
+        let first = manager.next_notification_generation();
+        let second = manager.next_notification_generation();
         assert!(second > first);
+    }
+
+    #[test]
+    fn transient_surface_lifecycles_start_closed() {
+        let manager = ShellSurfaces::new(None, Arc::new(CompositorSnapshot::default()));
+        assert_eq!(manager.notification_lifecycle, SurfaceLifecycle::Closed);
+        assert_eq!(manager.osd_lifecycle, SurfaceLifecycle::Closed);
+        assert_eq!(manager.capture_lifecycle, SurfaceLifecycle::Closed);
+        assert_eq!(manager.extension_lifecycle, SurfaceLifecycle::Closed);
+    }
+
+    #[gpui::test]
+    fn semantic_snapshot_without_runtime_is_closed(cx: &mut gpui::TestAppContext) {
+        let snapshot = cx.update(|app| ShellSurfaces::snapshot(app));
+        assert_eq!(snapshot.overview_lifecycle, OverviewLifecycle::Closed);
+        assert_eq!(snapshot.notification_lifecycle, SurfaceLifecycle::Closed);
+        assert_eq!(snapshot.osd_lifecycle, SurfaceLifecycle::Closed);
+        assert_eq!(snapshot.capture_lifecycle, SurfaceLifecycle::Closed);
+    }
+
+    #[gpui::test]
+    fn semantic_osd_requests_open_replace_and_close(cx: &mut gpui::TestAppContext) {
+        cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_test(app);
+            ShellSurfaces::request(
+                app,
+                SurfaceRequest::ShowOsd(crate::osd::OsdKind::Volume {
+                    level: 20,
+                    muted: false,
+                }),
+            );
+        });
+        let first = cx.update(|app| ShellSurfaces::snapshot(app).osd_lifecycle);
+        let SurfaceLifecycle::Open {
+            generation: first_generation,
+        } = first
+        else {
+            panic!("semantic OSD request did not open its lifecycle");
+        };
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(1_500));
+        cx.run_until_parked();
+        cx.update(|app| {
+            ShellSurfaces::request(
+                app,
+                SurfaceRequest::ShowOsd(crate::osd::OsdKind::Volume {
+                    level: 80,
+                    muted: false,
+                }),
+            )
+        });
+        let second = cx.update(|app| ShellSurfaces::snapshot(app).osd_lifecycle);
+        assert!(
+            matches!(second, SurfaceLifecycle::Open { generation } if generation > first_generation)
+        );
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(600));
+        cx.run_until_parked();
+        let after_stale_deadline = cx.update(|app| ShellSurfaces::snapshot(app).osd_lifecycle);
+        assert_eq!(after_stale_deadline, second);
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(1_500));
+        cx.run_until_parked();
+        let closed = cx.update(|app| ShellSurfaces::snapshot(app).osd_lifecycle);
+        assert_eq!(closed, SurfaceLifecycle::Closed);
     }
 
     #[test]
@@ -1890,22 +2115,22 @@ mod tests {
         assert_eq!(bar_geom.bounds.size.width, px(3840.));
     }
 
-    struct SurfaceManagerTestHarness {
-        manager: SurfaceManager,
+    struct ShellSurfacesTestHarness {
+        manager: ShellSurfaces,
     }
 
-    impl SurfaceManagerTestHarness {
+    impl ShellSurfacesTestHarness {
         fn new_offline() -> Self {
             let snapshot = Arc::new(CompositorSnapshot::default());
             Self {
-                manager: SurfaceManager::new(None, snapshot),
+                manager: ShellSurfaces::new(None, snapshot),
             }
         }
     }
 
     #[test]
-    fn test_harness_surface_manager_readiness_and_extension_surfaces() {
-        let mut harness = SurfaceManagerTestHarness::new_offline();
+    fn test_harness_shell_surfaces_readiness_and_extension_surfaces() {
+        let mut harness = ShellSurfacesTestHarness::new_offline();
         assert_eq!(
             harness.manager.readiness(),
             shilpo_services::ipc::ReadinessState::Starting
@@ -1939,5 +2164,6 @@ mod tests {
                 .stale_extension_surface_ids(&desired)
                 .is_empty()
         );
+        assert!(harness.manager.active_surfaces().is_empty());
     }
 }

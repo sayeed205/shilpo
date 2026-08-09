@@ -3,11 +3,12 @@ use libpulse_binding as pulse;
 use pulse::context::subscribe::InterestMaskSet;
 use pulse::context::{Context, FlagSet as ContextFlagSet, State as ContextState};
 use pulse::mainloop::threaded::Mainloop;
+use serde::{Deserialize, Serialize};
 use std::sync::mpsc;
 use tokio::sync::watch;
 
 /// Metadata describing an individual application audio playback stream (Sink Input).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioStream {
     pub id: u32,
     pub index: u32,
@@ -18,7 +19,7 @@ pub struct AudioStream {
 }
 
 /// Metadata describing an audio port on a sound card, sink, or source.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioPort {
     pub name: String,
     pub description: String,
@@ -27,7 +28,7 @@ pub struct AudioPort {
 }
 
 /// Metadata describing a physical or virtual audio device (sink or source).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioDevice {
     pub index: u32,
     pub id: String,
@@ -55,7 +56,7 @@ impl AudioDevice {
 }
 
 /// Comprehensive system audio snapshot including volumes, mutes, sinks, sources, and application streams.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioInfo {
     pub available: bool,
     pub default_sink_name: String,

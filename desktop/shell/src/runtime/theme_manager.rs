@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use gpui::{App, AppContext};
 use shilpo_theme_daemon::ThemeClient;
 
-use super::surface_manager::{self, SurfaceManager};
+use super::shell_surfaces::{self, ShellSurfaces};
 
 pub fn init(cx: &mut App) -> Option<PathBuf> {
     let theme_client = futures_lite::future::block_on(ThemeClient::new());
@@ -28,7 +28,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
             let state = update.state;
             cx.update(|cx: &mut App| {
                 shilpo_ui::Theme::global_mut(cx).apply_state(&state);
-                SurfaceManager::apply_theme_state(cx, &state);
+                ShellSurfaces::apply_theme_state(cx, &state);
             });
         }
     })
@@ -39,7 +39,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
 
 pub fn sync_wallpaper(cx: &mut App, initial_wallpaper_path: Option<PathBuf>) {
     let wallpaper_probe =
-        cx.background_spawn(async { surface_manager::query_awww_wallpaper_path() });
+        cx.background_spawn(async { shell_surfaces::query_awww_wallpaper_path() });
     let theme_wallpaper_path = initial_wallpaper_path;
     ThemeClient::spawn_task(async move {
         let client = ThemeClient::new().await;
