@@ -3,7 +3,7 @@ use crate::bar::service_worker::{self, ConfigUpdate, WorkerCommand, WorkerUpdate
 use crate::bar::widgets::clock::{format_clock, format_date};
 use crate::battery::BatteryIndicator;
 use crate::osd::OsdKind;
-use crate::runtime::ShellRuntime;
+use crate::runtime::{ShellRuntime, ShellSurfaces, SurfaceRequest};
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Path, PathBuilder, Pixels, Point,
     Render, Styled, Window, div, prelude::*, px,
@@ -181,7 +181,7 @@ impl BarView {
         config: ShellConfig,
     ) -> Self {
         window.on_window_should_close(cx, |_, cx| {
-            ShellRuntime::forget_bar(cx);
+            ShellSurfaces::forget_bar(cx);
             true
         });
 
@@ -355,10 +355,10 @@ impl BarView {
         for effect in result.effects {
             match effect {
                 BarViewEffect::ShowOsd(kind) => {
-                    ShellRuntime::show_osd(cx, kind);
+                    ShellSurfaces::request(cx, SurfaceRequest::ShowOsd(kind));
                 }
                 BarViewEffect::ShowNotificationToast(notification) => {
-                    open_notification_toast(cx, notification);
+                    ShellSurfaces::request(cx, SurfaceRequest::ShowNotification(notification));
                 }
                 BarViewEffect::ApplyConfigTheme(config) => {
                     apply_config_theme(&config, None, cx);
@@ -403,7 +403,7 @@ impl BarView {
         for (index, name) in widget_names.iter().enumerate() {
             match name {
                 BarWidget::Builtin(BuiltinBarWidget::Workspaces) => {
-                    let snapshot = ShellRuntime::compositor_snapshot(cx);
+                    let snapshot = ShellSurfaces::compositor_snapshot(cx);
                     let is_vertical = matches!(
                         self.config.bar.position,
                         shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
@@ -424,11 +424,11 @@ impl BarView {
                     );
                 }
                 BarWidget::Builtin(BuiltinBarWidget::RunningApps) => {
-                    let snapshot = ShellRuntime::compositor_snapshot(cx);
+                    let snapshot = ShellSurfaces::compositor_snapshot(cx);
                     let app_icons = std::sync::Arc::new(crate::app_icons::build_app_icon_index(
-                        ShellRuntime::overview_applications(cx),
+                        ShellSurfaces::overview_applications(cx),
                     ));
-                    let reduced_motion = ShellRuntime::overview_reduced_motion(cx);
+                    let reduced_motion = ShellSurfaces::overview_reduced_motion(cx);
                     let is_vertical = matches!(
                         self.config.bar.position,
                         shilpo_config::BarPosition::Left | shilpo_config::BarPosition::Right
@@ -753,7 +753,7 @@ impl Render for BarView {
         } else {
             self.config.bar.opacity.clamp(0.0, 1.0)
         };
-        let compositor_stale = !ShellRuntime::compositor_snapshot(cx).connection.is_ready();
+        let compositor_stale = !ShellSurfaces::compositor_snapshot(cx).connection.is_ready();
         let bg_color = cx
             .theme()
             .surface_container_high
@@ -842,139 +842,9 @@ impl Render for BarView {
     }
 }
 
-fn notification_timeout(notification: &Notification) -> Option<Duration> {
+pub(crate) fn notification_timeout(notification: &Notification) -> Option<Duration> {
     (notification.expire_timeout_ms > 0)
         .then(|| Duration::from_millis(notification.expire_timeout_ms as u64))
-}
-
-pub fn open_notification_toast(cx: &mut App, notification: Notification) {
-    use crate::notification::NotificationToastView;
-    use gpui::{
-        Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
-        layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
-        point, px, size,
-    };
-    use shilpo_config::BarPosition;
-
-    let timeout = notification_timeout(&notification);
-    let notification_id = notification.id;
-
-    let bar_config = ShellRuntime::active_config(cx).bar;
-    let bar_position = bar_config.position;
-    let bar_h = bar_config.height as f32;
-    let is_float = bar_config.style == shilpo_config::BarStyle::Float;
-    let float_margin_h = if is_float {
-        bar_config.margin.horizontal as f32
-    } else {
-        0.
-    };
-    let float_margin_v = if is_float {
-        bar_config.margin.vertical as f32
-    } else {
-        0.
-    };
-
-    let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
-        (display.bounds(), Some(display.id()))
-    } else {
-        (
-            Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
-            None,
-        )
-    };
-    let gap = px(8.);
-    let window_height = display_bounds.size.height - px(bar_h + float_margin_v) - gap - gap;
-    let window_size = size(px(376.), window_height);
-
-    // Layer shell margins are evaluated relative to the bar's exclusive zone by Niri.
-    // Windowed origins include explicit bar height offsets.
-    let (anchor, margin, origin) = match bar_position {
-        BarPosition::Top => (
-            Anchor::TOP | Anchor::RIGHT,
-            Some((gap, gap, px(0.), px(0.))),
-            point(
-                display_bounds.origin.x + display_bounds.size.width - window_size.width - gap,
-                display_bounds.origin.y + px(bar_h + float_margin_v) + gap,
-            ),
-        ),
-        BarPosition::Bottom => (
-            Anchor::BOTTOM | Anchor::RIGHT,
-            Some((px(0.), gap, gap, px(0.))),
-            point(
-                display_bounds.origin.x + display_bounds.size.width - window_size.width - gap,
-                display_bounds.origin.y + display_bounds.size.height
-                    - window_size.height
-                    - px(bar_h + float_margin_v)
-                    - gap,
-            ),
-        ),
-        BarPosition::Left => (
-            Anchor::TOP | Anchor::LEFT,
-            Some((gap, px(0.), px(0.), gap)),
-            point(
-                display_bounds.origin.x + px(bar_h + float_margin_h) + gap,
-                display_bounds.origin.y + gap,
-            ),
-        ),
-        BarPosition::Right => (
-            Anchor::TOP | Anchor::RIGHT,
-            Some((gap, gap, px(0.), px(0.))),
-            point(
-                display_bounds.origin.x + display_bounds.size.width
-                    - window_size.width
-                    - px(bar_h + float_margin_h)
-                    - gap,
-                display_bounds.origin.y + gap,
-            ),
-        ),
-    };
-
-    let options = WindowOptions {
-        titlebar: None,
-        window_bounds: Some(WindowBounds::Windowed(Bounds {
-            origin,
-            size: window_size,
-        })),
-        display_id,
-        app_id: Some("shilpo-notification".to_string()),
-        window_background: WindowBackgroundAppearance::Transparent,
-        kind: WindowKind::LayerShell(LayerShellOptions {
-            namespace: "notification".to_string(),
-            layer: Layer::Overlay,
-            anchor,
-            margin,
-            keyboard_interactivity: KeyboardInteractivity::None,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    if let Some(handle) = ShellRuntime::active_notification_handle(cx) {
-        let generation = ShellRuntime::reserve_notification_generation(cx);
-        if handle
-            .update(cx, |view, window, cx| {
-                view.push(notification.clone(), generation, timeout, window, cx);
-            })
-            .is_ok()
-        {
-            ShellRuntime::register_notification(cx, generation, notification_id, handle);
-            return;
-        }
-    }
-
-    let generation = ShellRuntime::reserve_notification_generation(cx);
-    if let Ok(handle) = cx.open_window(options, move |window, cx| {
-        NotificationToastView::view(
-            notification.clone(),
-            generation,
-            timeout,
-            bar_position,
-            window,
-            cx,
-        )
-    }) {
-        ShellRuntime::register_notification(cx, generation, notification_id, handle);
-    }
 }
 
 #[cfg(test)]

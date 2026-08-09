@@ -4,7 +4,7 @@ use crate::app_icons::{
 use crate::overview_search::{
     OverviewSearch, SearchIntent, SearchMode, SearchResult, SearchResultIcon,
 };
-use crate::runtime::ShellRuntime;
+use crate::runtime::{ShellRuntime, ShellSurfaces};
 use gpui::{
     Animation, AnimationExt as _, App, AppContext, Context, DragMoveEvent, ElementId, Entity,
     FocusHandle, Focusable, Image, ImageFormat, ImageSource, InteractiveElement, IntoElement,
@@ -271,7 +271,7 @@ pub struct WorkspaceOverview {
     generation: u64,
     close_reason: Option<OverviewCloseReason>,
     focus_handle: Option<FocusHandle>,
-    instance_id: u64,
+    lifecycle: Option<crate::runtime::shell_surfaces::OverviewLifecycleCallback>,
     reduced_motion: bool,
     wallpaper_path: Option<PathBuf>,
     wallpaper_preview: Option<Arc<Image>>,
@@ -318,7 +318,7 @@ impl WorkspaceOverview {
             generation: 0,
             close_reason: None,
             focus_handle: None,
-            instance_id: 0,
+            lifecycle: None,
             reduced_motion: false,
             wallpaper_path: None,
             wallpaper_preview: None,
@@ -425,7 +425,7 @@ impl WorkspaceOverview {
     ) {
         if let Some((target_id, target_index)) =
             adjacent_workspace(workspace_ids, self.active_workspace_id, forward)
-            && ShellRuntime::overview_focus_workspace(cx, target_id).is_ok()
+            && ShellSurfaces::overview_focus_workspace(cx, target_id).is_ok()
         {
             self.active_workspace_id = Some(target_id);
             let next_view_start =
@@ -511,9 +511,9 @@ impl WorkspaceOverview {
             cx.update(|cx| {
                 if let Some(entity) = weak_entity.upgrade()
                     && entity.read(cx).generation == gen_id
+                    && let Some(lifecycle) = entity.read(cx).lifecycle
                 {
-                    let instance_id = entity.read(cx).instance_id;
-                    ShellRuntime::finish_overview_close(cx, instance_id, reason);
+                    lifecycle.finish(cx, reason);
                 }
             });
         })
@@ -774,12 +774,15 @@ impl WorkspaceOverview {
         }
     }
 
-    pub fn view(window: &mut Window, cx: &mut App) -> Entity<shilpo_ui::Root> {
-        let snapshot = ShellRuntime::compositor_snapshot(cx);
-        let instance_id = ShellRuntime::begin_overview_instance(cx);
-        let reduced_motion = ShellRuntime::overview_reduced_motion(cx);
-        let wallpaper_path = ShellRuntime::overview_wallpaper_path(cx);
-        let app_icons = build_app_icon_index(ShellRuntime::overview_applications(cx));
+    pub(crate) fn view(
+        lifecycle: crate::runtime::shell_surfaces::OverviewLifecycleCallback,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<shilpo_ui::Root> {
+        let snapshot = ShellSurfaces::compositor_snapshot(cx);
+        let reduced_motion = ShellSurfaces::overview_reduced_motion(cx);
+        let wallpaper_path = ShellSurfaces::overview_wallpaper_path(cx);
+        let app_icons = build_app_icon_index(ShellSurfaces::overview_applications(cx));
         let scanner =
             ShellRuntime::app_scanner(cx).unwrap_or_else(shilpo_services::AppScanner::new_empty);
         let scanner_for_catalog = scanner.clone();
@@ -796,13 +799,13 @@ impl WorkspaceOverview {
         );
 
         window.on_window_should_close(cx, move |_, cx| {
-            ShellRuntime::forget_overview(cx, instance_id);
+            lifecycle.window_closed(cx);
             true
         });
 
         let overview = cx.new(|cx| {
             let mut ov = Self::new_from_snapshot(snapshot);
-            ov.instance_id = instance_id;
+            ov.lifecycle = Some(lifecycle);
             ov.reduced_motion = reduced_motion;
             ov.wallpaper_path = wallpaper_path;
             ov.load_wallpaper_preview(cx);
@@ -838,7 +841,7 @@ impl WorkspaceOverview {
                         };
                         entity.update(cx, |view, cx| {
                             view.app_icons =
-                                build_app_icon_index(ShellRuntime::overview_applications(cx));
+                                build_app_icon_index(ShellSurfaces::overview_applications(cx));
                             let query = view
                                 .input_state
                                 .as_ref()
@@ -887,7 +890,7 @@ impl WorkspaceOverview {
             }
             ov
         });
-        ShellRuntime::register_overview_entity(cx, overview.clone());
+        lifecycle.entity_ready(cx, overview.clone());
         cx.new(|cx| {
             shilpo_ui::Root::new(overview, window, cx)
                 .bordered(false)
@@ -1068,7 +1071,7 @@ impl Render for WorkspaceOverview {
                             .when(is_interactive, |s| {
                                 s.on_click(cx.listener(move |view, _, _, cx| {
                                     cx.stop_propagation();
-                                    if ShellRuntime::overview_focus_window(cx, win_id).is_ok() {
+                                    if ShellSurfaces::overview_focus_window(cx, win_id).is_ok() {
                                         view.begin_close(OverviewCloseReason::Selection, cx);
                                     }
                                 }))
@@ -1175,7 +1178,7 @@ impl Render for WorkspaceOverview {
                         preview
                             .on_click(cx.listener(move |view, _, _, cx| {
                                 cx.stop_propagation();
-                                if ShellRuntime::overview_focus_workspace(cx, ws_id).is_ok() {
+                                if ShellSurfaces::overview_focus_workspace(cx, ws_id).is_ok() {
                                     view.begin_close(OverviewCloseReason::Selection, cx);
                                 }
                             }))
@@ -1201,7 +1204,7 @@ impl Render for WorkspaceOverview {
                                     cx.stop_propagation();
                                     view.drag_target_workspace_id = None;
                                     if drag.source_workspace_id != Some(ws_id) {
-                                        let _ = ShellRuntime::overview_move_window(
+                                        let _ = ShellSurfaces::overview_move_window(
                                             cx,
                                             drag.window_id,
                                             ws_id,

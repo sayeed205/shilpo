@@ -13,7 +13,6 @@ pub enum ContributionSurface {
     Desktop,
     Settings,
     SidePanel,
-    ControlCenter,
     Launcher,
     Action,
     Background,

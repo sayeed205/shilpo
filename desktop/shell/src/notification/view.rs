@@ -12,37 +12,38 @@ use shilpo_ui::{
 };
 
 use crate::runtime::ShellRuntime;
+use crate::runtime::shell_surfaces::NotificationLifecycleCallback;
 
 #[derive(Clone)]
-pub struct ToastEntry {
-    pub notification: Notification,
-    pub generation: u64,
-    pub timeout: Option<Duration>,
+pub(crate) struct ToastEntry {
+    pub(crate) notification: Notification,
+    pub(crate) generation: NotificationLifecycleCallback,
+    pub(crate) timeout: Option<Duration>,
 }
 
 /// OSD Toast Notification View.
 pub struct NotificationToastView {
-    pub stack: VecDeque<ToastEntry>,
-    pub bar_position: shilpo_config::BarPosition,
-    pub expanded: bool,
-    pub unfolded_apps: HashSet<String>,
-    pub hovered: bool,
-    pub entering: bool,
-    pub closing: bool,
-    pub autohide_task: Option<gpui::Task<()>>,
+    pub(crate) stack: VecDeque<ToastEntry>,
+    pub(crate) bar_position: shilpo_config::BarPosition,
+    pub(crate) expanded: bool,
+    pub(crate) unfolded_apps: HashSet<String>,
+    pub(crate) hovered: bool,
+    pub(crate) entering: bool,
+    pub(crate) closing: bool,
+    pub(crate) autohide_task: Option<gpui::Task<()>>,
 }
 
 impl NotificationToastView {
-    pub fn new(
+    pub(crate) fn new(
         notification: Notification,
-        generation: u64,
+        generation: NotificationLifecycleCallback,
         timeout: Option<Duration>,
         bar_position: shilpo_config::BarPosition,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         window.on_window_should_close(cx, move |_, cx| {
-            ShellRuntime::forget_notification(cx, generation);
+            generation.forgotten(cx);
             true
         });
         let mut stack = VecDeque::new();
@@ -81,9 +82,9 @@ impl NotificationToastView {
         .detach();
     }
 
-    pub fn view(
+    pub(crate) fn view(
         notification: Notification,
-        generation: u64,
+        generation: NotificationLifecycleCallback,
         timeout: Option<Duration>,
         bar_position: shilpo_config::BarPosition,
         window: &mut Window,
@@ -92,10 +93,10 @@ impl NotificationToastView {
         cx.new(|cx| Self::new(notification, generation, timeout, bar_position, window, cx))
     }
 
-    pub fn push(
+    pub(crate) fn push(
         &mut self,
         notification: Notification,
-        generation: u64,
+        generation: NotificationLifecycleCallback,
         timeout: Option<Duration>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -144,7 +145,12 @@ impl NotificationToastView {
         cx.notify();
     }
 
-    pub fn dismiss_gen(&mut self, generation: u64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn dismiss_gen(
+        &mut self,
+        generation: NotificationLifecycleCallback,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.closing {
             return;
         }
@@ -153,7 +159,7 @@ impl NotificationToastView {
             if let Some(pos) = self.stack.iter().position(|e| e.generation == generation) {
                 let popped = self.stack.remove(pos);
                 if let Some(entry) = popped {
-                    ShellRuntime::forget_notification(cx, entry.generation);
+                    entry.generation.forgotten(cx);
                 }
             }
             if self.stack.len() <= 1 {
@@ -180,7 +186,7 @@ impl NotificationToastView {
                 "[NOTIFTRACE] dismiss popped gen={} (stack>1)",
                 popped.generation
             );
-            ShellRuntime::forget_notification(cx, popped.generation);
+            popped.generation.forgotten(cx);
             if self.stack.len() <= 1 {
                 self.unfolded_apps.clear();
             }
@@ -201,9 +207,7 @@ impl NotificationToastView {
                 .await;
             _ = cx.update(|_window, cx| {
                 if let Some(target_gen) = top_gen {
-                    ShellRuntime::expire_notification(cx, target_gen);
-                } else {
-                    ShellRuntime::close_active_notification(cx);
+                    target_gen.expired(cx);
                 }
             });
         })
@@ -233,9 +237,7 @@ impl NotificationToastView {
                 .update_in(cx, |this, window, cx| {
                     this.dismiss(window, cx);
                 })
-                .or_else(|_| {
-                    cx.update(|_window, cx| ShellRuntime::expire_notification(cx, generation))
-                });
+                .or_else(|_| cx.update(|_window, cx| generation.expired(cx)));
         }));
     }
 }
