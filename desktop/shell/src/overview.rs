@@ -7,12 +7,11 @@ use crate::overview_search::{
 use crate::runtime::{ShellRuntime, ShellSurfaces};
 use gpui::{
     Animation, AnimationExt as _, App, AppContext, Context, DragMoveEvent, ElementId, Entity,
-    FocusHandle, Focusable, Image, ImageFormat, ImageSource, InteractiveElement, IntoElement,
-    KeyDownEvent, MouseButton, ObjectFit, ParentElement, Render, Role, ScrollHandle,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div,
-    img, prelude::FluentBuilder, px,
+    FocusHandle, Focusable, ImageSource, InteractiveElement, IntoElement, KeyDownEvent,
+    MouseButton, ObjectFit, ParentElement, Render, Role, ScrollHandle, ScrollWheelEvent,
+    SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div, img,
+    prelude::FluentBuilder, px,
 };
-use image::imageops::FilterType;
 use shilpo_services::{CompositorSnapshot, WindowInfo, WorkspaceInfo};
 use shilpo_ui::{
     ActiveTheme, Colorize, FocusTrapElement, Icon, IconName, StyledExt,
@@ -21,14 +20,7 @@ use shilpo_ui::{
     input::{Input, InputEvent, InputState, InputVariant},
     v_flex,
 };
-use std::{
-    collections::HashMap,
-    io::Cursor,
-    ops::Range,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc, time::Duration};
 
 // ── Animation constants ────────────────────────────────────────────────────
 const ENTER_DURATION: Duration = Duration::from_millis(250);
@@ -44,9 +36,6 @@ const SEARCH_SURFACE_WIDTH: f32 = 500.0;
 const STAGE_HORIZONTAL_PADDING: f32 = 10.0;
 const STAGE_VERTICAL_PADDING: f32 = 10.0;
 const STAGE_BORDER_WIDTH: f32 = 1.0;
-const WALLPAPER_PREVIEW_MAX_WIDTH: u32 = 960;
-const WALLPAPER_PREVIEW_MAX_HEIGHT: u32 = 540;
-const WALLPAPER_BLUR_SIGMA: f32 = 2.0;
 
 fn filmstrip_height(workspace_count: usize) -> f32 {
     let visible_count = workspace_count.min(MAX_VISIBLE_WORKSPACES);
@@ -97,23 +86,6 @@ fn workspace_view_start(
 fn workspace_render_range(view_start: usize, workspace_count: usize) -> Range<usize> {
     let start = view_start.min(workspace_count.saturating_sub(MAX_VISIBLE_WORKSPACES));
     start..(start + MAX_VISIBLE_WORKSPACES).min(workspace_count)
-}
-
-fn blurred_wallpaper_preview(path: &Path) -> Option<Arc<Image>> {
-    let wallpaper = image::open(path).ok()?.resize(
-        WALLPAPER_PREVIEW_MAX_WIDTH,
-        WALLPAPER_PREVIEW_MAX_HEIGHT,
-        FilterType::Triangle,
-    );
-    let wallpaper = wallpaper.blur(WALLPAPER_BLUR_SIGMA);
-    let mut bytes = Cursor::new(Vec::new());
-    wallpaper
-        .write_to(&mut bytes, image::ImageFormat::Png)
-        .ok()?;
-    Some(Arc::new(Image::from_bytes(
-        ImageFormat::Png,
-        bytes.into_inner(),
-    )))
 }
 
 #[derive(Clone, Debug)]
@@ -273,8 +245,7 @@ pub struct WorkspaceOverview {
     focus_handle: Option<FocusHandle>,
     lifecycle: Option<crate::runtime::shell_surfaces::OverviewLifecycleCallback>,
     reduced_motion: bool,
-    wallpaper_path: Option<PathBuf>,
-    wallpaper_preview: Option<Arc<Image>>,
+    _wallpaper_subscription: Option<gpui::Subscription>,
     app_icons: HashMap<String, PathBuf>,
     drag_target_workspace_id: Option<u64>,
     workspace_view_start: usize,
@@ -320,8 +291,7 @@ impl WorkspaceOverview {
             focus_handle: None,
             lifecycle: None,
             reduced_motion: false,
-            wallpaper_path: None,
-            wallpaper_preview: None,
+            _wallpaper_subscription: None,
             app_icons: HashMap::new(),
             drag_target_workspace_id: None,
             workspace_view_start,
@@ -433,44 +403,6 @@ impl WorkspaceOverview {
             self.workspace_view_start = next_view_start;
             cx.notify();
         }
-    }
-
-    pub fn update_wallpaper_path(
-        &mut self,
-        wallpaper_path: Option<PathBuf>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.wallpaper_path != wallpaper_path {
-            self.wallpaper_path = wallpaper_path;
-            self.wallpaper_preview = None;
-            self.load_wallpaper_preview(cx);
-            cx.notify();
-        }
-    }
-
-    fn load_wallpaper_preview(&mut self, cx: &mut Context<Self>) {
-        let Some(wallpaper_path) = self.wallpaper_path.clone() else {
-            return;
-        };
-        let requested_path = wallpaper_path.clone();
-        let load_task = cx
-            .background_executor()
-            .spawn(async move { blurred_wallpaper_preview(&wallpaper_path) });
-        cx.spawn(async move |this, cx| {
-            let preview = load_task.await;
-            cx.update(|cx| {
-                let Some(entity) = this.upgrade() else {
-                    return;
-                };
-                entity.update(cx, |view, cx| {
-                    if view.wallpaper_path.as_ref() == Some(&requested_path) {
-                        view.wallpaper_preview = preview;
-                        cx.notify();
-                    }
-                });
-            });
-        })
-        .detach();
     }
 
     pub fn selected_window_id(&self) -> Option<u64> {
@@ -781,7 +713,6 @@ impl WorkspaceOverview {
     ) -> Entity<shilpo_ui::Root> {
         let snapshot = ShellSurfaces::compositor_snapshot(cx);
         let reduced_motion = ShellSurfaces::overview_reduced_motion(cx);
-        let wallpaper_path = ShellSurfaces::overview_wallpaper_path(cx);
         let app_icons = build_app_icon_index(ShellSurfaces::overview_applications(cx));
         let scanner =
             ShellRuntime::app_scanner(cx).unwrap_or_else(shilpo_services::AppScanner::new_empty);
@@ -807,8 +738,13 @@ impl WorkspaceOverview {
             let mut ov = Self::new_from_snapshot(snapshot);
             ov.lifecycle = Some(lifecycle);
             ov.reduced_motion = reduced_motion;
-            ov.wallpaper_path = wallpaper_path;
-            ov.load_wallpaper_preview(cx);
+            if cx.has_global::<ShellRuntime>() {
+                let resource = ShellRuntime::wallpaper_preview(cx);
+                let subscription = cx.observe(&resource, |_this: &mut Self, _, cx| {
+                    cx.notify();
+                });
+                ov._wallpaper_subscription = Some(subscription);
+            }
             ov.app_icons = app_icons;
 
             let input_state =
@@ -982,11 +918,13 @@ impl Render for WorkspaceOverview {
                     .collect();
                 let ws_title = ws.name.clone().unwrap_or_else(|| ws.idx.to_string());
                 let window_count = ws_windows.len();
-                let wallpaper_source: Option<ImageSource> = self
-                    .wallpaper_preview
-                    .clone()
-                    .map(ImageSource::from)
-                    .or_else(|| self.wallpaper_path.clone().map(ImageSource::from));
+                let wallpaper_snapshot = if cx.has_global::<ShellRuntime>() {
+                    ShellRuntime::wallpaper_preview_snapshot(cx)
+                } else {
+                    crate::runtime::WallpaperPreviewSnapshot::Empty
+                };
+                let wallpaper_source: Option<ImageSource> =
+                    wallpaper_snapshot.ready_image().map(ImageSource::from);
                 let inner_radius = px(4.);
                 let top_radius = px(if is_first {
                     PREVIEW_RADIUS

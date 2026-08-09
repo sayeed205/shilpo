@@ -5,19 +5,21 @@ pub mod service_hub;
 pub mod session;
 pub mod shell_surfaces;
 pub mod theme_manager;
+pub(crate) mod wallpaper_preview;
 
 pub use action_dispatcher::ActionDispatcher;
 pub use extension_host::ExtensionHost;
 pub use service_hub::ServiceHub;
 pub use session::SessionContext;
 pub use shell_surfaces::{ShellSurfaces, SurfaceRequest, SurfaceSnapshot};
+pub(crate) use wallpaper_preview::{WallpaperPreviewResource, WallpaperPreviewSnapshot};
 
 use shell_surfaces::WindowClosedOutcome;
 
 use std::{path::PathBuf, sync::Arc};
 
 use crate::extensions::ExtensionCoordinator;
-use gpui::{App, AppContext, Global, Subscription};
+use gpui::{App, AppContext, Entity, Global, Subscription};
 use shilpo_services::{CompositorSnapshot, ShellIpcServer};
 
 /// The shell runtime orchestrator: composes the deep service modules, watches
@@ -31,6 +33,7 @@ pub struct ShellRuntime {
     shell_surfaces: ShellSurfaces,
     action_dispatcher: ActionDispatcher,
     extension_host: ExtensionHost,
+    wallpaper_preview: Entity<WallpaperPreviewResource>,
     service_hub: Option<ServiceHub>,
     session_state: shilpo_config::ShellSessionState,
     session_path: PathBuf,
@@ -53,12 +56,14 @@ impl ShellRuntime {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
         let ipc = ShellIpcServer::new_at(&root, &root.join("shilpo-shell/ipc.sock")).unwrap();
+        let wallpaper_preview = cx.new(WallpaperPreviewResource::new);
         cx.set_global(Self {
             ipc_server: ipc,
             active_config: shilpo_config::ShellConfig::default(),
-            shell_surfaces: ShellSurfaces::new(None, Arc::new(CompositorSnapshot::default())),
+            shell_surfaces: ShellSurfaces::new(Arc::new(CompositorSnapshot::default())),
             action_dispatcher: ActionDispatcher::new(),
             extension_host: ExtensionHost::new(None),
+            wallpaper_preview,
             service_hub: None,
             session_state: shilpo_config::ShellSessionState::default(),
             session_path: root.join("session.json"),
@@ -121,6 +126,22 @@ impl ShellRuntime {
         &mut self.extension_host
     }
 
+    pub(crate) fn wallpaper_preview(cx: &App) -> Entity<WallpaperPreviewResource> {
+        cx.global::<Self>().wallpaper_preview.clone()
+    }
+
+    pub(crate) fn wallpaper_preview_snapshot(cx: &App) -> WallpaperPreviewSnapshot {
+        let entity = Self::wallpaper_preview(cx);
+        entity.read(cx).snapshot()
+    }
+
+    pub(crate) fn set_wallpaper_path(cx: &mut App, path: Option<PathBuf>) {
+        let entity = Self::wallpaper_preview(cx);
+        entity.update(cx, |wp, cx| {
+            wp.set_wallpaper_path(path, cx);
+        });
+    }
+
     pub(crate) fn service_hub(&self) -> Option<&ServiceHub> {
         self.service_hub.as_ref()
     }
@@ -151,10 +172,13 @@ impl ShellRuntime {
 
         let compositor = hub.compositor();
         let latest_snapshot = shell_surfaces::attach_compositor_stream(&ipc_server, &compositor);
-        let shell_surfaces =
-            ShellSurfaces::new(initial_wallpaper_path.clone(), latest_snapshot.clone());
+        let shell_surfaces = ShellSurfaces::new(latest_snapshot.clone());
         let action_dispatcher = ActionDispatcher::new();
         let extension_host = ExtensionHost::new(extensions);
+        let wallpaper_preview = cx.new(WallpaperPreviewResource::new);
+        wallpaper_preview.update(cx, |wp, cx| {
+            wp.set_wallpaper_path(initial_wallpaper_path.clone(), cx);
+        });
 
         cx.set_global(Self {
             ipc_server,
@@ -162,6 +186,7 @@ impl ShellRuntime {
             shell_surfaces,
             action_dispatcher,
             extension_host,
+            wallpaper_preview,
             service_hub: Some(hub),
             session_state: session.session_state,
             session_path: session.session_path,
