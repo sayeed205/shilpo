@@ -182,6 +182,55 @@ pub fn compute_band_geometry(input: &PlacementInput) -> BandGeometry {
     }
 }
 
+/// Full monitor work-area surface used by persistent cards so a click anywhere
+/// outside the card can be observed and dismiss it.
+pub fn compute_persistent_band_geometry(input: &PlacementInput) -> BandGeometry {
+    let m = input.monitor_bounds;
+    let thickness = input.bar_thickness;
+    let bounds = match input.bar_edge {
+        BarPosition::Top => Bounds {
+            origin: Point {
+                x: m.origin.x,
+                y: m.origin.y + thickness,
+            },
+            size: Size {
+                width: m.size.width,
+                height: m.size.height - thickness,
+            },
+        },
+        BarPosition::Bottom => Bounds {
+            origin: m.origin,
+            size: Size {
+                width: m.size.width,
+                height: m.size.height - thickness,
+            },
+        },
+        BarPosition::Left => Bounds {
+            origin: Point {
+                x: m.origin.x + thickness,
+                y: m.origin.y,
+            },
+            size: Size {
+                width: m.size.width - thickness,
+                height: m.size.height,
+            },
+        },
+        BarPosition::Right => Bounds {
+            origin: m.origin,
+            size: Size {
+                width: m.size.width - thickness,
+                height: m.size.height,
+            },
+        },
+    };
+
+    BandGeometry {
+        bounds,
+        bar_edge: input.bar_edge,
+        bar_thickness: thickness,
+    }
+}
+
 // ────────────────────────────────────────────────────────────────
 // Internal helpers
 // ────────────────────────────────────────────────────────────────
@@ -193,7 +242,8 @@ fn initial_placement(input: &PlacementInput) -> Bounds<Pixels> {
     let gap = px(SOURCE_GAP);
     match input.bar_edge {
         BarPosition::Top => {
-            let y = s.origin.y + s.size.height + gap;
+            let bar_inner_edge = input.monitor_bounds.origin.y + input.bar_thickness;
+            let y = bar_inner_edge + gap;
             let x = s.origin.x + s.size.width / 2.0 - r.width / 2.0;
             Bounds {
                 origin: Point { x, y },
@@ -201,7 +251,9 @@ fn initial_placement(input: &PlacementInput) -> Bounds<Pixels> {
             }
         }
         BarPosition::Bottom => {
-            let y = s.origin.y - r.height - gap;
+            let bar_inner_edge = input.monitor_bounds.origin.y + input.monitor_bounds.size.height
+                - input.bar_thickness;
+            let y = bar_inner_edge - r.height - gap;
             let x = s.origin.x + s.size.width / 2.0 - r.width / 2.0;
             Bounds {
                 origin: Point { x, y },
@@ -209,7 +261,8 @@ fn initial_placement(input: &PlacementInput) -> Bounds<Pixels> {
             }
         }
         BarPosition::Left => {
-            let x = s.origin.x + s.size.width + gap;
+            let bar_inner_edge = input.monitor_bounds.origin.x + input.bar_thickness;
+            let x = bar_inner_edge + gap;
             let y = s.origin.y + s.size.height / 2.0 - r.height / 2.0;
             Bounds {
                 origin: Point { x, y },
@@ -217,7 +270,9 @@ fn initial_placement(input: &PlacementInput) -> Bounds<Pixels> {
             }
         }
         BarPosition::Right => {
-            let x = s.origin.x - r.width - gap;
+            let bar_inner_edge = input.monitor_bounds.origin.x + input.monitor_bounds.size.width
+                - input.bar_thickness;
+            let x = bar_inner_edge - r.width - gap;
             let y = s.origin.y + s.size.height / 2.0 - r.height / 2.0;
             Bounds {
                 origin: Point { x, y },
@@ -551,8 +606,8 @@ mod tests {
         );
         assert_eq!(
             card.origin.y,
-            source.origin.y + source.size.height + px(SOURCE_GAP),
-            "source bounds already include the bar offset"
+            monitor.origin.y + i.bar_thickness + px(SOURCE_GAP),
+            "perpendicular placement must be stable regardless of pointer position"
         );
     }
 
@@ -598,8 +653,8 @@ mod tests {
         );
         assert_eq!(
             card.origin.x,
-            source.origin.x + source.size.width + px(SOURCE_GAP),
-            "source bounds already include the bar offset"
+            monitor.origin.x + i.bar_thickness + px(SOURCE_GAP),
+            "perpendicular placement must be stable regardless of pointer position"
         );
     }
 
@@ -829,6 +884,27 @@ mod tests {
         assert_eq!(band.bounds.origin.x, px(0.0));
         assert_eq!(band.bounds.origin.y, px(40.0)); // bar thickness
         assert_eq!(band.bounds.size.width, px(1920.0));
+    }
+
+    #[test]
+    fn persistent_top_band_covers_the_remaining_monitor_work_area() {
+        let monitor = monitor_1080p();
+        let source = source_center(monitor);
+        let i = input(monitor, BarPosition::Top, source, compact_size(), None);
+        let band = compute_persistent_band_geometry(&i);
+
+        assert_eq!(
+            band.bounds.origin,
+            Point {
+                x: px(0.0),
+                y: i.bar_thickness
+            }
+        );
+        assert_eq!(band.bounds.size.width, i.monitor_bounds.size.width);
+        assert_eq!(
+            band.bounds.size.height,
+            i.monitor_bounds.size.height - i.bar_thickness
+        );
     }
 
     #[test]

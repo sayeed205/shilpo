@@ -1,9 +1,7 @@
-use std::{cell::Cell, rc::Rc};
-
 use gpui::{
     App, Bounds, DisplayId, ElementId, InteractiveElement, IntoElement, ParentElement, Pixels,
-    RenderOnce, Role, StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
-    relative,
+    Point, RenderOnce, Role, StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
+    relative, size,
 };
 use shilpo_services::BatteryInfo;
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, black, green_500, h_flex};
@@ -17,8 +15,6 @@ use crate::bar::cards::{
 // bar. Shilpo's desktop bar and neighboring icons are larger, so scale that
 // geometry up slightly while preserving its proportions.
 const BATTERY_DESKTOP_SCALE: f32 = 1.5;
-const BATTERY_VIEWPORT_WIDTH: f32 = 20.6 * BATTERY_DESKTOP_SCALE;
-const BATTERY_VIEWPORT_HEIGHT: f32 = 12.0 * BATTERY_DESKTOP_SCALE;
 const BATTERY_BODY_WIDTH: f32 = 17.6 * BATTERY_DESKTOP_SCALE;
 const BATTERY_BODY_HEIGHT: f32 = 10.7 * BATTERY_DESKTOP_SCALE;
 const BATTERY_TERMINAL_WIDTH: f32 = 3.0;
@@ -29,6 +25,15 @@ const BATTERY_PERCENT_TEXT_SIZE: f32 = 8.6 * BATTERY_DESKTOP_SCALE;
 const BATTERY_CHARGING_TEXT_SIZE: f32 = 7.7 * BATTERY_DESKTOP_SCALE;
 const BATTERY_CHARGING_THREE_DIGIT_TEXT_SIZE: f32 = 5.15 * BATTERY_DESKTOP_SCALE;
 const BATTERY_CHARGING_ICON_SIZE: f32 = 5.15 * BATTERY_DESKTOP_SCALE;
+const BATTERY_INDICATOR_WIDTH: f32 = 48.0;
+const BATTERY_INDICATOR_HEIGHT: f32 = 32.0;
+
+fn activation_bounds(position: Point<Pixels>) -> Bounds<Pixels> {
+    Bounds::centered_at(
+        position,
+        size(px(BATTERY_INDICATOR_WIDTH), px(BATTERY_INDICATOR_HEIGHT)),
+    )
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BatteryVisualMode {
@@ -72,14 +77,20 @@ impl BatteryVisualState {
 pub(crate) struct BatteryIndicator {
     id: ElementId,
     info: BatteryInfo,
+    display_id: Option<DisplayId>,
     style: StyleRefinement,
 }
 
 impl BatteryIndicator {
-    pub(crate) fn new(id: impl Into<ElementId>, info: BatteryInfo) -> Self {
+    pub(crate) fn new(
+        id: impl Into<ElementId>,
+        info: BatteryInfo,
+        display_id: Option<DisplayId>,
+    ) -> Self {
         Self {
             id: id.into(),
             info,
+            display_id,
             style: StyleRefinement::default(),
         }
     }
@@ -97,10 +108,32 @@ impl RenderOnce for BatteryIndicator {
             return div().id(self.id).into_any_element();
         };
 
+        let owner = CardOwnerId::new("battery");
+        let display_id = self.display_id;
+        let is_selected =
+            CardCoordinator::source_state(cx, &owner) == CardSourceState::PersistentOpen;
         let (fill_color, filled_content_color) = match state.mode {
+            BatteryVisualMode::Normal if is_selected => (
+                cx.theme().on_secondary_container,
+                cx.theme().secondary_container,
+            ),
             BatteryVisualMode::Normal => (cx.theme().on_surface, cx.theme().surface),
             BatteryVisualMode::Low => (cx.theme().error, cx.theme().on_error),
             BatteryVisualMode::Charging => (green_500(), black()),
+        };
+        let track_color = if is_selected {
+            cx.theme().on_secondary_container.opacity(0.18)
+        } else {
+            cx.theme().surface_container_highest
+        };
+        let nub_color = if state.percentage == 100 {
+            if is_selected {
+                cx.theme().on_secondary_container
+            } else {
+                cx.theme().on_surface
+            }
+        } else {
+            track_color
         };
         let fill_width = px(BATTERY_BODY_WIDTH * state.fill_ratio);
         let fill_right_radius = if state.percentage >= 80 {
@@ -136,7 +169,7 @@ impl RenderOnce for BatteryIndicator {
 
             if is_charging {
                 content = content.child(
-                    Icon::new(IconName::Bolt)
+                    Icon::new(IconName::BoltFill)
                         .size(px(BATTERY_CHARGING_ICON_SIZE))
                         .text_color(text_color),
                 );
@@ -150,7 +183,7 @@ impl RenderOnce for BatteryIndicator {
             .w(px(BATTERY_BODY_WIDTH))
             .h(px(BATTERY_BODY_HEIGHT))
             .rounded(px(BATTERY_CORNER_RADIUS))
-            .bg(cx.theme().surface_container_highest)
+            .bg(track_color)
             .overflow_hidden()
             // Unfilled base layer (track background, unfilled text color)
             .child(
@@ -194,34 +227,15 @@ impl RenderOnce for BatteryIndicator {
             .w(px(BATTERY_TERMINAL_WIDTH))
             .h(px(BATTERY_TERMINAL_HEIGHT))
             .rounded(px(BATTERY_TERMINAL_WIDTH / 2.))
-            .bg(fill_color);
-
-        let owner = CardOwnerId::new("battery");
-        let is_selected =
-            CardCoordinator::source_state(cx, &owner) == CardSourceState::PersistentOpen;
-        let anchor = Rc::new(Cell::new(None::<(Bounds<Pixels>, DisplayId)>));
-        let measured_anchor = anchor.clone();
+            .bg(nub_color);
 
         h_flex()
-            .on_children_prepainted(move |child_bounds, window, cx| {
-                let Some(display_id) = window.display(cx).map(|display| display.id()) else {
-                    return;
-                };
-                let Some(bounds) = child_bounds
-                    .into_iter()
-                    .reduce(|bounds, child| bounds.union(&child))
-                else {
-                    return;
-                };
-                measured_anchor.set(Some((bounds.dilate(px(4.0)), display_id)));
-            })
             .id(self.id)
             .role(Role::Button)
             .aria_label("Battery status")
-            .w(px(BATTERY_VIEWPORT_WIDTH + 8.0))
-            .h(px(BATTERY_VIEWPORT_HEIGHT + 8.0))
-            .p(px(4.0))
-            .rounded_md()
+            .w(px(BATTERY_INDICATOR_WIDTH))
+            .h(px(BATTERY_INDICATOR_HEIGHT))
+            .rounded_full()
             .items_center()
             .justify_center()
             .gap(px(BATTERY_TERMINAL_GAP))
@@ -231,18 +245,25 @@ impl RenderOnce for BatteryIndicator {
             } else {
                 gpui::transparent_black()
             })
-            .hover(|style| style.bg(cx.theme().surface_container_high))
-            .on_click(move |_, _, cx| {
-                if let Some((bounds, display_id)) = anchor.get() {
-                    CardCoordinator::dispatch(
-                        cx,
-                        CardRequest::PersistentToggleAt {
-                            owner: owner.clone(),
-                            bounds,
-                            display_id,
-                        },
-                    );
-                }
+            .hover(|style| {
+                style.bg(if is_selected {
+                    cx.theme().secondary_container
+                } else {
+                    cx.theme().surface_container_high
+                })
+            })
+            .on_click(move |event, _, cx| {
+                let Some(display_id) = display_id else {
+                    return;
+                };
+                CardCoordinator::dispatch(
+                    cx,
+                    CardRequest::PersistentToggleAt {
+                        owner: owner.clone(),
+                        bounds: activation_bounds(event.position()),
+                        display_id,
+                    },
+                );
             })
             .refine_style(&self.style)
             .child(body)
@@ -361,5 +382,15 @@ mod tests {
 
         assert_eq!(state.percentage, 100);
         assert_eq!(state.fill_ratio, 1.0);
+    }
+
+    #[test]
+    fn activation_anchor_is_centered_on_the_click_position() {
+        let position = gpui::point(px(1900.0), px(20.0));
+        let bounds = activation_bounds(position);
+
+        assert_eq!(bounds.center(), position);
+        assert_eq!(bounds.size.width, px(BATTERY_INDICATOR_WIDTH));
+        assert_eq!(bounds.size.height, px(BATTERY_INDICATOR_HEIGHT));
     }
 }

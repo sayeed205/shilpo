@@ -27,7 +27,10 @@ use super::{
         CardChannel, CardDiagnostic, CardDismissReason, CardEffect, CardOwnerId, CardRequest,
         CardSourceState, CardState, TimerKind,
     },
-    placement::{BandGeometry, PlacementInput, PlacementResult, compute_placement},
+    placement::{
+        BandGeometry, PlacementInput, PlacementResult, compute_persistent_band_geometry,
+        compute_placement,
+    },
     provider::CardProvider,
 };
 
@@ -286,8 +289,8 @@ impl CardCoordinator {
                     reason = ?reason,
                     "card channel closing"
                 );
-                Self::close_channel(cx, channel, display_id);
-                Self::schedule_close_completion(cx, channel, generation);
+                Self::close_channel(cx, channel, display_id, reason);
+                Self::schedule_close_completion(cx, channel, display_id, generation);
             }
 
             CardEffect::RepositionChannel { channel, owner } => {
@@ -383,7 +386,12 @@ impl CardCoordinator {
         }
     }
 
-    fn schedule_close_completion(cx: &mut App, channel: CardChannel, generation: u64) {
+    fn schedule_close_completion(
+        cx: &mut App,
+        channel: CardChannel,
+        display_id: Option<DisplayId>,
+        generation: u64,
+    ) {
         let reduced_motion = ShellRuntime::active_config(cx).theme.reduced_motion;
         if reduced_motion {
             Self::dispatch(
@@ -398,9 +406,10 @@ impl CardCoordinator {
 
         let task = cx.spawn(async move |cx| {
             cx.background_executor()
-                .timer(std::time::Duration::from_millis(220))
+                .timer(super::band::ANIM_DURATION)
                 .await;
             cx.update(|cx| {
+                Self::clear_band_if_still_closing(cx, channel, display_id, generation);
                 Self::dispatch(
                     cx,
                     CardRequest::CloseAnimationFinished {
@@ -417,6 +426,49 @@ impl CardCoordinator {
         match channel {
             CardChannel::Persistent => coordinator.persistent_exit_task = Some(task),
             CardChannel::Preview => coordinator.preview_exit_task = Some(task),
+        }
+    }
+
+    fn clear_band_if_still_closing(
+        cx: &mut App,
+        channel: CardChannel,
+        display_id: Option<DisplayId>,
+        generation: u64,
+    ) {
+        let Some(display_id) = display_id else {
+            return;
+        };
+        let handle = {
+            let coordinator = &cx
+                .global::<ShellRuntime>()
+                .shell_surfaces()
+                .card_coordinator;
+            let slot = match channel {
+                CardChannel::Persistent => &coordinator.state.persistent,
+                CardChannel::Preview => &coordinator.state.preview,
+            };
+            if slot.lifecycle != super::model::ChannelLifecycle::Closing
+                || slot.generation != generation
+            {
+                return;
+            }
+            match channel {
+                CardChannel::Persistent => coordinator.persistent_bands.get(&display_id),
+                CardChannel::Preview => coordinator.preview_bands.get(&display_id),
+            }
+            .copied()
+        };
+        if let Some(handle) = handle {
+            if channel == CardChannel::Persistent {
+                cx.global_mut::<ShellRuntime>()
+                    .shell_surfaces_mut()
+                    .card_coordinator
+                    .persistent_bands
+                    .remove(&display_id);
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            } else {
+                let _ = handle.update(cx, |band, _, cx| band.clear(cx));
+            }
         }
     }
 
@@ -496,7 +548,15 @@ impl CardCoordinator {
         // Determine bar edge from config.
         let bar_config = ShellRuntime::active_config(cx).bar;
         let bar_edge = bar_config.position;
-        let bar_thickness = px(bar_config.height as f32);
+        let floating_margin = if bar_config.style == shilpo_config::BarStyle::Float {
+            match bar_edge {
+                BarPosition::Top | BarPosition::Bottom => bar_config.margin.vertical as f32,
+                BarPosition::Left | BarPosition::Right => bar_config.margin.horizontal as f32,
+            }
+        } else {
+            0.0
+        };
+        let bar_thickness = px(bar_config.height as f32 + floating_margin);
 
         // Get monitor bounds for this display.
         let monitor_bounds = cx
@@ -538,6 +598,11 @@ impl CardCoordinator {
                 card_bounds,
                 band_geometry,
             } => {
+                let band_geometry = if channel == CardChannel::Persistent {
+                    compute_persistent_band_geometry(&placement_input)
+                } else {
+                    band_geometry
+                };
                 // Ensure band surface exists.
                 let Some(band_handle) =
                     Self::ensure_band(cx, channel, display_id, &band_geometry, bar_edge)
@@ -605,6 +670,7 @@ impl CardCoordinator {
                         if channel == CardChannel::Persistent
                             && let Some(ref handle) = band.focus_handle.clone()
                         {
+                            window.activate_window();
                             handle.focus(window, cx);
                         }
                     }
@@ -633,7 +699,12 @@ impl CardCoordinator {
         );
     }
 
-    fn close_channel(cx: &mut App, channel: CardChannel, display_id: Option<DisplayId>) {
+    fn close_channel(
+        cx: &mut App,
+        channel: CardChannel,
+        display_id: Option<DisplayId>,
+        reason: CardDismissReason,
+    ) {
         if let Some(display_id) = display_id {
             let handle = {
                 let coordinator = &cx
@@ -649,7 +720,12 @@ impl CardCoordinator {
             };
 
             if let Some(band_handle) = handle {
-                let _ = band_handle.update(cx, |band, _, cx| {
+                let _ = band_handle.update(cx, |band, window, cx| {
+                    if channel == CardChannel::Persistent
+                        && reason == CardDismissReason::SourceToggle
+                    {
+                        window.activate_window();
+                    }
                     band.hide(cx);
                 });
             }
@@ -698,9 +774,10 @@ impl CardCoordinator {
         };
 
         let bg = &band_geometry.bounds;
+        let surface_bounds = Bounds::new(gpui::point(px(0.0), px(0.0)), bg.size);
         let options = WindowOptions {
             titlebar: None,
-            window_bounds: Some(WindowBounds::Windowed(*bg)),
+            window_bounds: Some(WindowBounds::Windowed(surface_bounds)),
             display_id: Some(display_id),
             app_id: Some(format!(
                 "shilpo-card-{}",
@@ -846,17 +923,12 @@ impl CardCoordinator {
     }
 
     fn band_margin(
-        bar_edge: BarPosition,
-        bar_thickness: gpui::Pixels,
+        _bar_edge: BarPosition,
+        _bar_thickness: gpui::Pixels,
     ) -> (gpui::Pixels, gpui::Pixels, gpui::Pixels, gpui::Pixels) {
-        // Margin order: top, right, bottom, left.
-        // We push the band off by bar_thickness so it sits just past the bar.
-        match bar_edge {
-            BarPosition::Top => (bar_thickness, px(0.0), px(0.0), px(0.0)),
-            BarPosition::Bottom => (px(0.0), px(0.0), bar_thickness, px(0.0)),
-            BarPosition::Left => (px(0.0), px(0.0), px(0.0), bar_thickness),
-            BarPosition::Right => (px(0.0), bar_thickness, px(0.0), px(0.0)),
-        }
+        // Placement and window bounds already include the bar thickness and
+        // source gap. Adding it again here doubles the bar-to-card offset.
+        (px(0.0), px(0.0), px(0.0), px(0.0))
     }
 
     // ── Diagnostics ───────────────────────────────────────────────

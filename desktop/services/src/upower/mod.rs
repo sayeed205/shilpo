@@ -114,6 +114,15 @@ pub trait UPowerDevice {
 
     #[zbus(property)]
     fn charge_end_threshold(&self) -> zbus::Result<u32>;
+
+    #[zbus(property)]
+    fn charge_threshold_supported(&self) -> zbus::Result<bool>;
+
+    #[zbus(property)]
+    fn charge_threshold_enabled(&self) -> zbus::Result<bool>;
+
+    #[zbus(property)]
+    fn charge_threshold_settings_supported(&self) -> zbus::Result<u32>;
 }
 
 #[proxy(
@@ -193,11 +202,56 @@ async fn fetch_physical_device_snapshot(
         has_statistics: proxy.has_statistics().await.unwrap_or(false),
         charge_start_threshold: optional_threshold(proxy.charge_start_threshold().await),
         charge_end_threshold: optional_threshold(proxy.charge_end_threshold().await),
+        charge_threshold_supported: proxy
+            .charge_threshold_supported()
+            .await
+            .map(OptionalBool::some)
+            .unwrap_or_else(|_| OptionalBool::none()),
+        charge_threshold_enabled: proxy
+            .charge_threshold_enabled()
+            .await
+            .map(OptionalBool::some)
+            .unwrap_or_else(|_| OptionalBool::none()),
+        charge_threshold_settings_supported: proxy
+            .charge_threshold_settings_supported()
+            .await
+            .map(|value| OptionalU64::some(u64::from(value)))
+            .unwrap_or_else(|_| OptionalU64::none()),
     })
 }
 
 const fn is_system_battery(device_type: u32, power_supply: bool, is_present: bool) -> bool {
     device_type == 2 && power_supply && is_present
+}
+
+fn physical_capacity_percent(devices: &[BatteryDevicePayload]) -> OptionalF64 {
+    let (energy_full, energy_design) = devices
+        .iter()
+        .filter_map(|device| {
+            Some((
+                device.energy_full_wh.get()?,
+                device.energy_full_design_wh.get()?,
+            ))
+        })
+        .fold(
+            (0.0, 0.0),
+            |(full, design), (device_full, device_design)| {
+                (full + device_full, design + device_design)
+            },
+        );
+    if energy_design > 0.0 {
+        return OptionalF64::some((energy_full / energy_design * 100.0).clamp(0.0, 100.0));
+    }
+
+    let capacities = devices
+        .iter()
+        .filter_map(|device| device.capacity_percent.get())
+        .collect::<Vec<_>>();
+    if capacities.is_empty() {
+        OptionalF64::none()
+    } else {
+        OptionalF64::some(capacities.iter().sum::<f64>() / capacities.len() as f64)
+    }
 }
 
 fn optional_positive_f64(value: zbus::Result<f64>) -> OptionalF64 {
@@ -348,6 +402,13 @@ async fn fetch_battery_snapshot(connection: &Connection) -> BatteryInfo {
                 physical_devices.push(device);
             }
         }
+    }
+
+    if capacity_percent
+        .get()
+        .is_none_or(|capacity| capacity <= 0.0)
+    {
+        capacity_percent = physical_capacity_percent(&physical_devices);
     }
 
     let system_present = is_present || !physical_devices.is_empty();
@@ -631,5 +692,41 @@ mod tests {
         assert_eq!(optional_percent(Ok(101.0)).get(), None);
         assert_eq!(optional_percent(Ok(0.0)).get(), Some(0.0));
         assert_eq!(optional_threshold(Ok(u32::MAX)).get(), None);
+    }
+
+    #[test]
+    fn physical_capacity_prefers_energy_weighted_health() {
+        let devices = vec![
+            BatteryDevicePayload {
+                energy_full_wh: OptionalF64::some(30.0),
+                energy_full_design_wh: OptionalF64::some(40.0),
+                capacity_percent: OptionalF64::some(1.0),
+                ..Default::default()
+            },
+            BatteryDevicePayload {
+                energy_full_wh: OptionalF64::some(20.0),
+                energy_full_design_wh: OptionalF64::some(40.0),
+                capacity_percent: OptionalF64::some(99.0),
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(physical_capacity_percent(&devices).get(), Some(62.5));
+    }
+
+    #[test]
+    fn physical_capacity_falls_back_to_reported_capacity_average() {
+        let devices = vec![
+            BatteryDevicePayload {
+                capacity_percent: OptionalF64::some(60.0),
+                ..Default::default()
+            },
+            BatteryDevicePayload {
+                capacity_percent: OptionalF64::some(80.0),
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(physical_capacity_percent(&devices).get(), Some(70.0));
     }
 }

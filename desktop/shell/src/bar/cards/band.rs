@@ -12,8 +12,8 @@
 
 use gpui::{
     App, Bounds, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement,
-    Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
-    div, prelude::FluentBuilder as _, px,
+    Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 use shilpo_config::BarPosition;
 use shilpo_ui::ActiveTheme;
@@ -43,7 +43,7 @@ enum AnimPhase {
     },
 }
 
-const ANIM_DURATION_MS: f32 = 220.0;
+pub(super) const ANIM_DURATION: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Owns one edge-band layer-shell surface rendering context.
 ///
@@ -69,6 +69,8 @@ pub(crate) struct CardBandView {
     /// Which display (for diagnostics).
     pub _surface_id: SharedString,
     _subscriptions: Vec<Subscription>,
+    animation_task: Option<Task<()>>,
+    focus_loss_task: Option<Task<()>>,
 }
 
 impl CardBandView {
@@ -90,7 +92,29 @@ impl CardBandView {
             owner_id: None,
             _surface_id: surface_id.into(),
             _subscriptions: Vec::new(),
+            animation_task: None,
+            focus_loss_task: None,
         }
+    }
+
+    fn schedule_focus_loss(&mut self, cx: &mut Context<Self>) {
+        // Wayland deactivates the card layer before the bar receives the click
+        // that toggles its source. Give that click a chance to become the
+        // authoritative dismissal instead of racing it with FocusLost.
+        self.focus_loss_task = Some(cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(220))
+                .await;
+            cx.update(|cx| {
+                super::adapter::CardCoordinator::dispatch(
+                    cx,
+                    CardRequest::Dismiss {
+                        channel: CardChannel::Persistent,
+                        reason: CardDismissReason::FocusLost,
+                    },
+                );
+            });
+        }));
     }
 
     pub fn install_focus_loss_listener(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -99,15 +123,17 @@ impl CardBandView {
         };
         let tracked = handle.clone();
         self._subscriptions
-            .push(cx.on_blur(&handle, window, move |_, window, cx| {
+            .push(cx.on_blur(&handle, window, move |this, window, cx| {
                 if !tracked.contains_focused(window, cx) {
-                    super::adapter::CardCoordinator::dispatch(
-                        cx,
-                        CardRequest::Dismiss {
-                            channel: CardChannel::Persistent,
-                            reason: CardDismissReason::FocusLost,
-                        },
-                    );
+                    this.schedule_focus_loss(cx);
+                }
+            }));
+        self._subscriptions
+            .push(cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.schedule_focus_loss(cx);
+                } else {
+                    this.focus_loss_task = None;
                 }
             }));
     }
@@ -128,6 +154,7 @@ impl CardBandView {
         } else {
             AnimPhase::Entering { progress: 0.0 }
         };
+        self.start_animation_task(cx);
         cx.notify();
     }
 
@@ -140,6 +167,7 @@ impl CardBandView {
             self.clear(cx);
         } else {
             self.anim = AnimPhase::Exiting { progress: 1.0 };
+            self.start_animation_task(cx);
             cx.notify();
         }
     }
@@ -167,10 +195,36 @@ impl CardBandView {
 
     // ── Animation tick ────────────────────────────────────────────
 
+    fn start_animation_task(&mut self, cx: &mut Context<Self>) {
+        if self.reduced_motion {
+            self.animation_task = None;
+            return;
+        }
+        self.animation_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(16))
+                    .await;
+                let keep_running = this
+                    .update(cx, |this, cx| {
+                        this.tick_animation(16.0, cx);
+                        matches!(
+                            this.anim,
+                            AnimPhase::Entering { .. } | AnimPhase::Exiting { .. }
+                        )
+                    })
+                    .unwrap_or(false);
+                if !keep_running {
+                    break;
+                }
+            }
+        }));
+    }
+
     fn tick_animation(&mut self, elapsed_ms: f32, cx: &mut Context<Self>) {
         match self.anim {
             AnimPhase::Entering { progress } => {
-                let next = (progress + elapsed_ms / ANIM_DURATION_MS).min(1.0);
+                let next = (progress + elapsed_ms / ANIM_DURATION.as_millis() as f32).min(1.0);
                 if next >= 1.0 {
                     self.anim = AnimPhase::Visible;
                 } else {
@@ -179,7 +233,7 @@ impl CardBandView {
                 cx.notify();
             }
             AnimPhase::Exiting { progress } => {
-                let next = (progress - elapsed_ms / ANIM_DURATION_MS).max(0.0);
+                let next = (progress - elapsed_ms / ANIM_DURATION.as_millis() as f32).max(0.0);
                 if next <= 0.0 {
                     self.clear(cx);
                 } else {
@@ -202,7 +256,14 @@ impl CardBandView {
 
     /// Compute the inward translation offset based on bar edge and progress.
     fn translation_offset(&self, progress: f32) -> Point<Pixels> {
-        let distance = px(12.0) * (1.0 - progress);
+        let distance = match self.bar_edge {
+            BarPosition::Top | BarPosition::Bottom => self
+                .card_local_bounds
+                .map_or(px(0.0), |bounds| bounds.size.height),
+            BarPosition::Left | BarPosition::Right => self
+                .card_local_bounds
+                .map_or(px(0.0), |bounds| bounds.size.width),
+        } * (1.0 - progress);
         match self.bar_edge {
             BarPosition::Top => Point {
                 x: px(0.0),
@@ -235,15 +296,6 @@ impl Focusable for CardBandView {
 
 impl Render for CardBandView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Tick animation via GPUI's request_animation_frame mechanism.
-        if matches!(
-            self.anim,
-            AnimPhase::Entering { .. } | AnimPhase::Exiting { .. }
-        ) {
-            let frame_time_ms = 16.0_f32; // approximate; GPUI drives at display refresh
-            self.tick_animation(frame_time_ms, cx);
-        }
-
         let raw_progress = self.anim_progress();
         let progress = shilpo_ui::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0)(raw_progress);
         let has_content = self.content.is_some();
@@ -265,16 +317,12 @@ impl Render for CardBandView {
 
         let bounds = card_bounds.unwrap();
         let translation = self.translation_offset(progress);
-        let scale = 0.96 + 0.04 * progress;
-        let scaled_size = gpui::size(bounds.size.width * scale, bounds.size.height * scale);
         let visual_bounds = Bounds {
             origin: Point {
-                x: bounds.origin.x + (bounds.size.width - scaled_size.width) / 2.0 + translation.x,
-                y: bounds.origin.y
-                    + (bounds.size.height - scaled_size.height) / 2.0
-                    + translation.y,
+                x: bounds.origin.x + translation.x,
+                y: bounds.origin.y + translation.y,
             },
-            size: scaled_size,
+            size: bounds.size,
         };
 
         // Build M3 card shell.
@@ -301,7 +349,6 @@ impl Render for CardBandView {
             .bg(theme.surface_container_high)
             .shadow_lg()
             .overflow_hidden()
-            .opacity(progress)
             .when_some(self.focus_handle.as_ref(), |this, handle| {
                 this.track_focus(handle)
             })
@@ -319,16 +366,7 @@ impl Render for CardBandView {
                 })
             })
             .when(channel == CardChannel::Persistent, |this| {
-                this.on_mouse_down_out(|_, _, cx| {
-                    super::adapter::CardCoordinator::dispatch(
-                        cx,
-                        CardRequest::Dismiss {
-                            channel: CardChannel::Persistent,
-                            reason: CardDismissReason::OutsideClick,
-                        },
-                    );
-                })
-                .on_key_down(move |event, _, cx| {
+                this.on_key_down(move |event, _, cx| {
                     if event.keystroke.key == "escape"
                         && let Some(ref owner) = owner_for_escape
                     {
@@ -347,9 +385,10 @@ impl Render for CardBandView {
                 })
             });
 
-        // Update input region to match card bounds.
-        let card_region = visual_bounds;
-        window.set_input_region(Some(&[card_region]));
+        // Everything outside the card remains true Wayland click-through. For
+        // persistent cards the underlying app receives the original click and
+        // its focus change dismisses this card through the blur listener.
+        window.set_input_region(Some(&[visual_bounds]));
 
         root.child(card_shell)
     }

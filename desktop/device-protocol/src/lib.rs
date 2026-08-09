@@ -486,6 +486,10 @@ pub struct BatteryDevicePayload {
     pub has_statistics: bool,
     pub charge_start_threshold: OptionalU64,
     pub charge_end_threshold: OptionalU64,
+    pub charge_threshold_supported: OptionalBool,
+    pub charge_threshold_enabled: OptionalBool,
+    /// UPower capability bitmask: start=1, end=2, firmware-managed=4.
+    pub charge_threshold_settings_supported: OptionalU64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, zvariant::Type)]

@@ -60,6 +60,8 @@ pub struct CardCapabilities {
 pub enum CardSizeTier {
     /// 280 × 240
     Compact,
+    /// 360 × 280 — desktop cards with a wide summary and short detail list.
+    WideCompact,
     /// 360 × 480
     #[default]
     Standard,
@@ -72,6 +74,7 @@ impl CardSizeTier {
     pub const fn max_width(self) -> f32 {
         match self {
             CardSizeTier::Compact => 280.0,
+            CardSizeTier::WideCompact => 360.0,
             CardSizeTier::Standard => 360.0,
             CardSizeTier::Expanded => 480.0,
         }
@@ -81,6 +84,7 @@ impl CardSizeTier {
     pub const fn max_height(self) -> f32 {
         match self {
             CardSizeTier::Compact => 240.0,
+            CardSizeTier::WideCompact => 280.0,
             CardSizeTier::Standard => 480.0,
             CardSizeTier::Expanded => 640.0,
         }
@@ -106,7 +110,6 @@ pub enum CardDismissReason {
     SourceToggle,
     Escape,
     FocusLost,
-    OutsideClick,
     OverviewOpened,
     BarClosed,
     DisplayRemoved,
@@ -285,6 +288,9 @@ pub struct ChannelSlot {
     pub pending_open_owner: Option<CardOwnerId>,
     /// Set when a preview-close timer is in flight.
     pub pending_close_generation: Option<u64>,
+    /// Whether completing this close should restore the focus captured before
+    /// the persistent card opened.
+    pub restore_focus_after_close: bool,
 }
 
 impl ChannelSlot {
@@ -424,9 +430,13 @@ impl CardState {
             }
 
             CardRequest::PersistentToggle { owner } => {
-                if self.persistent.owner.as_ref() == Some(&owner) && self.persistent.is_open() {
-                    // Toggle off — close persistent channel.
-                    effects.append(&mut self.close_persistent(CardDismissReason::SourceToggle));
+                if self.persistent.owner.as_ref() == Some(&owner) {
+                    if self.persistent.is_open() {
+                        // Toggle off — close persistent channel. A same-owner
+                        // toggle that arrives after deactivation already moved
+                        // the channel to Closing must not reopen it.
+                        effects.append(&mut self.close_persistent(CardDismissReason::SourceToggle));
+                    }
                 } else {
                     // Toggle on — replace any existing persistent card.
                     effects.append(&mut self.open_persistent(owner));
@@ -437,8 +447,10 @@ impl CardState {
                 bounds,
                 display_id,
             } => {
-                if self.persistent.owner.as_ref() == Some(&owner) && self.persistent.is_open() {
-                    effects.append(&mut self.close_persistent(CardDismissReason::SourceToggle));
+                if self.persistent.owner.as_ref() == Some(&owner) {
+                    if self.persistent.is_open() {
+                        effects.append(&mut self.close_persistent(CardDismissReason::SourceToggle));
+                    }
                 } else {
                     effects.append(&mut self.open_persistent(owner));
                     self.persistent.anchor_bounds = Some(bounds);
@@ -690,6 +702,7 @@ impl CardState {
         self.persistent.owner = Some(owner.clone());
         self.persistent.lifecycle = ChannelLifecycle::Open;
         self.persistent.generation = tok;
+        self.persistent.restore_focus_after_close = false;
 
         effects.push(CardEffect::OpenChannel {
             channel: CardChannel::Persistent,
@@ -715,6 +728,10 @@ impl CardState {
         let tok = self.persistent.generation;
         let display_id = self.persistent.display_id;
         self.persistent.lifecycle = ChannelLifecycle::Closing;
+        self.persistent.restore_focus_after_close = !matches!(
+            reason,
+            CardDismissReason::FocusLost | CardDismissReason::OverviewOpened
+        );
 
         effects.push(CardEffect::CloseChannel {
             channel: CardChannel::Persistent,
@@ -784,15 +801,19 @@ impl CardState {
         slot.card_bounds = None;
 
         let mut effects = Vec::new();
+        let restore_focus = slot.restore_focus_after_close;
+        slot.restore_focus_after_close = false;
         if channel == CardChannel::Persistent && self.focus_captured {
             self.focus_captured = false;
-            effects.push(CardEffect::RestoreFocus);
-            effects.push(CardEffect::Diagnostic(CardDiagnostic {
-                kind: DiagnosticKind::FocusRestored,
-                owner: owner.clone(),
-                channel: Some(channel),
-                generation,
-            }));
+            if restore_focus {
+                effects.push(CardEffect::RestoreFocus);
+                effects.push(CardEffect::Diagnostic(CardDiagnostic {
+                    kind: DiagnosticKind::FocusRestored,
+                    owner: owner.clone(),
+                    channel: Some(channel),
+                    generation,
+                }));
+            }
         }
         effects.append(&mut self.update_hold());
         effects.push(CardEffect::Diagnostic(CardDiagnostic {
@@ -1263,6 +1284,27 @@ mod tests {
         )));
     }
 
+    #[test]
+    fn focus_loss_close_does_not_steal_focus_back() {
+        let mut state = CardState::default();
+        state.reduce(CardRequest::PersistentToggle {
+            owner: owner("battery"),
+        });
+        let effects = state.reduce(CardRequest::Dismiss {
+            channel: CardChannel::Persistent,
+            reason: CardDismissReason::FocusLost,
+        });
+        let completion = state.reduce(CardRequest::CloseAnimationFinished {
+            channel: CardChannel::Persistent,
+            generation: close_generation(&effects),
+        });
+
+        assert!(!has_effect(&completion, |effect| matches!(
+            effect,
+            CardEffect::RestoreFocus
+        )));
+    }
+
     // ── Dismissal paths ───────────────────────────────────────────
 
     #[test]
@@ -1649,5 +1691,31 @@ mod tests {
         assert_eq!(state.persistent.anchor_bounds, Some(source_bounds));
         assert_eq!(state.persistent.display_id, Some(display_id));
         assert!(state.persistent.is_open());
+    }
+
+    #[test]
+    fn same_owner_activation_during_focus_loss_close_does_not_reopen() {
+        let mut state = CardState::default();
+        let battery = owner("battery");
+        state.reduce(CardRequest::PersistentToggleAt {
+            owner: battery.clone(),
+            bounds: bounds(),
+            display_id: DisplayId::new(9),
+        });
+        state.reduce(CardRequest::Dismiss {
+            channel: CardChannel::Persistent,
+            reason: CardDismissReason::FocusLost,
+        });
+        let closing_generation = state.persistent.generation;
+
+        let effects = state.reduce(CardRequest::PersistentToggleAt {
+            owner: battery,
+            bounds: bounds(),
+            display_id: DisplayId::new(9),
+        });
+
+        assert!(effects.is_empty());
+        assert_eq!(state.persistent.lifecycle, ChannelLifecycle::Closing);
+        assert_eq!(state.persistent.generation, closing_generation);
     }
 }

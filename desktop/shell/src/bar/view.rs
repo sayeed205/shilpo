@@ -88,6 +88,7 @@ pub struct BarView {
     _datetime_task: Option<gpui::Task<()>>,
     _sysinfo_task: Option<gpui::Task<()>>,
     extension_instance_prefix: Option<String>,
+    display_id: Option<gpui::DisplayId>,
     output_name: Option<String>,
 }
 
@@ -129,6 +130,7 @@ impl BarView {
             _datetime_task: None,
             _sysinfo_task: None,
             extension_instance_prefix: None,
+            display_id: None,
             output_name: None,
         }
     }
@@ -292,6 +294,7 @@ impl BarView {
         cx.new(|cx| {
             let mut view = Self::new_with_config(window, cx, config);
             view.extension_instance_prefix = Some(format!("bar:{display_id:?}"));
+            view.display_id = Some(display_id);
             view.output_name = output_name;
             view
         })
@@ -374,6 +377,7 @@ impl BarView {
         let mut view = Self::new_with_config(window, cx, ShellConfig::default());
         view.config.bar = spec.config;
         view.extension_instance_prefix = Some(format!("bar:{:?}", spec.display_id));
+        view.display_id = Some(spec.display_id);
         view.output_name = spec.output_name;
         view
     }
@@ -503,6 +507,7 @@ impl BarView {
                             BatteryIndicator::new(
                                 format!("battery_{section_name}_{index}"),
                                 self.battery.clone(),
+                                self.display_id,
                             )
                             .into_any_element(),
                         );

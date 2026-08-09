@@ -5,8 +5,8 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 use shilpo_device_protocol::{
-    BatteryChargeState, BatteryCoarseLevel, BatteryDevicePayload, BatteryPayload,
-    BatteryTechnology, BatteryWarningLevel,
+    BatteryChargeState, BatteryDevicePayload, BatteryPayload, BatteryTechnology,
+    BatteryWarningLevel,
 };
 use shilpo_services::ServiceLifecycle;
 use shilpo_ui::{ActiveTheme, Icon, IconName, h_flex, v_flex};
@@ -43,7 +43,7 @@ impl CardProvider for BatteryCardProvider {
     }
 
     fn size_tier(&self) -> CardSizeTier {
-        CardSizeTier::Standard
+        CardSizeTier::WideCompact
     }
 
     fn anchor_bounds(&self, _cx: &App) -> Option<(Bounds<Pixels>, DisplayId)> {
@@ -170,8 +170,7 @@ fn render_battery_card(
         .w_full()
         .h_full()
         .overflow_y_scroll()
-        .gap(px(12.0))
-        .p(px(16.0));
+        .gap(px(12.0));
 
     // Reconnecting or Service Disconnected Banner
     if is_reconnecting {
@@ -197,7 +196,7 @@ fn render_battery_card(
 
     // Top Aggregate Summary Block
     let icon_name = if payload.is_charging() {
-        IconName::Bolt
+        IconName::BoltFill
     } else {
         IconName::Info
     };
@@ -235,9 +234,6 @@ fn render_battery_card(
     let aggregate_block = v_flex()
         .w_full()
         .gap(px(8.0))
-        .p(px(12.0))
-        .rounded_lg()
-        .bg(theme.surface_container)
         .child(
             h_flex()
                 .items_center()
@@ -285,27 +281,48 @@ fn render_battery_card(
 
     card = card.child(aggregate_block);
 
-    // Physical Batteries Section
-    if !payload.devices.is_empty() {
-        let mut dev_list = v_flex().w_full().gap(px(6.0)).child(
-            div()
-                .text_size(px(11.0))
-                .font_weight(gpui::FontWeight::BOLD)
-                .text_color(theme.on_surface_variant)
-                .child("PHYSICAL BATTERIES"),
+    // A single system battery does not need disclosure UI. Show its useful
+    // identity and details directly; reserve accordions for choosing among
+    // multiple physical batteries.
+    if payload.devices.len() == 1 {
+        let dev = &payload.devices[0];
+        let dev_name = physical_device_name(dev, 0);
+        let details = render_physical_device_details(dev, &theme, false);
+        card = card.child(
+            v_flex()
+                .w_full()
+                .gap(px(8.0))
+                .child(section_label("BATTERY DETAILS", &theme))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap(px(10.0))
+                        .py(px(4.0))
+                        .child(
+                            Icon::new(IconName::BatteryAndroidFull)
+                                .size(px(18.0))
+                                .text_color(theme.on_surface_variant),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(13.0))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme.on_surface)
+                                .child(dev_name),
+                        ),
+                )
+                .child(details),
         );
+    } else if !payload.devices.is_empty() {
+        let mut dev_list = v_flex()
+            .w_full()
+            .gap(px(6.0))
+            .child(section_label("PHYSICAL BATTERIES", &theme));
 
         for (idx, dev) in payload.devices.iter().enumerate() {
             let is_expanded = selected.as_deref() == Some(dev.id.as_str());
-            let dev_name = if !dev.model.is_empty() {
-                if !dev.vendor.is_empty() {
-                    format!("{} {}", dev.vendor, dev.model)
-                } else {
-                    dev.model.clone()
-                }
-            } else {
-                format!("Battery {}", idx + 1)
-            };
+            let dev_name = physical_device_name(dev, idx);
 
             let dev_pct = if let Some(percentage) = dev.percentage.get() {
                 format!("{percentage:.0}%")
@@ -315,19 +332,18 @@ fn render_battery_card(
 
             let cell = selected_cell.clone();
             let device_id = dev.id.clone();
-            let row_bg = if is_expanded {
-                theme.surface_container_high
-            } else {
-                theme.surface_container
-            };
+            let row_bg = theme.surface_container;
 
-            let mut row = v_flex().w_full().rounded_md().bg(row_bg).child(
+            let mut row = v_flex().w_full().rounded_2xl().bg(row_bg).child(
                 h_flex()
                     .w_full()
+                    .min_h(px(48.0))
                     .items_center()
                     .justify_between()
-                    .p(px(10.0))
+                    .px(px(12.0))
+                    .rounded_2xl()
                     .cursor_pointer()
+                    .hover(|style| style.bg(theme.surface_container_high))
                     .on_mouse_down(gpui::MouseButton::Left, move |_event, window, _cx| {
                         if let Ok(mut lock) = cell.lock() {
                             toggle_selected_device(&mut lock, &device_id);
@@ -338,7 +354,11 @@ fn render_battery_card(
                         h_flex()
                             .items_center()
                             .gap(px(8.0))
-                            .child(Icon::new(IconName::Info).size(px(16.0)))
+                            .child(
+                                Icon::new(IconName::BatteryAndroidFull)
+                                    .size(px(18.0))
+                                    .text_color(theme.on_surface_variant),
+                            )
                             .child(
                                 div()
                                     .text_size(px(13.0))
@@ -370,7 +390,7 @@ fn render_battery_card(
 
             // Single allowed secondary detail view when expanded
             if is_expanded {
-                let detail_box = render_physical_device_details(dev, &theme);
+                let detail_box = render_physical_device_details(dev, &theme, true);
                 row = row.child(detail_box);
             }
 
@@ -380,40 +400,56 @@ fn render_battery_card(
         card = card.child(dev_list);
     }
 
-    card.into_any_element()
+    div()
+        .size_full()
+        .p(px(16.0))
+        .overflow_hidden()
+        .child(card)
+        .into_any_element()
 }
 
-fn physical_detail_rows(dev: &BatteryDevicePayload) -> Vec<(&'static str, String)> {
+fn section_label(label: &'static str, theme: &shilpo_ui::Theme) -> AnyElement {
+    div()
+        .text_size(px(11.0))
+        .font_weight(gpui::FontWeight::BOLD)
+        .text_color(theme.on_surface_variant)
+        .child(label)
+        .into_any_element()
+}
+
+fn physical_device_name(dev: &BatteryDevicePayload, index: usize) -> String {
+    if !dev.model.is_empty() {
+        if !dev.vendor.is_empty() {
+            format!("{} {}", dev.vendor, dev.model)
+        } else {
+            dev.model.clone()
+        }
+    } else {
+        format!("Battery {}", index + 1)
+    }
+}
+
+/// User-facing battery details. Raw telemetry (empty energy, voltages,
+/// timestamps, UPower capabilities) remains in the domain payload for future
+/// diagnostics but is intentionally absent from the everyday card.
+fn physical_detail_rows(
+    dev: &BatteryDevicePayload,
+    include_health: bool,
+) -> Vec<(&'static str, String)> {
     let mut rows = Vec::new();
     if dev.technology != BatteryTechnology::Unknown {
         rows.push(("Technology", format_technology(dev.technology).to_string()));
     }
-    if let Some(value) = dev.energy_wh.get() {
-        rows.push(("Energy", format!("{value:.1} Wh")));
-    }
-    if let Some(value) = dev.energy_empty_wh.get() {
-        rows.push(("Energy empty", format!("{value:.1} Wh")));
-    }
-    if let Some(value) = dev.energy_full_wh.get() {
-        rows.push(("Energy full", format!("{value:.1} Wh")));
-    }
-    if let Some(value) = dev.energy_full_design_wh.get() {
-        rows.push(("Design energy", format!("{value:.1} Wh")));
-    }
-    if let Some(value) = dev.energy_rate_w.get() {
-        rows.push(("Rate", format!("{value:.1} W")));
-    }
-    if let Some(value) = dev.capacity_percent.get() {
+    if include_health && let Some(value) = dev.capacity_percent.get() {
         rows.push(("Health", format!("{value:.0}%")));
     }
-    if let Some(value) = dev.voltage_v.get() {
-        rows.push(("Voltage", format!("{value:.2} V")));
-    }
-    if let Some(value) = dev.voltage_min_design_v.get() {
-        rows.push(("Minimum design voltage", format!("{value:.2} V")));
-    }
-    if let Some(value) = dev.voltage_max_design_v.get() {
-        rows.push(("Maximum design voltage", format!("{value:.2} V")));
+    match (dev.energy_full_wh.get(), dev.energy_full_design_wh.get()) {
+        (Some(full), Some(design)) => rows.push((
+            "Full charge capacity",
+            format!("{full:.1} of {design:.1} Wh"),
+        )),
+        (Some(full), None) => rows.push(("Full charge capacity", format!("{full:.1} Wh"))),
+        _ => {}
     }
     if let Some(value) = dev.temperature_c.get() {
         rows.push(("Temperature", format!("{value:.1} °C")));
@@ -421,43 +457,30 @@ fn physical_detail_rows(dev: &BatteryDevicePayload) -> Vec<(&'static str, String
     if let Some(value) = dev.cycle_count.get() {
         rows.push(("Cycles", value.to_string()));
     }
-    if let Some(value) = dev.update_time.get() {
-        rows.push(("Updated", value.to_string()));
-    }
-    if let Some(value) = dev.is_rechargeable.get() {
-        rows.push(("Rechargeable", if value { "Yes" } else { "No" }.to_string()));
-    }
     if dev.warning_level != BatteryWarningLevel::Unknown
         && dev.warning_level != BatteryWarningLevel::None
     {
         rows.push(("Warning Level", format!("{:?}", dev.warning_level)));
     }
-    if dev.coarse_level != BatteryCoarseLevel::Unknown
-        && dev.coarse_level != BatteryCoarseLevel::None
-    {
-        rows.push(("Coarse Level", format!("{:?}", dev.coarse_level)));
-    }
-    if dev.has_history || dev.has_statistics {
-        rows.push((
-            "Diagnostics",
-            if dev.has_history && dev.has_statistics {
-                "History & Statistics"
-            } else if dev.has_history {
-                "History"
-            } else {
-                "Statistics"
-            }
-            .to_string(),
-        ));
-    }
-    match (
-        dev.charge_start_threshold.get(),
-        dev.charge_end_threshold.get(),
-    ) {
-        (Some(start), Some(end)) => rows.push(("Charge limits", format!("{start}%–{end}%"))),
-        (Some(start), None) => rows.push(("Charge starts below", format!("{start}%"))),
-        (None, Some(end)) => rows.push(("Charge stops at", format!("{end}%"))),
-        (None, None) => {}
+    let threshold_supported = dev.charge_threshold_supported.get();
+    let threshold_enabled = dev.charge_threshold_enabled.get();
+    let settings = dev.charge_threshold_settings_supported.get();
+    if threshold_supported == Some(true) && threshold_enabled == Some(false) {
+        rows.push(("Battery care", "Off".to_string()));
+    } else if threshold_enabled == Some(true) {
+        let start_supported = settings.is_none_or(|bits| bits & 1 != 0);
+        let end_supported = settings.is_none_or(|bits| bits & 2 != 0);
+        let firmware_managed = settings.is_some_and(|bits| bits & 4 != 0);
+
+        if start_supported && let Some(start) = dev.charge_start_threshold.get() {
+            rows.push(("Charge resumes below", format!("{start}%")));
+        }
+        if end_supported && let Some(end) = dev.charge_end_threshold.get() {
+            rows.push(("Charge stops at", format!("{end}%")));
+        }
+        if firmware_managed && !start_supported && !end_supported {
+            rows.push(("Battery care", "Managed by firmware".to_string()));
+        }
     }
 
     rows
@@ -466,17 +489,20 @@ fn physical_detail_rows(dev: &BatteryDevicePayload) -> Vec<(&'static str, String
 fn render_physical_device_details(
     dev: &BatteryDevicePayload,
     theme: &shilpo_ui::Theme,
+    include_health: bool,
 ) -> AnyElement {
     let mut details = v_flex()
         .w_full()
         .gap(px(4.0))
-        .p(px(10.0))
+        .px(px(12.0))
+        .pb(px(12.0))
+        .pt(px(8.0))
         .border_t_1()
         .border_color(theme.outline_variant)
         .text_size(px(11.0))
         .text_color(theme.on_surface_variant);
 
-    for (label, value) in physical_detail_rows(dev) {
+    for (label, value) in physical_detail_rows(dev, include_health) {
         details = details.child(
             h_flex()
                 .justify_between()
@@ -540,7 +566,7 @@ mod tests {
         assert_eq!(provider.owner_id(), CardOwnerId::new("battery"));
         assert!(provider.capabilities().click);
         assert!(!provider.capabilities().hover);
-        assert_eq!(provider.size_tier(), CardSizeTier::Standard);
+        assert_eq!(provider.size_tier(), CardSizeTier::WideCompact);
     }
 
     #[test]
@@ -548,14 +574,52 @@ mod tests {
         let device = BatteryDevicePayload {
             capacity_percent: OptionalF64::some(87.4),
             charge_end_threshold: OptionalU64::some(80),
+            charge_threshold_supported: shilpo_device_protocol::OptionalBool::some(true),
+            charge_threshold_enabled: shilpo_device_protocol::OptionalBool::some(true),
+            charge_threshold_settings_supported: OptionalU64::some(2),
             ..Default::default()
         };
 
-        let rows = physical_detail_rows(&device);
+        let rows = physical_detail_rows(&device, true);
         assert!(rows.contains(&("Health", "87%".to_string())));
         assert!(rows.contains(&("Charge stops at", "80%".to_string())));
         assert!(!rows.iter().any(|(label, _)| *label == "Energy"));
         assert!(!rows.iter().any(|(_, value)| value.contains("0%–80%")));
+        assert!(
+            !rows
+                .iter()
+                .any(|(label, _)| *label == "Charge resumes below")
+        );
+    }
+
+    #[test]
+    fn disabled_charge_threshold_is_presented_as_off_not_as_active_limits() {
+        let device = BatteryDevicePayload {
+            charge_start_threshold: OptionalU64::some(75),
+            charge_end_threshold: OptionalU64::some(80),
+            charge_threshold_supported: shilpo_device_protocol::OptionalBool::some(true),
+            charge_threshold_enabled: shilpo_device_protocol::OptionalBool::some(false),
+            charge_threshold_settings_supported: OptionalU64::some(2),
+            ..Default::default()
+        };
+
+        let rows = physical_detail_rows(&device, false);
+        assert!(rows.contains(&("Battery care", "Off".to_string())));
+        assert!(!rows.iter().any(|(label, _)| label.contains("Charge ")));
+    }
+
+    #[test]
+    fn aggregate_health_is_not_repeated_for_a_single_battery() {
+        let device = BatteryDevicePayload {
+            capacity_percent: OptionalF64::some(87.4),
+            energy_full_wh: OptionalF64::some(31.5),
+            energy_full_design_wh: OptionalF64::some(48.0),
+            ..Default::default()
+        };
+
+        let rows = physical_detail_rows(&device, false);
+        assert!(!rows.iter().any(|(label, _)| *label == "Health"));
+        assert!(rows.contains(&("Full charge capacity", "31.5 of 48.0 Wh".to_string())));
     }
 
     #[test]
