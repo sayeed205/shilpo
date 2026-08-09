@@ -114,49 +114,26 @@ impl DeviceClient {
                 "device protocol mismatch: client {PROTOCOL_VERSION}, daemon {version}; restart or update both components"
             ));
         }
-        macro_rules! load_state {
-            ($method:ident, $domain:expr, $variant:ident) => {
-                if let Ok((revision, lifecycle, payload, error)) = proxy.$method().await {
-                    self.update_local_domain_state(state_from_wire(
-                        $domain,
-                        revision,
-                        lifecycle,
-                        DomainPayload::$variant(payload),
-                        error,
-                    ));
-                }
-            };
-        }
-        load_state!(get_audio_state, DeviceDomain::Audio, Audio);
-        load_state!(get_bluetooth_state, DeviceDomain::Bluetooth, Bluetooth);
-        load_state!(get_brightness_state, DeviceDomain::Brightness, Brightness);
-        load_state!(get_network_state, DeviceDomain::Network, Network);
-        load_state!(get_night_light_state, DeviceDomain::NightLight, NightLight);
-        load_state!(
-            get_power_profile_state,
-            DeviceDomain::PowerProfile,
-            PowerProfile
-        );
-        load_state!(get_media_state, DeviceDomain::Media, Media);
-        load_state!(get_battery_state, DeviceDomain::Battery, Battery);
-        load_state!(get_caffeine_state, DeviceDomain::Caffeine, Caffeine);
-        *self.connection.lock().unwrap() = Some(connection.clone());
-        let closed_client = self.clone();
-        let closed_connection = connection.clone();
-        tokio::spawn(async move {
-            closed_connection.closed().await;
-            *closed_client.connection.lock().unwrap() = None;
-            closed_client.mark_connection_lost("device daemon connection closed");
-        });
+        let mut listener_tasks = Vec::new();
+        let mut listener_readiness = Vec::new();
         let outcome_listener = self.clone();
         let outcome_connection = connection.clone();
-        tokio::spawn(async move {
+        let (outcome_ready_tx, outcome_ready_rx) = tokio::sync::oneshot::channel();
+        listener_readiness.push(outcome_ready_rx);
+        listener_tasks.push(tokio::spawn(async move {
             let Ok(proxy) = DeviceDbusProxy::builder(&outcome_connection).build().await else {
+                let _ = outcome_ready_tx.send(Err(
+                    "device daemon outcome signal proxy unavailable".to_string(),
+                ));
                 return;
             };
             let Ok(mut signals) = proxy.receive_command_reconciled().await else {
+                let _ = outcome_ready_tx.send(Err(
+                    "device daemon outcome signal subscription failed".to_string(),
+                ));
                 return;
             };
+            let _ = outcome_ready_tx.send(Ok(()));
             while let Some(signal) = signals.next().await {
                 if let Ok(args) = signal.args()
                     && let Ok(outcome) = CommandOutcome::try_from(args.outcome.clone())
@@ -164,18 +141,29 @@ impl DeviceClient {
                     outcome_listener.notify_command_outcome(outcome);
                 }
             }
-        });
+        }));
         macro_rules! spawn_state_listener {
             ($receive:ident, $domain:expr, $variant:ident) => {{
                 let listener = self.clone();
                 let connection = connection.clone();
-                tokio::spawn(async move {
+                let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+                listener_readiness.push(ready_rx);
+                listener_tasks.push(tokio::spawn(async move {
                     let Ok(proxy) = DeviceDbusProxy::builder(&connection).build().await else {
+                        let _ = ready_tx.send(Err(format!(
+                            "device daemon {:?} signal proxy unavailable",
+                            $domain
+                        )));
                         return;
                     };
                     let Ok(mut signals) = proxy.$receive().await else {
+                        let _ = ready_tx.send(Err(format!(
+                            "device daemon {:?} signal subscription failed",
+                            $domain
+                        )));
                         return;
                     };
+                    let _ = ready_tx.send(Ok(()));
                     while let Some(signal) = signals.next().await {
                         if let Ok(args) = signal.args() {
                             listener.update_local_domain_state(state_from_wire(
@@ -187,7 +175,7 @@ impl DeviceClient {
                             ));
                         }
                     }
-                })
+                }));
             }};
         }
         spawn_state_listener!(receive_audio_state_changed, DeviceDomain::Audio, Audio);
@@ -227,6 +215,58 @@ impl DeviceClient {
             DeviceDomain::Caffeine,
             Caffeine
         );
+
+        for readiness in listener_readiness {
+            let readiness = readiness.await.unwrap_or_else(|_| {
+                Err("device daemon signal listener stopped during setup".to_string())
+            });
+            if let Err(error) = readiness {
+                for task in &listener_tasks {
+                    task.abort();
+                }
+                return Err(error);
+            }
+        }
+
+        // Subscribe before loading the initial projection so no state change can
+        // fall into the connection/setup gap. Revision checks deduplicate a
+        // signal racing with the matching snapshot response.
+        macro_rules! load_state {
+            ($method:ident, $domain:expr, $variant:ident) => {
+                if let Ok((revision, lifecycle, payload, error)) = proxy.$method().await {
+                    self.update_local_domain_state(state_from_wire(
+                        $domain,
+                        revision,
+                        lifecycle,
+                        DomainPayload::$variant(payload),
+                        error,
+                    ));
+                }
+            };
+        }
+        load_state!(get_audio_state, DeviceDomain::Audio, Audio);
+        load_state!(get_bluetooth_state, DeviceDomain::Bluetooth, Bluetooth);
+        load_state!(get_brightness_state, DeviceDomain::Brightness, Brightness);
+        load_state!(get_network_state, DeviceDomain::Network, Network);
+        load_state!(get_night_light_state, DeviceDomain::NightLight, NightLight);
+        load_state!(
+            get_power_profile_state,
+            DeviceDomain::PowerProfile,
+            PowerProfile
+        );
+        load_state!(get_media_state, DeviceDomain::Media, Media);
+        load_state!(get_battery_state, DeviceDomain::Battery, Battery);
+        load_state!(get_caffeine_state, DeviceDomain::Caffeine, Caffeine);
+
+        // Publish only after every listener and the initial projection are
+        // ready. A failed setup therefore cannot leak listeners into a retry.
+        *self.connection.lock().unwrap() = Some(connection.clone());
+        let closed_client = self.clone();
+        tokio::spawn(async move {
+            connection.closed().await;
+            *closed_client.connection.lock().unwrap() = None;
+            closed_client.mark_connection_lost("device daemon connection closed");
+        });
         Ok(())
     }
 
@@ -774,9 +814,24 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(outcome, CommandOutcome::Applied { .. }));
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        let shell_state = shell.get_domain_state(DeviceDomain::Audio);
-        let settings_state = settings.get_domain_state(DeviceDomain::Audio);
+        let (shell_state, settings_state) = {
+            let mut converged = None;
+            for _ in 0..50 {
+                let shell_state = shell.get_domain_state(DeviceDomain::Audio);
+                let settings_state = settings.get_domain_state(DeviceDomain::Audio);
+                if shell_state.revision == settings_state.revision
+                    && matches!(
+                        settings_state.payload,
+                        DomainPayload::Audio(AudioPayload { volume: 72, .. })
+                    )
+                {
+                    converged = Some((shell_state, settings_state));
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            converged.expect("both clients should converge on the applied command")
+        };
         assert_eq!(shell_state.revision, settings_state.revision);
         assert!(matches!(
             shell_state.payload,
