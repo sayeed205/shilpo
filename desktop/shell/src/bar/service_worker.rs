@@ -23,6 +23,14 @@ pub struct DeviceSnapshot {
 impl DeviceSnapshot {
     pub fn apply(&mut self, update: &WorkerUpdate) -> bool {
         match update {
+            WorkerUpdate::Battery(info) if !info.available && self.battery.is_present => {
+                if self.battery.available {
+                    self.battery.available = false;
+                    true
+                } else {
+                    false
+                }
+            }
             WorkerUpdate::Battery(info) => replace_if_changed(&mut self.battery, info),
             WorkerUpdate::Audio(info) => replace_if_changed(&mut self.audio, info),
             WorkerUpdate::Network(info) => replace_if_changed(&mut self.network, info),
@@ -200,11 +208,7 @@ fn emit_client_updates(
         revisions.insert(domain, state.revision);
         let update = match state.payload {
             shilpo_device_protocol::DomainPayload::Battery(payload) => {
-                Some(WorkerUpdate::Battery(BatteryInfo {
-                    percentage: payload.percentage,
-                    is_charging: payload.is_charging,
-                    is_present: payload.is_present,
-                }))
+                Some(WorkerUpdate::Battery(payload))
             }
             shilpo_device_protocol::DomainPayload::Audio(payload) => {
                 Some(WorkerUpdate::Audio(audio_info(payload)))
@@ -412,12 +416,31 @@ mod tests {
         let mut snapshot = DeviceSnapshot::default();
         let battery = BatteryInfo {
             percentage: 85,
-            is_charging: true,
+            state: shilpo_services::BatteryChargeState::Charging,
             is_present: true,
+            available: true,
+            ..Default::default()
         };
         assert!(snapshot.apply(&WorkerUpdate::Battery(battery.clone())));
         assert_eq!(snapshot.battery, battery);
         assert!(!snapshot.apply(&WorkerUpdate::Battery(battery)));
+    }
+
+    #[test]
+    fn battery_snapshot_keeps_last_known_data_when_service_becomes_unavailable() {
+        let mut snapshot = DeviceSnapshot::default();
+        snapshot.apply(&WorkerUpdate::Battery(BatteryInfo {
+            available: true,
+            is_present: true,
+            percentage: 73,
+            state: shilpo_services::BatteryChargeState::Discharging,
+            ..Default::default()
+        }));
+
+        assert!(snapshot.apply(&WorkerUpdate::Battery(BatteryInfo::default())));
+        assert_eq!(snapshot.battery.percentage, 73);
+        assert!(snapshot.battery.is_present);
+        assert!(!snapshot.battery.available);
     }
     #[test]
     fn backoff_caps_at_thirty_seconds() {

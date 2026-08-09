@@ -50,7 +50,10 @@ pub use notifications::{Notification, NotificationService, NotificationUrgency};
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
 
 pub use tray::{TrayItem, TrayMenuItem, TrayService};
-pub use upower::{BatteryInfo, BatteryService};
+pub use upower::{
+    BatteryChargeState, BatteryCoarseLevel, BatteryDevicePayload, BatteryInfo, BatteryService,
+    BatteryTechnology, BatteryWarningLevel,
+};
 
 #[cfg(test)]
 pub(crate) mod test_support {
