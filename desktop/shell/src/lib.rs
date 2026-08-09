@@ -13,6 +13,7 @@ pub mod overview;
 pub mod overview_search;
 pub mod runtime;
 pub mod widgets;
+pub(crate) mod workspace_miniature;
 
 pub use actions::{
     ActionCategory, ActionDescriptor, ActionId, ActionRegistry, KeybindingManager, Shortcut,

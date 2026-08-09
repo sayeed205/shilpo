@@ -107,11 +107,11 @@ The first implementation slice, when authorized, consists of:
 3. A Workspace hover preview similar to the existing overview's workspace representation.
 4. Existing Running Apps behavior left unchanged.
 
-The Workspace preview is a compact, presentation-neutral reuse or extraction of the overview's visual model rather than an embedding of the full overview. It updates from compositor events, represents workspace identity and the overview-like application/window composition, provides a clear empty state, prioritizes focused and urgent windows under crowding, caps rendered entries, and shows `+N` overflow.
+The Workspace preview is a compact, presentation-neutral reuse or extraction of the overview's visual model rather than an embedding of the full overview. It updates from compositor events, represents the overview-like application/window composition, provides a clear empty state, prioritizes focused and urgent windows under crowding, and caps rendered entries.
 
-Its visual core consists of the overview's prepared blurred/downscaled wallpaper or themed fallback, scrim and surface tint, equal-width window regions, centered application icons, active-workspace outline, rounding, and shadow. It excludes overview-only search, launcher, filmstrip, drag/drop, and window-selection behavior. A compact header shows workspace identity and window count. Window titles stay out of the miniature but remain available to accessibility labels. The preview is informational; pointer entry only keeps it open.
+Its visual core consists of the overview's prepared blurred/downscaled wallpaper or themed fallback, scrim and surface tint, equal-width window regions, centered application icons, active-workspace outline, rounding, and shadow. It excludes overview-only search, launcher, filmstrip, drag/drop, and window-selection behavior. Workspace identity, window counts, and window titles stay out of the visual miniature but remain available to accessibility labels. The preview is informational; pointer entry only keeps it open.
 
-Crowded previews show up to five spatially ordered window regions, keep the active window within the visible viewport, and display `+N` for hidden windows. Wallpaper handling reuses overview preparation and does not introduce screen capture or a second wallpaper-processing path.
+Crowded previews show up to five spatially ordered window regions and retain active and urgent windows before the spatially nearest candidates. Hidden-window counts remain presentation metadata rather than visible chrome. Wallpaper handling reuses overview preparation and does not introduce screen capture or a second wallpaper-processing path.
 
 Workspace preview caching retains only reusable inputs such as prepared wallpaper and resolved icons. Its lightweight composition is rebuilt from the latest compositor snapshot on opening and updates while visible.
 

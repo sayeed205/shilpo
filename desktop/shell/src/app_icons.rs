@@ -6,8 +6,55 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
-use gpui::{Image, ImageFormat};
+use gpui::{
+    Image, ImageFormat, ImageSource, IntoElement, ObjectFit, ParentElement, Styled, StyledImage,
+    div, img,
+};
 use image::{DynamicImage, GenericImageView as _, RgbaImage, imageops::FilterType};
+use shilpo_ui::StyledExt;
+
+pub(crate) fn app_icon(
+    icon_path: Option<PathBuf>,
+    fallback_label: &str,
+    size: gpui::Pixels,
+    scale_factor: f32,
+    background: gpui::Hsla,
+    foreground: gpui::Hsla,
+) -> gpui::AnyElement {
+    if let Some(icon_path) = icon_path {
+        let target_size = icon_device_pixels(size.as_f32(), scale_factor);
+        let image = rasterized_app_icon(&icon_path, target_size)
+            .map(img)
+            .unwrap_or_else(|| img(ImageSource::from(icon_path)));
+        div()
+            .w(size)
+            .h(size)
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .child(image.w(size).h(size).object_fit(ObjectFit::Contain))
+            .into_any_element()
+    } else {
+        let initial = fallback_label
+            .chars()
+            .find(|character| character.is_alphanumeric())
+            .map(|character| character.to_uppercase().to_string())
+            .unwrap_or_else(|| "?".to_string());
+        div()
+            .w(size)
+            .h(size)
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .rounded_xl()
+            .bg(background)
+            .text_color(foreground)
+            .font_semibold()
+            .shadow_md()
+            .child(initial)
+            .into_any_element()
+    }
+}
 
 type RasterCache = HashMap<(PathBuf, u32), Option<Arc<Image>>>;
 

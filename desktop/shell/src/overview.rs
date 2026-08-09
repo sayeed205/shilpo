@@ -1,16 +1,16 @@
-use crate::app_icons::{
-    build_app_icon_index, icon_device_pixels, rasterized_app_icon, resolve_app_icon_path,
-};
+use crate::app_icons::{app_icon, build_app_icon_index, resolve_app_icon_path};
 use crate::overview_search::{
     OverviewSearch, SearchIntent, SearchMode, SearchResult, SearchResultIcon,
 };
 use crate::runtime::{ShellRuntime, ShellSurfaces};
+use crate::workspace_miniature::{
+    PREVIEW_HEIGHT, PREVIEW_WIDTH, WorkspaceMiniature, WorkspaceMiniatureModel,
+};
 use gpui::{
     Animation, AnimationExt as _, App, AppContext, Context, DragMoveEvent, ElementId, Entity,
     FocusHandle, Focusable, ImageSource, InteractiveElement, IntoElement, KeyDownEvent,
-    MouseButton, ObjectFit, ParentElement, Render, Role, ScrollHandle, ScrollWheelEvent,
-    SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div, img,
-    prelude::FluentBuilder, px,
+    MouseButton, ParentElement, Render, Role, ScrollHandle, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use shilpo_services::{CompositorSnapshot, WindowInfo, WorkspaceInfo};
 use shilpo_ui::{
@@ -25,9 +25,6 @@ use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc, time::Dura
 // ── Animation constants ────────────────────────────────────────────────────
 const ENTER_DURATION: Duration = Duration::from_millis(250);
 const EXIT_DURATION: Duration = Duration::from_millis(200);
-const PREVIEW_WIDTH: f32 = 326.0;
-const PREVIEW_HEIGHT: f32 = 183.0;
-const APP_ICON_SIZE: f32 = 52.0;
 const MAX_VISIBLE_WORKSPACES: usize = 3;
 const PREVIEW_RADIUS: f32 = 20.0;
 const INTER_WORKSPACE_RADIUS: f32 = 8.0;
@@ -167,49 +164,6 @@ pub enum OverviewCloseReason {
     Selection,
 }
 
-fn app_icon(
-    icon_path: Option<PathBuf>,
-    fallback_label: &str,
-    size: gpui::Pixels,
-    scale_factor: f32,
-    background: gpui::Hsla,
-    foreground: gpui::Hsla,
-) -> gpui::AnyElement {
-    if let Some(icon_path) = icon_path {
-        let target_size = icon_device_pixels(size.as_f32(), scale_factor);
-        let image = rasterized_app_icon(&icon_path, target_size)
-            .map(img)
-            .unwrap_or_else(|| img(ImageSource::from(icon_path)));
-        div()
-            .w(size)
-            .h(size)
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .child(image.w(size).h(size).object_fit(ObjectFit::Contain))
-            .into_any_element()
-    } else {
-        let initial = fallback_label
-            .chars()
-            .find(|character| character.is_alphanumeric())
-            .map(|character| character.to_uppercase().to_string())
-            .unwrap_or_else(|| "?".to_string());
-        div()
-            .w(size)
-            .h(size)
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .rounded_xl()
-            .bg(background)
-            .text_color(foreground)
-            .font_semibold()
-            .shadow_md()
-            .child(initial)
-            .into_any_element()
-    }
-}
-
 /// State of native launcher search queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LauncherSearchState {
@@ -246,7 +200,7 @@ pub struct WorkspaceOverview {
     lifecycle: Option<crate::runtime::shell_surfaces::OverviewLifecycleCallback>,
     reduced_motion: bool,
     _wallpaper_subscription: Option<gpui::Subscription>,
-    app_icons: HashMap<String, PathBuf>,
+    app_icons: Arc<HashMap<String, PathBuf>>,
     drag_target_workspace_id: Option<u64>,
     workspace_view_start: usize,
     input_state: Option<Entity<InputState>>,
@@ -292,7 +246,7 @@ impl WorkspaceOverview {
             lifecycle: None,
             reduced_motion: false,
             _wallpaper_subscription: None,
-            app_icons: HashMap::new(),
+            app_icons: Arc::new(HashMap::new()),
             drag_target_workspace_id: None,
             workspace_view_start,
             input_state: None,
@@ -713,7 +667,9 @@ impl WorkspaceOverview {
     ) -> Entity<shilpo_ui::Root> {
         let snapshot = ShellSurfaces::compositor_snapshot(cx);
         let reduced_motion = ShellSurfaces::overview_reduced_motion(cx);
-        let app_icons = build_app_icon_index(ShellSurfaces::overview_applications(cx));
+        let app_icons = Arc::new(build_app_icon_index(ShellSurfaces::overview_applications(
+            cx,
+        )));
         let scanner =
             ShellRuntime::app_scanner(cx).unwrap_or_else(shilpo_services::AppScanner::new_empty);
         let scanner_for_catalog = scanner.clone();
@@ -776,8 +732,9 @@ impl WorkspaceOverview {
                             break;
                         };
                         entity.update(cx, |view, cx| {
-                            view.app_icons =
-                                build_app_icon_index(ShellSurfaces::overview_applications(cx));
+                            view.app_icons = Arc::new(build_app_icon_index(
+                                ShellSurfaces::overview_applications(cx),
+                            ));
                             let query = view
                                 .input_state
                                 .as_ref()
@@ -851,7 +808,7 @@ impl WorkspaceOverview {
     }
 
     fn icon_path_for_app(&self, app_id: Option<&str>) -> Option<PathBuf> {
-        resolve_app_icon_path(app_id, &self.app_icons)
+        resolve_app_icon_path(app_id, self.app_icons.as_ref())
     }
 }
 
@@ -863,10 +820,7 @@ impl Render for WorkspaceOverview {
         let phase = self.phase;
 
         let scrim_color = gpui::transparent_black();
-        let card_bg = theme.surface_container_high;
-        let border_color = theme.outline_variant;
         let viewport = window.viewport_size();
-        let scale_factor = window.scale_factor();
         let has_active_drag = cx.has_active_drag();
 
         // ── Scrim backdrop ──────────────────────────────────────────────
@@ -908,16 +862,8 @@ impl Render for WorkspaceOverview {
                 let ws_id = ws.id;
                 let is_first = workspace_index == 0;
                 let is_last = workspace_index + 1 == rendered_workspace_count;
-                let is_active = self.active_workspace_id == Some(ws_id);
                 let is_drag_target =
                     has_active_drag && self.drag_target_workspace_id == Some(ws_id);
-                let ws_windows: Vec<_> = self
-                    .windows
-                    .iter()
-                    .filter(|w| w.workspace_id == Some(ws_id))
-                    .collect();
-                let ws_title = ws.name.clone().unwrap_or_else(|| ws.idx.to_string());
-                let window_count = ws_windows.len();
                 let wallpaper_snapshot = if cx.has_global::<ShellRuntime>() {
                     ShellRuntime::wallpaper_preview_snapshot(cx)
                 } else {
@@ -925,77 +871,74 @@ impl Render for WorkspaceOverview {
                 };
                 let wallpaper_source: Option<ImageSource> =
                     wallpaper_snapshot.ready_image().map(ImageSource::from);
-                let inner_radius = px(4.);
-                let top_radius = px(if is_first {
-                    PREVIEW_RADIUS
-                } else {
-                    INTER_WORKSPACE_RADIUS
-                });
-                let bottom_radius = px(if is_last {
-                    PREVIEW_RADIUS
-                } else {
-                    INTER_WORKSPACE_RADIUS
-                });
 
-                // Application icons are window proxies: click focuses, drag moves.
-                let window_icons: Vec<_> = ws_windows
-                    .into_iter()
-                    .enumerate()
-                    .map(|(window_index, win)| {
-                        let win_id = win.id;
-                        let source_workspace_id = win.workspace_id;
-                        let win_title: SharedString =
-                            win.title.as_deref().unwrap_or("Window").to_string().into();
-                        let fallback_label = win.app_id.as_deref().unwrap_or(win_title.as_ref());
-                        let icon_path = self.icon_path_for_app(win.app_id.as_deref());
+                let top_radius = if is_first {
+                    PREVIEW_RADIUS
+                } else {
+                    INTER_WORKSPACE_RADIUS
+                };
+                let bottom_radius = if is_last {
+                    PREVIEW_RADIUS
+                } else {
+                    INTER_WORKSPACE_RADIUS
+                };
+
+                let model = WorkspaceMiniatureModel::new(ws, &self.windows);
+                let miniature =
+                    WorkspaceMiniature::new(&model, wallpaper_source, self.app_icons.clone())
+                        .accessibility_managed_by_host()
+                        .corner_radii(top_radius, bottom_radius);
+
+                let inner_radius = px(4.);
+                let top_radius_px = px(top_radius);
+                let bottom_radius_px = px(bottom_radius);
+                let region_count = model.region_count();
+
+                // Application icons/regions overlay for focus and drag
+                let window_overlays: Vec<_> = model
+                    .visible_windows()
+                    .iter()
+                    .map(|win_proj| {
+                        let win_id = win_proj.id;
+                        let win_title = win_proj.title.clone();
+                        let source_workspace_id = ws_id;
+                        let icon_path = self.icon_path_for_app(win_proj.app_id.as_deref());
+                        let window_index = win_proj.region_index;
                         let drag = DraggedOverviewWindow {
                             window_id: win_id,
-                            source_workspace_id,
+                            source_workspace_id: Some(source_workspace_id),
                             title: win_title.clone(),
-                            icon_path: icon_path.clone(),
-                            region_index: window_index,
-                            region_count: window_count,
-                            top_radius: top_radius.into(),
-                            bottom_radius: bottom_radius.into(),
-                        };
-                        let icon_size = ((PREVIEW_WIDTH / window_count.max(1) as f32) - 24.)
-                            .clamp(30., APP_ICON_SIZE);
-                        let icon = app_icon(
                             icon_path,
-                            fallback_label,
-                            px(icon_size),
-                            scale_factor,
-                            theme.surface_container_highest,
-                            theme.on_surface,
-                        );
+                            region_index: window_index,
+                            region_count,
+                            top_radius,
+                            bottom_radius,
+                        };
                         div()
                             .id(ElementId::Name(SharedString::from(format!(
                                 "overview-window-{}",
-                                win.id
+                                win_id
                             ))))
                             .h_full()
                             .min_w(px(0.))
                             .flex_1()
-                            .flex()
-                            .items_center()
-                            .justify_center()
                             .rounded_tl(if window_index == 0 {
-                                top_radius
+                                top_radius_px
                             } else {
                                 inner_radius
                             })
                             .rounded_bl(if window_index == 0 {
-                                bottom_radius
+                                bottom_radius_px
                             } else {
                                 inner_radius
                             })
-                            .rounded_tr(if window_index + 1 == window_count {
-                                top_radius
+                            .rounded_tr(if window_index + 1 == region_count {
+                                top_radius_px
                             } else {
                                 inner_radius
                             })
-                            .rounded_br(if window_index + 1 == window_count {
-                                bottom_radius
+                            .rounded_br(if window_index + 1 == region_count {
+                                bottom_radius_px
                             } else {
                                 inner_radius
                             })
@@ -1004,8 +947,7 @@ impl Render for WorkspaceOverview {
                             .hover(|item| item.bg(theme.surface_container_high.opacity(0.12)))
                             .active(|item| item.bg(theme.surface_container_high.opacity(0.18)))
                             .role(Role::Button)
-                            .aria_label(format!("Focus or drag {}", win_title))
-                            .child(icon)
+                            .aria_label(format!("Focus or drag {}", win_proj.accessibility_label))
                             .when(is_interactive, |s| {
                                 s.on_click(cx.listener(move |view, _, _, cx| {
                                     cx.stop_propagation();
@@ -1023,46 +965,7 @@ impl Render for WorkspaceOverview {
                     .w(px(PREVIEW_WIDTH))
                     .h(px(PREVIEW_HEIGHT))
                     .relative()
-                    .rounded_tl(top_radius)
-                    .rounded_tr(top_radius)
-                    .rounded_bl(bottom_radius)
-                    .rounded_br(bottom_radius)
-                    .overflow_hidden()
-                    .flex_none()
-                    .bg(card_bg)
-                    .when_some(wallpaper_source, |preview, wallpaper_source| {
-                        preview.child(
-                            img(wallpaper_source)
-                                .absolute()
-                                .inset_0()
-                                .size_full()
-                                .rounded_tl(top_radius)
-                                .rounded_tr(top_radius)
-                                .rounded_bl(bottom_radius)
-                                .rounded_br(bottom_radius)
-                                .object_fit(ObjectFit::Cover),
-                        )
-                    })
-                    .child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .rounded_tl(top_radius)
-                            .rounded_tr(top_radius)
-                            .rounded_bl(bottom_radius)
-                            .rounded_br(bottom_radius)
-                            .bg(theme.scrim.opacity(if is_active { 0.24 } else { 0.26 })),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .rounded_tl(top_radius)
-                            .rounded_tr(top_radius)
-                            .rounded_bl(bottom_radius)
-                            .rounded_br(bottom_radius)
-                            .bg(theme.surface.opacity(0.08)),
-                    )
+                    .child(miniature)
                     .child(
                         div()
                             .absolute()
@@ -1071,36 +974,22 @@ impl Render for WorkspaceOverview {
                             .flex_row()
                             .items_center()
                             .justify_center()
-                            .children(window_icons),
+                            .children(window_overlays),
                     )
                     .when(is_drag_target, |preview| {
                         preview.child(
                             div()
                                 .absolute()
                                 .inset_0()
-                                .rounded_tl(top_radius)
-                                .rounded_tr(top_radius)
-                                .rounded_bl(bottom_radius)
-                                .rounded_br(bottom_radius)
-                                .bg(theme.primary.opacity(0.16)),
+                                .rounded_tl(top_radius_px)
+                                .rounded_tr(top_radius_px)
+                                .rounded_bl(bottom_radius_px)
+                                .rounded_br(bottom_radius_px)
+                                .bg(theme.primary.opacity(0.16))
+                                .border_2()
+                                .border_color(theme.primary),
                         )
-                    })
-                    .child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .rounded_tl(top_radius)
-                            .rounded_tr(top_radius)
-                            .rounded_bl(bottom_radius)
-                            .rounded_br(bottom_radius)
-                            .border_1()
-                            .when(is_active || is_drag_target, |outline| outline.border_2())
-                            .border_color(if is_active || is_drag_target {
-                                theme.primary
-                            } else {
-                                border_color.opacity(0.18)
-                            }),
-                    );
+                    });
 
                 preview
                     .id(ElementId::Name(SharedString::from(format!(
@@ -1111,7 +1000,7 @@ impl Render for WorkspaceOverview {
                     .when(is_drag_target, |preview| preview.shadow_md())
                     .cursor_pointer()
                     .role(Role::Button)
-                    .aria_label(format!("Focus workspace {}", ws_title))
+                    .aria_label(model.accessibility_label().to_string())
                     .when(is_interactive, |preview| {
                         preview
                             .on_click(cx.listener(move |view, _, _, cx| {
@@ -1778,8 +1667,7 @@ mod tests {
         assert_eq!(index.get("example-terminal"), Some(&icon_path));
 
         let mut overview = WorkspaceOverview::new_offline();
-        overview
-            .app_icons
+        Arc::make_mut(&mut overview.app_icons)
             .insert("jetbrains-rustrover-install-id".into(), icon_path.clone());
         assert_eq!(
             overview.icon_path_for_app(Some("jetbrains-rustrover")),
