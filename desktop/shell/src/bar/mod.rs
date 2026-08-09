@@ -1,3 +1,4 @@
+pub(crate) mod cards;
 pub mod ext_view_adapter;
 pub mod geometry;
 pub mod reconciliation;

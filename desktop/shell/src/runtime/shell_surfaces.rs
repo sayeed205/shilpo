@@ -1,3 +1,5 @@
+use crate::bar::cards::adapter::CardCoordinator;
+use crate::bar::cards::model::CardRequest;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -233,6 +235,8 @@ pub enum ActiveSurfaceKind {
     ExtensionSurface(String),
     ExtensionPanel(CanonicalId),
     Capture,
+    CardBandPersistent(DisplayId),
+    CardBandPreview(DisplayId),
 }
 
 /// Semantic requests accepted by the shell surface owner. Callers do not
@@ -294,6 +298,12 @@ pub struct SurfaceSnapshot {
     pub extension_surface_count: usize,
     pub extension_lifecycle: SurfaceLifecycle,
     pub capture_lifecycle: SurfaceLifecycle,
+    /// Lifecycle of the persistent (click) card channel.
+    pub persistent_card_lifecycle: SurfaceLifecycle,
+    /// Lifecycle of the preview (hover) card channel.
+    pub preview_card_lifecycle: SurfaceLifecycle,
+    /// Whether the card coordinator is holding bar visibility.
+    pub card_visibility_hold: bool,
 }
 
 /// The set of shell windows that must be torn down on shutdown.
@@ -323,6 +333,8 @@ pub(crate) enum WindowClosedOutcome {
 /// Window handles and surface state are private; the shell interacts with the
 /// manager exclusively through the method surface below.
 pub struct ShellSurfaces {
+    /// Two-channel card coordinator (hover + persistent).
+    pub(crate) card_coordinator: CardCoordinator,
     bars: HashMap<DisplayId, (WindowHandle<BarView>, BarSpec)>,
     last_bar_specs: Vec<(BarGeometry, bool)>,
     bar_state: BarState,
@@ -611,6 +623,9 @@ impl ShellSurfaces {
                 extension_surface_count: surfaces.extension_surfaces.len(),
                 extension_lifecycle: surfaces.extension_lifecycle,
                 capture_lifecycle: surfaces.capture_lifecycle,
+                persistent_card_lifecycle: CardCoordinator::persistent_lifecycle(cx),
+                preview_card_lifecycle: CardCoordinator::preview_lifecycle(cx),
+                card_visibility_hold: CardCoordinator::holds_bar_visibility(cx),
             }
         } else {
             SurfaceSnapshot::default()
@@ -622,6 +637,7 @@ impl ShellSurfaces {
         latest_snapshot: Arc<CompositorSnapshot>,
     ) -> Self {
         let mut manager = Self {
+            card_coordinator: CardCoordinator::default(),
             bars: HashMap::new(),
             last_bar_specs: Vec::new(),
             bar_state: BarState::Starting,
@@ -676,6 +692,16 @@ impl ShellSurfaces {
         if self.capture.is_some() {
             surfaces.push(ActiveSurfaceKind::Capture);
         }
+        surfaces.extend(
+            self.card_coordinator
+                .persistent_band_displays()
+                .map(ActiveSurfaceKind::CardBandPersistent),
+        );
+        surfaces.extend(
+            self.card_coordinator
+                .preview_band_displays()
+                .map(ActiveSurfaceKind::CardBandPreview),
+        );
         surfaces
     }
 
@@ -1032,10 +1058,26 @@ impl ShellSurfaces {
         let mut mounted = false;
         for op in ops {
             match op {
-                ReconciliationOp::Create(spec) | ReconciliationOp::Recreate(spec) => {
+                ReconciliationOp::Create(spec) => {
+                    mounted |= Self::open_bar_with_spec(cx, spec);
+                }
+                ReconciliationOp::Recreate(spec) => {
+                    let display_id = spec.display_id;
+                    CardCoordinator::dispatch(cx, CardRequest::DisplayRemoved { display_id });
+                    CardCoordinator::destroy_bands_for_display(cx, display_id);
+                    if let Some((handle, _)) = cx
+                        .global_mut::<ShellRuntime>()
+                        .shell_surfaces_mut()
+                        .bars
+                        .remove(&display_id)
+                    {
+                        let _ = handle.update(cx, |_, window, _| window.remove_window());
+                    }
                     mounted |= Self::open_bar_with_spec(cx, spec);
                 }
                 ReconciliationOp::Remove(display_id) => {
+                    CardCoordinator::dispatch(cx, CardRequest::DisplayRemoved { display_id });
+                    CardCoordinator::destroy_bands_for_display(cx, display_id);
                     if let Some((handle, _)) = cx
                         .global_mut::<ShellRuntime>()
                         .shell_surfaces_mut()
@@ -1074,6 +1116,8 @@ impl ShellSurfaces {
         if !cx.global::<ShellRuntime>().shell_surfaces().bars_are_open() {
             Self::reconcile_bars(cx);
         } else {
+            // Dismiss any open cards before hiding the bar.
+            CardCoordinator::dispatch(cx, CardRequest::BarClosed);
             let old_bars =
                 std::mem::take(&mut cx.global_mut::<ShellRuntime>().shell_surfaces_mut().bars);
             for (_, (handle, _)) in old_bars {
@@ -1384,6 +1428,8 @@ impl ShellSurfaces {
     /// Overview is an exclusive focused surface. Bars remain mounted, while
     /// transient overlays that could compete for focus are dismissed first.
     fn close_overview_competitors(cx: &mut App) {
+        // Dismiss any open cards before Overview opens.
+        CardCoordinator::dispatch(cx, CardRequest::OverviewOpened);
         let (notification, osd, panel) = {
             let surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
             (
