@@ -30,3 +30,4 @@ pub(crate) mod battery_card;
 pub(crate) mod model;
 pub(crate) mod placement;
 pub(crate) mod provider;
+pub(crate) mod workspace_card;

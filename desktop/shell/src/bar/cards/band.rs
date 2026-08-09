@@ -19,7 +19,7 @@ use shilpo_config::BarPosition;
 use shilpo_ui::ActiveTheme;
 
 use super::{
-    model::{CardChannel, CardDismissReason, CardOwnerId, CardRequest},
+    model::{CardChannel, CardDismissReason, CardRequest, CardSourceId},
     provider::CardContentRenderFn,
 };
 
@@ -43,7 +43,18 @@ enum AnimPhase {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+enum MovePhase {
+    #[default]
+    Idle,
+    Moving {
+        from: Bounds<Pixels>,
+        progress: f32,
+    },
+}
+
 pub(super) const ANIM_DURATION: std::time::Duration = std::time::Duration::from_millis(250);
+const RETARGET_DURATION_MS: f32 = 200.0;
 
 /// Owns one edge-band layer-shell surface rendering context.
 ///
@@ -64,8 +75,9 @@ pub(crate) struct CardBandView {
     pub reduced_motion: bool,
     /// Animation state.
     anim: AnimPhase,
-    /// Owner id for diagnostics in key handlers.
-    pub owner_id: Option<CardOwnerId>,
+    move_phase: MovePhase,
+    /// Source id for diagnostics and pointer bridge.
+    pub source: Option<CardSourceId>,
     /// Which display (for diagnostics).
     pub _surface_id: SharedString,
     _subscriptions: Vec<Subscription>,
@@ -89,7 +101,8 @@ impl CardBandView {
             focus_handle,
             reduced_motion,
             anim: AnimPhase::Hidden,
-            owner_id: None,
+            move_phase: MovePhase::Idle,
+            source: None,
             _surface_id: surface_id.into(),
             _subscriptions: Vec::new(),
             animation_task: None,
@@ -142,12 +155,12 @@ impl CardBandView {
     pub fn show(
         &mut self,
         card_local_bounds: Bounds<Pixels>,
-        owner_id: CardOwnerId,
+        source: CardSourceId,
         content: CardContentRenderFn,
         cx: &mut Context<Self>,
     ) {
         self.card_local_bounds = Some(card_local_bounds);
-        self.owner_id = Some(owner_id);
+        self.source = Some(source);
         self.content = Some(content);
         self.anim = if self.reduced_motion {
             AnimPhase::Visible
@@ -175,6 +188,30 @@ impl CardBandView {
     /// Move an already-visible card without restarting its entrance animation.
     pub fn reposition(&mut self, card_local_bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
         self.card_local_bounds = Some(card_local_bounds);
+        self.move_phase = MovePhase::Idle;
+        cx.notify();
+    }
+
+    /// Replace a visible preview's source/content and animate it to the new anchor.
+    pub fn retarget(
+        &mut self,
+        card_local_bounds: Bounds<Pixels>,
+        source: CardSourceId,
+        content: CardContentRenderFn,
+        cx: &mut Context<Self>,
+    ) {
+        let previous_bounds = self.current_card_bounds();
+        self.card_local_bounds = Some(card_local_bounds);
+        self.source = Some(source);
+        self.content = Some(content);
+        self.move_phase = match previous_bounds {
+            Some(from) if !self.reduced_motion && from != card_local_bounds => MovePhase::Moving {
+                from,
+                progress: 0.0,
+            },
+            _ => MovePhase::Idle,
+        };
+        self.start_animation_task(cx);
         cx.notify();
     }
 
@@ -182,8 +219,9 @@ impl CardBandView {
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.content = None;
         self.card_local_bounds = None;
-        self.owner_id = None;
+        self.source = None;
         self.anim = AnimPhase::Hidden;
+        self.move_phase = MovePhase::Idle;
         cx.notify();
     }
 
@@ -211,7 +249,7 @@ impl CardBandView {
                         matches!(
                             this.anim,
                             AnimPhase::Entering { .. } | AnimPhase::Exiting { .. }
-                        )
+                        ) || matches!(this.move_phase, MovePhase::Moving { .. })
                     })
                     .unwrap_or(false);
                 if !keep_running {
@@ -243,6 +281,18 @@ impl CardBandView {
             }
             _ => {}
         }
+        if let MovePhase::Moving { from, progress } = self.move_phase {
+            let next = (progress + elapsed_ms / RETARGET_DURATION_MS).min(1.0);
+            self.move_phase = if next >= 1.0 {
+                MovePhase::Idle
+            } else {
+                MovePhase::Moving {
+                    from,
+                    progress: next,
+                }
+            };
+            cx.notify();
+        }
     }
 
     fn anim_progress(&self) -> f32 {
@@ -251,6 +301,25 @@ impl CardBandView {
             AnimPhase::Entering { progress } => progress,
             AnimPhase::Visible => 1.0,
             AnimPhase::Exiting { progress } => progress,
+        }
+    }
+
+    fn current_card_bounds(&self) -> Option<Bounds<Pixels>> {
+        let target = self.card_local_bounds?;
+        match self.move_phase {
+            MovePhase::Idle => Some(target),
+            MovePhase::Moving { from, progress } => {
+                let eased = shilpo_ui::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0)(progress);
+                Some(Bounds {
+                    origin: Point {
+                        x: px(from.origin.x.as_f32()
+                            + (target.origin.x.as_f32() - from.origin.x.as_f32()) * eased),
+                        y: px(from.origin.y.as_f32()
+                            + (target.origin.y.as_f32() - from.origin.y.as_f32()) * eased),
+                    },
+                    size: target.size,
+                })
+            }
         }
     }
 
@@ -299,7 +368,7 @@ impl Render for CardBandView {
         let raw_progress = self.anim_progress();
         let progress = shilpo_ui::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0)(raw_progress);
         let has_content = self.content.is_some();
-        let card_bounds = self.card_local_bounds;
+        let card_bounds = self.current_card_bounds();
 
         // Build the band root: full-surface transparent container.
         let root = div()
@@ -335,8 +404,8 @@ impl Render for CardBandView {
 
         // Escape key handler for persistent channel.
         let channel = self.channel;
-        let owner_for_escape = self.owner_id.clone();
-        let owner_for_hover = self.owner_id.clone();
+        let source_for_escape = self.source.clone();
+        let source_for_hover = self.source.clone();
 
         let card_shell = div()
             .id("card-shell")
@@ -355,11 +424,11 @@ impl Render for CardBandView {
             .when_some(card_content, |this, content| this.child(content))
             .when(channel == CardChannel::Preview, |this| {
                 this.on_hover(move |hovered, _, cx| {
-                    if let Some(owner) = owner_for_hover.clone() {
+                    if let Some(source) = source_for_hover.clone() {
                         let request = if *hovered {
-                            CardRequest::PreviewEnter { owner }
+                            CardRequest::PreviewEnter { source }
                         } else {
-                            CardRequest::PreviewLeave { owner }
+                            CardRequest::PreviewLeave { source }
                         };
                         super::adapter::CardCoordinator::dispatch(cx, request);
                     }
@@ -368,7 +437,7 @@ impl Render for CardBandView {
             .when(channel == CardChannel::Persistent, |this| {
                 this.on_key_down(move |event, _, cx| {
                     if event.keystroke.key == "escape"
-                        && let Some(ref owner) = owner_for_escape
+                        && let Some(ref source) = source_for_escape
                     {
                         super::adapter::CardCoordinator::dispatch(
                             cx,
@@ -378,7 +447,7 @@ impl Render for CardBandView {
                             },
                         );
                         tracing::debug!(
-                            owner = %owner,
+                            source = %source,
                             "card dismissed via Escape key"
                         );
                     }

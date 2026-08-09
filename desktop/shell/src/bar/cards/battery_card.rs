@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    AnyElement, App, Bounds, DisplayId, InteractiveElement, IntoElement, ParentElement, Pixels,
+    AnyElement, App, InteractiveElement, IntoElement, ParentElement, Pixels, Size,
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 use shilpo_device_protocol::{
@@ -12,7 +12,7 @@ use shilpo_services::ServiceLifecycle;
 use shilpo_ui::{ActiveTheme, Icon, IconName, h_flex, v_flex};
 
 use super::{
-    model::{CardCapabilities, CardChannel, CardOwnerId, CardSizeTier},
+    model::{CardCapabilities, CardChannel, CardOwnerId, CardSourceId},
     provider::CardProvider,
 };
 use crate::runtime::ShellRuntime;
@@ -42,17 +42,22 @@ impl CardProvider for BatteryCardProvider {
         }
     }
 
-    fn size_tier(&self) -> CardSizeTier {
-        CardSizeTier::WideCompact
-    }
-
-    fn anchor_bounds(&self, _cx: &App) -> Option<(Bounds<Pixels>, DisplayId)> {
-        None
+    fn preferred_size(
+        &self,
+        _channel: CardChannel,
+        _source: &CardSourceId,
+        _cx: &App,
+    ) -> Size<Pixels> {
+        Size {
+            width: px(360.0),
+            height: px(280.0),
+        }
     }
 
     fn render_content(
         &self,
         _channel: CardChannel,
+        _source: &CardSourceId,
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
@@ -566,7 +571,6 @@ mod tests {
         assert_eq!(provider.owner_id(), CardOwnerId::new("battery"));
         assert!(provider.capabilities().click);
         assert!(!provider.capabilities().hover);
-        assert_eq!(provider.size_tier(), CardSizeTier::WideCompact);
     }
 
     #[test]

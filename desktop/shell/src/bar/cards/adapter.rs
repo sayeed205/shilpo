@@ -19,12 +19,12 @@ use gpui::{
 };
 use shilpo_config::BarPosition;
 
-use crate::runtime::ShellRuntime;
+use crate::runtime::{ShellRuntime, ShellSurfaces};
 
 use super::{
     band::CardBandView,
     model::{
-        CardChannel, CardDiagnostic, CardDismissReason, CardEffect, CardOwnerId, CardRequest,
+        CardChannel, CardDismissReason, CardEffect, CardOwnerId, CardRequest, CardSourceId,
         CardSourceState, CardState, TimerKind,
     },
     placement::{
@@ -59,10 +59,17 @@ pub struct CardCoordinator {
     prior_focused_window: Option<u64>,
 }
 
+#[derive(Clone, Copy)]
+enum PositionMode {
+    Show,
+    Reposition,
+    Retarget,
+}
+
 impl CardCoordinator {
     // ── Public API ────────────────────────────────────────────────
 
-    /// Register a built-in card provider.  Replaces any previously registered
+    /// Register a built-in card provider. Replaces any previously registered
     /// provider with the same `owner_id`.
     #[allow(dead_code)]
     pub(crate) fn register_provider(cx: &mut App, provider: Arc<dyn CardProvider>) {
@@ -81,7 +88,7 @@ impl CardCoordinator {
         self.providers.insert(owner_id, provider);
     }
 
-    /// Remove a provider.  Dispatches `OwnerRemoved` dismiss into the state
+    /// Remove a provider. Dispatches `OwnerRemoved` dismiss into the state
     /// machine to cleanly close any open card for that owner.
     #[allow(dead_code)]
     pub(crate) fn remove_provider(cx: &mut App, owner_id: &CardOwnerId) {
@@ -109,6 +116,11 @@ impl CardCoordinator {
             return;
         }
 
+        let refresh_source_state = !matches!(
+            &request,
+            CardRequest::AnchorUpdate { .. } | CardRequest::PlacementUpdated { .. }
+        );
+
         // Run the pure reducer.
         let effects = {
             let coordinator = &mut cx
@@ -120,16 +132,19 @@ impl CardCoordinator {
 
         // Interpret effects one by one.
         Self::apply_effects(cx, effects);
+        if refresh_source_state {
+            ShellSurfaces::refresh_bars(cx);
+        }
     }
 
     fn request_is_supported(cx: &App, request: &CardRequest) -> bool {
         let (owner, hover, click) = match request {
-            CardRequest::SourceEnter { owner }
-            | CardRequest::SourceLeave { owner }
-            | CardRequest::PreviewEnter { owner }
-            | CardRequest::PreviewLeave { owner } => (owner, true, false),
-            CardRequest::PersistentToggle { owner }
-            | CardRequest::PersistentToggleAt { owner, .. } => (owner, false, true),
+            CardRequest::SourceEnter { source }
+            | CardRequest::SourceLeave { source }
+            | CardRequest::PreviewEnter { source }
+            | CardRequest::PreviewLeave { source } => (&source.owner, true, false),
+            CardRequest::PersistentToggle { source }
+            | CardRequest::PersistentToggleAt { source, .. } => (&source.owner, false, true),
             _ => return true,
         };
         let Some(provider) = cx
@@ -145,9 +160,9 @@ impl CardCoordinator {
         (!hover || capabilities.hover) && (!click || capabilities.click)
     }
 
-    /// Query the source state for a given owner.
+    /// Query the source state for a given source.
     #[allow(dead_code)]
-    pub(crate) fn source_state(cx: &App, owner: &CardOwnerId) -> CardSourceState {
+    pub(crate) fn source_state(cx: &App, source: &CardSourceId) -> CardSourceState {
         if !cx.has_global::<ShellRuntime>() {
             return CardSourceState::Idle;
         }
@@ -155,7 +170,7 @@ impl CardCoordinator {
             .shell_surfaces()
             .card_coordinator
             .state
-            .source_state(owner)
+            .source_state(source)
     }
 
     /// Whether the card system currently holds bar visibility.
@@ -180,6 +195,32 @@ impl CardCoordinator {
 
     /// Re-render any open card owned by `owner` after its authoritative data changes.
     pub(crate) fn refresh_owner(cx: &mut App, owner: &CardOwnerId) {
+        let (provider, candidate_sources) = {
+            let coordinator = &cx
+                .global::<ShellRuntime>()
+                .shell_surfaces()
+                .card_coordinator;
+            let provider = coordinator.providers.get(owner).cloned();
+            let sources = [
+                coordinator.state.persistent.source.clone(),
+                coordinator.state.preview.source.clone(),
+                coordinator.state.preview.pending_open_source.clone(),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|source| &source.owner == owner)
+            .collect::<Vec<_>>();
+            (provider, sources)
+        };
+
+        if let Some(provider) = provider {
+            for source in candidate_sources {
+                if !provider.source_available(&source, cx) {
+                    Self::dispatch(cx, CardRequest::AnchorRemoved { source });
+                }
+            }
+        }
+
         let handles = {
             let coordinator = &cx
                 .global::<ShellRuntime>()
@@ -192,7 +233,7 @@ impl CardCoordinator {
                         CardChannel::Persistent => &coordinator.state.persistent,
                         CardChannel::Preview => &coordinator.state.preview,
                     };
-                    if slot.owner.as_ref() != Some(owner) || !slot.is_open() {
+                    if slot.source.as_ref().map(|s| &s.owner) != Some(owner) || !slot.is_open() {
                         return None;
                     }
                     let display = slot.display_id?;
@@ -206,6 +247,55 @@ impl CardCoordinator {
         };
         for handle in handles {
             let _ = handle.update(cx, |_, _, cx| cx.notify());
+        }
+    }
+
+    pub(crate) fn destroy_bands_for_display(cx: &mut App, display_id: DisplayId) {
+        Self::dispatch(cx, CardRequest::DisplayRemoved { display_id });
+        let (persistent, preview) = {
+            let coordinator = &mut cx
+                .global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .card_coordinator;
+            (
+                coordinator.persistent_bands.remove(&display_id),
+                coordinator.preview_bands.remove(&display_id),
+            )
+        };
+        for handle in persistent.into_iter().chain(preview) {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            tracing::debug!(display = ?display_id, "card band destroyed");
+        }
+    }
+
+    pub(crate) fn forget_window(cx: &mut App, window_id: gpui::WindowId) {
+        let coordinator = &mut cx
+            .global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .card_coordinator;
+        coordinator
+            .persistent_bands
+            .retain(|_, handle| handle.window_id() != window_id);
+        coordinator
+            .preview_bands
+            .retain(|_, handle| handle.window_id() != window_id);
+    }
+
+    pub(crate) fn destroy_all_bands(cx: &mut App) {
+        Self::dispatch(cx, CardRequest::Shutdown);
+        let (persistent, preview) = {
+            let coordinator = &mut cx
+                .global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .card_coordinator;
+            (
+                std::mem::take(&mut coordinator.persistent_bands),
+                std::mem::take(&mut coordinator.preview_bands),
+            )
+        };
+        for (display_id, handle) in persistent.into_iter().chain(preview) {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            tracing::debug!(display = ?display_id, "card band destroyed on shutdown");
         }
     }
 
@@ -266,16 +356,16 @@ impl CardCoordinator {
         match effect {
             CardEffect::OpenChannel {
                 channel,
-                owner,
+                source,
                 generation,
             } => {
                 tracing::debug!(
-                    owner = %owner,
+                    source = %source,
                     channel = ?channel,
                     generation,
                     "card channel opening"
                 );
-                Self::open_channel(cx, channel, owner, generation);
+                Self::open_channel(cx, channel, source, generation);
             }
 
             CardEffect::CloseChannel {
@@ -293,96 +383,85 @@ impl CardCoordinator {
                 Self::schedule_close_completion(cx, channel, display_id, generation);
             }
 
-            CardEffect::RepositionChannel { channel, owner } => {
-                Self::position_channel(cx, channel, owner, false);
+            CardEffect::RepositionChannel { channel, source } => {
+                Self::position_channel(cx, channel, source, PositionMode::Reposition);
+            }
+
+            CardEffect::RetargetChannel {
+                channel, source, ..
+            } => {
+                Self::position_channel(cx, channel, source, PositionMode::Retarget);
             }
 
             CardEffect::StartTimer { kind, generation } => {
-                let delay_ms = match kind {
-                    TimerKind::PreviewOpen => 350,
-                    TimerKind::PreviewClose => 200,
-                };
-                let delay = std::time::Duration::from_millis(delay_ms);
-                tracing::debug!(
-                    kind = ?kind,
-                    generation,
-                    delay_ms,
-                    "card timer started"
-                );
-
-                let task = cx.spawn(async move |cx| {
-                    cx.background_executor().timer(delay).await;
-                    cx.update(|cx| match kind {
-                        TimerKind::PreviewOpen => {
-                            Self::dispatch(cx, CardRequest::PreviewOpenTimer { generation })
-                        }
-                        TimerKind::PreviewClose => {
-                            Self::dispatch(cx, CardRequest::PreviewCloseTimer { generation })
-                        }
-                    });
-                });
-
-                let coordinator = &mut cx
-                    .global_mut::<ShellRuntime>()
-                    .shell_surfaces_mut()
-                    .card_coordinator;
-                match kind {
-                    TimerKind::PreviewOpen => coordinator.preview_open_task = Some(task),
-                    TimerKind::PreviewClose => coordinator.preview_close_task = Some(task),
-                }
+                Self::start_timer(cx, kind, generation);
             }
 
             CardEffect::CancelTimers { kind } => {
-                tracing::debug!(kind = ?kind, "card timer cancelled");
-                let coordinator = &mut cx
-                    .global_mut::<ShellRuntime>()
-                    .shell_surfaces_mut()
-                    .card_coordinator;
-                match kind {
-                    TimerKind::PreviewOpen => coordinator.preview_open_task = None,
-                    TimerKind::PreviewClose => coordinator.preview_close_task = None,
-                }
+                Self::cancel_timers(cx, kind);
             }
 
             CardEffect::CaptureFocus => {
-                let focused =
-                    crate::runtime::shell_surfaces::ShellSurfaces::compositor_snapshot(cx)
-                        .focused_window_id;
-                cx.global_mut::<ShellRuntime>()
-                    .shell_surfaces_mut()
-                    .card_coordinator
-                    .prior_focused_window = focused;
-                tracing::debug!(
-                    focused_window = ?focused,
-                    "card coordinator captured prior focus"
-                );
+                Self::capture_focus(cx);
             }
 
             CardEffect::RestoreFocus => {
-                let prior = cx
-                    .global_mut::<ShellRuntime>()
-                    .shell_surfaces_mut()
-                    .card_coordinator
-                    .prior_focused_window
-                    .take();
-                if let Some(window_id) = prior {
-                    tracing::debug!(window_id, "card coordinator restoring prior focus");
-                    let _ = crate::runtime::shell_surfaces::ShellSurfaces::overview_focus_window(
-                        cx, window_id,
-                    );
-                }
+                Self::restore_focus(cx);
             }
 
             CardEffect::UpdateBarHold { hold } => {
-                // Infrastructure state — a future auto-hide controller will consume this.
-                tracing::debug!(hold, "card coordinator bar visibility hold updated");
-                // The hold value is already reflected in `CardState::bar_visibility_hold`.
-                // The coordinator exposes it via `holds_bar_visibility()`.
+                Self::update_bar_hold(cx, hold);
             }
 
             CardEffect::Diagnostic(diag) => {
-                Self::emit_diagnostic(diag);
+                tracing::debug!(
+                    kind = ?diag.kind,
+                    source = ?diag.source.as_ref().map(|s| s.to_string()),
+                    channel = ?diag.channel,
+                    generation = diag.generation,
+                    "card diagnostic"
+                );
             }
+        }
+    }
+
+    // ── Timer management ──────────────────────────────────────────
+
+    fn start_timer(cx: &mut App, kind: TimerKind, generation: u64) {
+        let duration = match kind {
+            TimerKind::PreviewOpen => std::time::Duration::from_millis(350),
+            TimerKind::PreviewClose => std::time::Duration::from_millis(200),
+        };
+
+        let task = cx.spawn(async move |cx| {
+            cx.background_executor().timer(duration).await;
+            cx.update(move |cx| {
+                let request = match kind {
+                    TimerKind::PreviewOpen => CardRequest::PreviewOpenTimer { generation },
+                    TimerKind::PreviewClose => CardRequest::PreviewCloseTimer { generation },
+                };
+                Self::dispatch(cx, request);
+            });
+        });
+
+        let coordinator = &mut cx
+            .global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .card_coordinator;
+        match kind {
+            TimerKind::PreviewOpen => coordinator.preview_open_task = Some(task),
+            TimerKind::PreviewClose => coordinator.preview_close_task = Some(task),
+        }
+    }
+
+    fn cancel_timers(cx: &mut App, kind: TimerKind) {
+        let coordinator = &mut cx
+            .global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .card_coordinator;
+        match kind {
+            TimerKind::PreviewOpen => coordinator.preview_open_task = None,
+            TimerKind::PreviewClose => coordinator.preview_close_task = None,
         }
     }
 
@@ -419,6 +498,7 @@ impl CardCoordinator {
                 );
             });
         });
+
         let coordinator = &mut cx
             .global_mut::<ShellRuntime>()
             .shell_surfaces_mut()
@@ -472,221 +552,39 @@ impl CardCoordinator {
         }
     }
 
-    // ── Channel surface management ────────────────────────────────
+    // ── Focus management ──────────────────────────────────────────
 
-    fn open_channel(cx: &mut App, channel: CardChannel, owner: CardOwnerId, _generation: u64) {
-        Self::position_channel(cx, channel, owner, true);
+    fn capture_focus(cx: &mut App) {
+        let current = ShellSurfaces::compositor_snapshot(cx).focused_window_id;
+        tracing::debug!(focused_window_id = ?current, "capturing focus for persistent card");
+        cx.global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .card_coordinator
+            .prior_focused_window = current;
     }
 
-    fn position_channel(cx: &mut App, channel: CardChannel, owner: CardOwnerId, animate: bool) {
-        // Find the provider.
-        let provider = {
-            let coordinator = &cx
-                .global::<ShellRuntime>()
-                .shell_surfaces()
-                .card_coordinator;
-            coordinator.providers.get(&owner).map(|_| ())
-        };
-        if provider.is_none() {
-            tracing::warn!(owner = %owner, "card open requested but provider not found");
-            Self::dismiss_failed_open(cx, channel);
-            return;
-        }
+    fn restore_focus(cx: &mut App) {
+        let prior = cx
+            .global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .card_coordinator
+            .prior_focused_window
+            .take();
 
-        // Get anchor bounds and placement info from the provider.
-        let (provider_anchor, size_tier) = {
-            let coordinator = &cx
-                .global::<ShellRuntime>()
-                .shell_surfaces()
-                .card_coordinator;
-            if let Some(p) = coordinator.providers.get(&owner) {
-                let anchor = p.anchor_bounds(cx);
-                let tier = p.size_tier();
-                (anchor, tier)
-            } else {
-                return;
-            }
-        };
-
-        let state_anchor = {
-            let state = &cx
-                .global::<ShellRuntime>()
-                .shell_surfaces()
-                .card_coordinator
-                .state;
-            let slot = match channel {
-                CardChannel::Persistent => &state.persistent,
-                CardChannel::Preview => &state.preview,
-            };
-            (slot.owner.as_ref() == Some(&owner))
-                .then(|| slot.anchor_bounds.zip(slot.display_id))
-                .flatten()
-        };
-        let Some((anchor_bounds, display_id)) = state_anchor.or(provider_anchor) else {
-            tracing::warn!(owner = %owner, "card open: provider has no anchor bounds, skipping");
-            Self::dismiss_failed_open(cx, channel);
-            return;
-        };
-
-        // Get collision bounds (persistent card bounds when opening preview).
-        let collision_bounds: Option<Bounds<Pixels>> = if channel == CardChannel::Preview {
-            let persistent = &cx
-                .global::<ShellRuntime>()
-                .shell_surfaces()
-                .card_coordinator
-                .state
-                .persistent;
-            if persistent.is_open() && persistent.display_id == Some(display_id) {
-                persistent.card_bounds
-            } else {
-                None
-            }
+        if let Some(win_id) = prior {
+            tracing::debug!(win_id, "restoring focus after persistent card close");
+            let _ = ShellRuntime::dispatch_action(
+                cx,
+                crate::actions::ActionInvocation::FocusWindow(win_id),
+            );
         } else {
-            None
-        };
-
-        // Determine bar edge from config.
-        let bar_config = ShellRuntime::active_config(cx).bar;
-        let bar_edge = bar_config.position;
-        let floating_margin = if bar_config.style == shilpo_config::BarStyle::Float {
-            match bar_edge {
-                BarPosition::Top | BarPosition::Bottom => bar_config.margin.vertical as f32,
-                BarPosition::Left | BarPosition::Right => bar_config.margin.horizontal as f32,
-            }
-        } else {
-            0.0
-        };
-        let bar_thickness = px(bar_config.height as f32 + floating_margin);
-
-        // Get monitor bounds for this display.
-        let monitor_bounds = cx
-            .displays()
-            .into_iter()
-            .find(|d| d.id() == display_id)
-            .map(|d| d.bounds())
-            .unwrap_or_else(|| {
-                gpui::Bounds::new(
-                    gpui::point(px(0.0), px(0.0)),
-                    gpui::size(px(1920.0), px(1080.0)),
-                )
-            });
-
-        let requested_size = gpui::size(px(size_tier.max_width()), px(size_tier.max_height()));
-
-        let placement_input = PlacementInput {
-            monitor_bounds,
-            bar_edge,
-            bar_thickness,
-            source_bounds: anchor_bounds,
-            requested_size,
-            collision_bounds,
-        };
-
-        let placement = compute_placement(&placement_input);
-
-        match placement {
-            PlacementResult::Suppressed { reason } => {
-                tracing::debug!(
-                    owner = %owner,
-                    channel = ?channel,
-                    reason,
-                    "card placement suppressed"
-                );
-                Self::dismiss_failed_open(cx, channel);
-            }
-            PlacementResult::Placed {
-                card_bounds,
-                band_geometry,
-            } => {
-                let band_geometry = if channel == CardChannel::Persistent {
-                    compute_persistent_band_geometry(&placement_input)
-                } else {
-                    band_geometry
-                };
-                // Ensure band surface exists.
-                let Some(band_handle) =
-                    Self::ensure_band(cx, channel, display_id, &band_geometry, bar_edge)
-                else {
-                    Self::dismiss_failed_open(cx, channel);
-                    return;
-                };
-
-                // Convert global card bounds to band-local (surface-local) coords.
-                let band_local_bounds = gpui::Bounds {
-                    origin: gpui::Point {
-                        x: card_bounds.origin.x - band_geometry.bounds.origin.x,
-                        y: card_bounds.origin.y - band_geometry.bounds.origin.y,
-                    },
-                    size: card_bounds.size,
-                };
-
-                tracing::debug!(
-                    owner = %owner,
-                    channel = ?channel,
-                    card_x = card_bounds.origin.x.as_f32(),
-                    card_y = card_bounds.origin.y.as_f32(),
-                    card_w = card_bounds.size.width.as_f32(),
-                    card_h = card_bounds.size.height.as_f32(),
-                    "card placement computed"
-                );
-
-                // Render content into band.
-                let owner_clone = owner.clone();
-                let _ = band_handle.update(cx, move |band, window, cx| {
-                    let provider = cx
-                        .global::<ShellRuntime>()
-                        .shell_surfaces()
-                        .card_coordinator
-                        .providers
-                        .get(&owner_clone)
-                        .map(|_| ()); // just check presence
-
-                    if provider.is_some() {
-                        let content_owner = owner_clone.clone();
-                        let ch = channel;
-                        let content_box: super::provider::CardContentRenderFn =
-                            Box::new(move |window, cx| {
-                                let provider = cx
-                                    .global::<ShellRuntime>()
-                                    .shell_surfaces()
-                                    .card_coordinator
-                                    .providers
-                                    .get(&content_owner)
-                                    .cloned();
-
-                                if let Some(provider) = provider {
-                                    provider.render_content(ch, window, cx)
-                                } else {
-                                    gpui::div().into_any_element()
-                                }
-                            });
-                        if animate {
-                            band.show(band_local_bounds, owner_clone, content_box, cx);
-                        } else {
-                            band.reposition(band_local_bounds, cx);
-                        }
-
-                        // Focus persistent bands.
-                        if channel == CardChannel::Persistent
-                            && let Some(ref handle) = band.focus_handle.clone()
-                        {
-                            window.activate_window();
-                            handle.focus(window, cx);
-                        }
-                    }
-                });
-
-                Self::dispatch(
-                    cx,
-                    CardRequest::PlacementUpdated {
-                        owner,
-                        channel,
-                        bounds: card_bounds,
-                        display_id,
-                    },
-                );
-            }
+            tracing::debug!("no prior focused window to restore");
         }
+    }
+
+    fn update_bar_hold(cx: &mut App, hold: bool) {
+        tracing::debug!(hold, "updating bar visibility hold from card system");
+        ShellSurfaces::refresh_bars(cx);
     }
 
     fn dismiss_failed_open(cx: &mut App, channel: CardChannel) {
@@ -732,8 +630,216 @@ impl CardCoordinator {
         }
     }
 
-    /// Ensure a band surface exists for the given display+channel, creating it
-    /// lazily if needed.  Returns the `WindowHandle<CardBandView>`.
+    // ── Channel surface management ────────────────────────────────
+
+    fn open_channel(cx: &mut App, channel: CardChannel, source: CardSourceId, _generation: u64) {
+        Self::position_channel(cx, channel, source, PositionMode::Show);
+    }
+
+    fn position_channel(
+        cx: &mut App,
+        channel: CardChannel,
+        source: CardSourceId,
+        mode: PositionMode,
+    ) {
+        let provider_exists = {
+            let coordinator = &cx
+                .global::<ShellRuntime>()
+                .shell_surfaces()
+                .card_coordinator;
+            coordinator.providers.contains_key(&source.owner)
+        };
+        if !provider_exists {
+            tracing::warn!(source = %source, "card open requested but provider not found");
+            Self::dismiss_failed_open(cx, channel);
+            return;
+        }
+
+        let (state_anchor, preferred_size) = {
+            let coordinator = &cx
+                .global::<ShellRuntime>()
+                .shell_surfaces()
+                .card_coordinator;
+            let provider = coordinator.providers.get(&source.owner);
+            let preferred = provider.map(|p| p.preferred_size(channel, &source, cx));
+            let slot = match channel {
+                CardChannel::Persistent => &coordinator.state.persistent,
+                CardChannel::Preview => &coordinator.state.preview,
+            };
+            let anchor = (slot.source.as_ref() == Some(&source))
+                .then(|| slot.anchor_bounds.zip(slot.display_id))
+                .flatten();
+            (anchor, preferred)
+        };
+
+        let Some((anchor_bounds, display_id)) = state_anchor else {
+            tracing::warn!(source = %source, "card open: source has no anchor bounds, skipping");
+            Self::dismiss_failed_open(cx, channel);
+            return;
+        };
+
+        let requested_size = preferred_size.unwrap_or_else(|| gpui::size(px(360.0), px(280.0)));
+
+        let collision_bounds: Option<Bounds<Pixels>> = if channel == CardChannel::Preview {
+            let persistent = &cx
+                .global::<ShellRuntime>()
+                .shell_surfaces()
+                .card_coordinator
+                .state
+                .persistent;
+            if persistent.is_open() && persistent.display_id == Some(display_id) {
+                persistent.card_bounds
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let bar_config = ShellRuntime::active_config(cx).bar;
+        let bar_edge = bar_config.position;
+        let floating_margin = if bar_config.style == shilpo_config::BarStyle::Float {
+            match bar_edge {
+                BarPosition::Top | BarPosition::Bottom => bar_config.margin.vertical as f32,
+                BarPosition::Left | BarPosition::Right => bar_config.margin.horizontal as f32,
+            }
+        } else {
+            0.0
+        };
+        let bar_thickness = px(bar_config.height as f32 + floating_margin);
+
+        let monitor_bounds = cx
+            .displays()
+            .into_iter()
+            .find(|d| d.id() == display_id)
+            .map(|d| d.bounds())
+            .unwrap_or_else(|| {
+                gpui::Bounds::new(
+                    gpui::point(px(0.0), px(0.0)),
+                    gpui::size(px(1920.0), px(1080.0)),
+                )
+            });
+
+        let placement_input = PlacementInput {
+            monitor_bounds,
+            bar_edge,
+            bar_thickness,
+            source_bounds: anchor_bounds,
+            requested_size,
+            collision_bounds,
+        };
+
+        let placement = compute_placement(&placement_input);
+
+        match placement {
+            PlacementResult::Suppressed { reason } => {
+                tracing::debug!(
+                    source = %source,
+                    channel = ?channel,
+                    reason,
+                    "card placement suppressed"
+                );
+                Self::dismiss_failed_open(cx, channel);
+            }
+            PlacementResult::Placed {
+                card_bounds,
+                band_geometry,
+            } => {
+                let band_geometry = if channel == CardChannel::Persistent {
+                    compute_persistent_band_geometry(&placement_input)
+                } else {
+                    band_geometry
+                };
+
+                let Some(band_handle) =
+                    Self::ensure_band(cx, channel, display_id, &band_geometry, bar_edge)
+                else {
+                    Self::dismiss_failed_open(cx, channel);
+                    return;
+                };
+
+                let band_local_bounds = gpui::Bounds {
+                    origin: gpui::Point {
+                        x: card_bounds.origin.x - band_geometry.bounds.origin.x,
+                        y: card_bounds.origin.y - band_geometry.bounds.origin.y,
+                    },
+                    size: card_bounds.size,
+                };
+
+                tracing::debug!(
+                    source = %source,
+                    channel = ?channel,
+                    card_x = card_bounds.origin.x.as_f32(),
+                    card_y = card_bounds.origin.y.as_f32(),
+                    card_w = card_bounds.size.width.as_f32(),
+                    card_h = card_bounds.size.height.as_f32(),
+                    "card placement computed"
+                );
+
+                let source_clone = source.clone();
+                let _ = band_handle.update(cx, move |band, window, cx| {
+                    let provider = cx
+                        .global::<ShellRuntime>()
+                        .shell_surfaces()
+                        .card_coordinator
+                        .providers
+                        .get(&source_clone.owner)
+                        .map(|_| ());
+
+                    if provider.is_some() {
+                        let content_source = source_clone.clone();
+                        let ch = channel;
+                        let content_box: super::provider::CardContentRenderFn =
+                            Box::new(move |window, cx| {
+                                let provider = cx
+                                    .global::<ShellRuntime>()
+                                    .shell_surfaces()
+                                    .card_coordinator
+                                    .providers
+                                    .get(&content_source.owner)
+                                    .cloned();
+
+                                if let Some(provider) = provider {
+                                    provider.render_content(ch, &content_source, window, cx)
+                                } else {
+                                    gpui::div().into_any_element()
+                                }
+                            });
+                        match mode {
+                            PositionMode::Show => {
+                                band.show(band_local_bounds, source_clone.clone(), content_box, cx)
+                            }
+                            PositionMode::Reposition => band.reposition(band_local_bounds, cx),
+                            PositionMode::Retarget => band.retarget(
+                                band_local_bounds,
+                                source_clone.clone(),
+                                content_box,
+                                cx,
+                            ),
+                        }
+
+                        if channel == CardChannel::Persistent
+                            && let Some(ref handle) = band.focus_handle.clone()
+                        {
+                            window.activate_window();
+                            handle.focus(window, cx);
+                        }
+                    }
+                });
+
+                Self::dispatch(
+                    cx,
+                    CardRequest::PlacementUpdated {
+                        source,
+                        channel,
+                        bounds: card_bounds,
+                        display_id,
+                    },
+                );
+            }
+        }
+    }
+
     fn ensure_band(
         cx: &mut App,
         channel: CardChannel,
@@ -741,40 +847,30 @@ impl CardCoordinator {
         band_geometry: &BandGeometry,
         bar_edge: BarPosition,
     ) -> Option<WindowHandle<CardBandView>> {
-        // Check if band already exists.
-        {
+        let existing = {
             let coordinator = &cx
                 .global::<ShellRuntime>()
                 .shell_surfaces()
                 .card_coordinator;
-            let existing = match channel {
+            match channel {
                 CardChannel::Persistent => coordinator.persistent_bands.get(&display_id).copied(),
                 CardChannel::Preview => coordinator.preview_bands.get(&display_id).copied(),
-            };
-            if let Some(handle) = existing {
-                tracing::debug!(
-                    channel = ?channel,
-                    display = ?display_id,
-                    "card band reused"
-                );
-                return Some(handle);
             }
+        };
+
+        if let Some(handle) = existing {
+            tracing::debug!(channel = ?channel, display = ?display_id, "card band reused");
+            return Some(handle);
         }
 
-        // Create a new band surface.
-        tracing::debug!(
-            channel = ?channel,
-            display = ?display_id,
-            "card band created"
-        );
+        tracing::debug!(channel = ?channel, display = ?display_id, "card band created");
 
+        let reduced_motion = ShellRuntime::active_config(cx).theme.reduced_motion;
         let keyboard_interactivity = match channel {
             CardChannel::Persistent => KeyboardInteractivity::OnDemand,
             CardChannel::Preview => KeyboardInteractivity::None,
         };
-
-        let bg = &band_geometry.bounds;
-        let surface_bounds = Bounds::new(gpui::point(px(0.0), px(0.0)), bg.size);
+        let surface_bounds = Bounds::new(gpui::point(px(0.0), px(0.0)), band_geometry.bounds.size);
         let options = WindowOptions {
             titlebar: None,
             window_bounds: Some(WindowBounds::Windowed(surface_bounds)),
@@ -796,7 +892,6 @@ impl CardCoordinator {
                     }
                 ),
                 layer: Layer::Overlay,
-                // Anchor to bar edge — full span across the axis perpendicular to bar.
                 anchor: Self::band_anchor(bar_edge),
                 exclusive_edge: Some(match bar_edge {
                     BarPosition::Top => Anchor::TOP,
@@ -811,15 +906,9 @@ impl CardCoordinator {
             ..Default::default()
         };
 
-        let reduced_motion = ShellRuntime::active_config(cx).theme.reduced_motion;
-
-        let surface_id = format!("band-{:?}-{:?}", channel, display_id);
-
-        let handle = match cx.open_window(options, move |window, cx| {
-            let focus_handle = match channel {
-                CardChannel::Persistent => Some(cx.focus_handle()),
-                CardChannel::Preview => None,
-            };
+        let surface_id = format!("band-{channel:?}-{display_id:?}");
+        let band_view = match cx.open_window(options, move |window, cx| {
+            let focus_handle = (channel == CardChannel::Persistent).then(|| cx.focus_handle());
             let view = cx.new(|_| {
                 CardBandView::new(bar_edge, channel, reduced_motion, surface_id, focus_handle)
             });
@@ -832,88 +921,28 @@ impl CardCoordinator {
         }) {
             Ok(handle) => handle,
             Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    channel = ?channel,
-                    display = ?display_id,
-                    "failed to open card band surface"
-                );
+                tracing::warn!(error = %error, channel = ?channel, display = ?display_id, "failed to open card band surface");
                 return None;
             }
         };
 
-        {
-            let coordinator = &mut cx
-                .global_mut::<ShellRuntime>()
-                .shell_surfaces_mut()
-                .card_coordinator;
-            match channel {
-                CardChannel::Persistent => {
-                    coordinator.persistent_bands.insert(display_id, handle);
-                }
-                CardChannel::Preview => {
-                    coordinator.preview_bands.insert(display_id, handle);
-                }
-            }
-        }
-
-        Some(handle)
-    }
-
-    /// Destroy all band surfaces for a given display (called on `DisplayRemoved`).
-    #[allow(dead_code)]
-    pub(crate) fn destroy_bands_for_display(cx: &mut App, display_id: DisplayId) {
-        let (persistent, preview) = {
-            let coordinator = &mut cx
-                .global_mut::<ShellRuntime>()
-                .shell_surfaces_mut()
-                .card_coordinator;
-            (
-                coordinator.persistent_bands.remove(&display_id),
-                coordinator.preview_bands.remove(&display_id),
-            )
-        };
-        for handle in persistent.into_iter().chain(preview) {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
-            tracing::debug!(display = ?display_id, "card band destroyed");
-        }
-    }
-
-    /// Destroy all band surfaces (called on shutdown).
-    pub(crate) fn destroy_all_bands(cx: &mut App) {
-        let (persistent, preview) = {
-            let coordinator = &mut cx
-                .global_mut::<ShellRuntime>()
-                .shell_surfaces_mut()
-                .card_coordinator;
-            (
-                std::mem::take(&mut coordinator.persistent_bands),
-                std::mem::take(&mut coordinator.preview_bands),
-            )
-        };
-        for (display_id, handle) in persistent.into_iter().chain(preview) {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
-            tracing::debug!(display = ?display_id, "card band destroyed on shutdown");
-        }
-    }
-
-    pub(crate) fn forget_window(cx: &mut App, window_id: gpui::WindowId) {
         let coordinator = &mut cx
             .global_mut::<ShellRuntime>()
             .shell_surfaces_mut()
             .card_coordinator;
-        coordinator
-            .persistent_bands
-            .retain(|_, handle| handle.window_id() != window_id);
-        coordinator
-            .preview_bands
-            .retain(|_, handle| handle.window_id() != window_id);
+        match channel {
+            CardChannel::Persistent => {
+                coordinator.persistent_bands.insert(display_id, band_view);
+            }
+            CardChannel::Preview => {
+                coordinator.preview_bands.insert(display_id, band_view);
+            }
+        }
+
+        Some(band_view)
     }
 
-    // ── Layer-shell anchor helpers ────────────────────────────────
-
-    fn band_anchor(bar_edge: BarPosition) -> gpui::layer_shell::Anchor {
-        use gpui::layer_shell::Anchor;
+    fn band_anchor(bar_edge: BarPosition) -> Anchor {
         match bar_edge {
             BarPosition::Top => Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
             BarPosition::Bottom => Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
@@ -924,35 +953,22 @@ impl CardCoordinator {
 
     fn band_margin(
         _bar_edge: BarPosition,
-        _bar_thickness: gpui::Pixels,
-    ) -> (gpui::Pixels, gpui::Pixels, gpui::Pixels, gpui::Pixels) {
-        // Placement and window bounds already include the bar thickness and
-        // source gap. Adding it again here doubles the bar-to-card offset.
+        _bar_thickness: Pixels,
+    ) -> (Pixels, Pixels, Pixels, Pixels) {
+        // Card placement already includes the bar thickness and configured gap.
         (px(0.0), px(0.0), px(0.0), px(0.0))
     }
-
-    // ── Diagnostics ───────────────────────────────────────────────
-
-    fn emit_diagnostic(diag: CardDiagnostic) {
-        tracing::debug!(
-            kind = ?diag.kind,
-            owner = ?diag.owner.as_ref().map(|o| o.0.as_ref()),
-            channel = ?diag.channel,
-            generation = diag.generation,
-            "card diagnostic"
-        );
-    }
 }
-
-// ────────────────────────────────────────────────────────────────
-// Tests
-// ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::runtime::shell_surfaces::SurfaceLifecycle;
-    use gpui::{TestAppContext, point, size};
+    use gpui::{Size, TestAppContext, size};
+
+    fn test_source(owner_id: &str) -> CardSourceId {
+        CardSourceId::singleton(owner_id)
+    }
 
     struct TestProvider {
         owner: CardOwnerId,
@@ -968,20 +984,19 @@ mod tests {
             self.capabilities
         }
 
-        fn size_tier(&self) -> super::super::model::CardSizeTier {
-            super::super::model::CardSizeTier::Compact
-        }
-
-        fn anchor_bounds(&self, _cx: &App) -> Option<(Bounds<Pixels>, DisplayId)> {
-            Some((
-                Bounds::new(point(px(40.), px(40.)), size(px(32.), px(32.))),
-                DisplayId::new(0),
-            ))
+        fn preferred_size(
+            &self,
+            _channel: CardChannel,
+            _source: &CardSourceId,
+            _cx: &App,
+        ) -> Size<Pixels> {
+            size(px(280.0), px(240.0))
         }
 
         fn render_content(
             &self,
             _channel: CardChannel,
+            _source: &CardSourceId,
             _window: &mut gpui::Window,
             _cx: &mut App,
         ) -> gpui::AnyElement {
@@ -989,22 +1004,42 @@ mod tests {
         }
     }
 
-    // Helper: install ShellRuntime for test.
+    fn publish_anchor(cx: &mut App, source: &CardSourceId) {
+        let display_id = cx
+            .displays()
+            .first()
+            .map(|d| d.id())
+            .unwrap_or_else(|| DisplayId::new(0));
+        CardCoordinator::dispatch(
+            cx,
+            CardRequest::AnchorUpdate {
+                source: source.clone(),
+                bounds: gpui::Bounds::new(
+                    gpui::point(px(100.0), px(0.0)),
+                    gpui::size(px(40.0), px(30.0)),
+                ),
+                display_id,
+            },
+        );
+    }
+
     fn setup(cx: &mut TestAppContext) {
         cx.update(|app| {
             shilpo_ui::init(app);
             ShellRuntime::install_for_test(app);
             for id in ["battery", "test-battery", "test-workspaces"] {
+                let owner = CardOwnerId::new(id);
                 CardCoordinator::register_provider(
                     app,
                     Arc::new(TestProvider {
-                        owner: CardOwnerId::new(id),
+                        owner: owner.clone(),
                         capabilities: super::super::model::CardCapabilities {
                             hover: true,
                             click: true,
                         },
                     }),
                 );
+                publish_anchor(app, &CardSourceId::singleton(owner));
             }
         });
     }
@@ -1013,6 +1048,7 @@ mod tests {
     fn unsupported_hover_is_rejected_before_reaching_the_reducer(cx: &mut TestAppContext) {
         setup(cx);
         let owner = CardOwnerId::new("click-only");
+        let source = CardSourceId::singleton(owner.clone());
         cx.update(|app| {
             CardCoordinator::register_provider(
                 app,
@@ -1027,11 +1063,11 @@ mod tests {
             CardCoordinator::dispatch(
                 app,
                 CardRequest::SourceEnter {
-                    owner: owner.clone(),
+                    source: source.clone(),
                 },
             );
             assert_eq!(
-                CardCoordinator::source_state(app, &owner),
+                CardCoordinator::source_state(app, &source),
                 CardSourceState::Idle
             );
             assert!(!CardCoordinator::holds_bar_visibility(app));
@@ -1043,24 +1079,21 @@ mod tests {
         setup(cx);
 
         cx.update(|cx| {
-            let owner = CardOwnerId::new("test-battery");
-            // Initially closed
+            let source = test_source("test-battery");
             assert_eq!(
                 CardCoordinator::persistent_lifecycle(cx),
                 SurfaceLifecycle::Closed
             );
 
-            // Open persistent channel via toggle
             CardCoordinator::dispatch(
                 cx,
                 CardRequest::PersistentToggle {
-                    owner: owner.clone(),
+                    source: source.clone(),
                 },
             );
         });
 
         cx.update(|cx| {
-            // Should now be Open (even without a provider, state machine still transitions)
             let lifecycle = CardCoordinator::persistent_lifecycle(cx);
             assert!(
                 matches!(lifecycle, SurfaceLifecycle::Open { .. }),
@@ -1074,19 +1107,17 @@ mod tests {
         setup(cx);
 
         cx.update(|cx| {
-            let owner = CardOwnerId::new("test-workspaces");
+            let source = test_source("test-workspaces");
             CardCoordinator::dispatch(
                 cx,
                 CardRequest::SourceEnter {
-                    owner: owner.clone(),
+                    source: source.clone(),
                 },
             );
         });
 
-        // Timer started — preview still closed until timer fires
         cx.update(|cx| {
             let preview_lifecycle = CardCoordinator::preview_lifecycle(cx);
-            // The state machine opened ChannelLifecycle::Closed (timer pending, not yet open)
             assert_eq!(
                 preview_lifecycle,
                 SurfaceLifecycle::Closed,
@@ -1104,7 +1135,7 @@ mod tests {
             CardCoordinator::dispatch(
                 cx,
                 CardRequest::PersistentToggle {
-                    owner: CardOwnerId::new("battery"),
+                    source: test_source("battery"),
                 },
             );
             assert!(
@@ -1119,17 +1150,17 @@ mod tests {
         setup(cx);
 
         cx.update(|cx| {
-            let owner = CardOwnerId::new("battery");
+            let source = test_source("battery");
             CardCoordinator::dispatch(
                 cx,
                 CardRequest::PersistentToggle {
-                    owner: owner.clone(),
+                    source: source.clone(),
                 },
             );
             CardCoordinator::dispatch(
                 cx,
                 CardRequest::PersistentToggle {
-                    owner: owner.clone(),
+                    source: source.clone(),
                 },
             );
             assert!(CardCoordinator::holds_bar_visibility(cx));
@@ -1145,18 +1176,16 @@ mod tests {
         setup(cx);
 
         cx.update(|cx| {
-            let owner = CardOwnerId::new("battery");
-            CardCoordinator::dispatch(cx, CardRequest::SourceEnter { owner });
+            let source = test_source("battery");
+            CardCoordinator::dispatch(cx, CardRequest::SourceEnter { source });
         });
 
-        // Advance past 350ms
         cx.executor()
             .advance_clock(std::time::Duration::from_millis(400));
         cx.run_until_parked();
 
         cx.update(|cx| {
             let preview = CardCoordinator::preview_lifecycle(cx);
-            // After timer fires, preview should be Open
             assert!(
                 matches!(preview, SurfaceLifecycle::Open { .. }),
                 "Preview should be Open after 350ms timer: got {:?}",
@@ -1170,9 +1199,9 @@ mod tests {
         setup(cx);
 
         cx.update(|cx| {
-            let owner = CardOwnerId::new("battery");
+            let source = test_source("battery");
             assert_eq!(
-                CardCoordinator::source_state(cx, &owner),
+                CardCoordinator::source_state(cx, &source),
                 CardSourceState::Idle
             );
         });
@@ -1183,15 +1212,15 @@ mod tests {
         setup(cx);
 
         cx.update(|cx| {
-            let owner = CardOwnerId::new("battery");
+            let source = test_source("battery");
             CardCoordinator::dispatch(
                 cx,
                 CardRequest::PersistentToggle {
-                    owner: owner.clone(),
+                    source: source.clone(),
                 },
             );
             assert_eq!(
-                CardCoordinator::source_state(cx, &owner),
+                CardCoordinator::source_state(cx, &source),
                 CardSourceState::PersistentOpen
             );
         });
@@ -1205,7 +1234,7 @@ mod tests {
             CardCoordinator::dispatch(
                 cx,
                 CardRequest::PersistentToggle {
-                    owner: CardOwnerId::new("battery"),
+                    source: test_source("battery"),
                 },
             );
             assert!(CardCoordinator::holds_bar_visibility(cx));
@@ -1226,7 +1255,7 @@ mod tests {
             CardCoordinator::dispatch(
                 cx,
                 CardRequest::PersistentToggle {
-                    owner: CardOwnerId::new("battery"),
+                    source: test_source("battery"),
                 },
             );
             CardCoordinator::dispatch(cx, CardRequest::Shutdown);

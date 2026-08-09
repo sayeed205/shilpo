@@ -40,6 +40,7 @@ pub struct ShellRuntime {
     heed_store: Option<Arc<shilpo_config::HeedSessionStore>>,
     _start_time: std::time::Instant,
     _window_closed: Option<Subscription>,
+    _wallpaper_preview_changed: Option<Subscription>,
     _ipc_task: gpui::Task<()>,
 }
 
@@ -70,6 +71,7 @@ impl ShellRuntime {
             heed_store: None,
             _start_time: std::time::Instant::now(),
             _window_closed: None,
+            _wallpaper_preview_changed: None,
             _ipc_task: gpui::Task::ready(()),
         });
     }
@@ -186,15 +188,24 @@ impl ShellRuntime {
             shell_surfaces,
             action_dispatcher,
             extension_host,
-            wallpaper_preview,
+            wallpaper_preview: wallpaper_preview.clone(),
             service_hub: Some(hub),
             session_state: session.session_state,
             session_path: session.session_path,
             heed_store: session.heed_store,
             _start_time: std::time::Instant::now(),
             _window_closed: None,
+            _wallpaper_preview_changed: None,
             _ipc_task: gpui::Task::ready(()),
         });
+
+        let wallpaper_preview_changed = cx.observe(&wallpaper_preview, |_, cx| {
+            crate::bar::cards::adapter::CardCoordinator::refresh_owner(
+                cx,
+                &crate::bar::cards::workspace_card::workspace_owner_id(),
+            );
+        });
+        cx.global_mut::<Self>()._wallpaper_preview_changed = Some(wallpaper_preview_changed);
 
         shell_surfaces::spawn_compositor_stream_loop(cx, &compositor);
         theme_manager::sync_wallpaper(cx, initial_wallpaper_path);
@@ -264,6 +275,10 @@ impl ShellRuntime {
         cx.global_mut::<Self>().shell_surfaces.update_readiness();
         Self::publish_status(cx);
         ShellSurfaces::refresh_bars(cx);
+        crate::bar::cards::adapter::CardCoordinator::refresh_owner(
+            cx,
+            &crate::bar::cards::workspace_card::workspace_owner_id(),
+        );
         if outputs_changed {
             ShellSurfaces::reconcile_bars(cx);
         }

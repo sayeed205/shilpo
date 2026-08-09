@@ -8,7 +8,7 @@ use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, black, green_500, h_flex
 
 use crate::bar::cards::{
     adapter::CardCoordinator,
-    model::{CardOwnerId, CardRequest, CardSourceState},
+    model::{CardRequest, CardSourceId, CardSourceState},
 };
 
 // Android SystemUI renders the unified battery at 20.6 × 12 in the phone status
@@ -108,10 +108,10 @@ impl RenderOnce for BatteryIndicator {
             return div().id(self.id).into_any_element();
         };
 
-        let owner = CardOwnerId::new("battery");
+        let source = CardSourceId::singleton("battery");
         let display_id = self.display_id;
         let is_selected =
-            CardCoordinator::source_state(cx, &owner) == CardSourceState::PersistentOpen;
+            CardCoordinator::source_state(cx, &source) == CardSourceState::PersistentOpen;
         let (fill_color, filled_content_color) = match state.mode {
             BatteryVisualMode::Normal if is_selected => (
                 cx.theme().on_secondary_container,
@@ -259,7 +259,7 @@ impl RenderOnce for BatteryIndicator {
                 CardCoordinator::dispatch(
                     cx,
                     CardRequest::PersistentToggleAt {
-                        owner: owner.clone(),
+                        source: source.clone(),
                         bounds: activation_bounds(event.position()),
                         display_id,
                     },

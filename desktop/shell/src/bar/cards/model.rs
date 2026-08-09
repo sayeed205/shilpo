@@ -4,6 +4,8 @@
 //! transition logic can be covered by plain `#[test]` cases without a display
 //! server or app context.
 
+use std::collections::HashMap;
+
 use gpui::{Bounds, DisplayId, Pixels, SharedString};
 
 // ────────────────────────────────────────────────────────────────
@@ -30,6 +32,69 @@ impl CardOwnerId {
     }
 }
 
+impl From<&str> for CardOwnerId {
+    fn from(s: &str) -> Self {
+        Self(SharedString::from(s.to_string()))
+    }
+}
+
+impl From<String> for CardOwnerId {
+    fn from(s: String) -> Self {
+        Self(SharedString::from(s))
+    }
+}
+
+impl From<SharedString> for CardOwnerId {
+    fn from(s: SharedString) -> Self {
+        Self(s)
+    }
+}
+
+/// Fully qualified identity key for a rendered card source instance.
+///
+/// Separates provider ownership (`owner`) from a specific rendered instance (`instance_id`)
+/// and its optional content discriminator (`content_key`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CardSourceId {
+    pub owner: CardOwnerId,
+    pub instance_id: SharedString,
+    pub content_key: Option<SharedString>,
+}
+
+impl CardSourceId {
+    pub fn singleton(owner: impl Into<CardOwnerId>) -> Self {
+        let owner = owner.into();
+        let instance_id = owner.0.clone();
+        Self {
+            owner,
+            instance_id,
+            content_key: None,
+        }
+    }
+
+    pub fn new(
+        owner: impl Into<CardOwnerId>,
+        instance_id: impl Into<SharedString>,
+        content_key: Option<impl Into<SharedString>>,
+    ) -> Self {
+        Self {
+            owner: owner.into(),
+            instance_id: instance_id.into(),
+            content_key: content_key.map(Into::into),
+        }
+    }
+}
+
+impl std::fmt::Display for CardSourceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(key) = &self.content_key {
+            write!(f, "{}:{}:{}", self.owner, self.instance_id, key)
+        } else {
+            write!(f, "{}:{}", self.owner, self.instance_id)
+        }
+    }
+}
+
 /// Which surface channel carries a card.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CardChannel {
@@ -50,7 +115,7 @@ pub struct CardCapabilities {
 
 /// Maximum logical-pixel card dimensions per tier.
 ///
-/// Content may shrink below its tier maximum.  All dimensions are later
+/// Content may shrink below its tier maximum. All dimensions are later
 /// clamped to available monitor space by the placement engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[allow(
@@ -132,37 +197,48 @@ pub enum CardDismissReason {
 pub enum CardRequest {
     // ── pointer / source events ──────────────────────────────────
     SourceEnter {
-        owner: CardOwnerId,
+        source: CardSourceId,
     },
     SourceLeave {
+        source: CardSourceId,
+    },
+    /// Pointer left a source group such as the complete workspace pill.
+    SourceGroupLeave {
         owner: CardOwnerId,
+        instance_id: SharedString,
+    },
+    /// Pointer entered a source group; cancels dismissal while traversing
+    /// between the group and its preview surface.
+    SourceGroupEnter {
+        owner: CardOwnerId,
+        instance_id: SharedString,
     },
     PreviewEnter {
-        owner: CardOwnerId,
+        source: CardSourceId,
     },
     PreviewLeave {
-        owner: CardOwnerId,
+        source: CardSourceId,
     },
     PersistentToggle {
-        owner: CardOwnerId,
+        source: CardSourceId,
     },
     PersistentToggleAt {
-        owner: CardOwnerId,
+        source: CardSourceId,
         bounds: Bounds<Pixels>,
         display_id: DisplayId,
     },
 
     // ── anchor geometry update ───────────────────────────────────
     AnchorUpdate {
-        owner: CardOwnerId,
+        source: CardSourceId,
         bounds: Bounds<Pixels>,
         display_id: DisplayId,
     },
     AnchorRemoved {
-        owner: CardOwnerId,
+        source: CardSourceId,
     },
     PlacementUpdated {
-        owner: CardOwnerId,
+        source: CardSourceId,
         channel: CardChannel,
         bounds: Bounds<Pixels>,
         display_id: DisplayId,
@@ -205,7 +281,7 @@ pub enum CardRequest {
 pub enum CardEffect {
     OpenChannel {
         channel: CardChannel,
-        owner: CardOwnerId,
+        source: CardSourceId,
         generation: u64,
     },
     CloseChannel {
@@ -216,7 +292,13 @@ pub enum CardEffect {
     },
     RepositionChannel {
         channel: CardChannel,
-        owner: CardOwnerId,
+        source: CardSourceId,
+    },
+    /// Replace and move an already-visible preview without an exit/enter cycle.
+    RetargetChannel {
+        channel: CardChannel,
+        source: CardSourceId,
+        generation: u64,
     },
     StartTimer {
         kind: TimerKind,
@@ -244,7 +326,7 @@ pub enum TimerKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CardDiagnostic {
     pub kind: DiagnosticKind,
-    pub owner: Option<CardOwnerId>,
+    pub source: Option<CardSourceId>,
     pub channel: Option<CardChannel>,
     pub generation: u64,
 }
@@ -275,7 +357,7 @@ pub enum ChannelLifecycle {
 /// State for one channel (persistent or preview).
 #[derive(Clone, Debug, Default)]
 pub struct ChannelSlot {
-    pub owner: Option<CardOwnerId>,
+    pub source: Option<CardSourceId>,
     pub lifecycle: ChannelLifecycle,
     /// Monotonically increasing generation token for staleness checks.
     pub generation: u64,
@@ -284,8 +366,8 @@ pub struct ChannelSlot {
     pub card_bounds: Option<Bounds<Pixels>>,
     /// Set when a preview-open timer is in flight.
     pub pending_open_generation: Option<u64>,
-    /// Prospective hover owner while the open-intent timer is in flight.
-    pub pending_open_owner: Option<CardOwnerId>,
+    /// Prospective hover source while the open-intent timer is in flight.
+    pub pending_open_source: Option<CardSourceId>,
     /// Set when a preview-close timer is in flight.
     pub pending_close_generation: Option<u64>,
     /// Whether completing this close should restore the focus captured before
@@ -316,6 +398,8 @@ impl ChannelSlot {
 pub struct CardState {
     pub persistent: ChannelSlot,
     pub preview: ChannelSlot,
+    /// Known bounds and display IDs for card sources registered via `AnchorUpdate`.
+    pub anchors: HashMap<CardSourceId, (Bounds<Pixels>, DisplayId)>,
     /// Whether a compositor focus capture has been performed for the current
     /// persistent card session (cleared after final persistent dismiss).
     pub focus_captured: bool,
@@ -337,21 +421,66 @@ impl CardState {
 
         match request {
             // ─── Pointer / source events ──────────────────────────────
-            CardRequest::SourceEnter { owner } => {
-                // If persistent for this same owner is open, suppress preview.
-                let persistent_blocks = self.persistent.owner.as_ref().is_some_and(|o| o == &owner)
+            CardRequest::SourceEnter { source } => {
+                // If persistent for this same source is open, suppress preview.
+                let persistent_blocks = self
+                    .persistent
+                    .source
+                    .as_ref()
+                    .is_some_and(|s| s == &source)
                     && self.persistent.is_open();
 
                 if persistent_blocks {
                     return effects;
                 }
 
-                // Only schedule preview if preview channel is closed and
-                // owner supports hover.
-                if self.preview.is_closed() || self.preview.owner.as_ref() != Some(&owner) {
+                if self.preview.is_open() {
+                    if self.preview.source.as_ref() == Some(&source) {
+                        if self.preview.pending_close_generation.take().is_some() {
+                            effects.push(CardEffect::CancelTimers {
+                                kind: TimerKind::PreviewClose,
+                            });
+                        }
+                        return effects;
+                    }
+
+                    if self.preview.pending_open_generation.take().is_some() {
+                        effects.push(CardEffect::CancelTimers {
+                            kind: TimerKind::PreviewOpen,
+                        });
+                    }
+                    self.preview.pending_open_source = None;
+                    if self.preview.pending_close_generation.take().is_some() {
+                        effects.push(CardEffect::CancelTimers {
+                            kind: TimerKind::PreviewClose,
+                        });
+                    }
+                    let generation = self.next_generation();
+                    self.preview.source = Some(source.clone());
+                    self.preview.generation = generation;
+                    self.preview.card_bounds = None;
+                    if let Some(&(bounds, display_id)) = self.anchors.get(&source) {
+                        self.preview.anchor_bounds = Some(bounds);
+                        self.preview.display_id = Some(display_id);
+                    }
+                    effects.push(CardEffect::RetargetChannel {
+                        channel: CardChannel::Preview,
+                        source,
+                        generation,
+                    });
+                    return effects;
+                }
+
+                // Only schedule preview if preview channel is closed and not already pending for this source
+                if self.preview.is_closed() || self.preview.source.as_ref() != Some(&source) {
+                    if self.preview.pending_open_source.as_ref() == Some(&source)
+                        && self.preview.pending_open_generation.is_some()
+                    {
+                        return effects;
+                    }
                     let tok = self.next_generation();
                     self.preview.pending_open_generation = Some(tok);
-                    self.preview.pending_open_owner = Some(owner.clone());
+                    self.preview.pending_open_source = Some(source.clone());
                     self.preview.pending_close_generation = None;
                     effects.push(CardEffect::CancelTimers {
                         kind: TimerKind::PreviewClose,
@@ -363,28 +492,28 @@ impl CardState {
                     effects.append(&mut self.update_hold());
                     effects.push(CardEffect::Diagnostic(CardDiagnostic {
                         kind: DiagnosticKind::TimerStarted,
-                        owner: Some(owner),
+                        source: Some(source),
                         channel: Some(CardChannel::Preview),
                         generation: tok,
                     }));
                 }
             }
 
-            CardRequest::SourceLeave { owner } => {
-                // Cancel pending open if it's for this owner.
+            CardRequest::SourceLeave { source } => {
+                // Cancel pending open if it's for this source.
                 if self.preview.pending_open_generation.is_some()
-                    && self.preview.pending_open_owner.as_ref() == Some(&owner)
+                    && self.preview.pending_open_source.as_ref() == Some(&source)
                 {
                     self.preview.pending_open_generation = None;
-                    self.preview.pending_open_owner = None;
+                    self.preview.pending_open_source = None;
                     effects.push(CardEffect::CancelTimers {
                         kind: TimerKind::PreviewOpen,
                     });
                     effects.append(&mut self.update_hold());
                 }
 
-                // If preview is open for this owner, start close timer.
-                if self.preview.owner.as_ref() == Some(&owner) && self.preview.is_open() {
+                // If preview is open for this source, start close timer.
+                if self.preview.source.as_ref() == Some(&source) && self.preview.is_open() {
                     let tok = self.next_generation();
                     self.preview.pending_close_generation = Some(tok);
                     effects.push(CardEffect::StartTimer {
@@ -394,9 +523,50 @@ impl CardState {
                 }
             }
 
-            CardRequest::PreviewEnter { owner } => {
+            CardRequest::SourceGroupLeave { owner, instance_id } => {
+                let belongs_to_group = |source: &CardSourceId| {
+                    source.owner == owner && source.instance_id == instance_id
+                };
+                if self
+                    .preview
+                    .pending_open_source
+                    .as_ref()
+                    .is_some_and(&belongs_to_group)
+                {
+                    self.preview.pending_open_generation = None;
+                    self.preview.pending_open_source = None;
+                    effects.push(CardEffect::CancelTimers {
+                        kind: TimerKind::PreviewOpen,
+                    });
+                    effects.append(&mut self.update_hold());
+                }
+                if self.preview.source.as_ref().is_some_and(belongs_to_group)
+                    && self.preview.is_open()
+                {
+                    let generation = self.next_generation();
+                    self.preview.pending_close_generation = Some(generation);
+                    effects.push(CardEffect::StartTimer {
+                        kind: TimerKind::PreviewClose,
+                        generation,
+                    });
+                }
+            }
+
+            CardRequest::SourceGroupEnter { owner, instance_id } => {
+                let active_belongs_to_group = self.preview.source.as_ref().is_some_and(|source| {
+                    source.owner == owner && source.instance_id == instance_id
+                });
+                if active_belongs_to_group && self.preview.pending_close_generation.take().is_some()
+                {
+                    effects.push(CardEffect::CancelTimers {
+                        kind: TimerKind::PreviewClose,
+                    });
+                }
+            }
+
+            CardRequest::PreviewEnter { source } => {
                 // Pointer entered the preview card surface — cancel pending close.
-                if self.preview.owner.as_ref() == Some(&owner)
+                if self.preview.source.as_ref() == Some(&source)
                     && self.preview.pending_close_generation.is_some()
                 {
                     self.preview.pending_close_generation = None;
@@ -405,11 +575,11 @@ impl CardState {
                     });
                 }
                 // Also cancel any pending open (already open).
-                if self.preview.pending_open_owner.as_ref() == Some(&owner)
+                if self.preview.pending_open_source.as_ref() == Some(&source)
                     && self.preview.pending_open_generation.is_some()
                 {
                     self.preview.pending_open_generation = None;
-                    self.preview.pending_open_owner = None;
+                    self.preview.pending_open_source = None;
                     effects.push(CardEffect::CancelTimers {
                         kind: TimerKind::PreviewOpen,
                     });
@@ -417,9 +587,9 @@ impl CardState {
                 }
             }
 
-            CardRequest::PreviewLeave { owner } => {
+            CardRequest::PreviewLeave { source } => {
                 // Treat like source leave — start a close timer.
-                if self.preview.owner.as_ref() == Some(&owner) && self.preview.is_open() {
+                if self.preview.source.as_ref() == Some(&source) && self.preview.is_open() {
                     let tok = self.next_generation();
                     self.preview.pending_close_generation = Some(tok);
                     effects.push(CardEffect::StartTimer {
@@ -429,30 +599,26 @@ impl CardState {
                 }
             }
 
-            CardRequest::PersistentToggle { owner } => {
-                if self.persistent.owner.as_ref() == Some(&owner) {
+            CardRequest::PersistentToggle { source } => {
+                if self.persistent.source.as_ref() == Some(&source) {
                     if self.persistent.is_open() {
-                        // Toggle off — close persistent channel. A same-owner
-                        // toggle that arrives after deactivation already moved
-                        // the channel to Closing must not reopen it.
                         effects.append(&mut self.close_persistent(CardDismissReason::SourceToggle));
                     }
                 } else {
-                    // Toggle on — replace any existing persistent card.
-                    effects.append(&mut self.open_persistent(owner));
+                    effects.append(&mut self.open_persistent(source));
                 }
             }
             CardRequest::PersistentToggleAt {
-                owner,
+                source,
                 bounds,
                 display_id,
             } => {
-                if self.persistent.owner.as_ref() == Some(&owner) {
+                if self.persistent.source.as_ref() == Some(&source) {
                     if self.persistent.is_open() {
                         effects.append(&mut self.close_persistent(CardDismissReason::SourceToggle));
                     }
                 } else {
-                    effects.append(&mut self.open_persistent(owner));
+                    effects.append(&mut self.open_persistent(source));
                     self.persistent.anchor_bounds = Some(bounds);
                     self.persistent.display_id = Some(display_id);
                 }
@@ -460,11 +626,12 @@ impl CardState {
 
             // ─── Anchor geometry update ───────────────────────────────
             CardRequest::AnchorUpdate {
-                owner,
+                source,
                 bounds,
                 display_id,
             } => {
-                if self.persistent.owner.as_ref() == Some(&owner) {
+                self.anchors.insert(source.clone(), (bounds, display_id));
+                if self.persistent.source.as_ref() == Some(&source) {
                     let changed = self.persistent.anchor_bounds != Some(bounds)
                         || self.persistent.display_id != Some(display_id);
                     self.persistent.anchor_bounds = Some(bounds);
@@ -472,11 +639,13 @@ impl CardState {
                     if changed && self.persistent.is_open() {
                         effects.push(CardEffect::RepositionChannel {
                             channel: CardChannel::Persistent,
-                            owner: owner.clone(),
+                            source: source.clone(),
                         });
                     }
                 }
-                if self.preview.owner.as_ref() == Some(&owner) {
+                if self.preview.source.as_ref() == Some(&source)
+                    || self.preview.pending_open_source.as_ref() == Some(&source)
+                {
                     let changed = self.preview.anchor_bounds != Some(bounds)
                         || self.preview.display_id != Some(display_id);
                     self.preview.anchor_bounds = Some(bounds);
@@ -484,14 +653,14 @@ impl CardState {
                     if changed && self.preview.is_open() {
                         effects.push(CardEffect::RepositionChannel {
                             channel: CardChannel::Preview,
-                            owner,
+                            source,
                         });
                     }
                 }
             }
 
             CardRequest::PlacementUpdated {
-                owner,
+                source,
                 channel,
                 bounds,
                 display_id,
@@ -500,19 +669,20 @@ impl CardState {
                     CardChannel::Persistent => &mut self.persistent,
                     CardChannel::Preview => &mut self.preview,
                 };
-                if slot.owner.as_ref() == Some(&owner) && slot.is_open() {
+                if slot.source.as_ref() == Some(&source) && slot.is_open() {
                     slot.card_bounds = Some(bounds);
                     slot.display_id = Some(display_id);
                 }
             }
 
-            CardRequest::AnchorRemoved { owner } => {
-                if self.persistent.owner.as_ref() == Some(&owner) {
+            CardRequest::AnchorRemoved { source } => {
+                self.anchors.remove(&source);
+                if self.persistent.source.as_ref() == Some(&source) {
                     effects
                         .append(&mut self.close_persistent(CardDismissReason::SourceDisappeared));
                 }
-                if self.preview.owner.as_ref() == Some(&owner)
-                    || self.preview.pending_open_owner.as_ref() == Some(&owner)
+                if self.preview.source.as_ref() == Some(&source)
+                    || self.preview.pending_open_source.as_ref() == Some(&source)
                 {
                     effects.append(&mut self.close_preview(CardDismissReason::SourceDisappeared));
                 }
@@ -529,6 +699,8 @@ impl CardState {
             },
 
             CardRequest::DisplayRemoved { display_id } => {
+                self.anchors
+                    .retain(|_, (_, anchor_display_id)| *anchor_display_id != display_id);
                 if self.persistent.display_id == Some(display_id) {
                     effects.append(&mut self.close_persistent(CardDismissReason::DisplayRemoved));
                 }
@@ -538,11 +710,12 @@ impl CardState {
             }
 
             CardRequest::OwnerRemoved { owner } => {
-                if self.persistent.owner.as_ref() == Some(&owner) {
+                self.anchors.retain(|source, _| source.owner != owner);
+                if self.persistent.source.as_ref().map(|s| &s.owner) == Some(&owner) {
                     effects.append(&mut self.close_persistent(CardDismissReason::OwnerRemoved));
                 }
-                if self.preview.owner.as_ref() == Some(&owner)
-                    || self.preview.pending_open_owner.as_ref() == Some(&owner)
+                if self.preview.source.as_ref().map(|s| &s.owner) == Some(&owner)
+                    || self.preview.pending_open_source.as_ref().map(|s| &s.owner) == Some(&owner)
                 {
                     effects.append(&mut self.close_preview(CardDismissReason::OwnerRemoved));
                 }
@@ -565,28 +738,21 @@ impl CardState {
                 if self.preview.pending_open_generation != Some(generation) {
                     effects.push(CardEffect::Diagnostic(CardDiagnostic {
                         kind: DiagnosticKind::TimerStale,
-                        owner: self.preview.owner.clone(),
+                        source: self.preview.source.clone(),
                         channel: Some(CardChannel::Preview),
                         generation,
                     }));
                     return effects;
                 }
                 self.preview.pending_open_generation = None;
-                let pending_owner = self.preview.pending_open_owner.take();
+                let pending_source = self.preview.pending_open_source.take();
 
-                // Get the owner queued at SourceEnter — we need a provider
-                // registration to find the right owner here. For now the
-                // adapter stores the pending owner before dispatching timers.
-                // The timer carries no owner; the adapter must have stored the
-                // pending preview owner when scheduling. We use what's in the
-                // slot (may be `None` for brand-new opens).
-                let owner = match pending_owner {
-                    Some(o) => o,
+                let source = match pending_source {
+                    Some(s) => s,
                     None => {
-                        // No owner recorded yet; timer is orphaned.
                         effects.push(CardEffect::Diagnostic(CardDiagnostic {
                             kind: DiagnosticKind::TimerStale,
-                            owner: None,
+                            source: None,
                             channel: Some(CardChannel::Preview),
                             generation,
                         }));
@@ -594,18 +760,21 @@ impl CardState {
                     }
                 };
 
-                // Check persistent suppression for same owner.
-                let persistent_blocks = self.persistent.owner.as_ref().is_some_and(|o| o == &owner)
+                let persistent_blocks = self
+                    .persistent
+                    .source
+                    .as_ref()
+                    .is_some_and(|s| s == &source)
                     && self.persistent.is_open();
 
                 if persistent_blocks {
                     return effects;
                 }
 
-                if self.preview.is_open() && self.preview.owner.as_ref() != Some(&owner) {
+                if self.preview.is_open() && self.preview.source.as_ref() != Some(&source) {
                     let old_display = self.preview.display_id;
                     self.preview.lifecycle = ChannelLifecycle::Closed;
-                    self.preview.owner = None;
+                    self.preview.source = None;
                     self.preview.display_id = None;
                     self.preview.anchor_bounds = None;
                     self.preview.card_bounds = None;
@@ -618,18 +787,22 @@ impl CardState {
                 }
 
                 let tok = self.next_generation();
-                self.preview.owner = Some(owner.clone());
+                self.preview.source = Some(source.clone());
                 self.preview.lifecycle = ChannelLifecycle::Open;
                 self.preview.generation = tok;
+                if let Some(&(bounds, display_id)) = self.anchors.get(&source) {
+                    self.preview.anchor_bounds = Some(bounds);
+                    self.preview.display_id = Some(display_id);
+                }
                 effects.push(CardEffect::OpenChannel {
                     channel: CardChannel::Preview,
-                    owner: owner.clone(),
+                    source: source.clone(),
                     generation: tok,
                 });
                 effects.append(&mut self.update_hold());
                 effects.push(CardEffect::Diagnostic(CardDiagnostic {
                     kind: DiagnosticKind::ChannelOpened,
-                    owner: Some(owner),
+                    source: Some(source),
                     channel: Some(CardChannel::Preview),
                     generation: tok,
                 }));
@@ -639,14 +812,14 @@ impl CardState {
                 if self.preview.pending_close_generation != Some(generation) {
                     effects.push(CardEffect::Diagnostic(CardDiagnostic {
                         kind: DiagnosticKind::TimerStale,
-                        owner: self.preview.owner.clone(),
+                        source: self.preview.source.clone(),
                         channel: Some(CardChannel::Preview),
                         generation,
                     }));
                     return effects;
                 }
                 self.preview.pending_close_generation = None;
-                effects.append(&mut self.close_preview(CardDismissReason::FocusLost));
+                effects.append(&mut self.close_visible_preview(CardDismissReason::FocusLost));
             }
             CardRequest::CloseAnimationFinished {
                 channel,
@@ -659,16 +832,14 @@ impl CardState {
 
     // ─── Internal helpers ─────────────────────────────────────────
 
-    fn open_persistent(&mut self, owner: CardOwnerId) -> Vec<CardEffect> {
+    fn open_persistent(&mut self, source: CardSourceId) -> Vec<CardEffect> {
         let mut effects = Vec::new();
 
-        // Close existing persistent without restoring focus between cards
-        // (atomic replacement).
         if self.persistent.is_open() {
             let tok = self.persistent.generation;
             let display_id = self.persistent.display_id;
             self.persistent.lifecycle = ChannelLifecycle::Closed;
-            self.persistent.owner = None;
+            self.persistent.source = None;
             self.persistent.display_id = None;
             self.persistent.anchor_bounds = None;
             self.persistent.card_bounds = None;
@@ -680,39 +851,42 @@ impl CardState {
             });
             effects.push(CardEffect::Diagnostic(CardDiagnostic {
                 kind: DiagnosticKind::ChannelClosed,
-                owner: None,
+                source: None,
                 channel: Some(CardChannel::Persistent),
                 generation: tok,
             }));
         }
 
-        // Capture focus only if we haven't already for this session.
         if !self.focus_captured {
             self.focus_captured = true;
             effects.push(CardEffect::CaptureFocus);
             effects.push(CardEffect::Diagnostic(CardDiagnostic {
                 kind: DiagnosticKind::FocusCaptured,
-                owner: Some(owner.clone()),
+                source: Some(source.clone()),
                 channel: Some(CardChannel::Persistent),
                 generation: self.generation_counter,
             }));
         }
 
         let tok = self.next_generation();
-        self.persistent.owner = Some(owner.clone());
+        self.persistent.source = Some(source.clone());
         self.persistent.lifecycle = ChannelLifecycle::Open;
         self.persistent.generation = tok;
         self.persistent.restore_focus_after_close = false;
+        if let Some(&(bounds, display_id)) = self.anchors.get(&source) {
+            self.persistent.anchor_bounds = Some(bounds);
+            self.persistent.display_id = Some(display_id);
+        }
 
         effects.push(CardEffect::OpenChannel {
             channel: CardChannel::Persistent,
-            owner: owner.clone(),
+            source: source.clone(),
             generation: tok,
         });
         effects.append(&mut self.update_hold());
         effects.push(CardEffect::Diagnostic(CardDiagnostic {
             kind: DiagnosticKind::ChannelOpened,
-            owner: Some(owner),
+            source: Some(source),
             channel: Some(CardChannel::Persistent),
             generation: tok,
         }));
@@ -735,7 +909,7 @@ impl CardState {
 
         effects.push(CardEffect::CloseChannel {
             channel: CardChannel::Persistent,
-            reason: reason.clone(),
+            reason,
             display_id,
             generation: tok,
         });
@@ -748,13 +922,12 @@ impl CardState {
             return effects;
         }
 
-        // Cancel any in-flight timers.
         if self.preview.pending_open_generation.take().is_some() {
             effects.push(CardEffect::CancelTimers {
                 kind: TimerKind::PreviewOpen,
             });
         }
-        self.preview.pending_open_owner = None;
+        self.preview.pending_open_source = None;
         if self.preview.pending_close_generation.take().is_some() {
             effects.push(CardEffect::CancelTimers {
                 kind: TimerKind::PreviewClose,
@@ -777,6 +950,25 @@ impl CardState {
         effects
     }
 
+    /// Close the currently visible preview without discarding a hover intent
+    /// already queued for a different source.
+    fn close_visible_preview(&mut self, reason: CardDismissReason) -> Vec<CardEffect> {
+        let mut effects = Vec::new();
+        if self.preview.is_open() {
+            let generation = self.preview.generation;
+            let display_id = self.preview.display_id;
+            self.preview.lifecycle = ChannelLifecycle::Closing;
+            effects.push(CardEffect::CloseChannel {
+                channel: CardChannel::Preview,
+                reason,
+                display_id,
+                generation,
+            });
+        }
+        effects.append(&mut self.update_hold());
+        effects
+    }
+
     fn close_all(&mut self, reason: CardDismissReason) -> Vec<CardEffect> {
         let mut effects = Vec::new();
         effects.append(&mut self.close_persistent(reason.clone()));
@@ -793,7 +985,7 @@ impl CardState {
             return Vec::new();
         }
 
-        let owner = slot.owner.take();
+        let source = slot.source.take();
         slot.lifecycle = ChannelLifecycle::Closed;
         slot.generation = 0;
         slot.display_id = None;
@@ -809,7 +1001,7 @@ impl CardState {
                 effects.push(CardEffect::RestoreFocus);
                 effects.push(CardEffect::Diagnostic(CardDiagnostic {
                     kind: DiagnosticKind::FocusRestored,
-                    owner: owner.clone(),
+                    source: source.clone(),
                     channel: Some(channel),
                     generation,
                 }));
@@ -818,7 +1010,7 @@ impl CardState {
         effects.append(&mut self.update_hold());
         effects.push(CardEffect::Diagnostic(CardDiagnostic {
             kind: DiagnosticKind::ChannelClosed,
-            owner,
+            source,
             channel: Some(channel),
             generation,
         }));
@@ -839,21 +1031,18 @@ impl CardState {
 
     // ─── Public queries ───────────────────────────────────────────
 
-    /// Current source-widget state for a given owner.
-    pub fn source_state(&self, owner: &CardOwnerId) -> CardSourceState {
-        if self.persistent.owner.as_ref() == Some(owner) && self.persistent.is_open() {
+    /// Current source-widget state for a given source.
+    pub fn source_state(&self, source: &CardSourceId) -> CardSourceState {
+        if self.persistent.source.as_ref() == Some(source) && self.persistent.is_open() {
             return CardSourceState::PersistentOpen;
         }
-        if self.preview.owner.as_ref() == Some(owner) && self.preview.is_open() {
+        if self.preview.source.as_ref() == Some(source) && self.preview.is_open() {
             return CardSourceState::PreviewOpen;
         }
-        if self.preview.pending_open_generation.is_some() {
-            // Only report HoverPending for the current prospective owner.
-            // We track the pending owner in the slot's `owner` field once set.
-            // If the slot owner matches, report pending.
-            if self.preview.pending_open_owner.as_ref() == Some(owner) {
-                return CardSourceState::HoverPending;
-            }
+        if self.preview.pending_open_generation.is_some()
+            && self.preview.pending_open_source.as_ref() == Some(source)
+        {
+            return CardSourceState::HoverPending;
         }
         CardSourceState::Idle
     }
@@ -863,10 +1052,10 @@ impl CardState {
         self.bar_visibility_hold
     }
 
-    /// Test helper for directly priming a pending hover owner.
+    /// Test helper for directly priming a pending hover source.
     #[cfg(test)]
-    pub fn set_pending_preview_owner(&mut self, owner: CardOwnerId) {
-        self.preview.pending_open_owner = Some(owner);
+    pub fn set_pending_preview_source(&mut self, source: CardSourceId) {
+        self.preview.pending_open_source = Some(source);
     }
 }
 
@@ -879,8 +1068,12 @@ mod tests {
     use super::*;
     use gpui::{Bounds, DisplayId, Pixels, Point, Size, px};
 
-    fn owner(id: &str) -> CardOwnerId {
-        CardOwnerId::new(id)
+    fn source(id: &str) -> CardSourceId {
+        CardSourceId::singleton(id)
+    }
+
+    fn source_ws(ws_id: u64) -> CardSourceId {
+        CardSourceId::new("workspaces", "bar:1:ws", Some(ws_id.to_string()))
     }
 
     fn bounds() -> Bounds<Pixels> {
@@ -943,9 +1136,9 @@ mod tests {
     #[test]
     fn source_enter_starts_preview_open_timer() {
         let mut state = CardState::default();
-        state.set_pending_preview_owner(owner("battery"));
+        state.set_pending_preview_source(source("battery"));
         let effects = state.reduce(CardRequest::SourceEnter {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         assert!(
             open_timer_gen(&effects).is_some(),
@@ -954,11 +1147,127 @@ mod tests {
     }
 
     #[test]
+    fn repeated_source_enter_keeps_the_existing_hover_intent_timer() {
+        let mut state = CardState::default();
+        let workspace = source_ws(1);
+        let first = state.reduce(CardRequest::SourceEnter {
+            source: workspace.clone(),
+        });
+        let generation = open_timer_gen(&first).expect("initial hover intent timer");
+
+        let repeated = state.reduce(CardRequest::SourceEnter { source: workspace });
+
+        assert!(repeated.is_empty());
+        assert_eq!(state.preview.pending_open_generation, Some(generation));
+    }
+
+    #[test]
+    fn sources_for_the_same_workspace_on_different_bars_are_distinct() {
+        let first = CardSourceId::new("workspaces", "bar:display-1", Some("7"));
+        let second = CardSourceId::new("workspaces", "bar:display-2", Some("7"));
+
+        assert_ne!(first, second);
+        let mut state = CardState::default();
+        state.reduce(CardRequest::SourceEnter {
+            source: first.clone(),
+        });
+        assert_eq!(state.source_state(&first), CardSourceState::HoverPending);
+        assert_eq!(state.source_state(&second), CardSourceState::Idle);
+    }
+
+    #[test]
+    fn entering_another_source_retargets_an_open_preview_without_reopening() {
+        let mut state = CardState::default();
+        let first = source_ws(1);
+        let second = source_ws(2);
+        let first_enter = state.reduce(CardRequest::SourceEnter {
+            source: first.clone(),
+        });
+        state.reduce(CardRequest::PreviewOpenTimer {
+            generation: open_timer_gen(&first_enter).expect("first open timer"),
+        });
+
+        let effects = state.reduce(CardRequest::SourceEnter {
+            source: second.clone(),
+        });
+
+        assert!(has_effect(&effects, |effect| matches!(
+            effect,
+            CardEffect::RetargetChannel {
+                channel: CardChannel::Preview,
+                source,
+                ..
+            } if source == &second
+        )));
+        assert!(!has_effect(&effects, |effect| matches!(
+            effect,
+            CardEffect::StartTimer {
+                kind: TimerKind::PreviewOpen,
+                ..
+            } | CardEffect::CloseChannel { .. }
+                | CardEffect::OpenChannel { .. }
+        )));
+        assert_eq!(state.source_state(&first), CardSourceState::Idle);
+        assert_eq!(state.source_state(&second), CardSourceState::PreviewOpen);
+    }
+
+    #[test]
+    fn leaving_a_source_group_closes_its_visible_preview() {
+        let mut state = CardState::default();
+        let workspace = source_ws(1);
+        let enter = state.reduce(CardRequest::SourceEnter { source: workspace });
+        state.reduce(CardRequest::PreviewOpenTimer {
+            generation: open_timer_gen(&enter).expect("open timer"),
+        });
+
+        let effects = state.reduce(CardRequest::SourceGroupLeave {
+            owner: CardOwnerId::new("workspaces"),
+            instance_id: "bar:1:ws".into(),
+        });
+
+        assert!(has_effect(&effects, |effect| matches!(
+            effect,
+            CardEffect::StartTimer {
+                kind: TimerKind::PreviewClose,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn reentering_a_source_group_cancels_its_pending_close() {
+        let mut state = CardState::default();
+        let workspace = source_ws(1);
+        let enter = state.reduce(CardRequest::SourceEnter { source: workspace });
+        state.reduce(CardRequest::PreviewOpenTimer {
+            generation: open_timer_gen(&enter).expect("open timer"),
+        });
+        state.reduce(CardRequest::SourceGroupLeave {
+            owner: CardOwnerId::new("workspaces"),
+            instance_id: "bar:1:ws".into(),
+        });
+
+        let effects = state.reduce(CardRequest::SourceGroupEnter {
+            owner: CardOwnerId::new("workspaces"),
+            instance_id: "bar:1:ws".into(),
+        });
+
+        assert!(has_effect(&effects, |effect| matches!(
+            effect,
+            CardEffect::CancelTimers {
+                kind: TimerKind::PreviewClose
+            }
+        )));
+        assert!(state.preview.pending_close_generation.is_none());
+        assert!(state.preview.is_open());
+    }
+
+    #[test]
     fn preview_open_timer_with_correct_generation_opens_channel() {
         let mut state = CardState::default();
-        state.set_pending_preview_owner(owner("battery"));
+        state.set_pending_preview_source(source("battery"));
         let effects = state.reduce(CardRequest::SourceEnter {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let tok = open_timer_gen(&effects).unwrap();
 
@@ -978,13 +1287,12 @@ mod tests {
     #[test]
     fn preview_open_timer_stale_generation_is_noop() {
         let mut state = CardState::default();
-        state.set_pending_preview_owner(owner("battery"));
+        state.set_pending_preview_source(source("battery"));
         let effects = state.reduce(CardRequest::SourceEnter {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let tok = open_timer_gen(&effects).unwrap();
 
-        // Fire with wrong generation
         let noop_effects = state.reduce(CardRequest::PreviewOpenTimer {
             generation: tok + 99,
         });
@@ -1009,15 +1317,15 @@ mod tests {
     #[test]
     fn source_leave_after_open_starts_preview_close_timer() {
         let mut state = CardState::default();
-        state.set_pending_preview_owner(owner("battery"));
+        state.set_pending_preview_source(source("battery"));
         let effects = state.reduce(CardRequest::SourceEnter {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let tok = open_timer_gen(&effects).unwrap();
         state.reduce(CardRequest::PreviewOpenTimer { generation: tok });
 
         let leave_effects = state.reduce(CardRequest::SourceLeave {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         assert!(
             close_timer_gen(&leave_effects).is_some(),
@@ -1028,15 +1336,15 @@ mod tests {
     #[test]
     fn preview_close_timer_closes_channel() {
         let mut state = CardState::default();
-        state.set_pending_preview_owner(owner("battery"));
+        state.set_pending_preview_source(source("battery"));
         let effects = state.reduce(CardRequest::SourceEnter {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let tok = open_timer_gen(&effects).unwrap();
         state.reduce(CardRequest::PreviewOpenTimer { generation: tok });
 
         let leave_effects = state.reduce(CardRequest::SourceLeave {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let close_gen = close_timer_gen(&leave_effects).unwrap();
 
@@ -1056,16 +1364,46 @@ mod tests {
     }
 
     #[test]
+    fn stale_sibling_leave_does_not_close_a_retargeted_preview() {
+        let mut state = CardState::default();
+        let first = source_ws(1);
+        let second = source_ws(2);
+
+        let first_enter = state.reduce(CardRequest::SourceEnter {
+            source: first.clone(),
+        });
+        state.reduce(CardRequest::PreviewOpenTimer {
+            generation: open_timer_gen(&first_enter).expect("first open timer"),
+        });
+        let second_enter = state.reduce(CardRequest::SourceEnter {
+            source: second.clone(),
+        });
+        // GPUI can deliver the new sibling's enter before the old sibling's leave.
+        let first_leave = state.reduce(CardRequest::SourceLeave { source: first });
+
+        assert!(has_effect(&second_enter, |effect| matches!(
+            effect,
+            CardEffect::RetargetChannel {
+                channel: CardChannel::Preview,
+                source,
+                ..
+            } if source == &second
+        )));
+        assert!(first_leave.is_empty());
+        assert_eq!(state.source_state(&second), CardSourceState::PreviewOpen);
+    }
+
+    #[test]
     fn source_leave_before_timer_fires_cancels_open() {
         let mut state = CardState::default();
-        state.set_pending_preview_owner(owner("battery"));
+        state.set_pending_preview_source(source("battery"));
         let effects = state.reduce(CardRequest::SourceEnter {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let tok = open_timer_gen(&effects).unwrap();
 
         let leave_effects = state.reduce(CardRequest::SourceLeave {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         assert!(
             has_effect(&leave_effects, |e| matches!(
@@ -1077,7 +1415,6 @@ mod tests {
             "SourceLeave before timer fires should cancel open timer"
         );
 
-        // Stale timer should be no-op
         let late_effects = state.reduce(CardRequest::PreviewOpenTimer { generation: tok });
         assert!(!has_effect(&late_effects, |e| matches!(
             e,
@@ -1090,21 +1427,19 @@ mod tests {
     #[test]
     fn preview_enter_cancels_pending_close() {
         let mut state = CardState::default();
-        state.set_pending_preview_owner(owner("battery"));
+        state.set_pending_preview_source(source("battery"));
         let effects = state.reduce(CardRequest::SourceEnter {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let tok = open_timer_gen(&effects).unwrap();
         state.reduce(CardRequest::PreviewOpenTimer { generation: tok });
 
-        // Leave source
         state.reduce(CardRequest::SourceLeave {
-            owner: owner("battery"),
+            source: source("battery"),
         });
 
-        // Enter preview card
         let enter_effects = state.reduce(CardRequest::PreviewEnter {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         assert!(
             has_effect(&enter_effects, |e| matches!(
@@ -1123,7 +1458,7 @@ mod tests {
     fn persistent_toggle_opens_channel() {
         let mut state = CardState::default();
         let effects = state.reduce(CardRequest::PersistentToggle {
-            owner: owner("workspaces"),
+            source: source_ws(1),
         });
         assert!(has_effect(&effects, |e| matches!(
             e,
@@ -1138,10 +1473,10 @@ mod tests {
     fn persistent_toggle_closes_open_channel() {
         let mut state = CardState::default();
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("workspaces"),
+            source: source_ws(1),
         });
         let effects = state.reduce(CardRequest::PersistentToggle {
-            owner: owner("workspaces"),
+            source: source_ws(1),
         });
         assert!(has_effect(&effects, |e| matches!(
             e,
@@ -1155,44 +1490,38 @@ mod tests {
     #[test]
     fn persistent_replacement_skips_focus_restore_between_cards() {
         let mut state = CardState::default();
-        // Open card A
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
-        // Open card B (atomic replacement)
         let effects = state.reduce(CardRequest::PersistentToggle {
-            owner: owner("workspaces"),
+            source: source_ws(1),
         });
-        // Should NOT restore focus on replacement
         assert!(
             !has_effect(&effects, |e| matches!(e, CardEffect::RestoreFocus)),
             "Replacement should not restore focus between cards"
         );
-        // Should open the new card
         assert!(has_effect(&effects, |e| matches!(
             e,
             CardEffect::OpenChannel {
                 channel: CardChannel::Persistent,
-                owner: target_owner,
+                source: target_source,
                 ..
-            } if target_owner == &owner("workspaces")
+            } if target_source == &source_ws(1)
         )));
     }
 
     // ── Preview suppression ───────────────────────────────────────
 
     #[test]
-    fn same_owner_persistent_suppresses_preview() {
+    fn same_source_persistent_suppresses_preview() {
         let mut state = CardState::default();
-        // Open persistent for "battery"
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
 
-        // SourceEnter from same owner — should NOT start preview timer.
-        state.set_pending_preview_owner(owner("battery"));
+        state.set_pending_preview_source(source("battery"));
         let effects = state.reduce(CardRequest::SourceEnter {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         assert!(
             !has_effect(&effects, |e| matches!(
@@ -1202,22 +1531,20 @@ mod tests {
                     ..
                 }
             )),
-            "Same-owner persistent should suppress preview"
+            "Same-source persistent should suppress preview"
         );
     }
 
     #[test]
-    fn different_owner_persistent_allows_preview() {
+    fn different_source_persistent_allows_preview() {
         let mut state = CardState::default();
-        // Open persistent for "battery"
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
 
-        // SourceEnter from different owner — should start preview timer.
-        state.set_pending_preview_owner(owner("workspaces"));
+        state.set_pending_preview_source(source_ws(1));
         let effects = state.reduce(CardRequest::SourceEnter {
-            owner: owner("workspaces"),
+            source: source_ws(1),
         });
         assert!(
             has_effect(&effects, |e| matches!(
@@ -1227,7 +1554,7 @@ mod tests {
                     ..
                 }
             )),
-            "Different-owner persistent should allow preview"
+            "Different-source persistent should allow preview"
         );
     }
 
@@ -1237,7 +1564,7 @@ mod tests {
     fn first_persistent_open_emits_capture_focus() {
         let mut state = CardState::default();
         let effects = state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         assert!(has_effect(&effects, |e| matches!(
             e,
@@ -1249,11 +1576,10 @@ mod tests {
     fn second_persistent_open_does_not_re_capture_focus() {
         let mut state = CardState::default();
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
-        // Replace with new owner
         let effects = state.reduce(CardRequest::PersistentToggle {
-            owner: owner("workspaces"),
+            source: source_ws(1),
         });
         assert!(
             !has_effect(&effects, |e| matches!(e, CardEffect::CaptureFocus)),
@@ -1265,10 +1591,10 @@ mod tests {
     fn persistent_close_emits_restore_focus() {
         let mut state = CardState::default();
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let effects = state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         assert!(!has_effect(&effects, |e| matches!(
             e,
@@ -1288,7 +1614,7 @@ mod tests {
     fn focus_loss_close_does_not_steal_focus_back() {
         let mut state = CardState::default();
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let effects = state.reduce(CardRequest::Dismiss {
             channel: CardChannel::Persistent,
@@ -1311,11 +1637,11 @@ mod tests {
     fn overview_opened_closes_all_channels() {
         let mut state = CardState::default();
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
-        state.set_pending_preview_owner(owner("workspaces"));
+        state.set_pending_preview_source(source_ws(1));
         state.reduce(CardRequest::SourceEnter {
-            owner: owner("workspaces"),
+            source: source_ws(1),
         });
         let open_gen = state.preview.pending_open_generation.unwrap();
         state.reduce(CardRequest::PreviewOpenTimer {
@@ -1351,7 +1677,7 @@ mod tests {
     fn bar_closed_closes_all_channels() {
         let mut state = CardState::default();
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let effects = state.reduce(CardRequest::BarClosed);
         assert!(has_effect(&effects, |e| matches!(
@@ -1368,7 +1694,7 @@ mod tests {
     fn shutdown_closes_all_channels() {
         let mut state = CardState::default();
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let effects = state.reduce(CardRequest::Shutdown);
         assert!(has_effect(&effects, |e| matches!(
@@ -1385,10 +1711,10 @@ mod tests {
     fn display_removed_closes_only_matching_display() {
         let mut state = CardState::default();
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         state.reduce(CardRequest::AnchorUpdate {
-            owner: owner("battery"),
+            source: source("battery"),
             bounds: bounds(),
             display_id: DisplayId::new(1),
         });
@@ -1410,10 +1736,10 @@ mod tests {
     fn display_removed_different_display_noop_for_persistent() {
         let mut state = CardState::default();
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         state.reduce(CardRequest::AnchorUpdate {
-            owner: owner("battery"),
+            source: source("battery"),
             bounds: bounds(),
             display_id: DisplayId::new(1),
         });
@@ -1433,22 +1759,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn display_removed_forgets_all_source_anchors_on_that_display() {
+        let first = source_ws(1);
+        let second = source_ws(2);
+        let third = source("battery");
+        let mut state = CardState::default();
+        for (source, display_id) in [
+            (first.clone(), DisplayId::new(1)),
+            (second.clone(), DisplayId::new(1)),
+            (third.clone(), DisplayId::new(2)),
+        ] {
+            state.reduce(CardRequest::AnchorUpdate {
+                source,
+                bounds: bounds(),
+                display_id,
+            });
+        }
+
+        state.reduce(CardRequest::DisplayRemoved {
+            display_id: DisplayId::new(1),
+        });
+
+        assert!(!state.anchors.contains_key(&first));
+        assert!(!state.anchors.contains_key(&second));
+        assert!(state.anchors.contains_key(&third));
+    }
+
     // ── Source state projections ──────────────────────────────────
 
     #[test]
     fn source_state_idle_when_nothing_open() {
         let state = CardState::default();
-        assert_eq!(state.source_state(&owner("battery")), CardSourceState::Idle);
+        assert_eq!(
+            state.source_state(&source("battery")),
+            CardSourceState::Idle
+        );
     }
 
     #[test]
     fn source_state_persistent_open_when_persistent_active() {
         let mut state = CardState::default();
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         assert_eq!(
-            state.source_state(&owner("battery")),
+            state.source_state(&source("battery")),
             CardSourceState::PersistentOpen
         );
     }
@@ -1456,14 +1812,14 @@ mod tests {
     #[test]
     fn source_state_preview_open_when_preview_active() {
         let mut state = CardState::default();
-        state.set_pending_preview_owner(owner("battery"));
+        state.set_pending_preview_source(source("battery"));
         let effects = state.reduce(CardRequest::SourceEnter {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let tok = open_timer_gen(&effects).unwrap();
         state.reduce(CardRequest::PreviewOpenTimer { generation: tok });
         assert_eq!(
-            state.source_state(&owner("battery")),
+            state.source_state(&source("battery")),
             CardSourceState::PreviewOpen
         );
     }
@@ -1471,12 +1827,12 @@ mod tests {
     #[test]
     fn source_state_hover_pending_when_timer_queued() {
         let mut state = CardState::default();
-        state.set_pending_preview_owner(owner("battery"));
+        state.set_pending_preview_source(source("battery"));
         state.reduce(CardRequest::SourceEnter {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         assert_eq!(
-            state.source_state(&owner("battery")),
+            state.source_state(&source("battery")),
             CardSourceState::HoverPending
         );
     }
@@ -1487,7 +1843,7 @@ mod tests {
     fn hold_set_when_persistent_open() {
         let mut state = CardState::default();
         let effects = state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         assert!(
             has_effect(&effects, |e| matches!(
@@ -1503,10 +1859,10 @@ mod tests {
     fn hold_is_retained_until_close_animation_finishes() {
         let mut state = CardState::default();
         state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let effects = state.reduce(CardRequest::PersistentToggle {
-            owner: owner("battery"),
+            source: source("battery"),
         });
         let generation = effects
             .iter()
@@ -1531,11 +1887,10 @@ mod tests {
     #[test]
     fn hold_set_when_preview_timer_pending() {
         let mut state = CardState::default();
-        state.set_pending_preview_owner(owner("battery"));
+        state.set_pending_preview_source(source("battery"));
         let effects = state.reduce(CardRequest::SourceEnter {
-            owner: owner("battery"),
+            source: source("battery"),
         });
-        // Timer pending — hold should be set
         assert!(
             has_effect(&effects, |e| matches!(
                 e,
@@ -1546,40 +1901,40 @@ mod tests {
     }
 
     #[test]
-    fn source_enter_records_owner_without_test_priming() {
+    fn source_enter_records_source_without_test_priming() {
         let mut state = CardState::default();
         let effects = state.reduce(CardRequest::SourceEnter {
-            owner: owner("workspaces"),
+            source: source_ws(1),
         });
         let generation = open_timer_gen(&effects).expect("hover intent timer");
         assert_eq!(
-            state.preview.pending_open_owner.as_ref(),
-            Some(&owner("workspaces"))
+            state.preview.pending_open_source.as_ref(),
+            Some(&source_ws(1))
         );
         let effects = state.reduce(CardRequest::PreviewOpenTimer { generation });
         assert!(has_effect(&effects, |effect| matches!(
             effect,
             CardEffect::OpenChannel {
                 channel: CardChannel::Preview,
-                owner,
+                source,
                 ..
-            } if owner == &CardOwnerId::new("workspaces")
+            } if source == &source_ws(1)
         )));
     }
 
     #[test]
     fn close_effect_preserves_surface_display() {
         let mut state = CardState::default();
-        let battery = owner("battery");
+        let battery = source("battery");
         state.reduce(CardRequest::PersistentToggle {
-            owner: battery.clone(),
+            source: battery.clone(),
         });
         state.reduce(CardRequest::AnchorUpdate {
-            owner: battery.clone(),
+            source: battery.clone(),
             bounds: bounds(),
             display_id: DisplayId::new(7),
         });
-        let effects = state.reduce(CardRequest::PersistentToggle { owner: battery });
+        let effects = state.reduce(CardRequest::PersistentToggle { source: battery });
         assert!(has_effect(&effects, |effect| matches!(
             effect,
             CardEffect::CloseChannel {
@@ -1593,12 +1948,12 @@ mod tests {
     #[test]
     fn anchor_change_requests_live_reposition() {
         let mut state = CardState::default();
-        let battery = owner("battery");
+        let battery = source("battery");
         state.reduce(CardRequest::PersistentToggle {
-            owner: battery.clone(),
+            source: battery.clone(),
         });
         let effects = state.reduce(CardRequest::AnchorUpdate {
-            owner: battery.clone(),
+            source: battery.clone(),
             bounds: bounds(),
             display_id: DisplayId::new(1),
         });
@@ -1606,37 +1961,60 @@ mod tests {
             effect,
             CardEffect::RepositionChannel {
                 channel: CardChannel::Persistent,
-                owner,
-            } if owner == &battery
+                source,
+            } if source == &battery
         )));
     }
 
     #[test]
     fn removing_an_owner_does_not_close_another_owners_channels() {
         let mut state = CardState::default();
-        let battery = owner("battery");
+        let battery = source("battery");
         state.reduce(CardRequest::PersistentToggle {
-            owner: battery.clone(),
+            source: battery.clone(),
         });
 
         let effects = state.reduce(CardRequest::OwnerRemoved {
-            owner: owner("workspaces"),
+            owner: CardOwnerId::new("workspaces"),
         });
 
         assert!(effects.is_empty());
-        assert_eq!(state.persistent.owner.as_ref(), Some(&battery));
+        assert_eq!(state.persistent.source.as_ref(), Some(&battery));
         assert!(state.persistent.is_open());
+    }
+
+    #[test]
+    fn removing_an_owner_forgets_only_that_owners_anchors() {
+        let workspace = source_ws(1);
+        let battery = source("battery");
+        let mut state = CardState::default();
+        for source in [workspace.clone(), battery.clone()] {
+            state.reduce(CardRequest::AnchorUpdate {
+                source,
+                bounds: bounds(),
+                display_id: DisplayId::new(1),
+            });
+        }
+
+        state.reduce(CardRequest::OwnerRemoved {
+            owner: CardOwnerId::new("workspaces"),
+        });
+
+        assert!(!state.anchors.contains_key(&workspace));
+        assert!(state.anchors.contains_key(&battery));
     }
 
     #[test]
     fn removing_pending_preview_owner_cancels_the_hold() {
         let mut state = CardState::default();
-        let workspaces = owner("workspaces");
+        let workspaces = source_ws(1);
         state.reduce(CardRequest::SourceEnter {
-            owner: workspaces.clone(),
+            source: workspaces.clone(),
         });
 
-        let effects = state.reduce(CardRequest::OwnerRemoved { owner: workspaces });
+        let effects = state.reduce(CardRequest::OwnerRemoved {
+            owner: CardOwnerId::new("workspaces"),
+        });
 
         assert!(has_effect(&effects, |effect| matches!(
             effect,
@@ -1648,15 +2026,15 @@ mod tests {
     }
 
     #[test]
-    fn disappearing_anchor_closes_only_its_owner() {
+    fn disappearing_anchor_closes_only_its_source() {
         let mut state = CardState::default();
-        let battery = owner("battery");
+        let battery = source("battery");
         state.reduce(CardRequest::PersistentToggle {
-            owner: battery.clone(),
+            source: battery.clone(),
         });
 
         let effects = state.reduce(CardRequest::AnchorRemoved {
-            owner: battery.clone(),
+            source: battery.clone(),
         });
 
         assert!(has_effect(&effects, |effect| matches!(
@@ -1683,7 +2061,7 @@ mod tests {
         let display_id = DisplayId::new(9);
 
         state.reduce(CardRequest::PersistentToggleAt {
-            owner: owner("battery"),
+            source: source("battery"),
             bounds: source_bounds,
             display_id,
         });
@@ -1694,11 +2072,11 @@ mod tests {
     }
 
     #[test]
-    fn same_owner_activation_during_focus_loss_close_does_not_reopen() {
+    fn same_source_activation_during_focus_loss_close_does_not_reopen() {
         let mut state = CardState::default();
-        let battery = owner("battery");
+        let battery = source("battery");
         state.reduce(CardRequest::PersistentToggleAt {
-            owner: battery.clone(),
+            source: battery.clone(),
             bounds: bounds(),
             display_id: DisplayId::new(9),
         });
@@ -1709,7 +2087,7 @@ mod tests {
         let closing_generation = state.persistent.generation;
 
         let effects = state.reduce(CardRequest::PersistentToggleAt {
-            owner: battery,
+            source: battery,
             bounds: bounds(),
             display_id: DisplayId::new(9),
         });

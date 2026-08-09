@@ -1,12 +1,19 @@
 use crate::actions::ActionInvocation;
+use crate::bar::cards::{
+    adapter::CardCoordinator,
+    model::{CardChannel, CardDismissReason, CardRequest, CardSourceState},
+    workspace_card::{workspace_owner_id, workspace_source},
+};
 use crate::bar::widgets::pill_strip::PillOrientation;
 use crate::runtime::{ShellRuntime, ShellSurfaces};
 use gpui::{
     App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, RenderOnce, Role,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use shilpo_services::{CompositorConnection, WorkspaceInfo};
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, tooltip::Tooltip, v_flex};
+use shilpo_ui::{
+    ActiveTheme, ElementExt as _, Icon, IconName, StyledExt, h_flex, tooltip::Tooltip, v_flex,
+};
 
 fn workspace_actions_enabled(connection: &CompositorConnection) -> bool {
     matches!(connection, CompositorConnection::Ready)
@@ -73,6 +80,8 @@ fn occupied_background_geometry(
 #[derive(IntoElement)]
 pub struct WorkspacesWidget {
     id: ElementId,
+    source_instance: gpui::SharedString,
+    display_id: Option<gpui::DisplayId>,
     workspaces: Vec<WorkspaceInfo>,
     connection: CompositorConnection,
     orientation: PillOrientation,
@@ -81,13 +90,17 @@ pub struct WorkspacesWidget {
 
 impl WorkspacesWidget {
     pub fn new(
-        id: impl Into<ElementId>,
+        id: impl Into<gpui::SharedString>,
+        display_id: Option<gpui::DisplayId>,
         workspaces: Vec<WorkspaceInfo>,
         connection: CompositorConnection,
         orientation: PillOrientation,
     ) -> Self {
+        let source_instance = id.into();
         Self {
-            id: id.into(),
+            id: ElementId::Name(source_instance.clone()),
+            source_instance,
+            display_id,
             workspaces,
             connection,
             orientation,
@@ -104,6 +117,7 @@ impl Styled for WorkspacesWidget {
 
 fn render_workspace_dot(
     ws: &WorkspaceInfo,
+    instance_id: &str,
     is_ready: bool,
     display_id: Option<gpui::DisplayId>,
     cx: &mut App,
@@ -113,6 +127,14 @@ fn render_workspace_dot(
     let label = ws.name.clone().unwrap_or_else(|| ws.idx.to_string());
     let ws_id = ws.id;
 
+    let source = workspace_source(instance_id, ws.id);
+    let source_state = CardCoordinator::source_state(cx, &source);
+    let state_layer_color = if is_active {
+        cx.theme().on_primary
+    } else {
+        cx.theme().on_surface
+    };
+
     let dot_color = if is_active {
         cx.theme().on_primary
     } else if is_occupied {
@@ -121,15 +143,37 @@ fn render_workspace_dot(
         cx.theme().on_surface_variant.opacity(0.4)
     };
 
+    let source_prepaint = source.clone();
     let base_pill = div()
-        .id(("ws", ws.id))
-        .role(Role::Button)
-        .aria_label(format!("Workspace {}", label))
         .w(px(WORKSPACE_SLOT_SIZE))
         .h(px(WORKSPACE_SLOT_SIZE))
         .flex()
         .items_center()
         .justify_center()
+        .rounded_full()
+        .when(source_state == CardSourceState::HoverPending, |s| {
+            s.bg(state_layer_color.opacity(0.08))
+        })
+        .when(source_state == CardSourceState::PreviewOpen, |s| {
+            s.bg(state_layer_color.opacity(0.12))
+                .border_1()
+                .border_color(cx.theme().outline_variant.opacity(0.6))
+        })
+        .on_prepaint(move |bounds, _, cx| {
+            if let Some(display_id) = display_id {
+                CardCoordinator::dispatch(
+                    cx,
+                    CardRequest::AnchorUpdate {
+                        source: source_prepaint.clone(),
+                        bounds,
+                        display_id,
+                    },
+                );
+            }
+        })
+        .id(("ws", ws.id))
+        .role(Role::Button)
+        .aria_label(format!("Workspace {}", label))
         .child(
             div()
                 .w(px(WORKSPACE_DOT_SIZE))
@@ -139,10 +183,29 @@ fn render_workspace_dot(
         );
 
     if is_ready {
+        let source_enter = source.clone();
+
         base_pill
             .cursor_pointer()
             .hover(|s| if is_active { s } else { s.opacity(0.8) })
+            .on_hover(move |hovered, _, cx| {
+                if *hovered {
+                    CardCoordinator::dispatch(
+                        cx,
+                        CardRequest::SourceEnter {
+                            source: source_enter.clone(),
+                        },
+                    );
+                }
+            })
             .on_click(move |_, _, cx| {
+                CardCoordinator::dispatch(
+                    cx,
+                    CardRequest::Dismiss {
+                        channel: CardChannel::Preview,
+                        reason: CardDismissReason::SourceToggle,
+                    },
+                );
                 let _ = ShellRuntime::dispatch_action(cx, ActionInvocation::FocusWorkspace(ws_id));
             })
             .on_mouse_down(MouseButton::Right, move |_, _, cx| {
@@ -163,8 +226,11 @@ impl RenderOnce for WorkspacesWidget {
         let is_ready = workspace_actions_enabled(&self.connection);
         let is_connecting = matches!(self.connection, CompositorConnection::Connecting);
         let is_stopped = workspace_status_label(&self.connection) == Some("Compositor Unavailable");
-        let display_id = window.display(cx).map(|display| display.id());
+        // Layer-shell windows do not reliably expose their output through
+        // `Window::display`; the owning BarView already has the authoritative ID.
+        let display_id = self.display_id;
         let overview_open = ShellSurfaces::is_overview_open(cx);
+        let instance_id = self.source_instance;
 
         let mut items: Vec<gpui::AnyElement> = Vec::new();
         let mut occupied_backgrounds: Vec<gpui::AnyElement> = Vec::new();
@@ -296,11 +362,9 @@ impl RenderOnce for WorkspacesWidget {
                 }
             }
 
-            items.extend(
-                self.workspaces
-                    .iter()
-                    .map(|ws| render_workspace_dot(ws, is_ready, display_id, cx)),
-            );
+            items.extend(self.workspaces.iter().map(|ws| {
+                render_workspace_dot(ws, instance_id.as_ref(), is_ready, display_id, cx)
+            }));
         }
 
         let active_indicator_element =
@@ -369,7 +433,24 @@ impl RenderOnce for WorkspacesWidget {
             .items_center()
             .children(occupied_backgrounds)
             .child(active_indicator_element)
-            .child(items_layout);
+            .child(items_layout)
+            .when(is_ready, |container| {
+                let group_instance = instance_id.clone();
+                container.on_hover(move |hovered, _, cx| {
+                    let request = if *hovered {
+                        CardRequest::SourceGroupEnter {
+                            owner: workspace_owner_id(),
+                            instance_id: group_instance.clone(),
+                        }
+                    } else {
+                        CardRequest::SourceGroupLeave {
+                            owner: workspace_owner_id(),
+                            instance_id: group_instance.clone(),
+                        }
+                    };
+                    CardCoordinator::dispatch(cx, request);
+                })
+            });
 
         if self.orientation == PillOrientation::Horizontal {
             container

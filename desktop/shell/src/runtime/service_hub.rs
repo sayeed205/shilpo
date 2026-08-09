@@ -415,7 +415,9 @@ impl ServiceHub {
                             crate::bar::cards::adapter::CardCoordinator::dispatch(
                                 cx,
                                 crate::bar::cards::model::CardRequest::AnchorRemoved {
-                                    owner: crate::bar::cards::model::CardOwnerId::new("battery"),
+                                    source: crate::bar::cards::model::CardSourceId::singleton(
+                                        "battery",
+                                    ),
                                 },
                             );
                         }
