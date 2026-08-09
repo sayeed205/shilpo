@@ -27,7 +27,7 @@ use crate::{
 };
 use shilpo_capture::{CaptureIntent, capture_frame, frame_to_rgba};
 
-use super::ShellRuntime;
+use super::{ShellRuntime, WallpaperPreviewResource};
 
 #[derive(Clone, Copy)]
 pub(crate) struct OverviewLifecycleCallback {
@@ -179,6 +179,22 @@ fn discovered_wallpaper_needs_theme_sync(
     discovered_wallpaper_path: &Path,
 ) -> bool {
     theme_wallpaper_path != Some(discovered_wallpaper_path)
+}
+
+/// Revalidate the prepared image on every successful compositor wallpaper
+/// probe, even when the pathname is unchanged. The returned flag controls the
+/// separate concern of synchronizing a changed path to the theme daemon.
+fn reconcile_discovered_wallpaper(
+    resource: &Entity<WallpaperPreviewResource>,
+    discovered_wallpaper_path: PathBuf,
+    cx: &mut App,
+) -> bool {
+    let needs_theme_sync =
+        discovered_wallpaper_needs_theme_sync(resource.read(cx).path(), &discovered_wallpaper_path);
+    resource.update(cx, |resource, cx| {
+        resource.set_wallpaper_path(Some(discovered_wallpaper_path), cx);
+    });
+    needs_theme_sync
 }
 
 fn should_restore_overview_prior_focus(
@@ -344,7 +360,6 @@ pub struct ShellSurfaces {
     overview_instance: u64,
     next_overview_instance: u64,
     overview_opened_workspace_id: Option<u64>,
-    current_wallpaper_path: Option<PathBuf>,
     latest_snapshot: Arc<CompositorSnapshot>,
     notification: Option<(
         u64,
@@ -632,10 +647,7 @@ impl ShellSurfaces {
         }
     }
 
-    pub fn new(
-        initial_wallpaper_path: Option<PathBuf>,
-        latest_snapshot: Arc<CompositorSnapshot>,
-    ) -> Self {
+    pub fn new(latest_snapshot: Arc<CompositorSnapshot>) -> Self {
         let mut manager = Self {
             card_coordinator: CardCoordinator::default(),
             bars: HashMap::new(),
@@ -647,7 +659,6 @@ impl ShellSurfaces {
             overview_instance: 0,
             next_overview_instance: 0,
             overview_opened_workspace_id: None,
-            current_wallpaper_path: initial_wallpaper_path,
             latest_snapshot,
             notification: None,
             notification_generation: 0,
@@ -776,14 +787,6 @@ impl ShellSurfaces {
 
     pub(crate) fn bar_handles(&self) -> Vec<WindowHandle<BarView>> {
         self.bars.values().map(|(handle, _)| *handle).collect()
-    }
-
-    pub(crate) fn overview_entity(&self) -> Option<Entity<WorkspaceOverview>> {
-        self.overview_entity.clone()
-    }
-
-    pub(crate) fn current_wallpaper_path(&self) -> Option<PathBuf> {
-        self.current_wallpaper_path.clone()
     }
 
     pub(crate) fn overview_is_open(&self) -> bool {
@@ -1289,18 +1292,6 @@ impl ShellSurfaces {
         }
     }
 
-    pub(crate) fn overview_wallpaper_path(cx: &App) -> Option<PathBuf> {
-        if cx.has_global::<ShellRuntime>()
-            && let Some(path) = cx
-                .global::<ShellRuntime>()
-                .shell_surfaces()
-                .current_wallpaper_path()
-        {
-            return Some(path);
-        }
-        query_awww_wallpaper_path()
-    }
-
     pub(crate) fn overview_applications(cx: &App) -> Vec<shilpo_services::Application> {
         ShellRuntime::app_scanner(cx)
             .map(|scanner| scanner.applications())
@@ -1332,19 +1323,8 @@ impl ShellSurfaces {
         Self::close_overview_competitors(cx);
         Self::capture_prior_focus(cx);
         if let Some(discovered_wallpaper_path) = query_awww_wallpaper_path() {
-            let theme_wallpaper_path = cx
-                .global::<ShellRuntime>()
-                .shell_surfaces()
-                .current_wallpaper_path
-                .as_deref();
-            if discovered_wallpaper_needs_theme_sync(
-                theme_wallpaper_path,
-                &discovered_wallpaper_path,
-            ) {
-                cx.global_mut::<ShellRuntime>()
-                    .shell_surfaces_mut()
-                    .current_wallpaper_path = Some(discovered_wallpaper_path.clone());
-
+            let resource = ShellRuntime::wallpaper_preview(cx);
+            if reconcile_discovered_wallpaper(&resource, discovered_wallpaper_path.clone(), cx) {
                 shilpo_theme_daemon::ThemeClient::spawn_task(async move {
                     let client = shilpo_theme_daemon::ThemeClient::new().await;
                     let _ = client
@@ -1874,23 +1854,14 @@ impl ShellSurfaces {
     /// Applies a theme daemon state change to the wallpaper path and refreshes
     /// every surface that renders the wallpaper.
     pub(crate) fn apply_theme_state(cx: &mut App, state: &DaemonState) {
-        let (overview_entity, wallpaper_path, ov_handle) = {
-            let runtime = cx.global_mut::<ShellRuntime>();
-            if let Some(path) = state.wallpaper_path.clone().filter(|path| path.is_file()) {
-                runtime.shell_surfaces_mut().current_wallpaper_path = Some(path);
-            }
-            (
-                runtime.shell_surfaces().overview_entity(),
-                runtime.shell_surfaces().current_wallpaper_path(),
-                runtime.shell_surfaces().overview,
-            )
-        };
-
-        if let Some(overview) = overview_entity {
-            overview.update(cx, |view, cx| {
-                view.update_wallpaper_path(wallpaper_path, cx);
-            });
+        if cx.has_global::<ShellRuntime>() {
+            ShellRuntime::set_wallpaper_path(cx, state.wallpaper_path.clone());
         }
+        let ov_handle = if cx.has_global::<ShellRuntime>() {
+            cx.global::<ShellRuntime>().shell_surfaces().overview
+        } else {
+            None
+        };
         Self::refresh_bars(cx);
         if let Some(ov) = ov_handle {
             let _ = ov.update(cx, |_, _, cx| cx.notify());
@@ -1930,14 +1901,10 @@ mod tests {
     #[test]
     fn test_shell_surfaces_initialization() {
         let snapshot = Arc::new(CompositorSnapshot::default());
-        let manager = ShellSurfaces::new(Some(PathBuf::from("/wallpaper.png")), snapshot);
+        let manager = ShellSurfaces::new(snapshot);
         assert_eq!(manager.bar_state(), BarState::Starting);
         assert!(!manager.bars_are_open());
         assert!(!manager.overview_is_open());
-        assert_eq!(
-            manager.current_wallpaper_path(),
-            Some(PathBuf::from("/wallpaper.png"))
-        );
     }
 
     #[test]
@@ -1964,6 +1931,40 @@ mod tests {
             Some(discovered),
             discovered
         ));
+    }
+
+    #[gpui::test]
+    fn unchanged_discovered_path_revalidates_replaced_wallpaper(cx: &mut gpui::TestAppContext) {
+        let path = std::env::temp_dir().join(format!(
+            "shilpo-wallpaper-reconcile-{}.png",
+            uuid::Uuid::new_v4()
+        ));
+        image::RgbImage::new(32, 32)
+            .save_with_format(&path, image::ImageFormat::Png)
+            .unwrap();
+        let resource = cx.update(|cx| cx.new(WallpaperPreviewResource::new));
+
+        let first_needs_sync =
+            cx.update(|cx| reconcile_discovered_wallpaper(&resource, path.clone(), cx));
+        assert!(first_needs_sync);
+        cx.run_until_parked();
+        let first = cx
+            .update(|cx| resource.read(cx).snapshot().ready_image())
+            .expect("first prepared wallpaper");
+
+        image::RgbImage::new(64, 64)
+            .save_with_format(&path, image::ImageFormat::Png)
+            .unwrap();
+        let replacement_needs_sync =
+            cx.update(|cx| reconcile_discovered_wallpaper(&resource, path.clone(), cx));
+        assert!(!replacement_needs_sync, "the pathname did not change");
+        cx.run_until_parked();
+        let replacement = cx
+            .update(|cx| resource.read(cx).snapshot().ready_image())
+            .expect("replacement prepared wallpaper");
+
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -2015,7 +2016,7 @@ mod tests {
     #[test]
     fn overview_instances_advance_monotonically() {
         let snapshot = Arc::new(CompositorSnapshot::default());
-        let mut manager = ShellSurfaces::new(None, snapshot);
+        let mut manager = ShellSurfaces::new(snapshot);
         let first = manager.next_overview_instance();
         let second = manager.next_overview_instance();
         assert!(second > first);
@@ -2024,7 +2025,7 @@ mod tests {
     #[test]
     fn notification_generation_reserves_incrementally() {
         let snapshot = Arc::new(CompositorSnapshot::default());
-        let mut manager = ShellSurfaces::new(None, snapshot);
+        let mut manager = ShellSurfaces::new(snapshot);
         let first = manager.next_notification_generation();
         let second = manager.next_notification_generation();
         assert!(second > first);
@@ -2032,7 +2033,7 @@ mod tests {
 
     #[test]
     fn transient_surface_lifecycles_start_closed() {
-        let manager = ShellSurfaces::new(None, Arc::new(CompositorSnapshot::default()));
+        let manager = ShellSurfaces::new(Arc::new(CompositorSnapshot::default()));
         assert_eq!(manager.notification_lifecycle, SurfaceLifecycle::Closed);
         assert_eq!(manager.osd_lifecycle, SurfaceLifecycle::Closed);
         assert_eq!(manager.capture_lifecycle, SurfaceLifecycle::Closed);
@@ -2174,7 +2175,7 @@ mod tests {
         fn new_offline() -> Self {
             let snapshot = Arc::new(CompositorSnapshot::default());
             Self {
-                manager: ShellSurfaces::new(None, snapshot),
+                manager: ShellSurfaces::new(snapshot),
             }
         }
     }
