@@ -38,11 +38,6 @@ pub enum Commands {
         #[command(subcommand)]
         action: VisibilityAction,
     },
-    /// Control center visibility
-    ControlCenter {
-        #[command(subcommand)]
-        action: VisibilityAction,
-    },
     /// Status bar visibility
     Bar {
         #[command(subcommand)]

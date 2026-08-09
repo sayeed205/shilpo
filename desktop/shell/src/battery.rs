@@ -59,7 +59,7 @@ impl BatteryVisualState {
     }
 }
 
-/// Shared Pixel-style battery indicator for Shilpo shell (bar & Control Center).
+/// Shared Pixel-style battery indicator for the Shilpo shell bar.
 #[derive(IntoElement)]
 pub(crate) struct BatteryIndicator {
     id: ElementId,

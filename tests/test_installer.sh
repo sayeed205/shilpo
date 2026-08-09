@@ -125,8 +125,8 @@ fi
 exit 0
 SCRIPT
   chmod +x "$SHILPO_BUILD_DIR/release/shilpo"
-  touch "$SHILPO_BUILD_DIR/release/shilpo-shell" "$SHILPO_BUILD_DIR/release/shilpo-themed" "$SHILPO_BUILD_DIR/release/shilpo-settings"
-  chmod +x "$SHILPO_BUILD_DIR/release/shilpo-shell" "$SHILPO_BUILD_DIR/release/shilpo-themed" "$SHILPO_BUILD_DIR/release/shilpo-settings"
+  touch "$SHILPO_BUILD_DIR/release/shilpo-shell" "$SHILPO_BUILD_DIR/release/shilpo-themed" "$SHILPO_BUILD_DIR/release/shilpo-settings" "$SHILPO_BUILD_DIR/release/shilpo-device-daemon"
+  chmod +x "$SHILPO_BUILD_DIR/release/shilpo-shell" "$SHILPO_BUILD_DIR/release/shilpo-themed" "$SHILPO_BUILD_DIR/release/shilpo-settings" "$SHILPO_BUILD_DIR/release/shilpo-device-daemon"
 
   touch "$SHILPO_EXTENSION_TARGET_DIR/wasm32-wasip2/release/shilpo_weather_extension.wasm"
 fi
@@ -268,8 +268,12 @@ output=$("$REPO_ROOT/setup" install -y)
 assert_file_exists "$FAKE_HOME/.local/bin/shilpo" "Installs shilpo binary"
 assert_file_exists "$FAKE_HOME/.local/bin/shilpo-shell" "Installs shilpo-shell binary"
 assert_file_exists "$FAKE_HOME/.local/bin/shilpo-themed" "Installs shilpo-themed binary"
+assert_file_exists "$FAKE_HOME/.local/bin/shilpo-device-daemon" "Installs device daemon binary"
+assert_file_exists "$FAKE_HOME/.config/systemd/user/shilpo-device-daemon.service" "Installs device daemon user unit"
+assert_file_exists "$FAKE_HOME/.local/share/dbus-1/services/org.shilpo.Device.service" "Installs device daemon DBus activation"
 assert_file_exists "$FAKE_HOME/.config/niri/config.kdl" "Installs Niri config"
   assert_file_exists "$FAKE_HOME/.config/systemd/user/niri.service.wants/shilpo-shell.service" "Wires shilpo-shell service into niri.service.wants"
+  assert_file_exists "$FAKE_HOME/.config/systemd/user/niri.service.wants/shilpo-device-daemon.service" "Wires device daemon into niri.service.wants"
   assert_file_exists "$FAKE_HOME/.config/systemd/user/niri.service.wants/shilpo-network-agent.service" "Wires NetworkManager agent into niri.service.wants"
   assert_file_exists "$FAKE_HOME/.config/systemd/user/niri.service.wants/shilpo-keyring.service" "Wires GNOME Keyring into niri.service.wants"
   first_login_unit=$(<"$FAKE_HOME/.config/systemd/user/shilpo-first-login.service")
@@ -346,6 +350,8 @@ setup_test_env
 "$REPO_ROOT/setup" install -y >/dev/null
 output=$("$REPO_ROOT/setup" uninstall)
 assert_eq "false" "$([[ -f $FAKE_HOME/.local/bin/shilpo ]] && echo true || echo false)" "Removes shilpo binary"
+assert_eq "false" "$([[ -f $FAKE_HOME/.local/bin/shilpo-device-daemon ]] && echo true || echo false)" "Removes device daemon binary"
+assert_eq "false" "$([[ -f $FAKE_HOME/.local/share/dbus-1/services/org.shilpo.Device.service ]] && echo true || echo false)" "Removes device daemon DBus activation"
 assert_file_exists "$FAKE_HOME/.config/niri/config.kdl" "Preserves Niri configuration"
 assert_file_exists "$FAKE_HOME/.config/shilpo/config.toml" "Preserves Shilpo configuration"
 cleanup_test_env

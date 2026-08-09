@@ -1,8 +1,9 @@
-use crate::bar::service_worker::{self, CommandSender, DeviceCommand, WorkerCommand};
-use crate::runtime::ShellRuntime;
+use crate::bar::service_worker::{self, CommandSender, WorkerCommand};
+use crate::runtime::ShellSurfaces;
 use crate::widgets::MediaControl;
 use gpui::{App, ElementId, IntoElement, RenderOnce, StyleRefinement, Styled, Window};
-use shilpo_services::{MediaCommand, MediaInfo, PlaybackState};
+use shilpo_device_protocol::{DeviceCommand, MediaAction};
+use shilpo_services::{MediaInfo, PlaybackState};
 
 /// MPRIS Media player preview widget for Shilpo status bar.
 #[derive(IntoElement)]
@@ -53,17 +54,17 @@ impl RenderOnce for MediaWidget {
             .can_go_next(self.info.can_go_next)
             .progress(progress)
             .vertical(self.vertical)
-            .reduced_motion(ShellRuntime::overview_reduced_motion(cx))
+            .reduced_motion(ShellSurfaces::overview_reduced_motion(cx))
             .on_play_pause(move |_, _, _| {
                 let _ = service_worker::try_send_command(
                     &cmd_tx_play,
-                    WorkerCommand::Device(DeviceCommand::Media(MediaCommand::PlayPause)),
+                    WorkerCommand::Device(DeviceCommand::Media(MediaAction::PlayPause)),
                 );
             })
             .on_next(move |_, _, _| {
                 let _ = service_worker::try_send_command(
                     &cmd_tx_next,
-                    WorkerCommand::Device(DeviceCommand::Media(MediaCommand::Next)),
+                    WorkerCommand::Device(DeviceCommand::Media(MediaAction::Next)),
                 );
             })
     }

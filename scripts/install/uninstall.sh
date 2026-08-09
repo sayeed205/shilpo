@@ -29,7 +29,10 @@ uninstall_shilpo() {
   for unit in "${SHILPO_USER_UNITS[@]}"; do
     unit_files+=("$systemd_user_dir/$unit")
   done
-  unit_files+=("$dbus_service_dir/org.shilpo.Theme.service")
+  unit_files+=(
+    "$dbus_service_dir/org.shilpo.Theme.service"
+    "$dbus_service_dir/org.shilpo.Device.service"
+  )
   run rm -f "${unit_files[@]}"
 
   # Remove executables
@@ -37,6 +40,7 @@ uninstall_shilpo() {
     "$bin_dir/shilpo" \
     "$bin_dir/shilpo-shell" \
     "$bin_dir/shilpo-themed" \
+    "$bin_dir/shilpo-device-daemon" \
     "$bin_dir/shilpo-settings"
 
   if command -v systemctl >/dev/null 2>&1; then

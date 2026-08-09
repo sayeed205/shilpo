@@ -110,11 +110,34 @@ pub struct SettingsView {
     pub page_registry: SettingsPageRegistry,
     pub rail_collapsed: bool,
     pub theme_client: shilpo_theme_daemon::ThemeClient,
+    pub device_client: shilpo_device_client::DeviceClient,
+    pub device_states: std::collections::HashMap<
+        shilpo_device_protocol::DeviceDomain,
+        shilpo_device_protocol::DomainState,
+    >,
 }
 
 impl SettingsView {
     pub fn new(theme_client: shilpo_theme_daemon::ThemeClient, cx: &mut Context<Self>) -> Self {
         let page_registry = SettingsPageRegistry::discover();
+        let device_client = shilpo_device_client::DeviceClient::new();
+        let mut device_updates = device_client.subscribe_updates();
+        let device_client_task = device_client.clone();
+        cx.spawn(async move |_this, _cx| {
+            device_client_task.maintain_connection().await;
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            while let Ok(update) = device_updates.recv().await {
+                if let Some(this) = this.upgrade() {
+                    this.update(cx, |view, cx| {
+                        view.device_states.insert(update.domain, update.state);
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
 
         // 1. Immediately apply current theme state to GPUI Theme
         let current_theme = theme_client.current_state();
@@ -154,6 +177,22 @@ impl SettingsView {
             page_registry,
             rail_collapsed: false,
             theme_client,
+            device_client,
+            device_states: shilpo_device_protocol::DeviceDomain::ALL
+                .into_iter()
+                .map(|domain| {
+                    (
+                        domain,
+                        shilpo_device_protocol::DomainState {
+                            domain,
+                            revision: 0,
+                            lifecycle: shilpo_device_protocol::DomainLifecycle::Unavailable,
+                            payload: shilpo_device_protocol::DomainPayload::empty(domain),
+                            error: None,
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 
@@ -273,7 +312,13 @@ impl Render for SettingsView {
                                     )),
                             )
                             .child(if active == SettingsCategory::Quick {
-                                quick_page::QuickPage::render(&self.theme_client, _window, cx).into_any_element()
+                                quick_page::QuickPage::render(
+                                    &self.theme_client,
+                                    &self.device_client,
+                                    &self.device_states,
+                                    _window,
+                                    cx,
+                                ).into_any_element()
                             } else {
                                 v_flex()
                                     .flex_1()

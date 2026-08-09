@@ -4,7 +4,7 @@ use gpui::{
 };
 use shilpo_ui::{ActiveTheme, Icon, IconName};
 
-/// Settings & Control Center trigger button widget for Shilpo status bar.
+/// Settings trigger button widget for the Shilpo status bar.
 #[derive(IntoElement)]
 pub struct SettingsWidget {
     id: ElementId,

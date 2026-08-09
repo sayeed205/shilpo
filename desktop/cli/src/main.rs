@@ -107,7 +107,7 @@ async fn main() {
                         let data = serde_json::json!({ "unit_active": unit_active, "ipc": status });
                         output.success(
                                 "shell.status", &data,
-                                Some(&format!("Systemd active: {unit_active}\nInstance ID: {}\nPID: {}\nReadiness: {:?}\nBar State: {:?}\nOverview Visible: {}\nControl Center Visible: {}", status.instance_id, status.pid, status.readiness, status.bar, status.overview_visible, status.control_center_visible)),
+                                Some(&format!("Systemd active: {unit_active}\nInstance ID: {}\nPID: {}\nReadiness: {:?}\nBar State: {:?}\nOverview Visible: {}", status.instance_id, status.pid, status.readiness, status.bar, status.overview_visible)),
                                 Vec::new(),
                             )
                     }
@@ -260,25 +260,6 @@ async fn main() {
                 ),
                 Err((code, msg)) => {
                     output.error("overview", "ipc_failed", &msg, None, Vec::new(), code)
-                }
-            }
-        }
-        Commands::ControlCenter { action } => {
-            let ipc = IpcAdapter::new();
-            let res = match action {
-                VisibilityAction::Show => ipc.control_center_show(),
-                VisibilityAction::Hide => ipc.control_center_hide(),
-                VisibilityAction::Toggle => ipc.control_center_toggle(),
-            };
-            match res {
-                Ok(()) => output.success(
-                    "control_center",
-                    &serde_json::json!({ "action": format!("{action:?}") }),
-                    Some(&format!("Control center action {action:?} applied")),
-                    Vec::new(),
-                ),
-                Err((code, msg)) => {
-                    output.error("control_center", "ipc_failed", &msg, None, Vec::new(), code)
                 }
             }
         }

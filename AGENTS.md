@@ -28,11 +28,13 @@ The workspace is split into two tiers (see [ADR-0001](docs/adr/0001-cross-platfo
 
 #### Linux Desktop (`desktop/` — internal, never published)
 
-- **[`shilpo-shell`](desktop/shell)**: Desktop shell daemon — bar, control center, workspace overview, notifications,
+- **[`shilpo-shell`](desktop/shell)**: Desktop shell daemon — bar, workspace overview, notifications,
   OSD, extension surfaces, shell-specific widgets.
 - **[`shilpo-settings`](desktop/settings)**: Control panel application — same product as shell, separate binary.
 - **[`shilpo-services`](desktop/services)**: System service integrations — Wayland/Niri, audio, bluetooth, brightness,
   network, notifications, media, tray, upower, IPC.
+- **[`shilpo-device-protocol`](desktop/device-protocol)**: Desktop-only versioned device domain, lifecycle, command, and outcome types shared by the daemon and clients.
+- **[`shilpo-device-client`](desktop/device-client)**: Presentation-neutral typed DBus client used by Shell and Settings; owns reconnect/degraded projections and client-side debounce.
 - **[`shilpo-config`](desktop/config)**: TOML configuration, XDG directory resolution, LMDB session storage.
 - **[`shilpo-ext-types`](desktop/ext-types)**: Extension ID types (`ExtensionId`, `ContributionId`, `CanonicalId`) and string validation logic.
 - **[`shilpo-ext`](desktop/ext)**: Wasmtime-sandboxed extension runtime with capability-based security.
