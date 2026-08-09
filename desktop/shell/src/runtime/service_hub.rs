@@ -223,6 +223,10 @@ impl ServiceHub {
         self.device_snapshot.clone()
     }
 
+    pub(crate) fn service_availability(&self) -> crate::bar::service_worker::ServiceAvailability {
+        self.availability.clone()
+    }
+
     pub(crate) fn is_dnd_enabled(&self) -> bool {
         self.notification
             .as_ref()
@@ -403,12 +407,37 @@ impl ServiceHub {
                         ShellSurfaces::reconcile_bar_extension_instances(cx);
                     }
                     crate::bar::service_worker::WorkerUpdate::Battery(info) => {
+                        if info.available
+                            && !info.is_present
+                            && ShellRuntime::service_availability(cx).battery_state
+                                == shilpo_services::ServiceLifecycle::Ready
+                        {
+                            crate::bar::cards::adapter::CardCoordinator::dispatch(
+                                cx,
+                                crate::bar::cards::model::CardRequest::AnchorRemoved {
+                                    owner: crate::bar::cards::model::CardOwnerId::new("battery"),
+                                },
+                            );
+                        }
+                        crate::bar::cards::adapter::CardCoordinator::refresh_owner(
+                            cx,
+                            &crate::bar::cards::model::CardOwnerId::new("battery"),
+                        );
                         ShellRuntime::dispatch_extension_event(
                             cx,
                             shilpo_ext::ExtensionEvent::PowerChanged {
                                 percentage: info.is_present.then_some(info.percentage as f32),
-                                charging: info.is_charging,
+                                charging: info.is_charging(),
                             },
+                        );
+                    }
+                    crate::bar::service_worker::WorkerUpdate::ServiceStateChange {
+                        service: "battery",
+                        ..
+                    } => {
+                        crate::bar::cards::adapter::CardCoordinator::refresh_owner(
+                            cx,
+                            &crate::bar::cards::model::CardOwnerId::new("battery"),
                         );
                     }
                     crate::bar::service_worker::WorkerUpdate::Network(info) => {
@@ -469,6 +498,13 @@ impl ShellRuntime {
         cx.global::<Self>()
             .service_hub()
             .map(|hub| hub.device_snapshot())
+            .unwrap_or_default()
+    }
+
+    pub fn service_availability(cx: &App) -> crate::bar::service_worker::ServiceAvailability {
+        cx.global::<Self>()
+            .service_hub()
+            .map(|hub| hub.service_availability())
             .unwrap_or_default()
     }
 

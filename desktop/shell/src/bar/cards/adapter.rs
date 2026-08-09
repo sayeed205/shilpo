@@ -72,6 +72,12 @@ impl CardCoordinator {
             .insert(owner_id, provider);
     }
 
+    pub(crate) fn register_provider_direct(&mut self, provider: Arc<dyn CardProvider>) {
+        let owner_id = provider.owner_id();
+        tracing::debug!(owner = %owner_id, "card provider registered directly");
+        self.providers.insert(owner_id, provider);
+    }
+
     /// Remove a provider.  Dispatches `OwnerRemoved` dismiss into the state
     /// machine to cleanly close any open card for that owner.
     #[allow(dead_code)]
@@ -119,7 +125,8 @@ impl CardCoordinator {
             | CardRequest::SourceLeave { owner }
             | CardRequest::PreviewEnter { owner }
             | CardRequest::PreviewLeave { owner } => (owner, true, false),
-            CardRequest::PersistentToggle { owner } => (owner, false, true),
+            CardRequest::PersistentToggle { owner }
+            | CardRequest::PersistentToggleAt { owner, .. } => (owner, false, true),
             _ => return true,
         };
         let Some(provider) = cx
@@ -166,6 +173,37 @@ impl CardCoordinator {
 
     pub(crate) fn preview_band_displays(&self) -> impl Iterator<Item = DisplayId> + '_ {
         self.preview_bands.keys().copied()
+    }
+
+    /// Re-render any open card owned by `owner` after its authoritative data changes.
+    pub(crate) fn refresh_owner(cx: &mut App, owner: &CardOwnerId) {
+        let handles = {
+            let coordinator = &cx
+                .global::<ShellRuntime>()
+                .shell_surfaces()
+                .card_coordinator;
+            [CardChannel::Persistent, CardChannel::Preview]
+                .into_iter()
+                .filter_map(|channel| {
+                    let slot = match channel {
+                        CardChannel::Persistent => &coordinator.state.persistent,
+                        CardChannel::Preview => &coordinator.state.preview,
+                    };
+                    if slot.owner.as_ref() != Some(owner) || !slot.is_open() {
+                        return None;
+                    }
+                    let display = slot.display_id?;
+                    match channel {
+                        CardChannel::Persistent => coordinator.persistent_bands.get(&display),
+                        CardChannel::Preview => coordinator.preview_bands.get(&display),
+                    }
+                    .copied()
+                })
+                .collect::<Vec<_>>()
+        };
+        for handle in handles {
+            let _ = handle.update(cx, |_, _, cx| cx.notify());
+        }
     }
 
     fn project_lifecycle(
@@ -404,7 +442,7 @@ impl CardCoordinator {
         }
 
         // Get anchor bounds and placement info from the provider.
-        let (anchor_bounds, display_id, size_tier) = {
+        let (provider_anchor, size_tier) = {
             let coordinator = &cx
                 .global::<ShellRuntime>()
                 .shell_surfaces()
@@ -412,20 +450,30 @@ impl CardCoordinator {
             if let Some(p) = coordinator.providers.get(&owner) {
                 let anchor = p.anchor_bounds(cx);
                 let tier = p.size_tier();
-                match anchor {
-                    Some((b, d)) => (b, d, tier),
-                    None => {
-                        tracing::warn!(
-                            owner = %owner,
-                            "card open: provider has no anchor bounds, skipping"
-                        );
-                        Self::dismiss_failed_open(cx, channel);
-                        return;
-                    }
-                }
+                (anchor, tier)
             } else {
                 return;
             }
+        };
+
+        let state_anchor = {
+            let state = &cx
+                .global::<ShellRuntime>()
+                .shell_surfaces()
+                .card_coordinator
+                .state;
+            let slot = match channel {
+                CardChannel::Persistent => &state.persistent,
+                CardChannel::Preview => &state.preview,
+            };
+            (slot.owner.as_ref() == Some(&owner))
+                .then(|| slot.anchor_bounds.zip(slot.display_id))
+                .flatten()
+        };
+        let Some((anchor_bounds, display_id)) = state_anchor.or(provider_anchor) else {
+            tracing::warn!(owner = %owner, "card open: provider has no anchor bounds, skipping");
+            Self::dismiss_failed_open(cx, channel);
+            return;
         };
 
         // Get collision bounds (persistent card bounds when opening preview).

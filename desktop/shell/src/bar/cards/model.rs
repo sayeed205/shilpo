@@ -143,6 +143,11 @@ pub enum CardRequest {
     PersistentToggle {
         owner: CardOwnerId,
     },
+    PersistentToggleAt {
+        owner: CardOwnerId,
+        bounds: Bounds<Pixels>,
+        display_id: DisplayId,
+    },
 
     // ── anchor geometry update ───────────────────────────────────
     AnchorUpdate {
@@ -425,6 +430,19 @@ impl CardState {
                 } else {
                     // Toggle on — replace any existing persistent card.
                     effects.append(&mut self.open_persistent(owner));
+                }
+            }
+            CardRequest::PersistentToggleAt {
+                owner,
+                bounds,
+                display_id,
+            } => {
+                if self.persistent.owner.as_ref() == Some(&owner) && self.persistent.is_open() {
+                    effects.append(&mut self.close_persistent(CardDismissReason::SourceToggle));
+                } else {
+                    effects.append(&mut self.open_persistent(owner));
+                    self.persistent.anchor_bounds = Some(bounds);
+                    self.persistent.display_id = Some(display_id);
                 }
             }
 
@@ -1614,5 +1632,22 @@ mod tests {
             generation: close_generation(&effects),
         });
         assert!(!state.holds_bar_visibility());
+    }
+
+    #[test]
+    fn persistent_activation_captures_exact_source_anchor() {
+        let mut state = CardState::default();
+        let source_bounds = bounds();
+        let display_id = DisplayId::new(9);
+
+        state.reduce(CardRequest::PersistentToggleAt {
+            owner: owner("battery"),
+            bounds: source_bounds,
+            display_id,
+        });
+
+        assert_eq!(state.persistent.anchor_bounds, Some(source_bounds));
+        assert_eq!(state.persistent.display_id, Some(display_id));
+        assert!(state.persistent.is_open());
     }
 }
