@@ -259,12 +259,269 @@ pub struct MediaPayload {
     pub length_secs: f64,
     pub rate: f64,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, zvariant::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, zvariant::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum BatteryChargeState {
+    #[default]
+    Unknown,
+    Charging,
+    Discharging,
+    Empty,
+    FullyCharged,
+    PendingCharge,
+    PendingDischarge,
+}
+
+impl BatteryChargeState {
+    pub fn is_charging(&self) -> bool {
+        matches!(self, Self::Charging | Self::PendingCharge)
+    }
+
+    pub fn from_u32(val: u32) -> Self {
+        match val {
+            1 => Self::Charging,
+            2 => Self::Discharging,
+            3 => Self::Empty,
+            4 => Self::FullyCharged,
+            5 => Self::PendingCharge,
+            6 => Self::PendingDischarge,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, zvariant::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum BatteryTechnology {
+    #[default]
+    Unknown,
+    LithiumIon,
+    LithiumPolymer,
+    LithiumIronPhosphate,
+    LeadAcid,
+    NickelCadmium,
+    NickelMetalHydride,
+}
+
+impl BatteryTechnology {
+    pub fn from_u32(val: u32) -> Self {
+        match val {
+            1 => Self::LithiumIon,
+            2 => Self::LithiumPolymer,
+            3 => Self::LithiumIronPhosphate,
+            4 => Self::LeadAcid,
+            5 => Self::NickelCadmium,
+            6 => Self::NickelMetalHydride,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, zvariant::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum BatteryWarningLevel {
+    #[default]
+    Unknown,
+    None,
+    Discharging,
+    Low,
+    Critical,
+    Action,
+}
+
+impl BatteryWarningLevel {
+    pub fn from_u32(val: u32) -> Self {
+        match val {
+            1 => Self::None,
+            2 => Self::Discharging,
+            3 => Self::Low,
+            4 => Self::Critical,
+            5 => Self::Action,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, zvariant::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum BatteryCoarseLevel {
+    #[default]
+    Unknown,
+    None,
+    Low,
+    CriticallyLow,
+    Action,
+    Normal,
+    High,
+    Full,
+}
+
+impl BatteryCoarseLevel {
+    pub fn from_u32(val: u32) -> Self {
+        match val {
+            1 => Self::None,
+            3 => Self::Low,
+            4 => Self::CriticallyLow,
+            5 => Self::Action,
+            6 => Self::Normal,
+            7 => Self::High,
+            8 => Self::Full,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// DBus-safe optional floating-point battery metric.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize, zvariant::Type)]
+pub struct OptionalF64 {
+    present: bool,
+    value: f64,
+}
+
+impl OptionalF64 {
+    pub const fn none() -> Self {
+        Self {
+            present: false,
+            value: 0.0,
+        }
+    }
+
+    pub const fn some(value: f64) -> Self {
+        Self {
+            present: true,
+            value,
+        }
+    }
+
+    pub const fn get(self) -> Option<f64> {
+        if self.present { Some(self.value) } else { None }
+    }
+}
+
+/// DBus-safe optional unsigned integer battery metric.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, zvariant::Type)]
+pub struct OptionalU64 {
+    present: bool,
+    value: u64,
+}
+
+impl OptionalU64 {
+    pub const fn none() -> Self {
+        Self {
+            present: false,
+            value: 0,
+        }
+    }
+
+    pub const fn some(value: u64) -> Self {
+        Self {
+            present: true,
+            value,
+        }
+    }
+
+    pub const fn get(self) -> Option<u64> {
+        if self.present { Some(self.value) } else { None }
+    }
+}
+
+/// DBus-safe optional boolean battery property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, zvariant::Type)]
+pub struct OptionalBool {
+    present: bool,
+    value: bool,
+}
+
+impl OptionalBool {
+    pub const fn none() -> Self {
+        Self {
+            present: false,
+            value: false,
+        }
+    }
+
+    pub const fn some(value: bool) -> Self {
+        Self {
+            present: true,
+            value,
+        }
+    }
+
+    pub const fn get(self) -> Option<bool> {
+        if self.present { Some(self.value) } else { None }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, zvariant::Type)]
+pub struct BatteryDevicePayload {
+    /// Stable UPower object path; used for selection identity, never diagnostics.
+    pub id: String,
+    pub vendor: String,
+    pub model: String,
+    pub serial: String,
+    pub native_path: String,
+    pub is_present: bool,
+    pub power_supply: bool,
+    pub percentage: OptionalF64,
+    pub technology: BatteryTechnology,
+    pub charge_state: BatteryChargeState,
+    pub time_to_empty_secs: OptionalU64,
+    pub time_to_full_secs: OptionalU64,
+    pub energy_wh: OptionalF64,
+    pub energy_empty_wh: OptionalF64,
+    pub energy_full_wh: OptionalF64,
+    pub energy_full_design_wh: OptionalF64,
+    pub energy_rate_w: OptionalF64,
+    pub capacity_percent: OptionalF64,
+    pub voltage_v: OptionalF64,
+    pub voltage_min_design_v: OptionalF64,
+    pub voltage_max_design_v: OptionalF64,
+    pub temperature_c: OptionalF64,
+    pub cycle_count: OptionalU64,
+    pub update_time: OptionalU64,
+    pub is_rechargeable: OptionalBool,
+    pub warning_level: BatteryWarningLevel,
+    pub coarse_level: BatteryCoarseLevel,
+    pub has_history: bool,
+    pub has_statistics: bool,
+    pub charge_start_threshold: OptionalU64,
+    pub charge_end_threshold: OptionalU64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, zvariant::Type)]
 pub struct BatteryPayload {
     pub available: bool,
-    pub percentage: u8,
-    pub is_charging: bool,
     pub is_present: bool,
+    pub percentage: u8,
+    pub state: BatteryChargeState,
+    pub time_to_full_secs: OptionalU64,
+    pub time_to_empty_secs: OptionalU64,
+    pub energy_wh: OptionalF64,
+    pub energy_empty_wh: OptionalF64,
+    pub energy_full_wh: OptionalF64,
+    pub energy_full_design_wh: OptionalF64,
+    pub energy_rate_w: OptionalF64,
+    pub capacity_percent: OptionalF64,
+    pub voltage_v: OptionalF64,
+    pub temperature_c: OptionalF64,
+    pub warning_level: BatteryWarningLevel,
+    pub coarse_level: BatteryCoarseLevel,
+    pub update_time: OptionalU64,
+    pub devices: Vec<BatteryDevicePayload>,
+}
+
+impl BatteryPayload {
+    pub fn is_charging(&self) -> bool {
+        self.state.is_charging()
+    }
+
+    pub fn is_low_battery(&self) -> bool {
+        self.is_present && !self.is_charging() && self.percentage < 15
+    }
+
+    pub fn low_power_mode(&self) -> bool {
+        self.is_present && !self.is_charging() && self.percentage < 20
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, zvariant::Type)]
 pub struct CaffeinePayload {
@@ -655,5 +912,153 @@ mod tests {
 
         let toggle_mute = DeviceCommand::Audio(AudioAction::ToggleMute);
         assert!(!toggle_mute.is_coalescable());
+    }
+
+    #[test]
+    fn test_battery_charge_state_conversions() {
+        assert_eq!(BatteryChargeState::from_u32(0), BatteryChargeState::Unknown);
+        assert_eq!(
+            BatteryChargeState::from_u32(1),
+            BatteryChargeState::Charging
+        );
+        assert_eq!(
+            BatteryChargeState::from_u32(2),
+            BatteryChargeState::Discharging
+        );
+        assert_eq!(BatteryChargeState::from_u32(3), BatteryChargeState::Empty);
+        assert_eq!(
+            BatteryChargeState::from_u32(4),
+            BatteryChargeState::FullyCharged
+        );
+        assert_eq!(
+            BatteryChargeState::from_u32(5),
+            BatteryChargeState::PendingCharge
+        );
+        assert_eq!(
+            BatteryChargeState::from_u32(6),
+            BatteryChargeState::PendingDischarge
+        );
+        assert_eq!(
+            BatteryChargeState::from_u32(99),
+            BatteryChargeState::Unknown
+        );
+
+        assert!(BatteryChargeState::Charging.is_charging());
+        assert!(BatteryChargeState::PendingCharge.is_charging());
+        assert!(!BatteryChargeState::Discharging.is_charging());
+    }
+
+    #[test]
+    fn test_battery_technology_conversions() {
+        assert_eq!(BatteryTechnology::from_u32(0), BatteryTechnology::Unknown);
+        assert_eq!(
+            BatteryTechnology::from_u32(1),
+            BatteryTechnology::LithiumIon
+        );
+        assert_eq!(
+            BatteryTechnology::from_u32(2),
+            BatteryTechnology::LithiumPolymer
+        );
+        assert_eq!(
+            BatteryTechnology::from_u32(3),
+            BatteryTechnology::LithiumIronPhosphate
+        );
+        assert_eq!(BatteryTechnology::from_u32(4), BatteryTechnology::LeadAcid);
+        assert_eq!(
+            BatteryTechnology::from_u32(5),
+            BatteryTechnology::NickelCadmium
+        );
+        assert_eq!(
+            BatteryTechnology::from_u32(6),
+            BatteryTechnology::NickelMetalHydride
+        );
+        assert_eq!(BatteryTechnology::from_u32(999), BatteryTechnology::Unknown);
+    }
+
+    #[test]
+    fn test_battery_warning_level_conversions() {
+        assert_eq!(
+            BatteryWarningLevel::from_u32(0),
+            BatteryWarningLevel::Unknown
+        );
+        assert_eq!(BatteryWarningLevel::from_u32(1), BatteryWarningLevel::None);
+        assert_eq!(
+            BatteryWarningLevel::from_u32(2),
+            BatteryWarningLevel::Discharging
+        );
+        assert_eq!(BatteryWarningLevel::from_u32(3), BatteryWarningLevel::Low);
+        assert_eq!(
+            BatteryWarningLevel::from_u32(4),
+            BatteryWarningLevel::Critical
+        );
+        assert_eq!(
+            BatteryWarningLevel::from_u32(5),
+            BatteryWarningLevel::Action
+        );
+        assert_eq!(
+            BatteryWarningLevel::from_u32(100),
+            BatteryWarningLevel::Unknown
+        );
+    }
+
+    #[test]
+    fn test_battery_coarse_level_conversions() {
+        assert_eq!(BatteryCoarseLevel::from_u32(0), BatteryCoarseLevel::Unknown);
+        assert_eq!(BatteryCoarseLevel::from_u32(1), BatteryCoarseLevel::None);
+        assert_eq!(BatteryCoarseLevel::from_u32(2), BatteryCoarseLevel::Unknown);
+        assert_eq!(BatteryCoarseLevel::from_u32(3), BatteryCoarseLevel::Low);
+        assert_eq!(
+            BatteryCoarseLevel::from_u32(4),
+            BatteryCoarseLevel::CriticallyLow
+        );
+        assert_eq!(BatteryCoarseLevel::from_u32(5), BatteryCoarseLevel::Action);
+        assert_eq!(BatteryCoarseLevel::from_u32(6), BatteryCoarseLevel::Normal);
+        assert_eq!(BatteryCoarseLevel::from_u32(7), BatteryCoarseLevel::High);
+        assert_eq!(BatteryCoarseLevel::from_u32(8), BatteryCoarseLevel::Full);
+        assert_eq!(
+            BatteryCoarseLevel::from_u32(42),
+            BatteryCoarseLevel::Unknown
+        );
+    }
+
+    #[test]
+    fn test_battery_payload_roundtrip() {
+        let device = BatteryDevicePayload {
+            id: "/org/freedesktop/UPower/devices/battery_BAT0".to_string(),
+            vendor: "LGC".to_string(),
+            model: "L19M4P72".to_string(),
+            serial: "1234".to_string(),
+            native_path: "/sys/class/power_supply/BAT0".to_string(),
+            technology: BatteryTechnology::LithiumIon,
+            charge_state: BatteryChargeState::Discharging,
+            energy_wh: OptionalF64::some(45.2),
+            capacity_percent: OptionalF64::some(94.5),
+            ..Default::default()
+        };
+        let payload = BatteryPayload {
+            available: true,
+            is_present: true,
+            percentage: 82,
+            state: BatteryChargeState::Discharging,
+            time_to_empty_secs: OptionalU64::some(14400),
+            devices: vec![device],
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&payload).expect("serialize JSON");
+        let deserialized: BatteryPayload = serde_json::from_str(&json).expect("deserialize JSON");
+        assert_eq!(payload, deserialized);
+        assert!(deserialized.is_present);
+        assert!(!deserialized.is_charging());
+    }
+
+    #[test]
+    fn optional_battery_metrics_preserve_zero_and_absence_distinctly() {
+        assert_eq!(OptionalF64::some(0.0).get(), Some(0.0));
+        assert_eq!(OptionalF64::none().get(), None);
+        assert_eq!(OptionalU64::some(0).get(), Some(0));
+        assert_eq!(OptionalU64::none().get(), None);
+        assert_eq!(OptionalBool::some(false).get(), Some(false));
+        assert_eq!(OptionalBool::none().get(), None);
     }
 }

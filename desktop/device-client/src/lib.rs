@@ -794,4 +794,71 @@ mod tests {
         assert_eq!(shell_degraded.lifecycle, DomainLifecycle::Reconnecting);
         assert_eq!(shell_degraded, settings_degraded);
     }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn battery_projection_retains_last_known_payload_during_reconnect() {
+        use shilpo_device_protocol::{BatteryChargeState, BatteryPayload};
+        use shilpo_services::{DeviceDaemonService, DeviceDbusService, InMemoryDeviceAdapter};
+        use std::os::unix::net::UnixStream;
+        use std::sync::Arc;
+
+        let (server_socket, client_socket) = UnixStream::pair().unwrap();
+        let adapter = Arc::new(InMemoryDeviceAdapter::new());
+        let daemon = Arc::new(DeviceDaemonService::new(adapter.clone()));
+        let server_builder = zbus::connection::Builder::unix_stream(server_socket)
+            .server(zbus::Guid::generate())
+            .unwrap()
+            .p2p()
+            .serve_at("/org/shilpo/Device", DeviceDbusService::new(daemon))
+            .unwrap();
+        let client_builder = zbus::connection::Builder::unix_stream(client_socket).p2p();
+        let (server, connection) =
+            futures_lite::future::zip(server_builder.build(), client_builder.build()).await;
+        let server_connection = server.unwrap();
+        let connection = connection.unwrap();
+
+        let client = DeviceClient::new();
+        client.connect_on(connection).await.unwrap();
+
+        let initial_battery = client.get_domain_state(DeviceDomain::Battery);
+        assert_eq!(initial_battery.lifecycle, DomainLifecycle::Ready);
+
+        // Update local domain state with a known battery snapshot
+        let known_payload = BatteryPayload {
+            available: true,
+            is_present: true,
+            percentage: 75,
+            state: BatteryChargeState::Discharging,
+            ..Default::default()
+        };
+        let mut ready_state = initial_battery;
+        ready_state.revision += 1;
+        ready_state.payload = DomainPayload::Battery(known_payload.clone());
+        client.update_local_domain_state(ready_state);
+
+        let active_state = client.get_domain_state(DeviceDomain::Battery);
+        assert_eq!(active_state.lifecycle, DomainLifecycle::Ready);
+        assert_eq!(
+            active_state.payload,
+            DomainPayload::Battery(known_payload.clone())
+        );
+
+        // Drop server connection to simulate daemon loss
+        drop(server_connection);
+        for _ in 0..20 {
+            if !client.is_connected() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let reconnecting_state = client.get_domain_state(DeviceDomain::Battery);
+        assert_eq!(reconnecting_state.lifecycle, DomainLifecycle::Reconnecting);
+        // Payload must be preserved during reconnect!
+        assert_eq!(
+            reconnecting_state.payload,
+            DomainPayload::Battery(known_payload)
+        );
+    }
 }

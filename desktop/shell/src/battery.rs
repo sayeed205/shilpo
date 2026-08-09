@@ -43,7 +43,7 @@ impl BatteryVisualState {
         }
 
         let percentage = info.percentage.min(100);
-        let mode = if info.is_charging {
+        let mode = if info.is_charging() {
             BatteryVisualMode::Charging
         } else if info.is_low_battery() {
             BatteryVisualMode::Low
@@ -205,6 +205,7 @@ impl RenderOnce for BatteryIndicator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shilpo_services::BatteryChargeState;
 
     #[test]
     fn absent_battery_has_no_visual_state() {
@@ -214,9 +215,11 @@ mod tests {
     #[test]
     fn normal_percentage_and_fill_are_derived_from_production_state() {
         let state = BatteryVisualState::from_info(&BatteryInfo {
-            percentage: 60,
-            is_charging: false,
+            available: true,
             is_present: true,
+            percentage: 60,
+            state: BatteryChargeState::Discharging,
+            ..Default::default()
         })
         .expect("present battery");
 
@@ -228,15 +231,19 @@ mod tests {
     #[test]
     fn empty_and_full_batteries_map_to_fill_bounds() {
         let empty = BatteryVisualState::from_info(&BatteryInfo {
-            percentage: 0,
-            is_charging: false,
+            available: true,
             is_present: true,
+            percentage: 0,
+            state: BatteryChargeState::Empty,
+            ..Default::default()
         })
         .expect("present battery");
         let full = BatteryVisualState::from_info(&BatteryInfo {
-            percentage: 100,
-            is_charging: false,
+            available: true,
             is_present: true,
+            percentage: 100,
+            state: BatteryChargeState::FullyCharged,
+            ..Default::default()
         })
         .expect("present battery");
 
@@ -247,15 +254,19 @@ mod tests {
     #[test]
     fn low_battery_threshold_uses_battery_service_policy() {
         let low = BatteryVisualState::from_info(&BatteryInfo {
-            percentage: 14,
-            is_charging: false,
+            available: true,
             is_present: true,
+            percentage: 14,
+            state: BatteryChargeState::Discharging,
+            ..Default::default()
         })
         .expect("present battery");
         let normal = BatteryVisualState::from_info(&BatteryInfo {
-            percentage: 15,
-            is_charging: false,
+            available: true,
             is_present: true,
+            percentage: 15,
+            state: BatteryChargeState::Discharging,
+            ..Default::default()
         })
         .expect("present battery");
 
@@ -266,15 +277,19 @@ mod tests {
     #[test]
     fn charging_takes_precedence_over_low_battery() {
         let charging = BatteryVisualState::from_info(&BatteryInfo {
-            percentage: 58,
-            is_charging: true,
+            available: true,
             is_present: true,
+            percentage: 58,
+            state: BatteryChargeState::Charging,
+            ..Default::default()
         })
         .expect("present battery");
         let charging_low = BatteryVisualState::from_info(&BatteryInfo {
-            percentage: 10,
-            is_charging: true,
+            available: true,
             is_present: true,
+            percentage: 10,
+            state: BatteryChargeState::Charging,
+            ..Default::default()
         })
         .expect("present battery");
 
@@ -287,9 +302,11 @@ mod tests {
     #[test]
     fn malformed_percentage_is_clamped() {
         let state = BatteryVisualState::from_info(&BatteryInfo {
-            percentage: 150,
-            is_charging: false,
+            available: true,
             is_present: true,
+            percentage: 150,
+            state: BatteryChargeState::Discharging,
+            ..Default::default()
         })
         .expect("present battery");
 

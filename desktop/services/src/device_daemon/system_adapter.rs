@@ -118,11 +118,6 @@ fn payload_for(domain: DeviceDomain, payload: serde_json::Value) -> DomainPayloa
             DomainPayload::Media(serde_json::from_value(payload).unwrap_or_default())
         }
         DeviceDomain::Battery => {
-            let mut payload = payload;
-            payload["available"] = payload
-                .get("is_present")
-                .cloned()
-                .unwrap_or(serde_json::Value::Bool(false));
             DomainPayload::Battery(serde_json::from_value(payload).unwrap_or_default())
         }
         DeviceDomain::Caffeine => {
