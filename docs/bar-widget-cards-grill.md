@@ -142,6 +142,11 @@ No permanent user-facing feature flag is planned. Any temporary internal gate us
 
 ## Verification contract
 
+Developer integration guidance is maintained in
+[bar-widget-card-integration.md](bar-widget-card-integration.md). Recorded results
+and environment limitations are maintained in
+[bar-widget-card-verification.md](bar-widget-card-verification.md).
+
 Coordinator and placement tests cover hover timing/cancellation, two-channel coexistence, same-owner suppression, replacement, all dismissal paths, disappearing anchors, every bar edge/corner, collision avoidance, monitor transitions, reduced motion, and auto-hide holds. Shell integration tests cover surface lifecycle.
 
 Battery tests cover complete, partial, absent, reconnecting, and multiple-device data. Workspace tests cover empty, single-window, five-window, overflow, active-window viewport, urgency, missing icons, wallpaper pending/failure, and compositor reconnect cases.
@@ -162,4 +167,4 @@ The ADR records dedicated per-monitor surfaces, the two-channel coordinator, own
 
 ## Open decisions
 
-- When Running Apps capture is revisited, grill privacy, protected-content, memory lifetime, and refresh policies before enabling pixel previews.
+- Running Apps pixel previews are deferred to [#67](https://github.com/sayeed205/shilpo/issues/67). Grill privacy, protected-content, memory lifetime, cleanup, backpressure, and refresh policies before enabling them.
