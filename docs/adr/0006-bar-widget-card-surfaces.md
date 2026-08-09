@@ -21,8 +21,9 @@ or one card). Each open entry carries owner identity, monitor, anchor geometry, 
 global, not per-monitor: at most one persistent card and one preview may be visible across the entire shell.
 
 The coordinator is responsible for placement, timing, collision avoidance, focus, dismissal, auto-hide holds, and surface
-lifecycle. Widgets supply a stable identity, independently declared hover and click capabilities, live anchor geometry,
-an internal content provider, and a preferred size tier. The initial provider contract is restricted to built-in widgets.
+lifecycle. Widgets supply a stable source identity, independently declared hover and click capabilities, live anchor
+geometry, an internal content provider, and preferred dimensions for each source/channel. The coordinator clamps those
+dimensions to the available monitor space. The initial provider contract is restricted to built-in widgets.
 
 **Rejected alternative: per-widget surface management.** Letting each widget create and manage its own surface would
 duplicate placement logic, make shell-wide exclusivity unenforceable, and scatter focus and dismissal policies across

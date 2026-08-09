@@ -681,6 +681,11 @@ impl ShellSurfaces {
         manager
             .card_coordinator
             .register_provider_direct(battery_provider);
+        let workspace_provider =
+            std::sync::Arc::new(crate::bar::cards::workspace_card::WorkspacePreviewProvider::new());
+        manager
+            .card_coordinator
+            .register_provider_direct(workspace_provider);
         manager.update_readiness();
         manager
     }

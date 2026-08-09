@@ -5,9 +5,9 @@
 //! separately designed, capability-checked declarative API rather than
 //! implementing this trait directly.
 
-use gpui::{AnyElement, App, Bounds, DisplayId, Pixels, Window};
+use gpui::{AnyElement, App, Pixels, Size, Window};
 
-use super::model::{CardCapabilities, CardChannel, CardOwnerId, CardSizeTier};
+use super::model::{CardCapabilities, CardChannel, CardOwnerId, CardSourceId};
 
 /// Type alias for lazy card content rendering closures.
 pub(crate) type CardContentRenderFn = Box<dyn Fn(&mut Window, &mut App) -> AnyElement + Send>;
@@ -15,7 +15,7 @@ pub(crate) type CardContentRenderFn = Box<dyn Fn(&mut Window, &mut App) -> AnyEl
 /// Interface a built-in card provider must implement.
 ///
 /// Providers supply stable identity, independently declared capabilities,
-/// preferred size tier, live anchor geometry, and lazy content rendering.
+/// preferred dimensions per channel/source, and lazy content rendering.
 /// They never receive surface handles or implement placement or focus policy —
 /// the coordinator owns all of that.
 pub(crate) trait CardProvider: 'static + Send + Sync {
@@ -25,19 +25,26 @@ pub(crate) trait CardProvider: 'static + Send + Sync {
     /// Which interaction channels this provider participates in.
     fn capabilities(&self) -> CardCapabilities;
 
-    /// Preferred maximum card size tier.
-    fn size_tier(&self) -> CardSizeTier;
+    /// Preferred card size for the given channel and source.
+    fn preferred_size(&self, channel: CardChannel, source: &CardSourceId, cx: &App)
+    -> Size<Pixels>;
 
-    /// Current global anchor bounds of the source widget in logical coordinates,
-    /// and the display it lives on.  Returns `None` when the widget is not
-    /// currently mounted (e.g. not in any bar section).
-    fn anchor_bounds(&self, cx: &App) -> Option<(Bounds<Pixels>, DisplayId)>;
+    /// Whether `source` still identifies content owned by this provider.
+    /// Degraded providers may retain cached sources until authoritative data returns.
+    fn source_available(&self, _source: &CardSourceId, _cx: &App) -> bool {
+        true
+    }
 
-    /// Lazily render card content for `channel`.
+    /// Lazily render card content for `channel` and `source`.
     ///
     /// Called only when the coordinator has decided to open the channel for
-    /// this provider.  The returned element is placed inside the M3 card shell
+    /// this source. The returned element is placed inside the M3 card shell
     /// rendered by `CardBandView`.
-    fn render_content(&self, channel: CardChannel, window: &mut Window, cx: &mut App)
-    -> AnyElement;
+    fn render_content(
+        &self,
+        channel: CardChannel,
+        source: &CardSourceId,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement;
 }

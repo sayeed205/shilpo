@@ -17,9 +17,9 @@ Build a coherent card system for bar widgets that can support a deliberate mix o
 - Use a dedicated card surface per monitor rather than fitting cards inside the small bar layer-shell window.
 - A central coordinator owns the active card, trigger mode, source widget, anchor geometry, monitor, focus, and dismissal lifecycle.
 - At most one persistent clicked card and one temporary hover preview may be visible together.
-- Concurrent surfaces remain separate and never overlap. The persistent card keeps placement priority; the hover preview uses the next collision-free placement and may shrink within its tier.
+- Concurrent surfaces remain separate and never overlap. The persistent card keeps placement priority; the hover preview uses the next collision-free placement and may shrink within available monitor space.
 - Clicking another card-enabled widget replaces the persistent card atomically.
-- The internal built-in provider contract accepts a stable widget/card identity, independently declared hover/click capabilities, live anchor geometry and monitor, a content provider/controller, and preferred size tier.
+- The internal built-in provider contract accepts a stable keyed source identity, independently declared hover/click capabilities, live anchor geometry and monitor, a content provider/controller, and preferred dimensions per source/channel.
 - Widgets own their domain content and actions. The coordinator owns surfaces, two-channel state, placement, shell-wide exclusivity, focus, delays, collision, and dismissal.
 - The two explicit channels are `persistent` (zero or one clicked card) and `preview` (zero or one hover card). Each open entry carries owner identity, monitor, anchor, and lifecycle state.
 - Each active monitor may lazily create up to two reusable card surfaces, one per channel. Hidden surfaces clear content; surfaces are destroyed when their monitor disappears or shell configuration is rebuilt.
@@ -58,12 +58,12 @@ Build a coherent card system for bar widgets that can support a deliberate mix o
 - Interactive controls use authoritative service state with a visible pending projection. Confirmation reconciles the projection; rejection or timeout restores authoritative state and reports failure.
 - Card-local action failures appear inline near the affected control and preserve retry context. Routine success is reflected by authoritative state. Global continuous feedback uses the existing OSD. Durable or cross-surface failures use shell notification toasts; an important late failure is promoted if its card has already closed.
 - Cards share surface styling, spacing, corner radius, elevation, motion, and optional section primitives without requiring a universal header or footer.
-- Cards use compact, standard, and expanded sizing tiers constrained by the monitor work area; sparse content may shrink below a tier's maximum.
+- Providers report the dimensions their current source/channel content needs; the coordinator constrains them to the monitor work area.
 - Exclusivity is shell-wide rather than per-monitor. The persistent card and preview may occupy different monitors, but their channel limits remain global.
 - Cards use no triangular pointer/caret. Proximity, motion origin, and the source widget's interaction state communicate ownership.
 - Source widgets follow the text/icon/ghost-button state vocabulary: subtle hover, visible focus when applicable, and a stronger selected container state while persistent content is open. Persistent selection is more prominent than hover-preview selection.
 - Opening uses M3 emphasized easing over roughly 200–250 ms with short inward translation plus fade/scale; previews may be slightly faster. Reduced motion uses a near-instant fade.
-- Rapid traversal cancels pending previews immediately. An already-visible preview survives briefly during transit and is replaced only after the new target satisfies hover intent.
+- The first hover in a source group observes hover intent. Once its preview is visible, traversing sibling sources retargets that same surface immediately with emphasized along-axis movement and no exit/enter cycle. The preview closes only after leaving both the complete source group and preview.
 - Either open or pending channel holds the bar visible; auto-hide is released after both channels and their close delays finish.
 - Persistent cards close when focus moves to an unrelated surface, while legitimate owned child/dialog focus is exempt.
 - Opening Overview closes both channels and cancels pending previews.

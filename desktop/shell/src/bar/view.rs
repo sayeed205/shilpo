@@ -419,7 +419,14 @@ impl BarView {
                     };
                     elements.push(
                         super::widgets::WorkspacesWidget::new(
-                            "workspaces",
+                            format!(
+                                "workspaces_{:?}_{}_{}_{}",
+                                self.display_id,
+                                self.output_name.as_deref().unwrap_or("unknown-output"),
+                                section_name,
+                                index
+                            ),
+                            self.display_id,
                             snapshot.workspaces.clone(),
                             snapshot.connection.clone(),
                             pill_orientation,
