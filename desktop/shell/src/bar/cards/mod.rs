@@ -26,6 +26,7 @@
 //!
 pub(crate) mod adapter;
 pub(crate) mod band;
+pub(crate) mod battery_card;
 pub(crate) mod model;
 pub(crate) mod placement;
 pub(crate) mod provider;

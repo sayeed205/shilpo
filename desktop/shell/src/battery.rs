@@ -1,9 +1,17 @@
+use std::{cell::Cell, rc::Rc};
+
 use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
-    Styled, Window, div, px, relative,
+    App, Bounds, DisplayId, ElementId, InteractiveElement, IntoElement, ParentElement, Pixels,
+    RenderOnce, Role, StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
+    relative,
 };
 use shilpo_services::BatteryInfo;
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, black, green_500, h_flex};
+
+use crate::bar::cards::{
+    adapter::CardCoordinator,
+    model::{CardOwnerId, CardRequest, CardSourceState},
+};
 
 // Android SystemUI renders the unified battery at 20.6 × 12 in the phone status
 // bar. Shilpo's desktop bar and neighboring icons are larger, so scale that
@@ -188,13 +196,54 @@ impl RenderOnce for BatteryIndicator {
             .rounded(px(BATTERY_TERMINAL_WIDTH / 2.))
             .bg(fill_color);
 
+        let owner = CardOwnerId::new("battery");
+        let is_selected =
+            CardCoordinator::source_state(cx, &owner) == CardSourceState::PersistentOpen;
+        let anchor = Rc::new(Cell::new(None::<(Bounds<Pixels>, DisplayId)>));
+        let measured_anchor = anchor.clone();
+
         h_flex()
+            .on_children_prepainted(move |child_bounds, window, cx| {
+                let Some(display_id) = window.display(cx).map(|display| display.id()) else {
+                    return;
+                };
+                let Some(bounds) = child_bounds
+                    .into_iter()
+                    .reduce(|bounds, child| bounds.union(&child))
+                else {
+                    return;
+                };
+                measured_anchor.set(Some((bounds.dilate(px(4.0)), display_id)));
+            })
             .id(self.id)
-            .w(px(BATTERY_VIEWPORT_WIDTH))
-            .h(px(BATTERY_VIEWPORT_HEIGHT))
+            .role(Role::Button)
+            .aria_label("Battery status")
+            .w(px(BATTERY_VIEWPORT_WIDTH + 8.0))
+            .h(px(BATTERY_VIEWPORT_HEIGHT + 8.0))
+            .p(px(4.0))
+            .rounded_md()
             .items_center()
             .justify_center()
             .gap(px(BATTERY_TERMINAL_GAP))
+            .cursor_pointer()
+            .bg(if is_selected {
+                cx.theme().secondary_container
+            } else {
+                gpui::transparent_black()
+            })
+            .hover(|style| style.bg(cx.theme().surface_container_high))
+            .on_click(move |_, _, cx| {
+                if let Some((bounds, display_id)) = anchor.get() {
+                    CardCoordinator::dispatch(
+                        cx,
+                        CardRequest::PersistentToggleAt {
+                            owner: owner.clone(),
+                            bounds,
+                            display_id,
+                        },
+                    );
+                }
+            })
             .refine_style(&self.style)
             .child(body)
             .child(nub)

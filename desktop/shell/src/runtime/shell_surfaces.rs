@@ -665,6 +665,11 @@ impl ShellSurfaces {
             extension_output_ids: HashSet::new(),
             readiness: shilpo_services::ipc::ReadinessState::Starting,
         };
+        let battery_provider =
+            std::sync::Arc::new(crate::bar::cards::battery_card::BatteryCardProvider::new());
+        manager
+            .card_coordinator
+            .register_provider_direct(battery_provider);
         manager.update_readiness();
         manager
     }
