@@ -10,6 +10,7 @@ error() { printf 'error: %s\n' "$*" >&2; }
 SHILPO_USER_UNITS=(
   shilpo-shell.service
   shilpo-themed.service
+  shilpo-device-daemon.service
   shilpo-wallpaper.service
   shilpo-polkit-agent.service
   shilpo-network-agent.service
@@ -21,6 +22,7 @@ SHILPO_USER_UNITS=(
 SHILPO_SESSION_UNITS=(
   shilpo-shell.service
   shilpo-themed.service
+  shilpo-device-daemon.service
   shilpo-wallpaper.service
   shilpo-polkit-agent.service
   shilpo-network-agent.service

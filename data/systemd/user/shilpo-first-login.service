@@ -1,7 +1,7 @@
 [Unit]
 Description=Shilpo Desktop First-Login Doctor Verification
 PartOf=niri.service
-After=niri.service shilpo-shell.service shilpo-themed.service
+After=niri.service shilpo-shell.service shilpo-themed.service shilpo-device-daemon.service
 ConditionPathExists=!@FIRST_LOGIN_MARKER@
 
 [Service]
