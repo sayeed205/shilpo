@@ -96,6 +96,8 @@ pub struct Contributions {
     #[serde(default)]
     pub side_panels: Vec<SidePanelContribution>,
     #[serde(default)]
+    pub control_center: Vec<ControlCenterContribution>,
+    #[serde(default)]
     pub launcher_providers: Vec<LauncherProviderContribution>,
     #[serde(default)]
     pub actions: Vec<ActionContribution>,
@@ -127,6 +129,7 @@ named_contribution!(DesktopWidgetContribution {
 });
 named_contribution!(SettingsPageContribution { schema: String });
 named_contribution!(SidePanelContribution {});
+named_contribution!(ControlCenterContribution {});
 named_contribution!(LauncherProviderContribution {});
 named_contribution!(ActionContribution {});
 named_contribution!(BackgroundTaskContribution {});
@@ -350,6 +353,11 @@ impl Contributions {
             )
             .chain(
                 self.side_panels
+                    .iter()
+                    .map(|entry| (&entry.id, entry.name.as_str())),
+            )
+            .chain(
+                self.control_center
                     .iter()
                     .map(|entry| (&entry.id, entry.name.as_str())),
             )

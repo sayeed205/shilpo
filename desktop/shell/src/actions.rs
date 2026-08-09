@@ -4,6 +4,7 @@ use std::{borrow::Cow, collections::BTreeMap, fmt, str::FromStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BuiltinActionId {
+    ToggleControlCenter,
     ToggleBar,
     ToggleOverview,
     FocusWorkspace,
@@ -23,6 +24,7 @@ pub enum BuiltinActionId {
 
 impl BuiltinActionId {
     const ALL: &'static [Self] = &[
+        Self::ToggleControlCenter,
         Self::ToggleBar,
         Self::ToggleOverview,
         Self::FocusWorkspace,
@@ -42,6 +44,7 @@ impl BuiltinActionId {
 
     fn name(self) -> &'static str {
         match self {
+            Self::ToggleControlCenter => "toggle_control_center",
             Self::ToggleBar => "toggle_bar",
             Self::ToggleOverview => "toggle_overview",
             Self::FocusWorkspace => "focus_workspace",
@@ -62,7 +65,8 @@ impl BuiltinActionId {
 
     pub fn input_requirement(self) -> ActionInputRequirement {
         match self {
-            Self::ToggleBar
+            Self::ToggleControlCenter
+            | Self::ToggleBar
             | Self::ToggleOverview
             | Self::CreateWorkspace
             | Self::ReloadConfig
@@ -103,6 +107,7 @@ pub struct ActionId(Cow<'static, str>);
 
 #[allow(non_upper_case_globals)]
 impl ActionId {
+    pub const ToggleControlCenter: Self = Self(Cow::Borrowed("builtin:toggle_control_center"));
     pub const ToggleBar: Self = Self(Cow::Borrowed("builtin:toggle_bar"));
     pub const ToggleOverview: Self = Self(Cow::Borrowed("builtin:toggle_overview"));
     pub const FocusWorkspace: Self = Self(Cow::Borrowed("builtin:focus_workspace"));
@@ -200,6 +205,7 @@ pub enum ActionCategory {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionInvocation {
+    ToggleControlCenter,
     ToggleBar,
     ToggleOverview,
     FocusWorkspace(u64),
@@ -246,6 +252,7 @@ struct WindowWorkspaceActionInput {
 impl ActionInvocation {
     pub fn id(&self) -> ActionId {
         match self {
+            Self::ToggleControlCenter => ActionId::ToggleControlCenter,
             Self::ToggleBar => ActionId::ToggleBar,
             Self::ToggleOverview => ActionId::ToggleOverview,
             Self::FocusWorkspace(_) => ActionId::FocusWorkspace,
@@ -285,6 +292,7 @@ impl ActionInvocation {
         match builtin.input_requirement() {
             ActionInputRequirement::NoInput => match payload {
                 None | Some(serde_json::Value::Null) => match builtin {
+                    BuiltinActionId::ToggleControlCenter => Ok(Self::ToggleControlCenter),
                     BuiltinActionId::ToggleBar => Ok(Self::ToggleBar),
                     BuiltinActionId::ToggleOverview => Ok(Self::ToggleOverview),
                     BuiltinActionId::CreateWorkspace => Ok(Self::CreateWorkspace),
@@ -437,6 +445,7 @@ impl ActionRegistry {
 
 fn builtin_descriptor(id: BuiltinActionId) -> ActionDescriptor {
     let (label, category) = match id {
+        BuiltinActionId::ToggleControlCenter => ("Toggle Control Center", ActionCategory::Overlay),
         BuiltinActionId::ToggleBar => ("Toggle Desktop Bar", ActionCategory::System),
         BuiltinActionId::ToggleOverview => ("Toggle Workspace Overview", ActionCategory::Overlay),
         BuiltinActionId::FocusWorkspace => {
@@ -471,6 +480,7 @@ fn builtin_descriptor(id: BuiltinActionId) -> ActionDescriptor {
 
 fn action_id(id: BuiltinActionId) -> ActionId {
     match id {
+        BuiltinActionId::ToggleControlCenter => ActionId::ToggleControlCenter,
         BuiltinActionId::ToggleBar => ActionId::ToggleBar,
         BuiltinActionId::ToggleOverview => ActionId::ToggleOverview,
         BuiltinActionId::FocusWorkspace => ActionId::FocusWorkspace,
@@ -543,6 +553,7 @@ impl KeybindingManager {
         let mut mgr = Self::new();
         let defaults = [
             ("super+space", ActionId::ToggleOverview),
+            ("super+c", ActionId::ToggleControlCenter),
             ("super+b", ActionId::ToggleBar),
             ("super+shift+r", ActionId::ReloadConfig),
             ("super+shift+q", ActionId::Quit),
@@ -638,6 +649,10 @@ mod tests {
 
         assert_eq!(
             find_req(&ActionId::ToggleOverview),
+            ActionInputRequirement::NoInput
+        );
+        assert_eq!(
+            find_req(&ActionId::ToggleControlCenter),
             ActionInputRequirement::NoInput
         );
         assert_eq!(
@@ -877,8 +892,11 @@ mod tests {
     #[test]
     fn shortcut_conflict_detection() {
         let mut mgr = KeybindingManager::new();
-        let sc = Shortcut::parse("super+b").unwrap();
-        assert!(mgr.register(sc.clone(), ActionId::ToggleBar).is_ok());
+        let sc = Shortcut::parse("super+c").unwrap();
+        assert!(
+            mgr.register(sc.clone(), ActionId::ToggleControlCenter)
+                .is_ok()
+        );
 
         // Conflict registration should fail with diagnostic
         let err = mgr.register(sc, ActionId::Quit).unwrap_err();

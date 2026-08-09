@@ -2,10 +2,6 @@ use gpui::{
     App, ImageSource, IntoElement, ObjectFit, ParentElement, SharedString, Styled, StyledImage,
     Window, div, img, prelude::FluentBuilder as _, px,
 };
-use shilpo_device_client::DeviceClient;
-use shilpo_device_protocol::{
-    AudioAction, DeviceCommand, DeviceDomain, DomainPayload, DomainState, NetworkAction,
-};
 use shilpo_theme::{SchemeVariant, ThemeMode};
 use shilpo_theme_daemon::ThemeClient;
 use shilpo_ui::scroll::ScrollableElement;
@@ -35,8 +31,6 @@ impl QuickPage {
     /// Render the Quick Settings page containing Wallpaper & Color controls.
     pub fn render(
         theme_client: &ThemeClient,
-        device_client: &DeviceClient,
-        device_states: &std::collections::HashMap<DeviceDomain, DomainState>,
         _window: &mut Window,
         cx: &mut App,
     ) -> impl IntoElement {
@@ -58,91 +52,6 @@ impl QuickPage {
                 current_mode,
                 cx,
             ))
-            .child(Self::render_device_controls(
-                device_client,
-                device_states,
-                cx,
-            ))
-    }
-
-    fn render_device_controls(
-        client: &DeviceClient,
-        states: &std::collections::HashMap<DeviceDomain, DomainState>,
-        cx: &App,
-    ) -> impl IntoElement {
-        let audio = states.get(&DeviceDomain::Audio);
-        let volume = audio
-            .and_then(|state| match &state.payload {
-                DomainPayload::Audio(payload) => Some(payload.volume),
-                _ => None,
-            })
-            .unwrap_or(0);
-        let wifi = states
-            .get(&DeviceDomain::Network)
-            .and_then(|state| match &state.payload {
-                DomainPayload::Network(payload) => Some(payload.wifi_enabled),
-                _ => None,
-            })
-            .unwrap_or(false);
-        let client_down = client.clone();
-        let client_up = client.clone();
-        let client_wifi = client.clone();
-        v_flex()
-            .w_full()
-            .gap_3()
-            .child(
-                div()
-                    .text_lg()
-                    .font_bold()
-                    .text_color(cx.theme().on_surface)
-                    .child("Live device controls"),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(div().text_sm().child(format!("Volume {volume}%")))
-                    .child(
-                        Button::new("volume-down")
-                            .label("−")
-                            .on_click(move |_, _, _| {
-                                let client = client_down.clone();
-                                DeviceClient::spawn_command(
-                                    client,
-                                    DeviceCommand::Audio(AudioAction::SetVolume(
-                                        volume.saturating_sub(5),
-                                    )),
-                                );
-                            }),
-                    )
-                    .child(
-                        Button::new("volume-up")
-                            .label("+")
-                            .on_click(move |_, _, _| {
-                                let client = client_up.clone();
-                                DeviceClient::spawn_command(
-                                    client,
-                                    DeviceCommand::Audio(AudioAction::SetVolume(
-                                        (volume + 5).min(100),
-                                    )),
-                                );
-                            }),
-                    ),
-            )
-            .child(
-                Button::new("wifi-toggle")
-                    .label(if wifi {
-                        "Disable Wi-Fi"
-                    } else {
-                        "Enable Wi-Fi"
-                    })
-                    .on_click(move |_, _, _| {
-                        let client = client_wifi.clone();
-                        DeviceClient::spawn_command(
-                            client,
-                            DeviceCommand::Network(NetworkAction::SetWifiEnabled(!wifi)),
-                        );
-                    }),
-            )
     }
 
     /// The main Wallpaper & Colors section:

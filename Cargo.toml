@@ -8,8 +8,6 @@ members = [
 
     # Linux desktop shell crates
     "desktop/services",
-    "desktop/device-protocol",
-    "desktop/device-client",
     "desktop/config",
     "desktop/ext-types",
     "desktop/ext",
@@ -34,8 +32,6 @@ shilpo-ui = { path = "core/ui" }
 shilpo-assets = { path = "core/assets" }
 shilpo-macros = { path = "core/macros" }
 shilpo-services = { path = "desktop/services" }
-shilpo-device-protocol = { path = "desktop/device-protocol" }
-shilpo-device-client = { path = "desktop/device-client" }
 shilpo-config = { path = "desktop/config" }
 shilpo-ext-types = { path = "desktop/ext-types" }
 shilpo-ext = { path = "desktop/ext" }
@@ -43,8 +39,7 @@ shilpo-theme-daemon = { path = "desktop/theme-daemon" }
 shilpo-capture = { path = "desktop/capture" }
 
 niri-ipc = "26"
-zbus = { version = "5", features = ["p2p"] }
-zvariant = "5"
+zbus = "5"
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "settings", "screencast", "screenshot"] }
 futures-lite = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

@@ -7909,31 +7909,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shilpo-device-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures-lite",
- "serde",
- "serde_json",
- "shilpo-device-protocol",
- "shilpo-services",
- "tokio",
- "tracing",
- "zbus",
-]
-
-[[package]]
-name = "shilpo-device-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "zvariant",
-]
-
-[[package]]
 name = "shilpo-ext"
 version = "0.1.0"
 dependencies = [
@@ -7998,13 +7973,11 @@ dependencies = [
  "serde_json",
  "shilpo-capture",
  "shilpo-config",
- "shilpo-device-protocol",
  "smol",
  "tempfile",
  "tokio",
  "tokio-udev",
  "tracing",
- "tracing-subscriber",
  "uuid",
  "wayland-client",
  "wayland-protocols",
@@ -8026,8 +7999,6 @@ dependencies = [
  "serde_json",
  "shilpo-assets",
  "shilpo-config",
- "shilpo-device-client",
- "shilpo-device-protocol",
  "shilpo-ext",
  "shilpo-services",
  "shilpo-theme",
@@ -8058,8 +8029,6 @@ dependencies = [
  "shilpo-assets",
  "shilpo-capture",
  "shilpo-config",
- "shilpo-device-client",
- "shilpo-device-protocol",
  "shilpo-ext",
  "shilpo-ext-types",
  "shilpo-services",
@@ -8103,7 +8072,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "uuid",
  "zbus",
 ]
 

@@ -15,6 +15,7 @@ An extension may contribute one or more:
 - bar widgets;
 - desktop widgets;
 - side-panel pages;
+- control-center entries;
 - settings pages;
 - launcher providers;
 - shell actions;
@@ -378,10 +379,10 @@ height = 180
 Shilpo owns drag, resize, output migration, stacking, and edit mode. Geometry is stored per instance, independently from
 extension settings.
 
-### Side panel
+### Side panel and control center
 
-Side-panel contributions are registered by canonical ID and may be opened by an extension action, a bar widget, or
-user keybinding:
+Side-panel contributions are registered by canonical ID and may be opened by an extension action, a control-center
+entry, a bar widget, or user keybinding:
 
 ```toml
 [[keybindings]]

@@ -27,6 +27,7 @@
         "actions": [],
         "background_tasks": [],
         "bar_widgets": [],
+        "control_center": [],
         "desktop_widgets": [],
         "launcher_providers": [],
         "settings_pages": [],
@@ -427,6 +428,13 @@
             "$ref": "#/$defs/BarWidgetContribution"
           }
         },
+        "control_center": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ControlCenterContribution"
+          }
+        },
         "desktop_widgets": {
           "type": "array",
           "default": [],
@@ -457,6 +465,22 @@
         }
       },
       "additionalProperties": false
+    },
+    "ControlCenterContribution": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ContributionId"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ]
     },
     "DesktopWidgetContribution": {
       "type": "object",

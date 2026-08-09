@@ -1,10 +1,8 @@
-use gpui::{App, QuitMode};
+use gpui::{App, Bounds, DisplayId, QuitMode, point, px, size};
 use shilpo_assets::Assets;
+use shilpo_config::ShellConfig;
 use shilpo_services::ShellIpcServer;
-use shilpo_shell::{
-    ShellRuntime,
-    runtime::{ShellSurfaces, SurfaceRequest},
-};
+use shilpo_shell::{ShellRuntime, bar::geometry::BarGeometry};
 
 #[tokio::main]
 async fn main() {
@@ -96,14 +94,14 @@ async fn main() {
 
         let displays = cx.displays();
         if !displays.is_empty() {
-            ShellSurfaces::request(cx, SurfaceRequest::SyncDisplays);
+            ShellRuntime::sync_displays(cx);
         } else {
-            schedule_bar_retry(cx);
+            schedule_bar_retry(cx, config);
         }
     });
 }
 
-fn schedule_bar_retry(cx: &App) {
+fn schedule_bar_retry(cx: &App, config: ShellConfig) {
     cx.spawn(async move |cx| {
         for _ in 0..20 {
             cx.background_executor()
@@ -115,7 +113,7 @@ fn schedule_bar_retry(cx: &App) {
                 if displays.is_empty() {
                     return false;
                 }
-                ShellSurfaces::request(cx, SurfaceRequest::SyncDisplays);
+                ShellRuntime::sync_displays(cx);
                 true
             });
             if opened {
@@ -125,7 +123,12 @@ fn schedule_bar_retry(cx: &App) {
 
         tracing::warn!("primary display unavailable after 1s; opening degraded bar");
         cx.update(|cx| {
-            ShellSurfaces::request(cx, SurfaceRequest::OpenFallbackBar);
+            let geometry = BarGeometry::calculate(
+                DisplayId::new(0),
+                Bounds::new(point(px(0.), px(0.)), size(px(0.), px(0.))),
+                &config.bar,
+            );
+            ShellRuntime::open_bar(cx, &geometry, false);
         });
     })
     .detach();

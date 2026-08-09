@@ -44,6 +44,9 @@ pub enum IpcRequest {
     ShowBar,
     HideBar,
     ToggleBar,
+    ShowControlCenter,
+    HideControlCenter,
+    ToggleControlCenter,
     ShowOverview,
     HideOverview,
     ToggleOverview,
@@ -150,6 +153,7 @@ pub struct IpcStatus {
     pub readiness: ReadinessState,
     pub bar: BarState,
     pub overview_visible: bool,
+    pub control_center_visible: bool,
     #[serde(default)]
     pub health: ServiceHealth,
 }
@@ -946,6 +950,7 @@ mod tests {
             readiness: ReadinessState::Ready,
             bar: BarState::Visible,
             overview_visible: true,
+            control_center_visible: false,
             health: health.clone(),
             ..Default::default()
         });
@@ -960,6 +965,7 @@ mod tests {
         assert_eq!(status_resp.readiness, ReadinessState::Ready);
         assert_eq!(status_resp.bar, BarState::Visible);
         assert!(status_resp.overview_visible);
+        assert!(!status_resp.control_center_visible);
         assert!(!status_resp.instance_id.is_empty());
         assert!(status_resp.pid > 0);
 
@@ -1105,6 +1111,7 @@ mod tests {
             readiness: ReadinessState::Degraded,
             bar: BarState::OpenFailed,
             overview_visible: false,
+            control_center_visible: true,
             health: ServiceHealth {
                 compositor_connected: true,
                 compositor_state: "ready".into(),
@@ -1126,6 +1133,7 @@ mod tests {
         assert_eq!(value["readiness"], "degraded");
         assert_eq!(value["bar"], "open_failed");
         assert_eq!(value["overview_visible"], false);
+        assert_eq!(value["control_center_visible"], true);
         assert_eq!(value["health"]["compositor_connected"], true);
         assert_eq!(value["health"]["uptime_seconds"], 120);
         assert!(value.get("message").is_none());

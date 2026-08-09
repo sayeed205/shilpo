@@ -145,6 +145,20 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
                     minimum_size: None,
                 });
             }
+            for cc in &manifest.contributions.control_center {
+                descriptors.push(ContributionDescriptor {
+                    id: CanonicalId {
+                        extension_id: extension_id.clone(),
+                        contribution_id: cc.id.clone(),
+                    },
+                    extension_name: manifest.name.clone(),
+                    name: cc.name.clone(),
+                    surface: ContributionSurface::ControlCenter,
+                    settings_schema: None,
+                    default_size: None,
+                    minimum_size: None,
+                });
+            }
             for launcher in &manifest.contributions.launcher_providers {
                 descriptors.push(ContributionDescriptor {
                     id: CanonicalId {

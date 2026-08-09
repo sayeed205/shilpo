@@ -26,7 +26,7 @@ The system must support:
 
 - bar widgets;
 - desktop widgets such as clocks, notes, and monitors;
-- side-panel pages;
+- side-panel pages and control-center entries;
 - extension-owned settings pages;
 - launcher providers and shell actions;
 - background behavior reacting to typed shell events;
@@ -156,7 +156,7 @@ Each surface owns a thin adapter from a contribution to an existing Shilpo surfa
 
 - bar adapter;
 - desktop widget adapter;
-- side-panel adapter;
+- side-panel/control-center adapter;
 - settings adapter;
 - launcher adapter;
 - action adapter;
@@ -352,6 +352,7 @@ Contributions describe what an extension adds. They do not grant permission to p
 | `bar_widget`        | Zero or more instances per output and bar section | Orientation, height, spacing, accessibility, and interaction routing |
 | `desktop_widget`    | Zero or more persistent instances per output      | Bounds, drag/resize, stacking, output migration, and edit mode       |
 | `side_panel`        | Singleton or per-output instance                  | Surface placement, focus, dismissal, and size constraints            |
+| `control_center`    | Singleton entry, optionally opening a side panel  | Placement and unavailable/error presentation                         |
 | `settings_page`     | Singleton                                         | Navigation, save/cancel, validation, and permission display          |
 | `launcher_provider` | Singleton background provider                     | Debounce, result limits, cancellation, and launch routing            |
 | `action`            | Singleton descriptor                              | Keybinding discovery, enablement, dispatch, and diagnostics          |

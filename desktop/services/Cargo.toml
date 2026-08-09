@@ -16,10 +16,9 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 tracing.workspace = true
-uuid = { workspace = true, features = ["v4"] }
-tracing-subscriber.workspace = true
 dirs.workspace = true
 smol.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 image.workspace = true
 libc = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
@@ -28,7 +27,6 @@ wayland-protocols.workspace = true
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 rustix = { version = "1", features = ["fs"] }
 shilpo-config = { path = "../config" }
-shilpo-device-protocol = { workspace = true }
 shilpo-capture.workspace = true
 tokio-udev = { workspace = true }
 notify.workspace = true

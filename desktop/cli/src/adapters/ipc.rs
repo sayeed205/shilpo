@@ -49,6 +49,18 @@ impl IpcAdapter {
         self.request(IpcRequest::ToggleOverview)
     }
 
+    pub fn control_center_show(&self) -> Result<(), (i32, String)> {
+        self.request(IpcRequest::ShowControlCenter)
+    }
+
+    pub fn control_center_hide(&self) -> Result<(), (i32, String)> {
+        self.request(IpcRequest::HideControlCenter)
+    }
+
+    pub fn control_center_toggle(&self) -> Result<(), (i32, String)> {
+        self.request(IpcRequest::ToggleControlCenter)
+    }
+
     pub fn bar_show(&self) -> Result<(), (i32, String)> {
         self.request(IpcRequest::ShowBar)
     }

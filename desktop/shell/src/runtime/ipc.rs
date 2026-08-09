@@ -7,7 +7,7 @@ use crate::{
     error::ShellError,
 };
 
-use super::{ShellRuntime, ShellSurfaces};
+use super::ShellRuntime;
 
 impl ShellRuntime {
     pub fn save_audio_preference(cx: &App, device: Option<String>, port: Option<String>) {
@@ -102,25 +102,38 @@ impl ShellRuntime {
         for request in requests {
             match request {
                 IpcRequest::ShowBar => {
-                    if !ShellSurfaces::has_bars(cx) {
+                    if !Self::has_bars(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                     }
                 }
                 IpcRequest::HideBar => {
-                    if ShellSurfaces::has_bars(cx) {
+                    if Self::has_bars(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                     }
                 }
                 IpcRequest::ToggleBar => {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                 }
+                IpcRequest::ShowControlCenter => {
+                    if !Self::is_control_center_open(cx) {
+                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
+                    }
+                }
+                IpcRequest::HideControlCenter => {
+                    if Self::is_control_center_open(cx) {
+                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
+                    }
+                }
+                IpcRequest::ToggleControlCenter => {
+                    let _ = Self::dispatch_action(cx, ActionInvocation::ToggleControlCenter);
+                }
                 IpcRequest::ShowOverview => {
-                    if !ShellSurfaces::is_overview_open(cx) {
+                    if !Self::is_overview_open(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
                     }
                 }
                 IpcRequest::HideOverview => {
-                    if ShellSurfaces::is_overview_open(cx) {
+                    if Self::is_overview_open(cx) {
                         let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
                     }
                 }
@@ -154,23 +167,22 @@ impl ShellRuntime {
                 IpcRequest::SetBrightness(pct) => {
                     Self::dispatch_device_command(
                         cx,
-                        shilpo_device_protocol::DeviceCommand::Brightness(
-                            shilpo_device_protocol::BrightnessAction::SetBrightness(pct),
-                        ),
+                        crate::bar::service_worker::DeviceCommand::Brightness(pct),
                     );
                 }
-                IpcRequest::SetDisplayBrightness { id: _, percentage } => {
+                IpcRequest::SetDisplayBrightness { id, percentage } => {
                     Self::dispatch_device_command(
                         cx,
-                        shilpo_device_protocol::DeviceCommand::Brightness(
-                            shilpo_device_protocol::BrightnessAction::SetBrightness(percentage),
-                        ),
+                        crate::bar::service_worker::DeviceCommand::DisplayBrightness {
+                            id,
+                            percentage,
+                        },
                     );
                 }
                 IpcRequest::GetStatus => {}
                 IpcRequest::GetTelemetry => {}
                 IpcRequest::Capture(intent) => {
-                    ShellSurfaces::request(cx, super::SurfaceRequest::OpenCapture(intent));
+                    Self::open_capture_overlay(cx, intent);
                 }
             }
         }
@@ -182,12 +194,13 @@ impl ShellRuntime {
         let status = IpcStatus {
             running: runtime.readiness() != shilpo_services::ipc::ReadinessState::Failed,
             readiness: runtime.readiness(),
-            bar: if runtime.shell_surfaces.bars_are_open() {
+            bar: if runtime.surface_manager.has_bars() {
                 shilpo_services::ipc::BarState::Visible
             } else {
                 shilpo_services::ipc::BarState::Hidden
             },
-            overview_visible: runtime.shell_surfaces.overview_is_open(),
+            overview_visible: runtime.surface_manager.is_overview_open(),
+            control_center_visible: runtime.surface_manager.is_control_center_open(),
             health: shilpo_services::ServiceHealth::default(),
             instance_id: std::process::id().to_string(),
             pid: std::process::id(),

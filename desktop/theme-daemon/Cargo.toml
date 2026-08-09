@@ -22,7 +22,6 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
 
 [[bin]]
 name = "shilpo-themed"

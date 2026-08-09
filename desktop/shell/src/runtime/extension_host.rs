@@ -10,7 +10,7 @@ use crate::{
 };
 use gpui::App;
 
-use super::{ShellRuntime, shell_surfaces::ShellSurfaces};
+use super::{ShellRuntime, surface_manager::SurfaceManager};
 
 /// Owns the wasm extension runtime (coordinator), its in-flight task registry,
 /// and the location service used by extension effects.
@@ -161,7 +161,7 @@ impl ExtensionHost {
         }
     }
 
-    pub fn mount_contribution(&self, contribution: &CanonicalId, width: f32, height: f32) {
+    pub(crate) fn mount_contribution(&self, contribution: &CanonicalId, width: f32, height: f32) {
         if let Some(ext) = &self.extensions
             && let Err(error) = ext.send_command(ExtensionCommand::Lifecycle {
                 expected: ext.generation(),
@@ -177,7 +177,7 @@ impl ExtensionHost {
         }
     }
 
-    pub fn unmount_contribution(&self, contribution: &CanonicalId) {
+    pub(crate) fn unmount_contribution(&self, contribution: &CanonicalId) {
         if let Some(ext) = &self.extensions
             && let Err(error) = ext.send_command(ExtensionCommand::Lifecycle {
                 expected: ext.generation(),
@@ -280,7 +280,7 @@ impl ExtensionHost {
             .is_some_and(|s| s.catalog_changed_at.is_some())
         {
             Self::sync_extension_actions(cx);
-            ShellSurfaces::reconcile_bar_extension_instances(cx);
+            SurfaceManager::reconcile_bar_extension_instances(cx);
         }
 
         for (extension_id, effect) in update.effects {
@@ -348,10 +348,7 @@ impl ExtensionHost {
                 let mut notification = shilpo_services::Notification::new(title, body);
                 notification.app_name = extension_id.to_string();
                 notification.app_icon = icon;
-                super::ShellSurfaces::request(
-                    cx,
-                    super::SurfaceRequest::ShowNotification(notification),
-                );
+                crate::bar::view::open_notification_toast(cx, notification);
             }
             shilpo_ext::AuthorizedHostEffectKind::NonHttp(
                 shilpo_ext::HostEffect::SetThemeSource { color },
@@ -601,7 +598,7 @@ mod tests {
         );
         let id = ExtensionId::new("org.shilpo.weather").unwrap();
         assert_eq!(
-            crate::runtime::shell_surfaces::extension_settings(
+            crate::runtime::surface_manager::extension_settings(
                 &config,
                 &id,
                 Some(&serde_json::json!({"show_condition": true}))

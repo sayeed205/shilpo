@@ -1,7 +1,6 @@
 use crate::adapters::{DesktopAdapter, select_desktop_adapter};
-use crate::dbus::{ActorMessage, EffectStatus, ThemeDbusService};
-use crate::executors::{AdapterExecutor, PersistenceExecutor, ProjectionStatus};
-use crate::persistence::read_state_snapshot;
+use crate::dbus::{ActorMessage, ThemeDbusService};
+use crate::persistence::{read_state_snapshot, write_state_snapshot};
 use crate::portal::PortalObserver;
 use anyhow::Result;
 use image::DynamicImage;
@@ -15,7 +14,6 @@ use shilpo_theme::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
@@ -97,8 +95,6 @@ pub struct WallpaperTaskResult {
 pub struct ThemeDaemon {
     state: DaemonState,
     adapter: Arc<dyn DesktopAdapter>,
-    persistence_executor: PersistenceExecutor,
-    adapter_executor: AdapterExecutor,
     config_path: PathBuf,
     actor_rx: mpsc::UnboundedReceiver<ActorMessage>,
     portal_rx: mpsc::UnboundedReceiver<Option<ThemeMode>>,
@@ -106,7 +102,6 @@ pub struct ThemeDaemon {
     wallpaper_result_rx: mpsc::UnboundedReceiver<WallpaperTaskResult>,
     current_wallpaper_op: Arc<AtomicU64>,
     _conn: Connection,
-    effects: Arc<Mutex<EffectStatus>>,
 }
 
 impl ThemeDaemon {
@@ -152,20 +147,7 @@ impl ThemeDaemon {
             configured_variant,
         );
 
-        let persistence_executor = PersistenceExecutor::new(None);
-        let adapter_executor = AdapterExecutor::new(adapter.clone());
-        let effects = Arc::new(Mutex::new(EffectStatus {
-            durable_revision: persistence_executor.durable_revision(),
-            projection_status: adapter_executor.status(),
-        }));
-
-        // Startup reconciliation: reapply persisted resolved mode through desktop adapter
-        adapter_executor.project(
-            initial_state.theme.revision,
-            initial_state.theme.resolved_mode,
-        );
-
-        let service = ThemeDbusService::new(actor_tx, effects.clone());
+        let service = ThemeDbusService::new(actor_tx);
         let conn = Builder::session()?
             .name("org.shilpo.Theme")?
             .serve_at("/org/shilpo/Theme", service)?
@@ -179,8 +161,6 @@ impl ThemeDaemon {
         let daemon = Self {
             state: initial_state,
             adapter,
-            persistence_executor,
-            adapter_executor,
             config_path,
             actor_rx,
             portal_rx,
@@ -188,13 +168,9 @@ impl ThemeDaemon {
             wallpaper_result_rx: wp_rx,
             current_wallpaper_op: Arc::new(AtomicU64::new(0)),
             _conn: conn.clone(),
-            effects,
         };
 
-        let _ = daemon
-            .persistence_executor
-            .persist(daemon.state.clone())
-            .await;
+        let _ = write_state_snapshot(&daemon.state);
         let startup_update = ThemeUpdate {
             state: daemon.state.clone(),
             change_kind: ChangeKind::full(),
@@ -212,24 +188,6 @@ impl ThemeDaemon {
         }
 
         Ok(daemon)
-    }
-
-    pub fn committed_revision(&self) -> u64 {
-        self.state.theme.revision
-    }
-
-    pub fn durable_revision(&self) -> u64 {
-        self.persistence_executor.durable_revision()
-    }
-
-    pub fn projection_status(&self) -> ProjectionStatus {
-        self.adapter_executor.status()
-    }
-
-    pub async fn shutdown(&self, deadline: std::time::Duration) -> bool {
-        self.persistence_executor
-            .shutdown_with_deadline(deadline)
-            .await
     }
 
     pub async fn run(mut self) {
@@ -257,7 +215,6 @@ impl ThemeDaemon {
     }
 
     async fn handle_actor_message(&mut self, msg: ActorMessage) {
-        self.refresh_effect_status();
         match msg {
             ActorMessage::GetState(reply) => {
                 self.sync_wallpaper_dir_from_config();
@@ -266,10 +223,6 @@ impl ThemeDaemon {
             ActorMessage::GetDiagnostics(reply) => {
                 self.sync_wallpaper_dir_from_config();
                 let diag = serde_json::json!({
-                    "committed_revision": self.state.theme.revision,
-                    "durable_revision": self.persistence_executor.durable_revision(),
-                    "persistence_error": self.persistence_executor.last_error(),
-                    "projection_status": self.adapter_executor.status(),
                     "revision": self.state.theme.revision,
                     "selected_mode": self.state.theme.selected_mode,
                     "resolved_mode": self.state.theme.resolved_mode,
@@ -281,22 +234,24 @@ impl ThemeDaemon {
                 let _ = reply.send(diag.to_string());
             }
             ActorMessage::SetMode(mode, reply) => {
-                let result = self
-                    .process_command(DaemonCommand::Theme(ThemeCommand::SetMode(mode)))
-                    .await;
-                self.respond_after_durable(reply, result);
+                let _ = reply.send(
+                    self.process_command(DaemonCommand::Theme(ThemeCommand::SetMode(mode)))
+                        .await,
+                );
             }
             ActorMessage::ToggleMode(reply) => {
-                let result = self
-                    .process_command(DaemonCommand::Theme(ThemeCommand::ToggleMode))
-                    .await;
-                self.respond_after_durable(reply, result);
+                let _ = reply.send(
+                    self.process_command(DaemonCommand::Theme(ThemeCommand::ToggleMode))
+                        .await,
+                );
             }
             ActorMessage::SetColorSource(source, reply) => {
-                let result = self
-                    .process_command(DaemonCommand::Theme(ThemeCommand::SetColorSource(source)))
-                    .await;
-                self.respond_after_durable(reply, result);
+                let _ = reply.send(
+                    self.process_command(DaemonCommand::Theme(ThemeCommand::SetColorSource(
+                        source,
+                    )))
+                    .await,
+                );
             }
             ActorMessage::SetSchemeVariant(variant, reply) => {
                 let res = self
@@ -311,13 +266,13 @@ impl ThemeDaemon {
                         let _ = config.save(&config_path);
                     }
                 });
-                self.respond_after_durable(reply, res);
+                let _ = reply.send(res);
             }
             ActorMessage::SetCustomSeed(seed, reply) => {
-                let result = self
-                    .process_command(DaemonCommand::Theme(ThemeCommand::SetCustomSeed(seed)))
-                    .await;
-                self.respond_after_durable(reply, result);
+                let _ = reply.send(
+                    self.process_command(DaemonCommand::Theme(ThemeCommand::SetCustomSeed(seed)))
+                        .await,
+                );
             }
             ActorMessage::SetWallpaper(path_str, reply) => {
                 let path = expand_tilde(Path::new(&path_str));
@@ -342,7 +297,7 @@ impl ThemeDaemon {
                         dir.display()
                     ))
                 };
-                self.respond_after_durable(reply, result);
+                let _ = reply.send(result);
             }
             ActorMessage::SetRandomWallpaper(reply) => match self.pick_random_wallpaper() {
                 Ok(path) => self.spawn_wallpaper_task(path, reply),
@@ -350,33 +305,6 @@ impl ThemeDaemon {
                     let _ = reply.send(Err(error));
                 }
             },
-        }
-    }
-
-    fn respond_after_durable(
-        &self,
-        reply: tokio::sync::oneshot::Sender<Result<DaemonState, String>>,
-        result: Result<DaemonState, String>,
-    ) {
-        let executor = self.persistence_executor.clone();
-        let effects = self.effects.clone();
-        let adapter_executor = self.adapter_executor.clone();
-        match result {
-            Err(error) => {
-                let _ = reply.send(Err(error));
-            }
-            Ok(state) => {
-                let revision = state.theme.revision;
-                tokio::spawn(async move {
-                    let result = executor.wait_until_durable(revision).await.map(|durable| {
-                        let mut status = effects.lock().unwrap();
-                        status.durable_revision = durable;
-                        status.projection_status = adapter_executor.status();
-                        state
-                    });
-                    let _ = reply.send(result);
-                });
-            }
         }
     }
 
@@ -487,7 +415,7 @@ impl ThemeDaemon {
                 detected_variant: res.detected_variant,
             })
             .await;
-        self.respond_after_durable(res.reply, result);
+        let _ = res.reply.send(result);
     }
 
     async fn process_command(&mut self, command: DaemonCommand) -> Result<DaemonState, String> {
@@ -515,23 +443,22 @@ impl ThemeDaemon {
                 )
                 .await;
 
-            self.persistence_executor.enqueue(self.state.clone())?;
-            self.refresh_effect_status();
+            let state_to_save = self.state.clone();
+            tokio::task::spawn_blocking(move || {
+                let _ = write_state_snapshot(&state_to_save);
+            });
         }
 
         if let Some(mode) = outcome.dispatch_adapter_mode {
-            self.adapter_executor
-                .project(self.state.theme.revision, mode);
-            self.refresh_effect_status();
+            let adapter = Arc::clone(&self.adapter);
+            tokio::task::spawn_blocking(move || {
+                if let Err(error) = adapter.set_mode(mode) {
+                    tracing::warn!(%error, provider = adapter.name(), "Desktop adapter set_mode failed");
+                }
+            });
         }
 
         Ok(self.state.clone())
-    }
-
-    fn refresh_effect_status(&self) {
-        let mut status = self.effects.lock().unwrap();
-        status.durable_revision = self.persistence_executor.durable_revision();
-        status.projection_status = self.adapter_executor.status();
     }
 
     fn sync_wallpaper_dir_from_config(&mut self) {

@@ -1,6 +1,6 @@
 use crate::actions::ActionInvocation;
 use crate::bar::widgets::pill_strip::PillOrientation;
-use crate::runtime::{ShellRuntime, ShellSurfaces};
+use crate::runtime::ShellRuntime;
 use gpui::{
     App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, RenderOnce, Role,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
@@ -147,10 +147,7 @@ fn render_workspace_dot(
             })
             .on_mouse_down(MouseButton::Right, move |_, _, cx| {
                 cx.stop_propagation();
-                ShellSurfaces::request(
-                    cx,
-                    crate::runtime::SurfaceRequest::OpenOverviewOnDisplay(display_id),
-                );
+                ShellRuntime::open_or_focus_overview_on_display(cx, display_id);
             })
             .into_any_element()
     } else {
@@ -164,7 +161,7 @@ impl RenderOnce for WorkspacesWidget {
         let is_connecting = matches!(self.connection, CompositorConnection::Connecting);
         let is_stopped = workspace_status_label(&self.connection) == Some("Compositor Unavailable");
         let display_id = window.display(cx).map(|display| display.id());
-        let overview_open = ShellSurfaces::is_overview_open(cx);
+        let overview_open = ShellRuntime::is_overview_open(cx);
 
         let mut items: Vec<gpui::AnyElement> = Vec::new();
         let mut occupied_backgrounds: Vec<gpui::AnyElement> = Vec::new();

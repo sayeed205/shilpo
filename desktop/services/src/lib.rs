@@ -5,7 +5,6 @@ pub mod brightness;
 pub mod caffeine;
 pub mod clipboard;
 pub mod compositor;
-pub mod device_daemon;
 pub mod error;
 pub mod ipc;
 pub mod location;
@@ -32,10 +31,6 @@ pub use compositor::{
     CompositorAdapter, CompositorCapabilities, CompositorCommand, CompositorCommandBroker,
     CompositorCommandError, CompositorConnection, CompositorOutput, CompositorSnapshot,
     CompositorTarget, NiriCompositorService, TestCompositorAdapter, WindowInfo, WorkspaceInfo,
-};
-pub use device_daemon::{
-    DeviceAdapter, DeviceDaemonService, DeviceDbusService, InMemoryDeviceAdapter,
-    SystemDeviceAdapter,
 };
 pub use error::ServiceError;
 pub use ipc::{

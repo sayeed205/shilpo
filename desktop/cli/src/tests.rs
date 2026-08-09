@@ -75,6 +75,14 @@ fn test_cli_parser_ui_visibility_actions() {
         })
     ));
 
+    let cli = Cli::try_parse_from(["shilpo", "control-center", "hide"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Commands::ControlCenter {
+            action: VisibilityAction::Hide
+        })
+    ));
+
     let cli = Cli::try_parse_from(["shilpo", "bar", "toggle"]).unwrap();
     assert!(matches!(
         cli.command,

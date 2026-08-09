@@ -21,6 +21,27 @@ impl Default for LocaleCatalogue {
         en_us.insert("settings.general".to_string(), "General".to_string());
         en_us.insert("settings.appearance".to_string(), "Appearance".to_string());
         en_us.insert("settings.about".to_string(), "About".to_string());
+        en_us.insert("control_center.network".to_string(), "Network".to_string());
+        en_us.insert(
+            "control_center.bluetooth".to_string(),
+            "Bluetooth".to_string(),
+        );
+        en_us.insert(
+            "control_center.audio".to_string(),
+            "Audio & Sound".to_string(),
+        );
+        en_us.insert(
+            "control_center.brightness".to_string(),
+            "Brightness".to_string(),
+        );
+        en_us.insert(
+            "control_center.night_light".to_string(),
+            "Night Light".to_string(),
+        );
+        en_us.insert(
+            "control_center.dnd".to_string(),
+            "Do Not Disturb".to_string(),
+        );
         en_us.insert(
             "overview.search_placeholder".to_string(),
             "Search, calculate or run".to_string(),
@@ -32,6 +53,21 @@ impl Default for LocaleCatalogue {
         bn_in.insert("settings.general".to_string(), "সাধারণ".to_string());
         bn_in.insert("settings.appearance".to_string(), "চেহারা".to_string());
         bn_in.insert("settings.about".to_string(), "সম্পর্কে".to_string());
+        bn_in.insert("control_center.network".to_string(), "নেটওয়ার্ক".to_string());
+        bn_in.insert("control_center.bluetooth".to_string(), "ব্লুটুথ".to_string());
+        bn_in.insert("control_center.audio".to_string(), "অডিও ও শব্দ".to_string());
+        bn_in.insert(
+            "control_center.brightness".to_string(),
+            "উজ্জ্বলতা".to_string(),
+        );
+        bn_in.insert(
+            "control_center.night_light".to_string(),
+            "নাইট লাইট".to_string(),
+        );
+        bn_in.insert(
+            "control_center.dnd".to_string(),
+            "বিরক্ত করবেন না".to_string(),
+        );
         bn_in.insert(
             "overview.search_placeholder".to_string(),
             "খুঁজুন, গণনা করুন বা চালান...".to_string(),
@@ -196,7 +232,7 @@ mod tests {
     #[test]
     fn test_production_localization_catalogue_resources() {
         let catalogue = LocaleCatalogue::new("bn-IN");
-        assert_eq!(catalogue.tr("settings.title"), "সেটিংস");
+        assert_eq!(catalogue.tr("control_center.network"), "নেটওয়ার্ক");
         assert_eq!(
             catalogue.tr("overview.search_placeholder"),
             "খুঁজুন, গণনা করুন বা চালান..."

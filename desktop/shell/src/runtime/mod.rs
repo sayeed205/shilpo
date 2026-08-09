@@ -3,22 +3,28 @@ pub mod extension_host;
 pub mod ipc;
 pub mod service_hub;
 pub mod session;
-pub mod shell_surfaces;
+pub mod surface_manager;
 pub mod theme_manager;
 
 pub use action_dispatcher::ActionDispatcher;
 pub use extension_host::ExtensionHost;
 pub use service_hub::ServiceHub;
 pub use session::SessionContext;
-pub use shell_surfaces::{ShellSurfaces, SurfaceRequest, SurfaceSnapshot};
+pub use surface_manager::SurfaceManager;
 
-use shell_surfaces::WindowClosedOutcome;
+use surface_manager::WindowClosedOutcome;
 
 use std::{path::PathBuf, sync::Arc};
 
-use crate::extensions::ExtensionCoordinator;
-use gpui::{App, AppContext, Global, Subscription};
+use gpui::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};
+use gpui::{
+    App, AppContext, Global, Subscription, WindowBackgroundAppearance, WindowKind, WindowOptions,
+};
+use shilpo_capture::{CaptureIntent, capture_frame, frame_to_rgba};
 use shilpo_services::{CompositorSnapshot, ShellIpcServer};
+
+use crate::capture::CaptureOverlayView;
+use crate::extensions::{ContributionSurface, ExtensionCoordinator};
 
 /// The shell runtime orchestrator: composes the deep service modules, watches
 /// the compositor stream, and routes lifecycle events between them.
@@ -28,7 +34,7 @@ use shilpo_services::{CompositorSnapshot, ShellIpcServer};
 pub struct ShellRuntime {
     ipc_server: ShellIpcServer,
     active_config: shilpo_config::ShellConfig,
-    shell_surfaces: ShellSurfaces,
+    surface_manager: SurfaceManager,
     action_dispatcher: ActionDispatcher,
     extension_host: ExtensionHost,
     service_hub: Option<ServiceHub>,
@@ -43,32 +49,6 @@ pub struct ShellRuntime {
 impl Global for ShellRuntime {}
 
 impl ShellRuntime {
-    #[cfg(test)]
-    pub(crate) fn install_for_test(cx: &mut App) {
-        use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!(
-            "shilpo-shell-surface-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let ipc = ShellIpcServer::new_at(&root, &root.join("shilpo-shell/ipc.sock")).unwrap();
-        cx.set_global(Self {
-            ipc_server: ipc,
-            active_config: shilpo_config::ShellConfig::default(),
-            shell_surfaces: ShellSurfaces::new(None, Arc::new(CompositorSnapshot::default())),
-            action_dispatcher: ActionDispatcher::new(),
-            extension_host: ExtensionHost::new(None),
-            service_hub: None,
-            session_state: shilpo_config::ShellSessionState::default(),
-            session_path: root.join("session.json"),
-            heed_store: None,
-            _start_time: std::time::Instant::now(),
-            _window_closed: None,
-            _ipc_task: gpui::Task::ready(()),
-        });
-    }
-
     pub(crate) fn ipc_server(&self) -> &ShellIpcServer {
         &self.ipc_server
     }
@@ -78,7 +58,7 @@ impl ShellRuntime {
     }
 
     pub(crate) fn readiness(&self) -> shilpo_services::ipc::ReadinessState {
-        self.shell_surfaces.readiness()
+        self.surface_manager.readiness()
     }
 
     pub(crate) fn session_state(&self) -> &shilpo_config::ShellSessionState {
@@ -97,12 +77,12 @@ impl ShellRuntime {
         self.heed_store.as_ref()
     }
 
-    pub(crate) fn shell_surfaces(&self) -> &ShellSurfaces {
-        &self.shell_surfaces
+    pub(crate) fn surface_manager(&self) -> &SurfaceManager {
+        &self.surface_manager
     }
 
-    pub(crate) fn shell_surfaces_mut(&mut self) -> &mut ShellSurfaces {
-        &mut self.shell_surfaces
+    pub(crate) fn surface_manager_mut(&mut self) -> &mut SurfaceManager {
+        &mut self.surface_manager
     }
 
     pub(crate) fn action_dispatcher(&self) -> &ActionDispatcher {
@@ -150,16 +130,16 @@ impl ShellRuntime {
         let extensions = ExtensionCoordinator::init(cx.background_executor().clone());
 
         let compositor = hub.compositor();
-        let latest_snapshot = shell_surfaces::attach_compositor_stream(&ipc_server, &compositor);
-        let shell_surfaces =
-            ShellSurfaces::new(initial_wallpaper_path.clone(), latest_snapshot.clone());
+        let latest_snapshot = surface_manager::attach_compositor_stream(&ipc_server, &compositor);
+        let surface_manager =
+            SurfaceManager::new(initial_wallpaper_path.clone(), latest_snapshot.clone());
         let action_dispatcher = ActionDispatcher::new();
         let extension_host = ExtensionHost::new(extensions);
 
         cx.set_global(Self {
             ipc_server,
             active_config: session.active_config,
-            shell_surfaces,
+            surface_manager,
             action_dispatcher,
             extension_host,
             service_hub: Some(hub),
@@ -171,7 +151,7 @@ impl ShellRuntime {
             _ipc_task: gpui::Task::ready(()),
         });
 
-        shell_surfaces::spawn_compositor_stream_loop(cx, &compositor);
+        surface_manager::spawn_compositor_stream_loop(cx, &compositor);
         theme_manager::sync_wallpaper(cx, initial_wallpaper_path);
         Self::on_compositor_snapshot_changed(cx, latest_snapshot);
         Self::spawn_window_closed_watch(cx);
@@ -187,12 +167,20 @@ impl ShellRuntime {
             }
             let outcome = cx
                 .global_mut::<ShellRuntime>()
-                .shell_surfaces
+                .surface_manager
                 .handle_window_closed(window_id);
             Self::publish_status(cx);
             match outcome {
                 WindowClosedOutcome::Nothing => {}
-                WindowClosedOutcome::Capture => ShellSurfaces::restore_prior_focus(cx),
+                WindowClosedOutcome::ControlCenter => {
+                    Self::dispatch_surface_lifecycle(
+                        cx,
+                        ContributionSurface::ControlCenter,
+                        false,
+                        340.,
+                        540.,
+                    );
+                }
                 WindowClosedOutcome::ExtensionPanel(contribution) => {
                     Self::dispatch_extension_event(
                         cx,
@@ -213,7 +201,7 @@ impl ShellRuntime {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(100))
                     .await;
-                cx.update(|cx| ShellSurfaces::request(cx, SurfaceRequest::SyncDisplays));
+                cx.update(Self::sync_displays);
                 cx.update(ServiceHub::drain);
                 cx.update(Self::drain_extensions);
                 cx.update(Self::drain_ipc);
@@ -228,18 +216,20 @@ impl ShellRuntime {
         }
         let outputs_changed = {
             let runtime = cx.global_mut::<Self>();
-            let changed = runtime.shell_surfaces.latest_snapshot().outputs != snapshot.outputs;
-            runtime.shell_surfaces.set_latest_snapshot(snapshot.clone());
+            let changed = runtime.surface_manager.latest_snapshot().outputs != snapshot.outputs;
+            runtime
+                .surface_manager
+                .set_latest_snapshot(snapshot.clone());
             changed
         };
         cx.global_mut::<Self>()
             .action_dispatcher
             .update_enabled_for_snapshot(&snapshot);
-        cx.global_mut::<Self>().shell_surfaces.update_readiness();
+        cx.global_mut::<Self>().surface_manager.update_readiness();
         Self::publish_status(cx);
-        ShellSurfaces::refresh_bars(cx);
+        SurfaceManager::refresh_bars(cx);
         if outputs_changed {
-            ShellSurfaces::reconcile_bars(cx);
+            SurfaceManager::reconcile_bars(cx);
         }
     }
 
@@ -259,7 +249,7 @@ impl ShellRuntime {
             cx.update(|cx| {
                 let windows = cx
                     .global_mut::<Self>()
-                    .shell_surfaces
+                    .surface_manager
                     .take_windows_for_shutdown();
                 for (_, (handle, _)) in windows.bars {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
@@ -270,10 +260,10 @@ impl ShellRuntime {
                 if let Some((handle, _)) = windows.extension_panel {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
-                if let Some((_, _, handle)) = windows.notification {
+                if let Some(handle) = windows.control_center {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
-                if let Some((_, handle)) = windows.capture {
+                if let Some((_, _, handle)) = windows.notification {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
                 cx.global_mut::<Self>().service_hub = None;
@@ -282,5 +272,35 @@ impl ShellRuntime {
             });
         })
         .detach();
+    }
+
+    pub fn open_capture_overlay(cx: &mut App, intent: CaptureIntent) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let config = cx.global::<Self>().active_config.capture.clone();
+        let frame = match capture_frame(None).and_then(|frame| frame_to_rgba(&frame)) {
+            Ok(frame) => frame,
+            Err(error) => {
+                tracing::warn!(%error, "failed to prepare screenshot overlay");
+                return;
+            }
+        };
+        let options = WindowOptions {
+            window_background: WindowBackgroundAppearance::Transparent,
+            kind: WindowKind::LayerShell(LayerShellOptions {
+                namespace: "capture-overlay".to_string(),
+                layer: Layer::Overlay,
+                anchor: Anchor::all(),
+                keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        if let Err(error) = cx.open_window(options, move |window, cx| {
+            CaptureOverlayView::view(frame, intent, config, window, cx)
+        }) {
+            tracing::warn!(%error, "failed to open capture overlay");
+        }
     }
 }
