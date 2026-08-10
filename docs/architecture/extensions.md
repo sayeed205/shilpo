@@ -28,7 +28,7 @@ The system must support:
 - desktop widgets such as clocks, notes, and monitors;
 - side-panel pages;
 - extension-owned settings pages;
-- launcher providers and shell actions;
+- search providers and shell actions;
 - background behavior reacting to typed shell events;
 - privileged effects such as changing wallpaper only after an explicit capability grant;
 - development, installation, update, disable, recovery, and uninstall workflows.
@@ -72,21 +72,21 @@ flowchart LR
     DESKTOP[Desktop adapter]
     PANEL[Side-panel adapter]
     SURFACE_SETTINGS[Extension settings adapter]
+   SEARCH[Search provider adapter]
     ACTIONS[Action adapter]
     EVENTS[Shell event adapters]
-    SETTINGS[Settings app]
-    CLI[Extension CLI]
     BAR --> SHELL
     DESKTOP --> SHELL
     PANEL --> SHELL
     SURFACE_SETTINGS --> SHELL
+   SEARCH --> SHELL
     ACTIONS --> SHELL
     EVENTS --> SHELL
     SHELL[ShellExtensions lifecycle]
     SHELL --> CATALOG
     SHELL --> HOST
-    SETTINGS --> CATALOG
-    CLI --> CATALOG
+   SETTINGS_VIEW[Settings view in-process] --> CATALOG
+   CLI[CLI via D-Bus] -.-> SHELL
     HOST[ExtensionHost deep module]
     HOST --> POLICY[Capability policy]
     HOST --> RUNTIME[Runtime seam]
@@ -101,18 +101,20 @@ flowchart LR
 
 ### `shilpo-ext`
 
-`desktop/ext` is the stable contract shared with extension authors. It owns:
+`desktop/ext` is the extension runtime crate. It owns:
 
-- identifiers and semantic-version compatibility types;
 - manifest parsing and validation;
 - contribution descriptors;
 - settings schema types;
 - shell event and host-effect messages;
 - capability declarations;
 - the declarative view tree and UI event types;
-- the versioned WIT contract and low-level Rust guest interface.
+- the versioned WIT contract and low-level Rust guest interface;
+- WASM Component Model loading and execution via Wasmtime.
 
-It does not depend on GPUI, `shilpo-ui`, `shilpo-shell`, or concrete service implementations.
+Extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`) live in `shilpo-config` and are shared across
+the config system and extension runtime without importing Wasmtime. `shilpo-ext` does not depend on GPUI, `shilpo-ui`,
+`shilpo-shell`, or concrete service implementations.
 
 ### `ExtensionHost`
 
@@ -139,11 +141,24 @@ The runtime seam has two justified adapters:
 The runtime adapter executes guest functions. It does not decide shell policy. Capability checks, scheduling, and effect
 validation remain in `ExtensionHost`.
 
-The component ABI remains versioned as `shilpo:extension@0.1.0` and exports `on-event(string) -> string` and
-`view(string) -> string`. The strings encode the contract crate's typed events, effects, and view trees as JSON. The
-small ABI avoids duplicating policy or UI types in generated bindings and leaves room for a higher-level guest SDK. The
-manifest's `api_version = "0.2.0"` contract adds instance-aware lifecycle/input events and host-owned state responses
-without changing those two component exports.
+The component ABI is versioned as `shilpo:extension@0.1.0` and exports typed WIT functions with proper records and
+variants for `ExtensionEvent`, `HostEffect`, and `ViewTree`. The typed WIT contract provides compile-time guarantees for
+both host and guest, enables multi-language SDK generation via `wit-bindgen` (Rust, Go, Python, JS/TS), and eliminates
+JSON serialization overhead at the ABI boundary. During the `@0.x` epoch the WIT interface may break freely between
+minor versions; backward-compatible multi-world hosting is deferred to `@1.0`.
+
+### Guest SDKs
+
+The primary extension authoring path is **TypeScript**, compiled to a WASM Component via
+[ComponentizeJS](https://github.com/nickvidal/ComponentizeJS) (Bytecode Alliance). The `shilpo ext build` command
+handles compilation transparently — authors write TypeScript, the toolchain produces a conformant WASM component.
+
+The TypeScript SDK (`@shilpo/ext-sdk`) uses Raycast-inspired API naming conventions (`List`, `Detail`, `Form`,
+`ActionPanel`, `Action.Push`) to lower the barrier for web developers familiar with that ecosystem. This is a
+design-level inspiration, not a runtime compatibility layer.
+
+Rust extensions compile directly to `wasm32-wasip2` components using the standard `cargo` toolchain and
+`wit-bindgen`-generated bindings.
 
 Rust-generated WASI Preview 2 components receive a default-deny WASI context so the Rust component adapter can
 initialize. It has closed stdin, discarded stdout/stderr, no arguments or environment, no preopened directories, and
@@ -158,17 +173,18 @@ Each surface owns a thin adapter from a contribution to an existing Shilpo surfa
 - desktop widget adapter;
 - side-panel adapter;
 - settings adapter;
-- launcher adapter;
+- search provider adapter;
 - action adapter;
 - event adapters for theme, palette, wallpaper, output, network, media, and other stable shell events.
 
 Adapters translate surface context into `ExtensionInput` and translate a validated
 `ViewTree` into GPUI elements. They never expose the surface implementation to the guest.
 
-`ShellRuntime` owns the single production `ShellExtensions` lifecycle module. Development registrations are scanned for
-manifest, component, settings-schema, and asset changes. A replacement generation is built completely before activation,
-so a broken edit leaves the last valid runtime and view tree active. Reconciliation runs after output, configuration,
-and catalog changes.
+The unified `shilpo` binary owns the single production `ShellExtensions` lifecycle module. The Settings view accesses
+the `ExtensionCatalog` in-process (no IPC needed). The CLI reaches the running shell via D-Bus (`org.shilpo.Shell`).
+Development registrations are scanned for manifest, component, settings-schema, and asset changes. A replacement
+generation is built completely before activation, so a broken edit leaves the last valid runtime and view tree active.
+Reconciliation runs after output, configuration, and catalog changes.
 
 ## Threading Topology and Off-Main-Thread Execution Seams
 
@@ -347,15 +363,15 @@ produce the same signed index and immutable package contracts described here.
 
 Contributions describe what an extension adds. They do not grant permission to perform effects.
 
-| Contribution        | Instance model                                    | Host responsibilities                                                |
-|---------------------|---------------------------------------------------|----------------------------------------------------------------------|
-| `bar_widget`        | Zero or more instances per output and bar section | Orientation, height, spacing, accessibility, and interaction routing |
-| `desktop_widget`    | Zero or more persistent instances per output      | Bounds, drag/resize, stacking, output migration, and edit mode       |
-| `side_panel`        | Singleton or per-output instance                  | Surface placement, focus, dismissal, and size constraints            |
-| `settings_page`     | Singleton                                         | Navigation, save/cancel, validation, and permission display          |
-| `launcher_provider` | Singleton background provider                     | Debounce, result limits, cancellation, and launch routing            |
-| `action`            | Singleton descriptor                              | Keybinding discovery, enablement, dispatch, and diagnostics          |
-| `background_task`   | Singleton guest state owner                       | Startup, event delivery, timers, quotas, restart, and shutdown       |
+| Contribution      | Instance model                                    | Host responsibilities                                                |
+|-------------------|---------------------------------------------------|----------------------------------------------------------------------|
+| `bar_widget`      | Zero or more instances per output and bar section | Orientation, height, spacing, accessibility, and interaction routing |
+| `desktop_widget`  | Zero or more persistent instances per output      | Bounds, drag/resize, stacking, output migration, and edit mode       |
+| `side_panel`      | Singleton or per-output instance                  | Surface placement, focus, dismissal, and size constraints            |
+| `settings_page`   | Singleton                                         | Navigation, save/cancel, validation, and permission display          |
+| `search_provider` | Singleton background provider                     | Query dispatch via `SearchSink`, result ranking, cancellation        |
+| `action`          | Singleton descriptor                              | Keybinding discovery, enablement, dispatch, and diagnostics          |
+| `background_task` | Singleton guest state owner                       | Startup, event delivery, timers, quotas, restart, and shutdown       |
 
 The manifest declares contribution definitions. User configuration creates contribution instances and chooses placement.
 This permits two clocks with different settings without loading the extension twice.
@@ -516,8 +532,10 @@ The manifest carries three distinct versions:
 - `api_version`: guest/host WIT interface;
 - `version`: extension release.
 
-Shilpo supports a documented range of interface versions and retains versioned WIT worlds for migrations. An
-incompatible extension is discoverable in settings but is never executed.
+During the `@0.x` epoch, Shilpo supports only the current WIT interface version. Extensions targeting an older `@0.x`
+interface must be recompiled. At `@1.0`, Shilpo will support a documented range of interface versions and retain
+versioned WIT worlds for backward compatibility. An incompatible extension is discoverable in settings but is never
+executed.
 
 Contribution and setting IDs are persistent data keys. Renaming one requires a manifest migration. Extension settings
 are validated before activation, and the previous valid settings remain active after a failed edit or migration.
@@ -583,7 +601,7 @@ Observable update states include `up-to-date`, `available`, `awaiting-permission
 
 ## Settings discovery experience
 
-The Settings app is the primary graphical discovery and management interface:
+The Settings view (part of the unified `shilpo` binary) is the primary graphical discovery and management interface:
 
 ```text
 Settings
