@@ -212,6 +212,30 @@ fn should_restore_overview_prior_focus(
     }
 }
 
+fn remove_window_after_frame_drain<V: 'static>(
+    handle: WindowHandle<V>,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    handle.update(cx, move |_, window, _| {
+        window.on_next_frame(move |_, cx| {
+            cx.spawn(async move |cx| {
+                let result =
+                    cx.update(|cx| handle.update(cx, |_, window, _| window.remove_window()));
+                if let Err(error) = result {
+                    tracing::warn!(
+                        ?error,
+                        window_id = ?handle.window_id(),
+                        "overview window disappeared before deferred teardown"
+                    );
+                }
+            })
+            .detach();
+        });
+        window.refresh();
+    })?;
+    Ok(())
+}
+
 /// Describes a desktop surface contributed by an extension.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExtensionSurfaceSpec {
@@ -808,6 +832,14 @@ impl ShellSurfaces {
         self.overview_instance
     }
 
+    pub(crate) fn begin_overview_close(&mut self) -> Option<u64> {
+        let OverviewLifecycle::Open { generation } = self.overview_lifecycle else {
+            return None;
+        };
+        self.overview_lifecycle = OverviewLifecycle::Closing { generation };
+        Some(generation)
+    }
+
     pub(crate) fn next_notification_generation(&mut self) -> u64 {
         self.notification_generation = self.notification_generation.wrapping_add(1);
         self.notification_lifecycle = SurfaceLifecycle::Opening {
@@ -824,7 +856,7 @@ impl ShellSurfaces {
     ) {
         self.notification = Some((generation, notification_id, handle));
         self.notification_lifecycle = SurfaceLifecycle::Open { generation };
-        tracing::warn!("[NOTIFTRACE] register_notification gen={generation} id={notification_id}");
+        tracing::debug!(generation, notification_id, "registered notification toast");
     }
 
     pub(crate) fn notification_handle(
@@ -871,6 +903,23 @@ impl ShellSurfaces {
             self.capture = None;
             self.capture_lifecycle = SurfaceLifecycle::Closed;
             outcome = WindowClosedOutcome::Capture;
+        }
+        if self
+            .osd
+            .as_ref()
+            .is_some_and(|(_, handle, _)| handle.window_id() == window_id)
+        {
+            self.osd = None;
+            self.osd_lifecycle = SurfaceLifecycle::Closed;
+        }
+        if self
+            .overview
+            .as_ref()
+            .is_some_and(|handle| handle.window_id() == window_id)
+        {
+            self.overview = None;
+            self.overview_entity = None;
+            self.overview_lifecycle = OverviewLifecycle::Closed;
         }
         outcome
     }
@@ -1179,13 +1228,13 @@ impl ShellSurfaces {
     }
 
     pub(crate) fn close_overview(cx: &mut App) {
-        let generation = cx
-            .global::<ShellRuntime>()
-            .shell_surfaces()
-            .overview_instance;
-        cx.global_mut::<ShellRuntime>()
+        let Some(_) = cx
+            .global_mut::<ShellRuntime>()
             .shell_surfaces_mut()
-            .overview_lifecycle = OverviewLifecycle::Closing { generation };
+            .begin_overview_close()
+        else {
+            return;
+        };
         let overview = cx
             .global::<ShellRuntime>()
             .shell_surfaces()
@@ -1216,6 +1265,7 @@ impl ShellSurfaces {
         };
 
         if let Some(handle) = handle {
+            let handle_id = handle.window_id();
             ShellRuntime::dispatch_surface_lifecycle(
                 cx,
                 ContributionSurface::Launcher,
@@ -1223,7 +1273,14 @@ impl ShellSurfaces {
                 1280.,
                 720.,
             );
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            if let Err(error) = remove_window_after_frame_drain(handle, cx) {
+                tracing::warn!(
+                    ?error,
+                    ?handle_id,
+                    instance_id,
+                    "failed to schedule overview window teardown"
+                );
+            }
         }
 
         if should_restore_overview_prior_focus(
@@ -1293,7 +1350,14 @@ impl ShellSurfaces {
     pub(crate) fn refresh_bars(cx: &mut App) {
         let handles = cx.global::<ShellRuntime>().shell_surfaces().bar_handles();
         for handle in handles {
-            let _ = handle.update(cx, |_, _, cx| cx.notify());
+            if let Err(error) = handle.update(cx, |_, _, cx| cx.notify()) {
+                tracing::debug!(
+                    ?error,
+                    window_id = ?handle.window_id(),
+                    surface = "bar",
+                    "stale window handle on bar refresh"
+                );
+            }
         }
     }
 
@@ -1321,7 +1385,14 @@ impl ShellSurfaces {
         target_display_id: Option<DisplayId>,
     ) {
         if let Some(handle) = cx.global::<ShellRuntime>().shell_surfaces().overview {
-            let _ = handle.update(cx, |_, window, _| window.activate_window());
+            if let Err(error) = handle.update(cx, |_, window, _| window.activate_window()) {
+                tracing::debug!(
+                    ?error,
+                    window_id = ?handle.window_id(),
+                    surface = "overview",
+                    "stale window handle on overview activate"
+                );
+            }
             return;
         }
 
@@ -1453,8 +1524,9 @@ impl ShellSurfaces {
             .notification
             .take();
         let Some((current_generation, notification_id, handle)) = entry else {
-            tracing::warn!(
-                "[NOTIFTRACE] expire_notification(gen={generation}) no active entry; window NOT removed"
+            tracing::debug!(
+                generation,
+                "expire_notification called but no active notification entry exists"
             );
             return;
         };
@@ -1462,13 +1534,17 @@ impl ShellSurfaces {
             cx.global_mut::<ShellRuntime>()
                 .shell_surfaces_mut()
                 .notification = Some((current_generation, notification_id, handle));
-            tracing::warn!(
-                "[NOTIFTRACE] expire_notification stale gen={generation} current={current_generation}; window NOT removed"
+            tracing::debug!(
+                generation,
+                current_generation,
+                "expire_notification called with stale generation"
             );
             return;
         }
-        tracing::warn!(
-            "[NOTIFTRACE] expire_notification(gen={generation}) id={notification_id} removing window"
+        tracing::debug!(
+            generation,
+            notification_id,
+            "expire_notification removing toast window"
         );
         cx.global_mut::<ShellRuntime>()
             .shell_surfaces_mut()
@@ -1494,13 +1570,16 @@ impl ShellSurfaces {
                 .notification
                 .take()
         {
-            tracing::warn!(
-                "[NOTIFTRACE] forget_notification gen={generation} id={notification_id} entry dropped"
+            tracing::debug!(
+                generation,
+                notification_id,
+                "forget_notification dropped notification entry"
             );
             Self::dismiss_notification(cx, notification_id);
         } else {
-            tracing::warn!(
-                "[NOTIFTRACE] forget_notification gen={generation} mismatch/none; no-op"
+            tracing::debug!(
+                generation,
+                "forget_notification generation mismatch or empty slot"
             );
         }
     }
@@ -1557,11 +1636,16 @@ impl ShellSurfaces {
             .shell_surfaces_mut()
             .osd
             .take();
-        if let Some((generation, window_handle, view_handle)) = existing {
-            view_handle.update(cx, |view, cx| {
-                view.kind = kind;
-                cx.notify();
-            });
+        if let Some((generation, window_handle, view_handle)) = existing
+            && window_handle
+                .update(cx, |_, _, window_cx| {
+                    view_handle.update(window_cx, |view, view_cx| {
+                        view.kind = kind.clone();
+                        view_cx.notify();
+                    });
+                })
+                .is_ok()
+        {
             let next_gen = generation + 1;
             cx.global_mut::<ShellRuntime>().shell_surfaces_mut().osd =
                 Some((next_gen, window_handle, view_handle));
@@ -1576,6 +1660,7 @@ impl ShellSurfaces {
             Self::schedule_osd_dismiss(cx, next_gen);
             return;
         }
+        // Window was already closed or not existing; fall through to create a fresh surface.
 
         let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
             (display.bounds(), Some(display.id()))
@@ -1868,8 +1953,15 @@ impl ShellSurfaces {
             None
         };
         Self::refresh_bars(cx);
-        if let Some(ov) = ov_handle {
-            let _ = ov.update(cx, |_, _, cx| cx.notify());
+        if let Some(ov) = ov_handle
+            && let Err(error) = ov.update(cx, |_, _, cx| cx.notify())
+        {
+            tracing::debug!(
+                ?error,
+                window_id = ?ov.window_id(),
+                surface = "overview",
+                "stale window handle on theme update"
+            );
         }
         cx.refresh_windows();
     }
@@ -1902,6 +1994,53 @@ fn readiness_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::Cell, rc::Rc};
+
+    struct LifecycleTestView;
+
+    impl gpui::Render for LifecycleTestView {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    #[gpui::test]
+    fn overview_window_teardown_drains_the_requested_frame_before_removal(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let frame_drained = Rc::new(Cell::new(false));
+        let handle = cx.add_window(|_, _| LifecycleTestView);
+        cx.update_window(handle.into(), |_, window, app| window.draw(app).clear(app))
+            .unwrap();
+
+        cx.update(|app| {
+            handle
+                .update(app, |_, window, _| {
+                    let frame_drained = frame_drained.clone();
+                    window.on_next_frame(move |_, _| frame_drained.set(true));
+                    window.refresh();
+                })
+                .unwrap();
+            remove_window_after_frame_drain(handle, app).unwrap();
+        });
+
+        let drained_callbacks = cx
+            .update_window(handle.into(), |_, window, app| {
+                window.simulate_next_frame(app)
+            })
+            .unwrap();
+        assert_eq!(drained_callbacks, 2);
+        cx.run_until_parked();
+        assert!(
+            frame_drained.get(),
+            "teardown removed the window before its requested frame drained"
+        );
+        assert!(handle.update(cx, |_, _, _| ()).is_err());
+    }
 
     #[test]
     fn test_shell_surfaces_initialization() {
@@ -2025,6 +2164,21 @@ mod tests {
         let first = manager.next_overview_instance();
         let second = manager.next_overview_instance();
         assert!(second > first);
+    }
+
+    #[test]
+    fn overview_close_transition_is_idempotent_per_generation() {
+        let snapshot = Arc::new(CompositorSnapshot::default());
+        let mut manager = ShellSurfaces::new(snapshot);
+        let generation = manager.next_overview_instance();
+        manager.overview_lifecycle = OverviewLifecycle::Open { generation };
+
+        assert_eq!(manager.begin_overview_close(), Some(generation));
+        assert_eq!(
+            manager.overview_lifecycle,
+            OverviewLifecycle::Closing { generation }
+        );
+        assert_eq!(manager.begin_overview_close(), None);
     }
 
     #[test]
@@ -2222,5 +2376,148 @@ mod tests {
                 .is_empty()
         );
         assert!(harness.manager.active_surfaces().is_empty());
+    }
+
+    #[gpui::test]
+    fn osd_slot_cleared_when_window_externally_closed(cx: &mut gpui::TestAppContext) {
+        cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_test(app);
+        });
+
+        // Open an OSD surface.
+        cx.update(|app| {
+            ShellSurfaces::request(
+                app,
+                SurfaceRequest::ShowOsd(crate::osd::OsdKind::Volume {
+                    level: 50,
+                    muted: false,
+                }),
+            );
+        });
+
+        let osd_lifecycle = cx.update(|app| ShellSurfaces::snapshot(app).osd_lifecycle);
+        assert!(
+            matches!(osd_lifecycle, SurfaceLifecycle::Open { .. }),
+            "OSD should be open after request"
+        );
+
+        // Simulate external window closure: extract the window ID and call
+        // handle_window_closed directly, as the compositor would.
+        let window_id = cx.update(|app| {
+            let surfaces = app.global::<ShellRuntime>().shell_surfaces();
+            surfaces.osd.as_ref().unwrap().1.window_id()
+        });
+        cx.update(|app| {
+            let outcome = app
+                .global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .handle_window_closed(window_id);
+            assert!(matches!(outcome, WindowClosedOutcome::Nothing));
+        });
+
+        // Verify the OSD slot was cleared.
+        cx.update(|app| {
+            let surfaces = app.global::<ShellRuntime>().shell_surfaces();
+            assert!(
+                surfaces.osd.is_none(),
+                "OSD slot should be None after external close"
+            );
+            assert_eq!(
+                surfaces.osd_lifecycle,
+                SurfaceLifecycle::Closed,
+                "OSD lifecycle should be Closed"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn overview_slot_cleared_when_window_externally_closed(cx: &mut gpui::TestAppContext) {
+        // We cannot easily open a full overview in unit tests, but we can test
+        // the struct-level cleanup by inserting a synthetic window handle.
+        let raw_handle = cx.add_window(|_, _| LifecycleTestView);
+        let handle: WindowHandle<shilpo_ui::Root> = unsafe { std::mem::transmute(raw_handle) };
+
+        let mut manager = ShellSurfaces::new(Arc::new(CompositorSnapshot::default()));
+        let instance = manager.next_overview_instance();
+        manager.overview = Some(handle);
+        manager.overview_lifecycle = OverviewLifecycle::Open {
+            generation: instance,
+        };
+
+        let window_id = handle.window_id();
+        let outcome = manager.handle_window_closed(window_id);
+        assert!(matches!(outcome, WindowClosedOutcome::Nothing));
+        assert!(
+            manager.overview.is_none(),
+            "overview handle should be None after external close"
+        );
+        assert!(
+            manager.overview_entity.is_none(),
+            "overview entity should be None after external close"
+        );
+        assert_eq!(
+            manager.overview_lifecycle,
+            OverviewLifecycle::Closed,
+            "overview lifecycle should be Closed"
+        );
+    }
+
+    #[gpui::test]
+    fn osd_reuse_falls_through_when_window_is_stale(cx: &mut gpui::TestAppContext) {
+        cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_test(app);
+        });
+
+        // Open an OSD surface.
+        cx.update(|app| {
+            ShellSurfaces::request(
+                app,
+                SurfaceRequest::ShowOsd(crate::osd::OsdKind::Volume {
+                    level: 30,
+                    muted: false,
+                }),
+            );
+        });
+
+        let first_lifecycle = cx.update(|app| ShellSurfaces::snapshot(app).osd_lifecycle);
+        assert!(
+            matches!(first_lifecycle, SurfaceLifecycle::Open { .. }),
+            "first OSD should be open"
+        );
+
+        // Externally close the window through handle_window_closed.
+        let window_id = cx.update(|app| {
+            let surfaces = app.global::<ShellRuntime>().shell_surfaces();
+            surfaces.osd.as_ref().unwrap().1.window_id()
+        });
+        cx.update(|app| {
+            app.global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .handle_window_closed(window_id);
+        });
+
+        // Now the OSD slot is cleared. The handle_window_closed already
+        // cleared the slot, so the next show_osd should create a fresh window.
+        cx.run_until_parked();
+
+        // Request a new OSD — the show_osd reuse path should detect the stale
+        // slot was already cleared and create a fresh window.
+        cx.update(|app| {
+            ShellSurfaces::request(
+                app,
+                SurfaceRequest::ShowOsd(crate::osd::OsdKind::Volume {
+                    level: 75,
+                    muted: true,
+                }),
+            );
+        });
+
+        let new_lifecycle = cx.update(|app| ShellSurfaces::snapshot(app).osd_lifecycle);
+        assert!(
+            matches!(new_lifecycle, SurfaceLifecycle::Open { .. }),
+            "a fresh OSD should be created after stale window"
+        );
     }
 }

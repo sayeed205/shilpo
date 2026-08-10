@@ -468,11 +468,18 @@ impl ServiceHub {
             let handles = cx.global::<ShellRuntime>().shell_surfaces().bar_handles();
             for handle in handles {
                 let updates_clone = updates.clone();
-                let _ = handle.update(cx, |bar_view, _window, cx| {
+                if let Err(error) = handle.update(cx, |bar_view, _window, cx| {
                     for upd in &updates_clone {
                         bar_view.apply_worker_update(upd, cx);
                     }
-                });
+                }) {
+                    tracing::debug!(
+                        ?error,
+                        window_id = ?handle.window_id(),
+                        surface = "bar",
+                        "stale window handle on service drain"
+                    );
+                }
             }
         }
     }

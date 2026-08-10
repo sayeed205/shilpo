@@ -246,7 +246,14 @@ impl CardCoordinator {
                 .collect::<Vec<_>>()
         };
         for handle in handles {
-            let _ = handle.update(cx, |_, _, cx| cx.notify());
+            if let Err(error) = handle.update(cx, |_, _, cx| cx.notify()) {
+                tracing::debug!(
+                    ?error,
+                    window_id = ?handle.window_id(),
+                    surface = "card-band",
+                    "stale window handle on card refresh"
+                );
+            }
         }
     }
 
@@ -617,15 +624,22 @@ impl CardCoordinator {
                 }
             };
 
-            if let Some(band_handle) = handle {
-                let _ = band_handle.update(cx, |band, window, cx| {
+            if let Some(band_handle) = handle
+                && let Err(error) = band_handle.update(cx, |band, window, cx| {
                     if channel == CardChannel::Persistent
                         && reason == CardDismissReason::SourceToggle
                     {
                         window.activate_window();
                     }
                     band.hide(cx);
-                });
+                })
+            {
+                tracing::debug!(
+                    ?error,
+                    window_id = ?band_handle.window_id(),
+                    surface = "card-band",
+                    "stale window handle on card channel close"
+                );
             }
         }
     }
@@ -777,7 +791,7 @@ impl CardCoordinator {
                 );
 
                 let source_clone = source.clone();
-                let _ = band_handle.update(cx, move |band, window, cx| {
+                if let Err(error) = band_handle.update(cx, move |band, window, cx| {
                     let provider = cx
                         .global::<ShellRuntime>()
                         .shell_surfaces()
@@ -825,7 +839,14 @@ impl CardCoordinator {
                             handle.focus(window, cx);
                         }
                     }
-                });
+                }) {
+                    tracing::debug!(
+                        ?error,
+                        window_id = ?band_handle.window_id(),
+                        surface = "card-band",
+                        "stale window handle on card position"
+                    );
+                }
 
                 Self::dispatch(
                     cx,
