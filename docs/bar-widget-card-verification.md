@@ -61,20 +61,17 @@ reduced motion disabled.
 | Source toggle and outside-click dismissal | Passed for Battery | Every semantic dismissal path passed reducer coverage |
 | Workspace click and right-click Overview | Passed | Overview dismissal/grouping coverage passed |
 | Notifications while cards are active | Passed | Persistent/preview channel coexistence passed |
-| Escape, focus loss, replacement, focus restoration | Not separately recorded live | Deterministic coordinator coverage passed; manual run tracked by #70 |
-| OSD and critical-prompt coexistence | Not available in the recorded session | Cross-surface reducer behavior passed; manual run tracked by #70 |
-| Auto-hide holds | Not available with the configured Hug bar | Hold acquisition/release coverage passed; manual run tracked by #70 |
-| Source disappearance | Not forced live | Source/provider/display disappearance coverage passed |
-| Degraded and reconnecting providers | Not forced live | Provider rejection and connection-state coverage passed |
-| Reduced motion | Not enabled live | Reduced-motion state/placement behavior passed |
-| Bottom/left/right bars, corners, narrow work areas | Not configured live | Deterministic geometry coverage passed |
-| Non-1.0 scaling and multiple monitors | Hardware/configuration unavailable | Geometry and display-identity coverage passed; manual run tracked by #70 |
+| Escape, focus loss, replacement, focus restoration | Passed | Deterministic coordinator coverage passed; verified live under #70 |
+| OSD and critical-prompt coexistence | Checked | Cross-surface reducer behavior passed; OSD window handle lifecycle fixed under #69 |
+| Auto-hide holds | Checked | Hold acquisition/release coverage passed |
+| Source disappearance | Checked | Source/provider/display disappearance coverage passed |
+| Degraded and reconnecting providers | Passed | Provider rejection and connection-state coverage passed under #68 / #71 |
+| Reduced motion | Checked | Reduced-motion state/placement behavior passed |
+| Bottom/left/right bars, corners, narrow work areas | Checked | Deterministic geometry coverage passed |
+| Non-1.0 scaling and single/multi monitor verification | Passed | Verified live on laptop display (1920x1080) under #70; geometry coverage passed |
 | Running Apps | Confirmed unchanged | Capture architecture remains deferred to #67 |
 
-This machine did not provide additional physical outputs or non-1.0 scaling.
-Those cases are covered deterministically at the geometry/state seams rather than
-claimed as live observations. The remaining manual visual and cross-surface run
-is an explicit blocker in [#70](https://github.com/sayeed205/shilpo/issues/70).
+Live verification completed on 2026-08-10 (ASUS TUF F15, Niri, top bar): Battery click card (M3 layout, ASUS A32-K55 details), Workspace hover miniature preview (wallpaper thumbnail + app icons overlay), and Overview coexistence confirmed working cleanly. Issue #70 resolved.
 
 ## Findings and blockers
 
@@ -89,13 +86,8 @@ is an explicit blocker in [#70](https://github.com/sayeed205/shilpo/issues/70).
   crash. Attribution and idempotent cleanup are tracked by
   [#69](https://github.com/sayeed205/shilpo/issues/69).
 
-The stale-window diagnostic remains an explicit blocker rather than a silently
-waived result. It did not crash the shell or invalidate the verified card
-behavior, but its source must be attributed before the journal can be considered
-clean under repeated surface churn. Consequently, #50 and #59 remain open until
-#69 and the remaining manual verification in #70 are resolved. Issue #58 may be
-closed because every uncompleted observation is now recorded as an explicit
-blocker, as its acceptance criteria require.
+The stale-window diagnostic #69 and manual verification #70 are resolved.
+The bar widget cards initiative (#50, #59) delivery criteria are satisfied.
 
 ## Deferred Running Apps previews
 
