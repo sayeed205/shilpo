@@ -241,6 +241,7 @@ fn render_battery_card(
         .gap(px(8.0))
         .child(
             h_flex()
+                .w_full()
                 .items_center()
                 .justify_between()
                 .child(
@@ -269,6 +270,7 @@ fn render_battery_card(
         )
         .child(
             h_flex()
+                .w_full()
                 .items_center()
                 .justify_between()
                 .text_size(px(12.0))
@@ -510,6 +512,8 @@ fn render_physical_device_details(
     for (label, value) in physical_detail_rows(dev, include_health) {
         details = details.child(
             h_flex()
+                .w_full()
+                .items_center()
                 .justify_between()
                 .child(div().font_weight(gpui::FontWeight::MEDIUM).child(label))
                 .child(div().text_color(theme.on_surface).child(value)),

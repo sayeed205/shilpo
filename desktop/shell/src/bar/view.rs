@@ -514,7 +514,6 @@ impl BarView {
                             BatteryIndicator::new(
                                 format!("battery_{section_name}_{index}"),
                                 self.battery.clone(),
-                                self.display_id,
                             )
                             .into_any_element(),
                         );

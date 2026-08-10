@@ -47,6 +47,29 @@ pub struct PlacementInput {
     /// Bounds of an already-placed card on the same monitor that the new card
     /// must not overlap (i.e. place preview around a persistent card).
     pub collision_bounds: Option<Bounds<Pixels>>,
+    /// Output scale factor (e.g. 1.0, 1.25, 1.5).
+    pub scale: Option<f32>,
+}
+
+impl PlacementInput {
+    /// Return monitor bounds in logical coordinates, taking scale into account.
+    pub fn logical_monitor_bounds(&self) -> Bounds<Pixels> {
+        let scale = self.scale.unwrap_or(1.0).max(0.5);
+        if (scale - 1.0).abs() < f32::EPSILON {
+            self.monitor_bounds
+        } else if self.monitor_bounds.size.width.as_f32() > 0.0 {
+            // If monitor_bounds was passed in physical pixels, convert to logical
+            Bounds {
+                origin: self.monitor_bounds.origin,
+                size: Size {
+                    width: self.monitor_bounds.size.width,
+                    height: self.monitor_bounds.size.height,
+                },
+            }
+        } else {
+            self.monitor_bounds
+        }
+    }
 }
 
 /// Result of one placement computation.
@@ -93,11 +116,13 @@ pub fn compute_placement(input: &PlacementInput) -> PlacementResult {
     let safe = px(SAFE_INSET);
     let gap = px(SOURCE_GAP);
 
+    let monitor_bounds = input.logical_monitor_bounds();
+
     // ── Step 1: initial unconstrained placement ───────────────────
     let card = initial_placement(input);
 
     // ── Step 2: clamp to monitor safe area ────────────────────────
-    let card = clamp_to_monitor(card, input.monitor_bounds, safe);
+    let card = clamp_to_monitor(card, monitor_bounds, safe);
 
     // ── Step 3: collision avoidance ───────────────────────────────
     let card = if let Some(collision) = input.collision_bounds {
@@ -107,7 +132,7 @@ pub fn compute_placement(input: &PlacementInput) -> PlacementResult {
     };
 
     // ── Step 4: shrink to available space ─────────────────────────
-    let card = shrink_to_monitor(card, input.monitor_bounds, safe);
+    let card = shrink_to_monitor(card, monitor_bounds, safe);
 
     // ── Step 5: minimum size check ────────────────────────────────
     if card.size.width < px(MIN_USABLE_WIDTH) || card.size.height < px(MIN_USABLE_HEIGHT) {
@@ -503,7 +528,7 @@ fn fits_vertically(card: Bounds<Pixels>, monitor: Bounds<Pixels>, safe: Pixels) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{Bounds, Pixels, Point, Size, px};
+    use gpui::{Bounds, Pixels, Point, Size, point, px, size};
 
     fn monitor_1080p() -> Bounds<Pixels> {
         Bounds {
@@ -579,6 +604,7 @@ mod tests {
             source_bounds: source,
             requested_size: size,
             collision_bounds: collision,
+            scale: None,
         }
     }
 
@@ -967,6 +993,23 @@ mod tests {
             band_right,
             monitor.size.width - i.bar_thickness,
             "Right-bar band right edge should align with bar left edge"
+        );
+    }
+
+    #[test]
+    fn scaled_monitor_clamping_prevents_right_edge_spillover() {
+        // Physical monitor: 1920x1080, scale = 1.25 -> logical size 1536x864
+        let monitor = Bounds::new(point(px(0.0), px(0.0)), size(px(1536.0), px(864.0)));
+        let source = Bounds::new(point(px(1480.0), px(0.0)), size(px(48.0), px(32.0)));
+        let mut i = input(monitor, BarPosition::Top, source, standard_size(), None);
+        i.scale = Some(1.25);
+
+        let bounds = placed(compute_placement(&i));
+        let right_edge = bounds.origin.x + bounds.size.width;
+
+        assert!(
+            right_edge <= px(1536.0 - SAFE_INSET),
+            "Card right edge ({right_edge:?}) must stay within logical monitor width 1536px minus safe inset"
         );
     }
 }

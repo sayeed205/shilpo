@@ -1,7 +1,6 @@
 use gpui::{
-    App, Bounds, DisplayId, ElementId, InteractiveElement, IntoElement, ParentElement, Pixels,
-    Point, RenderOnce, Role, StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
-    relative, size,
+    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px, relative,
 };
 use shilpo_services::BatteryInfo;
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, black, green_500, h_flex};
@@ -27,13 +26,6 @@ const BATTERY_CHARGING_THREE_DIGIT_TEXT_SIZE: f32 = 5.15 * BATTERY_DESKTOP_SCALE
 const BATTERY_CHARGING_ICON_SIZE: f32 = 5.15 * BATTERY_DESKTOP_SCALE;
 const BATTERY_INDICATOR_WIDTH: f32 = 48.0;
 const BATTERY_INDICATOR_HEIGHT: f32 = 32.0;
-
-fn activation_bounds(position: Point<Pixels>) -> Bounds<Pixels> {
-    Bounds::centered_at(
-        position,
-        size(px(BATTERY_INDICATOR_WIDTH), px(BATTERY_INDICATOR_HEIGHT)),
-    )
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BatteryVisualMode {
@@ -77,20 +69,14 @@ impl BatteryVisualState {
 pub(crate) struct BatteryIndicator {
     id: ElementId,
     info: BatteryInfo,
-    display_id: Option<DisplayId>,
     style: StyleRefinement,
 }
 
 impl BatteryIndicator {
-    pub(crate) fn new(
-        id: impl Into<ElementId>,
-        info: BatteryInfo,
-        display_id: Option<DisplayId>,
-    ) -> Self {
+    pub(crate) fn new(id: impl Into<ElementId>, info: BatteryInfo) -> Self {
         Self {
             id: id.into(),
             info,
-            display_id,
             style: StyleRefinement::default(),
         }
     }
@@ -109,7 +95,6 @@ impl RenderOnce for BatteryIndicator {
         };
 
         let source = CardSourceId::singleton("battery");
-        let display_id = self.display_id;
         let is_selected =
             CardCoordinator::source_state(cx, &source) == CardSourceState::PersistentOpen;
         let (fill_color, filled_content_color) = match state.mode {
@@ -229,7 +214,28 @@ impl RenderOnce for BatteryIndicator {
             .rounded(px(BATTERY_TERMINAL_WIDTH / 2.))
             .bg(nub_color);
 
+        let source_prepaint = source.clone();
         h_flex()
+            .on_children_prepainted(move |child_bounds, window, cx| {
+                let Some(display_id) = window.display(cx).map(|display| display.id()) else {
+                    return;
+                };
+                let Some(bounds) = child_bounds
+                    .into_iter()
+                    .reduce(|bounds, child| bounds.union(&child))
+                else {
+                    return;
+                };
+
+                CardCoordinator::dispatch(
+                    cx,
+                    CardRequest::AnchorUpdate {
+                        source: source_prepaint.clone(),
+                        bounds,
+                        display_id,
+                    },
+                );
+            })
             .id(self.id)
             .role(Role::Button)
             .aria_label("Battery status")
@@ -252,16 +258,11 @@ impl RenderOnce for BatteryIndicator {
                     cx.theme().surface_container_high
                 })
             })
-            .on_click(move |event, _, cx| {
-                let Some(display_id) = display_id else {
-                    return;
-                };
+            .on_click(move |_, _, cx| {
                 CardCoordinator::dispatch(
                     cx,
-                    CardRequest::PersistentToggleAt {
+                    CardRequest::PersistentToggle {
                         source: source.clone(),
-                        bounds: activation_bounds(event.position()),
-                        display_id,
                     },
                 );
             })
@@ -382,15 +383,5 @@ mod tests {
 
         assert_eq!(state.percentage, 100);
         assert_eq!(state.fill_ratio, 1.0);
-    }
-
-    #[test]
-    fn activation_anchor_is_centered_on_the_click_position() {
-        let position = gpui::point(px(1900.0), px(20.0));
-        let bounds = activation_bounds(position);
-
-        assert_eq!(bounds.center(), position);
-        assert_eq!(bounds.size.width, px(BATTERY_INDICATOR_WIDTH));
-        assert_eq!(bounds.size.height, px(BATTERY_INDICATOR_HEIGHT));
     }
 }

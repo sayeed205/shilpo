@@ -257,6 +257,13 @@ impl CardCoordinator {
         }
     }
 
+    pub(crate) fn handle_window_closed(&mut self, window_id: gpui::WindowId) {
+        self.persistent_bands
+            .retain(|_, handle| handle.window_id() != window_id);
+        self.preview_bands
+            .retain(|_, handle| handle.window_id() != window_id);
+    }
+
     pub(crate) fn destroy_bands_for_display(cx: &mut App, display_id: DisplayId) {
         Self::dispatch(cx, CardRequest::DisplayRemoved { display_id });
         let (persistent, preview) = {
@@ -722,17 +729,7 @@ impl CardCoordinator {
         };
         let bar_thickness = px(bar_config.height as f32 + floating_margin);
 
-        let monitor_bounds = cx
-            .displays()
-            .into_iter()
-            .find(|d| d.id() == display_id)
-            .map(|d| d.bounds())
-            .unwrap_or_else(|| {
-                gpui::Bounds::new(
-                    gpui::point(px(0.0), px(0.0)),
-                    gpui::size(px(1920.0), px(1080.0)),
-                )
-            });
+        let (monitor_bounds, scale) = Self::resolve_monitor_bounds_and_scale(cx, display_id);
 
         let placement_input = PlacementInput {
             monitor_bounds,
@@ -741,6 +738,7 @@ impl CardCoordinator {
             source_bounds: anchor_bounds,
             requested_size,
             collision_bounds,
+            scale,
         };
 
         let placement = compute_placement(&placement_input);
@@ -880,8 +878,23 @@ impl CardCoordinator {
         };
 
         if let Some(handle) = existing {
-            tracing::debug!(channel = ?channel, display = ?display_id, "card band reused");
-            return Some(handle);
+            if handle.update(cx, |_, _, _| ()).is_ok() {
+                tracing::debug!(channel = ?channel, display = ?display_id, "card band reused");
+                return Some(handle);
+            }
+            tracing::warn!(channel = ?channel, display = ?display_id, "stale card band handle detected, re-creating");
+            let coordinator = &mut cx
+                .global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .card_coordinator;
+            match channel {
+                CardChannel::Persistent => {
+                    coordinator.persistent_bands.remove(&display_id);
+                }
+                CardChannel::Preview => {
+                    coordinator.preview_bands.remove(&display_id);
+                }
+            }
         }
 
         tracing::debug!(channel = ?channel, display = ?display_id, "card band created");
@@ -978,6 +991,65 @@ impl CardCoordinator {
     ) -> (Pixels, Pixels, Pixels, Pixels) {
         // Card placement already includes the bar thickness and configured gap.
         (px(0.0), px(0.0), px(0.0), px(0.0))
+    }
+
+    fn resolve_monitor_bounds_and_scale(
+        cx: &App,
+        display_id: DisplayId,
+    ) -> (gpui::Bounds<Pixels>, Option<f32>) {
+        let snapshot = ShellSurfaces::compositor_snapshot(cx);
+
+        let gpui_display = cx
+            .displays()
+            .into_iter()
+            .find(|d| d.id() == display_id)
+            .or_else(|| cx.primary_display());
+
+        let gpui_bounds = gpui_display.as_ref().map(|d| d.bounds());
+
+        if let Some(ref bounds) = gpui_bounds
+            && let Some(output_name) =
+                ShellSurfaces::output_name_for_bounds(*bounds, &snapshot.outputs)
+            && let Some(output) = snapshot.outputs.iter().find(|o| o.name == output_name)
+        {
+            let logical_bounds = gpui::Bounds::new(
+                gpui::point(
+                    px(output.logical_position.0 as f32),
+                    px(output.logical_position.1 as f32),
+                ),
+                gpui::size(
+                    px(output.logical_size.0 as f32),
+                    px(output.logical_size.1 as f32),
+                ),
+            );
+            return (logical_bounds, Some(output.scale as f32));
+        }
+
+        if let Some(output) = snapshot.outputs.first() {
+            let logical_bounds = gpui::Bounds::new(
+                gpui::point(
+                    px(output.logical_position.0 as f32),
+                    px(output.logical_position.1 as f32),
+                ),
+                gpui::size(
+                    px(output.logical_size.0 as f32),
+                    px(output.logical_size.1 as f32),
+                ),
+            );
+            return (logical_bounds, Some(output.scale as f32));
+        }
+
+        if let Some(bounds) = gpui_bounds {
+            return (bounds, None);
+        }
+
+        (
+            gpui::Bounds::new(
+                gpui::point(px(0.0), px(0.0)),
+                gpui::size(px(1920.0), px(1080.0)),
+            ),
+            None,
+        )
     }
 }
 

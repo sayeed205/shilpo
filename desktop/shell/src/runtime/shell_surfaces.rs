@@ -921,6 +921,7 @@ impl ShellSurfaces {
             self.overview_entity = None;
             self.overview_lifecycle = OverviewLifecycle::Closed;
         }
+        self.card_coordinator.handle_window_closed(window_id);
         outcome
     }
 

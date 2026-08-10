@@ -618,9 +618,9 @@ impl CardState {
                         effects.append(&mut self.close_persistent(CardDismissReason::SourceToggle));
                     }
                 } else {
-                    effects.append(&mut self.open_persistent(source));
                     self.persistent.anchor_bounds = Some(bounds);
                     self.persistent.display_id = Some(display_id);
+                    effects.append(&mut self.open_persistent(source));
                 }
             }
 
