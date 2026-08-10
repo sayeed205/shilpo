@@ -114,7 +114,7 @@ impl NotificationToastView {
             self.closing = false;
             self.entering = true;
             self.schedule_enter_completion(window, cx);
-            tracing::warn!("[NOTIFTRACE] push while closing -> reset flags");
+            tracing::debug!("push notification while closing, resetting flags");
         }
 
         self.stack.push_front(ToastEntry {
@@ -122,9 +122,10 @@ impl NotificationToastView {
             generation,
             timeout,
         });
-        tracing::warn!(
-            "[NOTIFTRACE] push gen={generation} stack_len={}",
-            self.stack.len()
+        tracing::debug!(
+            generation = %generation,
+            stack_len = self.stack.len(),
+            "notification toast pushed"
         );
         self.reset_autohide_timer(window, cx);
         cx.notify();
@@ -175,16 +176,16 @@ impl NotificationToastView {
 
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing {
-            tracing::warn!("[NOTIFTRACE] dismiss rejected: already closing");
+            tracing::debug!("notification toast dismiss rejected: already closing");
             return;
         }
 
         if self.stack.len() > 1
             && let Some(popped) = self.stack.pop_front()
         {
-            tracing::warn!(
-                "[NOTIFTRACE] dismiss popped gen={} (stack>1)",
-                popped.generation
+            tracing::debug!(
+                popped_gen = %popped.generation,
+                "popped notification toast from stack"
             );
             popped.generation.forgotten(cx);
             if self.stack.len() <= 1 {
@@ -195,7 +196,7 @@ impl NotificationToastView {
             return;
         }
 
-        tracing::warn!("[NOTIFTRACE] dismiss last -> closing=true");
+        tracing::debug!("dismissing final notification toast");
         self.closing = true;
         self.autohide_task = None;
         cx.notify();
