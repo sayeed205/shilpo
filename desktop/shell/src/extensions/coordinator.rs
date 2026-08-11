@@ -40,7 +40,9 @@ pub struct ContributionInstance {
     pub settings: serde_json::Value,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct ExtensionGeneration(pub u64);
 
 impl ExtensionGeneration {
@@ -121,6 +123,8 @@ pub enum ExtensionCommand {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExtensionUpdate {
+    #[serde(default)]
+    pub host_generation: super::process::HostGeneration,
     pub generation: ExtensionGeneration,
     pub snapshot: Option<ExtensionSnapshot>,
     pub effects: Vec<(ExtensionId, AuthorizedHostEffect)>,
@@ -146,11 +150,13 @@ impl ExtensionCoordinator {
         let supervisor = Arc::new(super::supervisor::ExtensionSupervisor::new());
         let (command_tx, command_rx) = std::sync::mpsc::sync_channel(64);
         let supervisor_for_forward = supervisor.clone();
-        executor.spawn(async move {
-            while let Ok(cmd) = command_rx.recv() {
-                let _ = supervisor_for_forward.send_command(cmd);
-            }
-        }).detach();
+        executor
+            .spawn(async move {
+                while let Ok(cmd) = command_rx.recv() {
+                    let _ = supervisor_for_forward.send_command(cmd);
+                }
+            })
+            .detach();
 
         let watch_paths = vec![
             shilpo_ext::default_extension_state_dir().join("dev"),
@@ -163,11 +169,7 @@ impl ExtensionCoordinator {
             Ok(w) => watcher = Some(w),
             Err(error) => {
                 tracing::warn!(%error, "ExtensionWatcher failed, falling back to 30s background scan");
-                fallback_scan = spawn_fallback_scan(
-                    &executor,
-                    command_tx,
-                    Duration::from_secs(30),
-                );
+                fallback_scan = spawn_fallback_scan(&executor, command_tx, Duration::from_secs(30));
             }
         }
 
@@ -217,6 +219,10 @@ impl ExtensionCoordinator {
         self.snapshot().diagnostics.clone()
     }
 
+    pub fn host_diagnostics(&self) -> super::supervisor::ExtensionHostDiagnostics {
+        self.supervisor.diagnostics()
+    }
+
     pub fn view(&self, id: &CanonicalId) -> Option<ViewTree> {
         self.snapshot().views.get(id).cloned()
     }
@@ -253,9 +259,7 @@ impl ExtensionCoordinator {
         timeout: Duration,
     ) -> gpui::Task<bool> {
         let supervisor = self.supervisor.clone();
-        executor.spawn(async move {
-            supervisor.shutdown(timeout)
-        })
+        executor.spawn(async move { supervisor.shutdown(timeout) })
     }
 }
 

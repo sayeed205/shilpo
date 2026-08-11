@@ -21,18 +21,14 @@ stage_and_commit_files() {
   if [[ "${DRY_RUN:-false}" == "false" ]]; then
     local release_dir="${SHILPO_RELEASE_DIR:-$REPO_ROOT/target/release}"
     cp -a "$release_dir/shilpo" "$staging_dir/bin/shilpo"
-    cp -a "$release_dir/shilpo-shell" "$staging_dir/bin/shilpo-shell"
-    cp -a "$release_dir/shilpo-themed" "$staging_dir/bin/shilpo-themed"
-    cp -a "$release_dir/shilpo-settings" "$staging_dir/bin/shilpo-settings"
-    cp -a "$release_dir/shilpo-device-daemon" "$staging_dir/bin/shilpo-device-daemon"
     chmod +x "$staging_dir/bin/"*
   fi
 
   # Stage systemd services with absolute binary paths
   mkdir -p "$staging_dir/systemd/user"
-  render_template data/systemd/user/shilpo-shell.service "$staging_dir/systemd/user/shilpo-shell.service" "/usr/bin/shilpo-shell" "$bin_dir/shilpo-shell"
-  render_template data/systemd/user/shilpo-themed.service "$staging_dir/systemd/user/shilpo-themed.service" "/usr/bin/shilpo-themed" "$bin_dir/shilpo-themed"
-  render_template data/systemd/user/shilpo-device-daemon.service "$staging_dir/systemd/user/shilpo-device-daemon.service" "/usr/bin/shilpo-device-daemon" "$bin_dir/shilpo-device-daemon"
+  render_template data/systemd/user/shilpo-shell.service "$staging_dir/systemd/user/shilpo-shell.service" "/usr/bin/shilpo" "$bin_dir/shilpo"
+  render_template data/systemd/user/shilpo-themed.service "$staging_dir/systemd/user/shilpo-themed.service" "/usr/bin/shilpo" "$bin_dir/shilpo"
+  render_template data/systemd/user/shilpo-device-daemon.service "$staging_dir/systemd/user/shilpo-device-daemon.service" "/usr/bin/shilpo" "$bin_dir/shilpo"
   render_template data/systemd/user/shilpo-wallpaper.service "$staging_dir/systemd/user/shilpo-wallpaper.service" "/usr/bin/awww-daemon" "/usr/bin/awww-daemon"
   render_template data/systemd/user/shilpo-swayidle.service "$staging_dir/systemd/user/shilpo-swayidle.service" "/usr/bin/swayidle" "/usr/bin/swayidle"
   render_template data/systemd/user/shilpo-first-login.service "$staging_dir/systemd/user/shilpo-first-login.service" \
@@ -58,8 +54,8 @@ stage_and_commit_files() {
 
   # Stage D-Bus service
   mkdir -p "$staging_dir/dbus-1/services"
-  render_template data/dbus-1/services/org.shilpo.Theme.service "$staging_dir/dbus-1/services/org.shilpo.Theme.service" "/usr/bin/shilpo-themed" "$bin_dir/shilpo-themed"
-  render_template data/dbus-1/services/org.shilpo.Device.service "$staging_dir/dbus-1/services/org.shilpo.Device.service" "/usr/bin/shilpo-device-daemon" "$bin_dir/shilpo-device-daemon"
+  render_template data/dbus-1/services/org.shilpo.Theme.service "$staging_dir/dbus-1/services/org.shilpo.Theme.service" "/usr/bin/shilpo" "$bin_dir/shilpo"
+  render_template data/dbus-1/services/org.shilpo.Device.service "$staging_dir/dbus-1/services/org.shilpo.Device.service" "/usr/bin/shilpo" "$bin_dir/shilpo"
 
   # Stage Niri config tree
   mkdir -p "$staging_dir/niri"
@@ -69,7 +65,7 @@ stage_and_commit_files() {
   # Render the absolute Shilpo binary path without shell/sed interpolation.
   render_template "$staging_dir/niri/config.d/70-binds.kdl" "$staging_dir/niri/config.d/70-binds.kdl" \
     'spawn "shilpo"' "spawn \"$bin_dir/shilpo\"" \
-    'spawn "shilpo-settings"' "spawn \"$bin_dir/shilpo-settings\""
+    'spawn "shilpo" "settings"' "spawn \"$bin_dir/shilpo\" \"settings\""
 
   # Stage Kitty, Starship, Swaylock, Swayidle, Fish, Shilpo configs
   mkdir -p "$staging_dir/kitty" "$staging_dir/starship" "$staging_dir/swaylock" "$staging_dir/swayidle" "$staging_dir/fish" "$staging_dir/shilpo" "$staging_dir/wallpapers"
@@ -92,7 +88,7 @@ stage_and_commit_files() {
 
   # Validate binaries exist and are executable
   if [[ "${DRY_RUN:-false}" == "false" ]]; then
-    for b in shilpo shilpo-shell shilpo-themed shilpo-settings shilpo-device-daemon; do
+    for b in shilpo; do
       if [[ ! -x "$staging_dir/bin/$b" ]]; then
         error "Staged executable $b is invalid or missing"
         exit 1
@@ -118,10 +114,6 @@ stage_and_commit_files() {
   # 1. Binaries
   mkdir -p "$bin_dir"
   install -Dm755 "$staging_dir/bin/shilpo" "$bin_dir/shilpo"
-  install -Dm755 "$staging_dir/bin/shilpo-shell" "$bin_dir/shilpo-shell"
-  install -Dm755 "$staging_dir/bin/shilpo-themed" "$bin_dir/shilpo-themed"
-  install -Dm755 "$staging_dir/bin/shilpo-settings" "$bin_dir/shilpo-settings"
-  install -Dm755 "$staging_dir/bin/shilpo-device-daemon" "$bin_dir/shilpo-device-daemon"
 
   # 2. Systemd & D-Bus
   mkdir -p "$systemd_user_dir" "$dbus_service_dir"

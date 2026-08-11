@@ -48,22 +48,17 @@ impl ExtAdapter {
                     result: Some(shilpo_services::IpcResult::Telemetry(health)),
                     ..
                 }) => {
-                    let ext_status = health
-                        .extension_host
-                        .unwrap_or_else(|| serde_json::json!({
-                            "state": "ready",
-                            "host_generation": 1,
-                            "engine_generation": 1,
-                            "pid": null,
-                            "session_restart_count": 0,
-                            "consecutive_crashes": 0,
-                            "last_exit": null,
-                            "last_error": null,
-                            "stale_updates_dropped": 0,
-                            "malformed_frames": 0,
-                        }));
+                    let Some(ext_status) = health.extension_host else {
+                        return ExtOpResult {
+                            success: false,
+                            data: serde_json::Value::Null,
+                            human_message: "Extension host diagnostics are unavailable".into(),
+                            warnings: Vec::new(),
+                            exit_code: 1,
+                        };
+                    };
                     let state_str = ext_status
-                        .get("state")
+                        .get("lifecycle")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown");
                     let host_gen = ext_status

@@ -1,8 +1,8 @@
-use shilpo_shell::extensions::process::{
-    HostGeneration, HostMessage, ProcessCodecError, PROTOCOL_VERSION, read_frame,
-    recv_host_message, send_host_message, write_frame, MAX_FRAME_SIZE, MAX_QUEUE_BOUND,
-};
 use shilpo_shell::extensions::ExtensionCommand;
+use shilpo_shell::extensions::process::{
+    HostGeneration, HostMessage, MAX_FRAME_SIZE, MAX_QUEUE_BOUND, PROTOCOL_VERSION,
+    ProcessCodecError, read_frame, recv_host_message, send_host_message, write_frame,
+};
 use std::io::Cursor;
 
 #[test]
@@ -76,7 +76,10 @@ fn protocol_version_mismatch_terminates_child() {
     let mut cursor = Cursor::new(buf);
     assert!(matches!(
         recv_host_message(&mut cursor),
-        Err(ProcessCodecError::ProtocolVersionMismatch { expected: 1, found: 999 })
+        Err(ProcessCodecError::ProtocolVersionMismatch {
+            expected: 1,
+            found: 999
+        })
     ));
 }
 

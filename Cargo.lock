@@ -8051,6 +8051,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image",
+ "libc",
  "log",
  "notify",
  "resvg 0.48.1",

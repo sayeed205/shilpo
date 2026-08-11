@@ -39,13 +39,13 @@ The shell is structured into modular layers:
 ### Building the Crate
 
 ```bash
-cargo build -p shilpo-shell --release
+cargo build -p shilpo-cli --release
 ```
 
 ### Running the Shell
 
 ```bash
-cargo run -p shilpo-shell
+cargo run -p shilpo-cli -- daemon
 ```
 
 ---
@@ -77,7 +77,9 @@ locale = "en-US" # en-US | bn-IN | ar-SA
 
 ## 5. IPC Protocol & Security Model
 
-`shilpo-shell` exposes a secure UNIX domain socket at `$XDG_RUNTIME_DIR/shilpo-shell/ipc.sock` (mode `0600`).
+The current shell control path remains a transitional secure UNIX domain socket at
+`$XDG_RUNTIME_DIR/shilpo-shell/ipc.sock` (mode `0600`). It is scheduled for removal when #125 completes the public
+`org.shilpo.Shell` DBus interface.
 
 ### Available Commands
 
@@ -115,8 +117,8 @@ To test changes without conflicting with an active release service:
 ./scripts/dev-shell
 ```
 
-This helper detects if `shilpo-shell.service` is running, gracefully stops it, waits for the IPC socket and lock to
-release, runs `cargo run -p shilpo-shell`, and restores the release service automatically upon exit.
+This helper detects if `shilpo-shell.service` is running, gracefully stops it, waits for the transitional IPC socket and
+lock to release, runs `cargo run -p shilpo-cli -- daemon`, and restores the release service automatically upon exit.
 
 ---
 

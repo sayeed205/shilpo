@@ -1,15 +1,15 @@
 use crate::extensions::{ExtensionCommand, ExtensionGeneration, ExtensionUpdate};
 use serde::{Deserialize, Serialize};
 use shilpo_ext::{CatalogPaths, WasmRuntime};
-use std::{
-    io::{self, Read, Write},
-};
+use std::io::{self, Read, Write};
 
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024; // 8MB
 pub const MAX_QUEUE_BOUND: usize = 64;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct HostGeneration(pub u64);
 
 impl HostGeneration {
@@ -55,10 +55,9 @@ impl std::fmt::Display for ProcessCodecError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ZeroLengthFrame => write!(f, "zero-length frame rejected"),
-            Self::FrameTooLarge { length } => write!(
-                f,
-                "frame length {length} exceeds maximum {MAX_FRAME_SIZE}"
-            ),
+            Self::FrameTooLarge { length } => {
+                write!(f, "frame length {length} exceeds maximum {MAX_FRAME_SIZE}")
+            }
             Self::ProtocolVersionMismatch { expected, found } => write!(
                 f,
                 "protocol version mismatch: expected {expected}, found {found}"
@@ -73,7 +72,9 @@ impl std::error::Error for ProcessCodecError {}
 
 pub fn read_frame<R: Read>(reader: &mut R) -> Result<Vec<u8>, ProcessCodecError> {
     let mut header = [0u8; 4];
-    reader.read_exact(&mut header).map_err(ProcessCodecError::Io)?;
+    reader
+        .read_exact(&mut header)
+        .map_err(ProcessCodecError::Io)?;
     let length = u32::from_be_bytes(header) as usize;
     if length == 0 {
         return Err(ProcessCodecError::ZeroLengthFrame);
@@ -82,7 +83,9 @@ pub fn read_frame<R: Read>(reader: &mut R) -> Result<Vec<u8>, ProcessCodecError>
         return Err(ProcessCodecError::FrameTooLarge { length });
     }
     let mut payload = vec![0u8; length];
-    reader.read_exact(&mut payload).map_err(ProcessCodecError::Io)?;
+    reader
+        .read_exact(&mut payload)
+        .map_err(ProcessCodecError::Io)?;
     Ok(payload)
 }
 
@@ -102,6 +105,50 @@ pub fn write_frame<W: Write>(writer: &mut W, payload: &[u8]) -> Result<(), Proce
     writer.write_all(payload).map_err(ProcessCodecError::Io)?;
     writer.flush().map_err(ProcessCodecError::Io)?;
     Ok(())
+}
+
+/// Incremental frame decoder used with the nonblocking worker stdout pipe.
+/// Unlike `read_frame`, this preserves partial headers and payloads across
+/// `WouldBlock` returns.
+#[derive(Default)]
+pub struct FrameReader {
+    buffer: Vec<u8>,
+}
+
+impl FrameReader {
+    pub fn try_read_frame<R: Read>(
+        &mut self,
+        reader: &mut R,
+    ) -> Result<Option<Vec<u8>>, ProcessCodecError> {
+        let mut scratch = [0u8; 8192];
+        loop {
+            if self.buffer.len() >= 4 {
+                let length = u32::from_be_bytes(self.buffer[..4].try_into().unwrap()) as usize;
+                if length == 0 {
+                    return Err(ProcessCodecError::ZeroLengthFrame);
+                }
+                if length > MAX_FRAME_SIZE {
+                    return Err(ProcessCodecError::FrameTooLarge { length });
+                }
+                if self.buffer.len() >= 4 + length {
+                    let payload = self.buffer[4..4 + length].to_vec();
+                    self.buffer.drain(..4 + length);
+                    return Ok(Some(payload));
+                }
+            }
+
+            match reader.read(&mut scratch) {
+                Ok(0) => {
+                    return Err(ProcessCodecError::Io(io::Error::from(
+                        io::ErrorKind::UnexpectedEof,
+                    )));
+                }
+                Ok(read) => self.buffer.extend_from_slice(&scratch[..read]),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+                Err(error) => return Err(ProcessCodecError::Io(error)),
+            }
+        }
+    }
 }
 
 pub fn send_host_message<W: Write>(
@@ -142,6 +189,23 @@ pub fn recv_worker_message<R: Read>(reader: &mut R) -> Result<WorkerMessage, Pro
         });
     }
     Ok(message)
+}
+
+pub fn recv_worker_message_nonblocking<R: Read>(
+    reader: &mut R,
+    frame_reader: &mut FrameReader,
+) -> Result<Option<WorkerMessage>, ProcessCodecError> {
+    let Some(bytes) = frame_reader.try_read_frame(reader)? else {
+        return Ok(None);
+    };
+    let message: WorkerMessage = serde_json::from_slice(&bytes).map_err(ProcessCodecError::Json)?;
+    if message.protocol_version != PROTOCOL_VERSION {
+        return Err(ProcessCodecError::ProtocolVersionMismatch {
+            expected: PROTOCOL_VERSION,
+            found: message.protocol_version,
+        });
+    }
+    Ok(Some(message))
 }
 
 /// The main loop for the `shilpo extension-host` child process.
@@ -188,6 +252,7 @@ pub fn run_extension_host() {
         engine_generation: engine.generation(),
         request_id: first_msg.request_id,
         payload: WorkerPayload::Update(ExtensionUpdate {
+            host_generation: HostGeneration(0),
             generation: engine.generation(),
             snapshot: Some(initial_update),
             effects: Vec::new(),

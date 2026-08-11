@@ -32,22 +32,31 @@ pub use runtime::ShellRuntime;
 pub fn run_daemon() {
     init_tracing();
 
-    futures_lite::future::block_on(async {
-        if let Ok(conn) = zbus::Connection::session().await {
-            use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
-            if let Ok(dbus) = DBusProxy::new(&conn).await
-                && let Ok(reply) = dbus
-                    .request_name(
-                        "org.shilpo.Shell".try_into().unwrap(),
-                        RequestNameFlags::DoNotQueue.into(),
-                    )
-                    .await
-                && reply != RequestNameReply::PrimaryOwner
-            {
-                eprintln!("org.shilpo.Shell is already owned by another process");
+    let shell_bus = futures_lite::future::block_on(async {
+        use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
+        let conn = zbus::Connection::session().await.unwrap_or_else(|error| {
+            eprintln!("failed to connect to the session bus: {error}");
+            std::process::exit(1);
+        });
+        let dbus = DBusProxy::new(&conn).await.unwrap_or_else(|error| {
+            eprintln!("failed to access the session bus: {error}");
+            std::process::exit(1);
+        });
+        let reply = dbus
+            .request_name(
+                "org.shilpo.Shell".try_into().unwrap(),
+                RequestNameFlags::DoNotQueue.into(),
+            )
+            .await
+            .unwrap_or_else(|error| {
+                eprintln!("failed to acquire org.shilpo.Shell: {error}");
                 std::process::exit(1);
-            }
+            });
+        if reply != RequestNameReply::PrimaryOwner {
+            eprintln!("org.shilpo.Shell is already owned by another process");
+            std::process::exit(1);
         }
+        conn
     });
 
     let app = gpui_platform::application()
@@ -77,7 +86,7 @@ pub fn run_daemon() {
             });
         bar::view::apply_config_theme(&config, None, cx);
         cx.activate(true);
-        ShellRuntime::install(cx, ipc_server);
+        ShellRuntime::install(cx, ipc_server, shell_bus);
         cx.spawn(async move |cx| {
             use tokio::signal::unix::{SignalKind, signal};
             let mut sigint = signal(SignalKind::interrupt()).ok();
@@ -154,4 +163,3 @@ fn init_tracing() {
         .with_writer(std::io::stderr)
         .try_init();
 }
-

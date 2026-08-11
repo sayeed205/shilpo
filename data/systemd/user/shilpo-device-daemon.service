@@ -3,7 +3,9 @@ Description=Shilpo device integration daemon
 After=graphical-session.target
 
 [Service]
-ExecStart=/usr/bin/shilpo-device-daemon
+Type=dbus
+BusName=org.shilpo.Device
+ExecStart=/usr/bin/shilpo device-daemon
 Restart=on-failure
 RestartSec=2
 

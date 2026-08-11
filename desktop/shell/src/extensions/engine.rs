@@ -727,6 +727,7 @@ where
                 None
             };
         ExtensionUpdate {
+            host_generation: super::process::HostGeneration(0),
             generation: self.generation,
             snapshot,
             effects: changes.effects,
@@ -745,6 +746,7 @@ where
             let initial_snapshot = self.build_snapshot(true);
             *snapshot_lock.write().unwrap() = initial_snapshot.clone();
             let initial_update = ExtensionUpdate {
+                host_generation: super::process::HostGeneration(0),
                 generation: self.generation,
                 snapshot: Some(initial_snapshot),
                 effects: Vec::new(),

@@ -1,7 +1,7 @@
 use super::{
-    ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, HostGeneration,
-    HostMessage, ProcessCodecError, WorkerMessage, WorkerPayload, PROTOCOL_VERSION,
-    recv_worker_message, send_host_message,
+    ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, FrameReader,
+    HostGeneration, HostMessage, PROTOCOL_VERSION, ProcessCodecError, ReplaceableEvent,
+    WorkerMessage, WorkerPayload, recv_worker_message_nonblocking, send_host_message,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -29,7 +29,7 @@ pub enum SupervisorState {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ExtensionHostDiagnostics {
-    pub state: String,
+    pub lifecycle: String,
     pub host_generation: u64,
     pub engine_generation: u64,
     pub pid: Option<u32>,
@@ -54,6 +54,10 @@ pub const MAX_QUEUE_SIZE: usize = 64;
 
 pub trait Clock: Send + Sync {
     fn now(&self) -> Instant;
+
+    fn sleep(&self, duration: Duration) {
+        thread::sleep(duration);
+    }
 }
 
 #[derive(Default)]
@@ -67,7 +71,8 @@ impl Clock for SystemClock {
 pub trait ChildStream: Send + Sync {
     fn pid(&self) -> Option<u32>;
     fn write_host_message(&mut self, msg: &HostMessage) -> Result<(), ProcessCodecError>;
-    fn read_worker_message(&mut self) -> Result<WorkerMessage, ProcessCodecError>;
+    fn try_read_worker_message(&mut self) -> Result<Option<WorkerMessage>, ProcessCodecError>;
+    fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>>;
     fn shutdown_gracefully(&mut self, timeout: Duration) -> io::Result<()>;
     fn kill(&mut self) -> io::Result<()>;
 }
@@ -80,6 +85,7 @@ pub struct RealChildStream {
     child: Child,
     stdin: std::process::ChildStdin,
     stdout: std::process::ChildStdout,
+    frame_reader: FrameReader,
 }
 
 impl ChildStream for RealChildStream {
@@ -91,8 +97,12 @@ impl ChildStream for RealChildStream {
         send_host_message(&mut self.stdin, msg)
     }
 
-    fn read_worker_message(&mut self) -> Result<WorkerMessage, ProcessCodecError> {
-        recv_worker_message(&mut self.stdout)
+    fn try_read_worker_message(&mut self) -> Result<Option<WorkerMessage>, ProcessCodecError> {
+        recv_worker_message_nonblocking(&mut self.stdout, &mut self.frame_reader)
+    }
+
+    fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        self.child.try_wait()
     }
 
     fn shutdown_gracefully(&mut self, timeout: Duration) -> io::Result<()> {
@@ -136,10 +146,13 @@ impl ChildSpawner for RealChildSpawner {
             .take()
             .ok_or_else(|| io::Error::other("missing stdout"))?;
 
+        set_nonblocking(&stdout)?;
+
         Ok(Box::new(RealChildStream {
             child,
             stdin,
             stdout,
+            frame_reader: FrameReader::default(),
         }))
     }
 }
@@ -153,6 +166,7 @@ pub struct ExtensionSupervisor {
     host_generation: Arc<Mutex<HostGeneration>>,
     stop_signal: Arc<AtomicBool>,
     _worker_thread: Option<JoinHandle<()>>,
+    pending_replaceable: Arc<Mutex<Option<ReplaceableEvent>>>,
 }
 
 impl Default for ExtensionSupervisor {
@@ -170,7 +184,7 @@ impl ExtensionSupervisor {
         let state = Arc::new(Mutex::new(SupervisorState::Starting));
         let snapshot = Arc::new(RwLock::new(ExtensionSnapshot::default()));
         let diagnostics = Arc::new(Mutex::new(ExtensionHostDiagnostics {
-            state: "starting".into(),
+            lifecycle: "starting".into(),
             ..Default::default()
         }));
         let host_generation = Arc::new(Mutex::new(HostGeneration(1)));
@@ -178,6 +192,7 @@ impl ExtensionSupervisor {
 
         let (command_tx, command_rx) = mpsc::sync_channel(MAX_QUEUE_SIZE);
         let (update_tx, update_rx) = mpsc::sync_channel(MAX_QUEUE_SIZE);
+        let pending_replaceable = Arc::new(Mutex::new(None));
 
         let ctx = SupervisorLoopParams {
             state: state.clone(),
@@ -187,6 +202,7 @@ impl ExtensionSupervisor {
             stop_signal: stop_signal.clone(),
             command_rx,
             update_tx,
+            pending_replaceable: pending_replaceable.clone(),
         };
 
         let worker_thread = thread::Builder::new()
@@ -205,6 +221,7 @@ impl ExtensionSupervisor {
             host_generation,
             stop_signal,
             _worker_thread: worker_thread,
+            pending_replaceable,
         }
     }
 
@@ -226,7 +243,7 @@ impl ExtensionSupervisor {
 
     pub fn diagnostics(&self) -> ExtensionHostDiagnostics {
         let mut diag = self.diagnostics.lock().unwrap().clone();
-        diag.state = match self.state() {
+        diag.lifecycle = match self.state() {
             SupervisorState::Starting => "starting".into(),
             SupervisorState::Ready => "ready".into(),
             SupervisorState::Backoff { attempt } => format!("backoff(attempt={attempt})"),
@@ -241,14 +258,16 @@ impl ExtensionSupervisor {
         let state = self.state();
         if matches!(
             state,
-            SupervisorState::Quarantined
-                | SupervisorState::Stopped
-                | SupervisorState::Stopping
+            SupervisorState::Quarantined | SupervisorState::Stopped | SupervisorState::Stopping
         ) {
             return Err(format!("extension host is unavailable (state: {state:?})"));
         }
         match self.command_tx.try_send(command) {
             Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Full(ExtensionCommand::Replaceable(event))) => {
+                *self.pending_replaceable.lock().unwrap() = Some(event);
+                Ok(())
+            }
             Err(mpsc::TrySendError::Full(_)) => Err("extension command queue full".into()),
             Err(mpsc::TrySendError::Disconnected(_)) => {
                 Err("extension supervisor disconnected".into())
@@ -272,11 +291,37 @@ impl ExtensionSupervisor {
         updates
     }
 
-    pub fn shutdown(&self, _timeout: Duration) -> bool {
+    pub fn shutdown(&self, timeout: Duration) -> bool {
         self.stop_signal.store(true, Ordering::Release);
-        let _ = self.send_command(ExtensionCommand::Shutdown);
-        true
+        let _ = self.command_tx.try_send(ExtensionCommand::Shutdown);
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if matches!(
+                self.state(),
+                SupervisorState::Stopped | SupervisorState::Quarantined
+            ) {
+                return self.state() == SupervisorState::Stopped;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
     }
+}
+
+fn set_nonblocking(stdout: &std::process::ChildStdout) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let fd = stdout.as_raw_fd();
+    // SAFETY: `fd` is borrowed from the live ChildStdout and remains open for
+    // the lifetime of the stream.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: setting O_NONBLOCK on this pipe is a local descriptor mutation.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 struct SupervisorLoopParams {
@@ -287,6 +332,7 @@ struct SupervisorLoopParams {
     stop_signal: Arc<AtomicBool>,
     command_rx: mpsc::Receiver<ExtensionCommand>,
     update_tx: mpsc::SyncSender<ExtensionUpdate>,
+    pending_replaceable: Arc<Mutex<Option<ReplaceableEvent>>>,
 }
 
 fn supervisor_loop<S: ChildSpawner>(
@@ -301,7 +347,7 @@ fn supervisor_loop<S: ChildSpawner>(
     let mut last_accepted_engine_gen = ExtensionGeneration(0);
     let mut ready_since: Option<Instant>;
 
-    loop {
+    'supervisor: loop {
         if params.stop_signal.load(Ordering::Acquire) {
             *params.state.lock().unwrap() = SupervisorState::Stopped;
             break;
@@ -343,7 +389,7 @@ fn supervisor_loop<S: ChildSpawner>(
                 *params.state.lock().unwrap() = SupervisorState::Backoff {
                     attempt: consecutive_crashes,
                 };
-                thread::sleep(delay);
+                clock.sleep(delay);
 
                 let mut hg = params.host_gen.lock().unwrap();
                 *hg = hg.next();
@@ -393,7 +439,7 @@ fn supervisor_loop<S: ChildSpawner>(
             *params.state.lock().unwrap() = SupervisorState::Backoff {
                 attempt: consecutive_crashes,
             };
-            thread::sleep(delay);
+            clock.sleep(delay);
 
             let mut hg = params.host_gen.lock().unwrap();
             *hg = hg.next();
@@ -402,40 +448,79 @@ fn supervisor_loop<S: ChildSpawner>(
         }
 
         // Read initial snapshot worker message
-        let initial_worker_msg = match child.read_worker_message() {
-            Ok(msg) => msg,
-            Err(error) => {
-                let err_msg = format!("failed reading initial snapshot from child: {error}");
-                tracing::warn!(%err_msg);
+        let initial_worker_msg = loop {
+            if params.stop_signal.load(Ordering::Acquire) {
                 let _ = child.kill();
-
-                {
-                    let mut diag = params.diagnostics.lock().unwrap();
-                    diag.last_error = Some(err_msg);
-                    diag.malformed_frames += 1;
+                *params.state.lock().unwrap() = SupervisorState::Stopped;
+                return;
+            }
+            match child.try_read_worker_message() {
+                Ok(Some(message)) => break message,
+                Ok(None) => {
+                    if child.try_wait().ok().flatten().is_some() {
+                        let error =
+                            ProcessCodecError::Io(io::Error::from(io::ErrorKind::UnexpectedEof));
+                        let err_msg =
+                            format!("failed reading initial snapshot from child: {error}");
+                        tracing::warn!(%err_msg);
+                        let _ = child.kill();
+                        let mut diag = params.diagnostics.lock().unwrap();
+                        diag.last_error = Some(err_msg);
+                        diag.malformed_frames += 1;
+                        let now = clock.now();
+                        crash_timestamps.push(now);
+                        crash_timestamps.retain(|ts| now.duration_since(*ts) <= ROLLING_WINDOW);
+                        consecutive_crashes += 1;
+                        if crash_timestamps.len() >= MAX_CRASHES_IN_WINDOW as usize {
+                            *params.state.lock().unwrap() = SupervisorState::Quarantined;
+                            return;
+                        }
+                        *params.state.lock().unwrap() = SupervisorState::Backoff {
+                            attempt: consecutive_crashes,
+                        };
+                        clock.sleep(
+                            RETRY_DELAYS
+                                [(consecutive_crashes as usize - 1).min(RETRY_DELAYS.len() - 1)],
+                        );
+                        *params.host_gen.lock().unwrap() = current_host_gen.next();
+                        session_restarts += 1;
+                        continue 'supervisor;
+                    }
+                    clock.sleep(Duration::from_millis(10));
                 }
+                Err(error) => {
+                    let err_msg = format!("failed reading initial snapshot from child: {error}");
+                    tracing::warn!(%err_msg);
+                    let _ = child.kill();
 
-                let now = clock.now();
-                consecutive_crashes += 1;
-                crash_timestamps.push(now);
-                crash_timestamps.retain(|ts| now.duration_since(*ts) <= ROLLING_WINDOW);
+                    {
+                        let mut diag = params.diagnostics.lock().unwrap();
+                        diag.last_error = Some(err_msg);
+                        diag.malformed_frames += 1;
+                    }
 
-                if crash_timestamps.len() >= MAX_CRASHES_IN_WINDOW as usize {
-                    *params.state.lock().unwrap() = SupervisorState::Quarantined;
-                    break;
+                    let now = clock.now();
+                    consecutive_crashes += 1;
+                    crash_timestamps.push(now);
+                    crash_timestamps.retain(|ts| now.duration_since(*ts) <= ROLLING_WINDOW);
+
+                    if crash_timestamps.len() >= MAX_CRASHES_IN_WINDOW as usize {
+                        *params.state.lock().unwrap() = SupervisorState::Quarantined;
+                        return;
+                    }
+
+                    let attempt = (consecutive_crashes - 1) as usize;
+                    let delay = RETRY_DELAYS[attempt.min(RETRY_DELAYS.len() - 1)];
+                    *params.state.lock().unwrap() = SupervisorState::Backoff {
+                        attempt: consecutive_crashes,
+                    };
+                    clock.sleep(delay);
+
+                    let mut hg = params.host_gen.lock().unwrap();
+                    *hg = hg.next();
+                    session_restarts += 1;
+                    continue 'supervisor;
                 }
-
-                let attempt = (consecutive_crashes - 1) as usize;
-                let delay = RETRY_DELAYS[attempt.min(RETRY_DELAYS.len() - 1)];
-                *params.state.lock().unwrap() = SupervisorState::Backoff {
-                    attempt: consecutive_crashes,
-                };
-                thread::sleep(delay);
-
-                let mut hg = params.host_gen.lock().unwrap();
-                *hg = hg.next();
-                session_restarts += 1;
-                continue;
             }
         };
 
@@ -457,6 +542,8 @@ fn supervisor_loop<S: ChildSpawner>(
             if let Some(ref new_snapshot) = update.snapshot {
                 *params.snapshot.write().unwrap() = new_snapshot.clone();
             }
+            let mut update = update;
+            update.host_generation = current_host_gen;
             let _ = params.update_tx.try_send(update);
         }
 
@@ -492,7 +579,13 @@ fn supervisor_loop<S: ChildSpawner>(
             }
 
             // Check for incoming ExtensionCommands to send to worker
-            if let Ok(cmd) = params.command_rx.try_recv() {
+            let pending = params
+                .pending_replaceable
+                .lock()
+                .unwrap()
+                .take()
+                .map(ExtensionCommand::Replaceable);
+            if let Some(cmd) = pending.or_else(|| params.command_rx.try_recv().ok()) {
                 if matches!(cmd, ExtensionCommand::Shutdown) {
                     *params.state.lock().unwrap() = SupervisorState::Stopping;
                     request_counter += 1;
@@ -505,8 +598,7 @@ fn supervisor_loop<S: ChildSpawner>(
                     });
                     let _ = child.shutdown_gracefully(SHUTDOWN_DEADLINE);
                     *params.state.lock().unwrap() = SupervisorState::Stopped;
-                    clean_shutdown = true;
-                    break;
+                    continue 'supervisor;
                 }
 
                 request_counter += 1;
@@ -525,8 +617,8 @@ fn supervisor_loop<S: ChildSpawner>(
             }
 
             // Read response update from worker child
-            match child.read_worker_message() {
-                Ok(worker_msg) => {
+            match child.try_read_worker_message() {
+                Ok(Some(worker_msg)) => {
                     if worker_msg.host_generation != current_host_gen {
                         let mut diag = params.diagnostics.lock().unwrap();
                         diag.stale_updates_dropped += 1;
@@ -546,13 +638,15 @@ fn supervisor_loop<S: ChildSpawner>(
                     }
 
                     match worker_msg.payload {
-                        WorkerPayload::Update(update) => {
+                        WorkerPayload::Update(mut update) => {
+                            update.host_generation = current_host_gen;
                             if let Some(ref new_snapshot) = update.snapshot {
                                 *params.snapshot.write().unwrap() = new_snapshot.clone();
                             }
                             let _ = params.update_tx.try_send(update);
                         }
                         WorkerPayload::ShutdownAck => {
+                            let _ = child.shutdown_gracefully(SHUTDOWN_DEADLINE);
                             clean_shutdown = true;
                             break;
                         }
@@ -563,11 +657,11 @@ fn supervisor_loop<S: ChildSpawner>(
                         }
                     }
                 }
-                Err(ProcessCodecError::Io(ref err))
-                    if err.kind() == io::ErrorKind::WouldBlock
-                        || err.kind() == io::ErrorKind::TimedOut =>
-                {
-                    thread::sleep(Duration::from_millis(10));
+                Ok(None) => {
+                    if child.try_wait().ok().flatten().is_some() {
+                        break;
+                    }
+                    clock.sleep(Duration::from_millis(10));
                 }
                 Err(error) => {
                     tracing::warn!(%error, "error reading update from worker child");
@@ -608,7 +702,7 @@ fn supervisor_loop<S: ChildSpawner>(
         *params.state.lock().unwrap() = SupervisorState::Backoff {
             attempt: consecutive_crashes,
         };
-        thread::sleep(delay);
+        clock.sleep(delay);
 
         let mut hg = params.host_gen.lock().unwrap();
         *hg = hg.next();

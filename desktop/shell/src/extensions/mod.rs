@@ -17,9 +17,9 @@ pub use coordinator::{
 };
 pub use engine::ExtensionEngine;
 pub use process::{
-    HostGeneration, HostMessage, ProcessCodecError, WorkerMessage, WorkerPayload,
-    PROTOCOL_VERSION, recv_host_message, recv_worker_message, run_extension_host,
-    send_host_message, send_worker_message,
+    FrameReader, HostGeneration, HostMessage, PROTOCOL_VERSION, ProcessCodecError, WorkerMessage,
+    WorkerPayload, recv_host_message, recv_worker_message, recv_worker_message_nonblocking,
+    run_extension_host, send_host_message, send_worker_message,
 };
 pub use supervisor::{
     ChildSpawner, ExtensionHostDiagnostics, ExtensionSupervisor, SupervisorState,

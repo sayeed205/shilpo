@@ -5,8 +5,10 @@ PartOf=niri.service
 After=niri.service
 
 [Service]
+Type=dbus
+BusName=org.shilpo.Shell
 ExecStartPre=/usr/bin/sleep 1
-ExecStart=/usr/bin/shilpo-shell
+ExecStart=/usr/bin/shilpo daemon
 Restart=always
 RestartSec=2s
 KillSignal=SIGTERM
