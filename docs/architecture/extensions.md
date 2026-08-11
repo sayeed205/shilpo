@@ -103,7 +103,7 @@ flowchart LR
 
 The extension ecosystem is split across two dependency-aligned crates:
 
-- **`shilpo-ext-api`** (`core/ext-api`) is the cross-platform extension contract crate. It owns extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`, `IdError`), manifest parsing and validation, contribution descriptors, settings schema types, shell event and host-effect messages, capability declarations, the declarative view tree and UI event types, versioned schema files, and the canonical WIT contract (`wit/extension.wit`). Cross-platform, zero Wasmtime or desktop dependencies.
+- **`shilpo-ext-api`** (`core/ext-api`) is the cross-platform extension contract crate. It owns extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`, `IdError`), manifest parsing and validation, contribution descriptors, settings schema types, shell event and host-effect messages, capability declarations, the declarative view tree and UI event types, versioned schema files, and the provisional WIT source (`wit/extension.wit`). Cross-platform, zero Wasmtime or desktop dependencies.
 - **`shilpo-ext-runtime`** (`desktop/ext-runtime`) is the Linux desktop extension runtime crate. It owns capability authorization, Wasmtime Component Model execution, package catalog and registry management, and the worker process framing and protocol (`shilpo extension-host`). Internal to Linux desktop.
 
 `shilpo-ext-api` does not depend on GPUI, `shilpo-ui`, `shilpo-shell`, or concrete service implementations. `shilpo-config` depends only on `shilpo-ext-api`.
@@ -133,11 +133,10 @@ The runtime seam has two justified adapters:
 The runtime adapter executes guest functions. It does not decide shell policy. Capability checks, scheduling, and effect
 validation remain in `ExtensionHost`.
 
-The component ABI is versioned as `shilpo:extension@0.1.0` and exports typed WIT functions with proper records and
-variants for `ExtensionEvent`, `HostEffect`, and `ViewTree`. The typed WIT contract provides compile-time guarantees for
-both host and guest, enables multi-language SDK generation via `wit-bindgen` (Rust, Go, Python, JS/TS), and eliminates
-JSON serialization overhead at the ABI boundary. During the `@0.x` epoch the WIT interface may break freely between
-minor versions; backward-compatible multi-world hosting is deferred to `@1.0`.
+The current component ABI is versioned as `shilpo:extension@0.1.0` and carries JSON strings for the provisional
+`ExtensionEvent`, `HostEffect`, and `ViewTree` representations. The WIT-only typed contract, generated host/guest
+bindings, explicit activation record, and removal of general `process:exec` are designed in #76; this migration does
+not claim those guarantees. During the `@0.x` epoch the ABI may break freely; compatibility hosting is deferred.
 
 ### Guest SDKs
 

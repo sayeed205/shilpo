@@ -1,6 +1,6 @@
 # Shilpo Extensions
 
-`shilpo-ext` provides the validated extension contract, policy-owning host, in-memory and Wasmtime Component Model
+`shilpo-ext-runtime` provides the policy-owning host, in-memory and Wasmtime Component Model
 runtime adapters, resource budgets, structured diagnostics, deterministic `.shilpo-ext` archives, Ed25519 signing,
 atomic installation and rollback, host-owned receipts and grants, signed registry resolution, update selection, and the
 catalog snapshots consumed by the shell, CLI, and Settings app.
@@ -195,7 +195,7 @@ serde_json = "1"
 wit-bindgen = "0.57"
 ```
 
-The versioned contract lives in [`wit/extension.wit`](wit/extension.wit):
+The provisional versioned contract lives in [`core/ext-api/wit/extension.wit`](../../core/ext-api/wit/extension.wit):
 
 ```wit
 package shilpo:extension@0.1.0;

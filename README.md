@@ -29,7 +29,8 @@ featuring Material Design 3 (M3) & Material Expressive design inspirations.
 | **`shilpo-settings`** | Control panel application | [`desktop/settings`](desktop/settings) |
 | **`shilpo-services`** | Linux system service integrations | [`desktop/services`](desktop/services) |
 | **`shilpo-config`** | Shell configuration management | [`desktop/config`](desktop/config) |
-| **`shilpo-ext`** | Wasmtime extension runtime | [`desktop/ext`](desktop/ext) |
+| **`shilpo-ext-api`** | Cross-platform extension contract | [`core/ext-api`](core/ext-api) |
+| **`shilpo-ext-runtime`** | Wasmtime extension runtime | [`desktop/ext-runtime`](desktop/ext-runtime) |
 | **`shilpo-theme-daemon`** | Theme DBus daemon & system sync | [`desktop/theme-daemon`](desktop/theme-daemon) |
 | **`shilpo-cli`** | CLI tool | [`desktop/cli`](desktop/cli) |
 | **`storybook`** | Interactive component gallery application | [`apps/storybook`](apps/storybook) |
