@@ -22,8 +22,10 @@ fn workspace_actions_enabled(connection: &CompositorConnection) -> bool {
 fn workspace_status_label(connection: &CompositorConnection) -> Option<&'static str> {
     match connection {
         CompositorConnection::Connecting => Some("Connecting..."),
-        CompositorConnection::Reconnecting { .. } => Some("Reconnecting"),
-        CompositorConnection::Stopped => Some("Compositor Unavailable"),
+        CompositorConnection::Reconnecting => Some("Reconnecting"),
+        CompositorConnection::Unavailable | CompositorConnection::Degraded => {
+            Some("Compositor Unavailable")
+        }
         CompositorConnection::Ready => None,
     }
 }
@@ -259,7 +261,9 @@ impl RenderOnce for WorkspacesWidget {
             items.push(badge.into_any_element());
         } else if is_stopped {
             let last_err = match &self.connection {
-                CompositorConnection::Stopped => "Compositor is unavailable".to_string(),
+                CompositorConnection::Unavailable | CompositorConnection::Degraded => {
+                    "Compositor is unavailable".to_string()
+                }
                 _ => String::new(),
             };
             let badge = div()
@@ -277,7 +281,7 @@ impl RenderOnce for WorkspacesWidget {
                 .justify_center();
 
             let badge = if self.orientation == PillOrientation::Horizontal {
-                badge.h(px(24.)).px_2_5().child("Compositor Unavailable")
+                badge.h(px(24.)).px_2_5().child("Unavailable")
             } else {
                 badge.w(px(24.)).py_2_5().child("!")
             };
@@ -377,18 +381,12 @@ impl RenderOnce for WorkspacesWidget {
                 cx,
             );
 
-        if let CompositorConnection::Reconnecting {
-            attempt,
-            ref last_error,
-        } = self.connection
-        {
-            let error_msg = last_error
-                .clone()
-                .unwrap_or_else(|| "Attempting to reconnect to compositor...".into());
+        if matches!(self.connection, CompositorConnection::Reconnecting) {
+            let error_msg = "Attempting to reconnect to compositor...".to_string();
             let badge = div()
                 .id("ws_reconnect_indicator")
                 .role(Role::Status)
-                .aria_label(format!("Compositor reconnecting attempt {}", attempt))
+                .aria_label("Compositor reconnecting")
                 .tooltip(move |window, cx| Tooltip::new(error_msg.clone()).build(window, cx))
                 .flex()
                 .items_center()
@@ -399,12 +397,7 @@ impl RenderOnce for WorkspacesWidget {
                 .child(Icon::new(IconName::Info).size(px(12.)));
 
             let badge = if self.orientation == PillOrientation::Horizontal {
-                badge
-                    .ml_1()
-                    .gap_1()
-                    .px_2()
-                    .h(px(24.))
-                    .child(format!("Reconnecting ({})", attempt))
+                badge.ml_1().gap_1().px_2().h(px(24.)).child("Reconnecting")
             } else {
                 badge.mt_1().py_1().px_1().w(px(24.)).justify_center()
             };
@@ -507,12 +500,11 @@ mod tests {
             &CompositorConnection::Connecting
         ));
         assert!(!workspace_actions_enabled(
-            &CompositorConnection::Reconnecting {
-                attempt: 1,
-                last_error: None,
-            }
+            &CompositorConnection::Reconnecting
         ));
-        assert!(!workspace_actions_enabled(&CompositorConnection::Stopped));
+        assert!(!workspace_actions_enabled(
+            &CompositorConnection::Unavailable
+        ));
     }
 
     #[test]
@@ -522,14 +514,11 @@ mod tests {
             Some("Connecting...")
         );
         assert_eq!(
-            workspace_status_label(&CompositorConnection::Reconnecting {
-                attempt: 2,
-                last_error: Some("socket closed".into()),
-            }),
+            workspace_status_label(&CompositorConnection::Reconnecting),
             Some("Reconnecting")
         );
         assert_eq!(
-            workspace_status_label(&CompositorConnection::Stopped),
+            workspace_status_label(&CompositorConnection::Unavailable),
             Some("Compositor Unavailable")
         );
         assert_eq!(workspace_status_label(&CompositorConnection::Ready), None);

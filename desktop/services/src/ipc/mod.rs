@@ -5,7 +5,7 @@
 //! descriptors are borrowed from Rust-owned objects and never closed here.
 
 use crate::compositor::{
-    CommandOutcome, CompositorCommand, CompositorCommandBroker, CompositorCommandError,
+    CommandOutcome, CompositorCommand, CompositorCommandBroker, RejectionReason,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -96,6 +96,8 @@ pub struct ServiceHealth {
     pub compositor_connected: bool,
     #[serde(default)]
     pub compositor_state: String,
+    #[serde(default)]
+    pub compositor_owner_generation: u64,
     #[serde(default)]
     pub compositor_revision: u64,
     #[serde(default)]
@@ -707,56 +709,36 @@ fn response(id: u64, result: Option<IpcResult>, error: Option<IpcErrorBody>) -> 
     }
 }
 
-fn map_broker_error(err: &CompositorCommandError) -> IpcErrorBody {
+#[allow(dead_code)]
+fn map_broker_error(err: &RejectionReason) -> IpcErrorBody {
     let (code, message) = match err {
-        CompositorCommandError::Unavailable { state } => (
+        RejectionReason::Unavailable => (
             "compositor_unavailable",
-            format!("compositor is unavailable (state: {})", state.state_name()),
+            "compositor is unavailable".to_string(),
         ),
-        CompositorCommandError::Busy { queue_len } => (
-            "compositor_busy",
-            format!("compositor queue full (length: {})", queue_len),
-        ),
-        CompositorCommandError::Unsupported => (
+        RejectionReason::Overloaded => {
+            ("compositor_busy", "compositor queue overloaded".to_string())
+        }
+        RejectionReason::Unsupported => (
             "compositor_unsupported",
-            "compositor command is unsupported".into(),
+            "compositor command is unsupported".to_string(),
         ),
-        CompositorCommandError::BackendRejected { message } => (
+        RejectionReason::BackendRejected { message } => (
             "compositor_command_failed",
             format!("backend rejected command: {}", message),
         ),
-        CompositorCommandError::Transport { message } => (
+        RejectionReason::Transport { message } => (
             "compositor_command_failed",
             format!("transport error: {}", message),
         ),
-        CompositorCommandError::Timeout { duration } => (
-            "compositor_timeout",
-            format!("command timed out after {:?}", duration),
-        ),
-        CompositorCommandError::Cancelled { reason } => (
-            "compositor_cancelled",
-            format!("command cancelled: {}", reason),
-        ),
-        CompositorCommandError::InvalidTarget(target) => {
-            ("invalid_target", format!("invalid target: {}", target))
-        }
-        CompositorCommandError::TargetDisappeared(target) => (
+        RejectionReason::InvalidTarget(t) => ("invalid_target", format!("invalid target: {}", t)),
+        RejectionReason::TargetDisappeared(t) => (
             "target_disappeared",
-            format!("target disappeared before application: {}", target),
-        ),
-        CompositorCommandError::ApplyTimeout {
-            duration,
-            last_revision,
-        } => (
-            "apply_timeout",
-            format!(
-                "command application timed out after {:?} (last revision: {})",
-                duration, last_revision
-            ),
+            format!("target disappeared before application: {}", t),
         ),
     };
     IpcErrorBody {
-        code: code.to_string(),
+        code: code.into(),
         message,
     }
 }
@@ -855,19 +837,11 @@ fn handle_client(
         if let IpcRequest::Compositor(ref cmd) = env.request {
             let b = broker.lock().unwrap().clone();
             if let Some(broker_arc) = b {
-                match broker_arc.submit(cmd.clone()) {
-                    Ok(ticket) => match ticket.wait_timeout(IO_TIMEOUT) {
-                        Ok(outcome) => Some(IpcResult::CommandApplied(outcome)),
-                        Err(err) => {
-                            err_body = Some(map_broker_error(&err));
-                            None
-                        }
-                    },
-                    Err(err) => {
-                        err_body = Some(map_broker_error(&err));
-                        None
-                    }
-                }
+                let outcome = match broker_arc.submit(cmd.clone()) {
+                    Ok(ticket) => ticket.wait_timeout(IO_TIMEOUT),
+                    Err(outcome) => outcome,
+                };
+                Some(IpcResult::CommandApplied(outcome))
             } else {
                 err_body = Some(IpcErrorBody {
                     code: "compositor_unavailable".into(),
@@ -900,6 +874,7 @@ fn handle_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compositor::DomainVersion;
 
     fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
         crate::test_support::serial_guard()
@@ -1055,7 +1030,7 @@ mod tests {
             focused_workspace_id: Some(1),
             ..Default::default()
         };
-        broker.observe_snapshot(Arc::new(snapshot));
+        let _ = broker.observe_snapshot(Arc::new(snapshot));
 
         server.attach_broker(broker);
 
@@ -1070,7 +1045,7 @@ mod tests {
         assert_eq!(
             response.result,
             Some(IpcResult::CommandApplied(CommandOutcome::Applied {
-                revision: 0
+                version: DomainVersion::ZERO,
             }))
         );
 

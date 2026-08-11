@@ -140,14 +140,26 @@ impl ActionDispatcher {
             Ok(crate::actions::ActionResult::Immediate) => Ok(()),
             Ok(crate::actions::ActionResult::Compositor(ticket)) => {
                 cx.spawn(async move |cx| match ticket.await {
-                    Ok(shilpo_services::CommandOutcome::Applied { revision }) => {
-                        tracing::trace!(revision, "compositor action applied");
+                    shilpo_services::CommandOutcome::Applied { version }
+                    | shilpo_services::CommandOutcome::ReconciledApplied { version } => {
+                        tracing::trace!(?version, "compositor action applied");
                     }
-                    Err(err) => {
+                    shilpo_services::CommandOutcome::Rejected { reason } => {
                         cx.update(|cx: &mut gpui::App| {
-                            tracing::warn!(error = %err, "compositor action failed");
-                            Self::show_compositor_error_message(cx, &err.to_string());
+                            tracing::warn!(error = %reason, "compositor action rejected");
+                            Self::show_compositor_error_message(cx, &reason.to_string());
                         });
+                    }
+                    shilpo_services::CommandOutcome::TimedOut {
+                        last_observed_version,
+                    } => {
+                        cx.update(|cx: &mut gpui::App| {
+                            tracing::warn!(?last_observed_version, "compositor action timed out");
+                            Self::show_compositor_error_message(cx, "compositor action timed out");
+                        });
+                    }
+                    shilpo_services::CommandOutcome::Cancelled { reason } => {
+                        tracing::debug!(?reason, "compositor action cancelled");
                     }
                 })
                 .detach();
@@ -487,6 +499,7 @@ impl ShellRuntime {
         ActionDispatcher::dispatch_invocation(cx, invocation)
     }
 
+    #[allow(dead_code)]
     pub(super) fn show_compositor_error_toast(
         cx: &mut App,
         error: &shilpo_services::CompositorCommandError,

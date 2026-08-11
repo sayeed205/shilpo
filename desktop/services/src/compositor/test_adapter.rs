@@ -1,6 +1,6 @@
 use super::{
     BrokerOptions, CompositorAdapter, CompositorCommand, CompositorCommandBroker,
-    CompositorSnapshot, ExecutorAck,
+    CompositorSnapshot, ExecutorAck, StaleUpdateError,
 };
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
@@ -27,7 +27,10 @@ impl TestCompositorAdapter {
             });
 
         let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
-        broker.observe_snapshot(snapshot_arc);
+        if snapshot_arc.version.owner_generation > 0 {
+            broker.set_installed_generation(snapshot_arc.version.owner_generation);
+        }
+        let _ = broker.observe_snapshot(snapshot_arc);
 
         Self {
             tx,
@@ -41,10 +44,19 @@ impl TestCompositorAdapter {
         Self::new(CompositorSnapshot::default())
     }
 
+    pub fn set_installed_generation(&self, generation: u64) {
+        self.broker.set_installed_generation(generation);
+    }
+
     pub fn update(&self, snapshot: CompositorSnapshot) {
+        let _ = self.update_result(snapshot);
+    }
+
+    pub fn update_result(&self, snapshot: CompositorSnapshot) -> Result<(), StaleUpdateError> {
         let snap_arc = Arc::new(snapshot);
-        self.broker.observe_snapshot(snap_arc.clone());
+        self.broker.observe_snapshot(snap_arc.clone())?;
         let _ = self.tx.send(snap_arc);
+        Ok(())
     }
 
     pub fn executed_commands(&self) -> Vec<CompositorCommand> {

@@ -1976,7 +1976,8 @@ fn readiness_for(
     bar_state: &BarState,
 ) -> shilpo_services::ipc::ReadinessState {
     match connection {
-        shilpo_services::CompositorConnection::Connecting => {
+        shilpo_services::CompositorConnection::Unavailable
+        | shilpo_services::CompositorConnection::Connecting => {
             shilpo_services::ipc::ReadinessState::Starting
         }
         shilpo_services::CompositorConnection::Ready => {
@@ -1986,11 +1987,9 @@ fn readiness_for(
                 shilpo_services::ipc::ReadinessState::Degraded
             }
         }
-        shilpo_services::CompositorConnection::Reconnecting { .. } => {
+        shilpo_services::CompositorConnection::Reconnecting
+        | shilpo_services::CompositorConnection::Degraded => {
             shilpo_services::ipc::ReadinessState::Degraded
-        }
-        shilpo_services::CompositorConnection::Stopped => {
-            shilpo_services::ipc::ReadinessState::Failed
         }
     }
 }
