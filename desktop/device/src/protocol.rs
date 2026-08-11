@@ -592,7 +592,7 @@ impl std::str::FromStr for RejectionReason {
         match s {
             "unavailable" => Ok(Self::Unavailable),
             "overloaded" => Ok(Self::Overloaded),
-            _ => Ok(Self::Unavailable),
+            _ => Err(format!("unknown rejection reason: {s}")),
         }
     }
 }
@@ -625,7 +625,7 @@ impl std::str::FromStr for CancellationReason {
             "reconnect" => Ok(Self::Reconnect),
             "owner_replaced" => Ok(Self::OwnerReplaced),
             "superseded" => Ok(Self::Superseded),
-            _ => Ok(Self::OwnerReplaced),
+            _ => Err(format!("unknown cancellation reason: {s}")),
         }
     }
 }
@@ -739,7 +739,8 @@ pub struct CommandOutcomeRecord {
     pub domain: u8,
     pub owner_generation: u64,
     pub revision: u64,
-    pub reason: String,
+    pub rejection_reason: u8,
+    pub cancellation_reason: u8,
 }
 
 impl From<CommandOutcome> for CommandOutcomeRecord {
@@ -757,7 +758,8 @@ impl From<CommandOutcome> for CommandOutcomeRecord {
                 domain: domain_code(domain),
                 owner_generation: version.owner_generation,
                 revision: version.revision,
-                reason: String::new(),
+                rejection_reason: 0,
+                cancellation_reason: 0,
             },
             CommandOutcome::Rejected {
                 command_id,
@@ -771,7 +773,8 @@ impl From<CommandOutcome> for CommandOutcomeRecord {
                 domain: domain_code(domain),
                 owner_generation: 0,
                 revision: 0,
-                reason: reason.to_string(),
+                rejection_reason: rejection_reason_code(reason),
+                cancellation_reason: 0,
             },
             CommandOutcome::TimedOut {
                 command_id,
@@ -785,7 +788,8 @@ impl From<CommandOutcome> for CommandOutcomeRecord {
                 domain: domain_code(domain),
                 owner_generation: last_observed_version.owner_generation,
                 revision: last_observed_version.revision,
-                reason: String::new(),
+                rejection_reason: 0,
+                cancellation_reason: 0,
             },
             CommandOutcome::ReconciledApplied {
                 command_id,
@@ -799,7 +803,8 @@ impl From<CommandOutcome> for CommandOutcomeRecord {
                 domain: domain_code(domain),
                 owner_generation: version.owner_generation,
                 revision: version.revision,
-                reason: String::new(),
+                rejection_reason: 0,
+                cancellation_reason: 0,
             },
             CommandOutcome::Cancelled {
                 command_id,
@@ -813,7 +818,8 @@ impl From<CommandOutcome> for CommandOutcomeRecord {
                 domain: domain_code(domain),
                 owner_generation: 0,
                 revision: 0,
-                reason: reason.to_string(),
+                rejection_reason: 0,
+                cancellation_reason: cancellation_reason_code(reason),
             },
         }
     }
@@ -822,7 +828,6 @@ impl From<CommandOutcome> for CommandOutcomeRecord {
 impl TryFrom<CommandOutcomeRecord> for CommandOutcome {
     type Error = String;
     fn try_from(record: CommandOutcomeRecord) -> Result<Self, Self::Error> {
-        use std::str::FromStr;
         let domain =
             domain_from_code(record.domain).ok_or_else(|| "invalid device domain".to_string())?;
         Ok(match record.kind {
@@ -836,7 +841,7 @@ impl TryFrom<CommandOutcomeRecord> for CommandOutcome {
                 command_id: record.command_id,
                 arrival_sequence: record.arrival_sequence,
                 domain,
-                reason: RejectionReason::from_str(&record.reason)?,
+                reason: rejection_reason_from_code(record.rejection_reason)?,
             },
             2 => Self::TimedOut {
                 command_id: record.command_id,
@@ -854,10 +859,44 @@ impl TryFrom<CommandOutcomeRecord> for CommandOutcome {
                 command_id: record.command_id,
                 arrival_sequence: record.arrival_sequence,
                 domain,
-                reason: CancellationReason::from_str(&record.reason)?,
+                reason: cancellation_reason_from_code(record.cancellation_reason)?,
             },
             _ => return Err("invalid command outcome kind".into()),
         })
+    }
+}
+
+fn rejection_reason_code(reason: RejectionReason) -> u8 {
+    match reason {
+        RejectionReason::Unavailable => 1,
+        RejectionReason::Overloaded => 2,
+    }
+}
+
+fn rejection_reason_from_code(code: u8) -> Result<RejectionReason, String> {
+    match code {
+        1 => Ok(RejectionReason::Unavailable),
+        2 => Ok(RejectionReason::Overloaded),
+        _ => Err(format!("unknown rejection reason code: {code}")),
+    }
+}
+
+fn cancellation_reason_code(reason: CancellationReason) -> u8 {
+    match reason {
+        CancellationReason::Shutdown => 1,
+        CancellationReason::Reconnect => 2,
+        CancellationReason::OwnerReplaced => 3,
+        CancellationReason::Superseded => 4,
+    }
+}
+
+fn cancellation_reason_from_code(code: u8) -> Result<CancellationReason, String> {
+    match code {
+        1 => Ok(CancellationReason::Shutdown),
+        2 => Ok(CancellationReason::Reconnect),
+        3 => Ok(CancellationReason::OwnerReplaced),
+        4 => Ok(CancellationReason::Superseded),
+        _ => Err(format!("unknown cancellation reason code: {code}")),
     }
 }
 

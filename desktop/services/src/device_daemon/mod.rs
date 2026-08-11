@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 pub use system_adapter::SystemDeviceAdapter;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{Notify, broadcast, oneshot};
 
 const DOMAIN_QUEUE_CAPACITY: usize = 16;
 
@@ -58,12 +58,15 @@ struct ExecContext<'a> {
     timed_out: &'a Arc<std::sync::Mutex<HashMap<DeviceDomain, Vec<TimedOutCommand>>>>,
     outcome_tx: &'a broadcast::Sender<CommandOutcome>,
     owner_generation: u64,
+    owner_generation_source: &'a Arc<AtomicU64>,
+    owner_generation_notify: &'a Arc<Notify>,
 }
 
 pub struct DeviceDaemonService {
     adapter: Arc<dyn DeviceAdapter>,
     next_arrival_sequence: Arc<AtomicU64>,
     owner_generation: Arc<AtomicU64>,
+    owner_generation_notify: Arc<Notify>,
     domain_queues: HashMap<DeviceDomain, DomainQueueHandle>,
     domain_states: Arc<std::sync::Mutex<HashMap<DeviceDomain, DomainState>>>,
     timed_out: Arc<std::sync::Mutex<HashMap<DeviceDomain, Vec<TimedOutCommand>>>>,
@@ -71,18 +74,21 @@ pub struct DeviceDaemonService {
     overloads: Arc<AtomicU64>,
     supersessions: Arc<AtomicU64>,
     stale_updates: Arc<AtomicU64>,
+    restarts: Arc<AtomicU64>,
 }
 
 impl DeviceDaemonService {
     pub fn new(adapter: Arc<dyn DeviceAdapter>) -> Self {
         let next_arrival_sequence = Arc::new(AtomicU64::new(1));
         let owner_generation = Arc::new(AtomicU64::new(1));
+        let owner_generation_notify = Arc::new(Notify::new());
         let domain_states = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let timed_out = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let (outcome_tx, _) = broadcast::channel(128);
         let overloads = Arc::new(AtomicU64::new(0));
         let supersessions = Arc::new(AtomicU64::new(0));
         let stale_updates = Arc::new(AtomicU64::new(0));
+        let restarts = Arc::new(AtomicU64::new(0));
         let mut domain_queues = HashMap::new();
 
         for domain in DeviceDomain::ALL {
@@ -99,6 +105,7 @@ impl DeviceDaemonService {
             let pending_queue = queue_handle.pending.clone();
             let notify = queue_handle.notify.clone();
             let owner_gen_clone = owner_generation.clone();
+            let owner_gen_notify_clone = owner_generation_notify.clone();
 
             tokio::spawn(async move {
                 loop {
@@ -131,6 +138,8 @@ impl DeviceDaemonService {
                                 timed_out: &timed_out_clone,
                                 outcome_tx: &outcome_tx_clone,
                                 owner_generation: current_gen,
+                                owner_generation_source: &owner_gen_clone,
+                                owner_generation_notify: &owner_gen_notify_clone,
                             },
                             current_id,
                             current_sequence,
@@ -152,6 +161,7 @@ impl DeviceDaemonService {
             adapter,
             next_arrival_sequence,
             owner_generation,
+            owner_generation_notify,
             domain_queues,
             domain_states,
             timed_out,
@@ -159,6 +169,7 @@ impl DeviceDaemonService {
             overloads,
             supersessions,
             stale_updates,
+            restarts,
         }
     }
 
@@ -168,6 +179,7 @@ impl DeviceDaemonService {
 
     pub fn increment_owner_generation(&self) -> u64 {
         let new_gen = self.owner_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.restarts.fetch_add(1, Ordering::SeqCst);
         for (domain, queue) in &self.domain_queues {
             let mut guard = queue.pending.lock().unwrap();
             for item in std::mem::take(&mut *guard) {
@@ -180,20 +192,35 @@ impl DeviceDaemonService {
                 let _ = item.reply.send(outcome);
             }
         }
+        {
+            let mut states = self.domain_states.lock().unwrap();
+            for state in states.values_mut() {
+                state.version = DomainVersion::new(new_gen, 0);
+                state.lifecycle = DomainLifecycle::Reconnecting;
+                state.error = Some("device owner replaced".into());
+            }
+        }
+        self.owner_generation_notify.notify_waiters();
         new_gen
     }
 
     pub fn telemetry(&self) -> DomainPortTelemetry {
         let current_queue_depth: usize = self.domain_queues.values().map(|q| q.queue_depth()).sum();
+        let last_error = self
+            .domain_states
+            .lock()
+            .unwrap()
+            .values()
+            .find_map(|state| state.error.clone());
         DomainPortTelemetry {
             owner_generation: self.owner_generation.load(Ordering::SeqCst),
             current_queue_depth,
             queue_capacity: DOMAIN_QUEUE_CAPACITY * DeviceDomain::ALL.len(),
             overloads: self.overloads.load(Ordering::SeqCst),
             supersessions: self.supersessions.load(Ordering::SeqCst),
-            restarts: 0,
+            restarts: self.restarts.load(Ordering::SeqCst),
             stale_updates: self.stale_updates.load(Ordering::SeqCst),
-            last_error: None,
+            last_error,
         }
     }
 
@@ -214,11 +241,38 @@ impl DeviceDaemonService {
         let timeout_duration = confirmation_timeout(domain);
 
         let exec_fut = cx.adapter.execute_command(command.clone());
-        match tokio::time::timeout(timeout_duration, exec_fut).await {
+        let execution = tokio::select! {
+            result = tokio::time::timeout(timeout_duration, exec_fut) => result,
+            _ = cx.owner_generation_notify.notified() => {
+                return CommandOutcome::Cancelled {
+                    command_id: id,
+                    arrival_sequence,
+                    domain,
+                    reason: CancellationReason::OwnerReplaced,
+                };
+            }
+        };
+        if cx.owner_generation_source.load(Ordering::SeqCst) != cx.owner_generation {
+            return CommandOutcome::Cancelled {
+                command_id: id,
+                arrival_sequence,
+                domain,
+                reason: CancellationReason::OwnerReplaced,
+            };
+        }
+        match execution {
             Ok(Ok(_)) => {
                 let started = tokio::time::Instant::now();
                 loop {
                     let mut observed = cx.adapter.get_domain_state(domain);
+                    if cx.owner_generation_source.load(Ordering::SeqCst) != cx.owner_generation {
+                        return CommandOutcome::Cancelled {
+                            command_id: id,
+                            arrival_sequence,
+                            domain,
+                            reason: CancellationReason::OwnerReplaced,
+                        };
+                    }
                     if command_confirmed(&command, &before, &observed) {
                         observed.version =
                             DomainVersion::new(cx.owner_generation, observed.version.revision);
@@ -254,7 +308,17 @@ impl DeviceDaemonService {
                         let _ = cx.outcome_tx.send(outcome.clone());
                         break outcome;
                     }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                        _ = cx.owner_generation_notify.notified() => {
+                            return CommandOutcome::Cancelled {
+                                command_id: id,
+                                arrival_sequence,
+                                domain,
+                                reason: CancellationReason::OwnerReplaced,
+                            };
+                        }
+                    }
                 }
             }
             Ok(Err(_err)) => {
@@ -567,9 +631,7 @@ fn vpn_active(payload: &crate::device_protocol::NetworkPayload, name: &str) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device_protocol::{
-        AudioAction, BrightnessAction, DomainPayload, PROTOCOL_VERSION,
-    };
+    use crate::device_protocol::{AudioAction, BrightnessAction, DomainPayload, PROTOCOL_VERSION};
     use std::sync::Mutex;
 
     #[derive(Clone)]
@@ -821,23 +883,34 @@ mod tests {
         adapter.set_forced_delay(Some(Duration::from_millis(200)));
         let service = DeviceDaemonService::new(adapter);
 
-        let (_id1, _rx1) = service
+        let (_id1, rx1) = service
             .submit_command(
-                DeviceCommand::Audio(AudioAction::SetVolume(10)),
+                DeviceCommand::Audio(AudioAction::ToggleMute),
                 PROTOCOL_VERSION,
             )
             .unwrap();
         let (_id2, rx2) = service
             .submit_command(
-                DeviceCommand::Audio(AudioAction::SetVolume(20)),
+                DeviceCommand::Audio(AudioAction::ToggleMute),
                 PROTOCOL_VERSION,
             )
             .unwrap();
 
         let new_gen = service.increment_owner_generation();
         assert_eq!(new_gen, 2);
+        let reset_state = service.get_domain_state(DeviceDomain::Audio);
+        assert_eq!(reset_state.version, DomainVersion::new(2, 0));
+        assert_eq!(reset_state.lifecycle, DomainLifecycle::Reconnecting);
 
         let outcome2 = rx2.await.unwrap();
+        let outcome1 = rx1.await.unwrap();
+        assert!(matches!(
+            outcome1,
+            CommandOutcome::Cancelled {
+                reason: CancellationReason::OwnerReplaced,
+                ..
+            }
+        ));
         assert!(matches!(
             outcome2,
             CommandOutcome::Cancelled {

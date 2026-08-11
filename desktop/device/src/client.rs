@@ -21,8 +21,12 @@ pub struct DeviceClient {
     update_tx: broadcast::Sender<DeviceClientUpdate>,
     outcome_tx: broadcast::Sender<CommandOutcome>,
     connection: Arc<Mutex<Option<zbus::Connection>>>,
+    connection_identity: Arc<Mutex<Option<String>>>,
     debounce_tx: tokio::sync::mpsc::Sender<(DeviceCommand, Duration)>,
     installed_owner_generation: Arc<AtomicU64>,
+    debounce_depth: Arc<AtomicU64>,
+    restarts: Arc<AtomicU64>,
+    last_error: Arc<Mutex<Option<String>>>,
     stale_updates: Arc<AtomicU64>,
     overloads: Arc<AtomicU64>,
     supersessions: Arc<AtomicU64>,
@@ -40,17 +44,28 @@ impl DebouncedCommands {
         command: DeviceCommand,
         deadline: tokio::time::Instant,
         supersessions: &Arc<AtomicU64>,
-    ) {
+        depth: &Arc<AtomicU64>,
+    ) -> bool {
         if let Some(key) = command.coalescing_key() {
             if self.pending.insert(key, (command, deadline)).is_some() {
                 supersessions.fetch_add(1, Ordering::SeqCst);
+                depth.fetch_sub(1, Ordering::SeqCst);
             }
         } else {
+            if self.pending.len() + self.non_coalescible.len() >= 32 {
+                depth.fetch_sub(1, Ordering::SeqCst);
+                return false;
+            }
             self.non_coalescible.push((command, deadline));
         }
+        true
     }
 
-    fn take_due(&mut self, now: tokio::time::Instant) -> Vec<DeviceCommand> {
+    fn take_due(
+        &mut self,
+        now: tokio::time::Instant,
+        depth: &Arc<AtomicU64>,
+    ) -> Vec<DeviceCommand> {
         let mut due = Vec::new();
         let due_keys: Vec<String> = self
             .pending
@@ -67,6 +82,7 @@ impl DebouncedCommands {
             .partition(|(_, deadline)| *deadline <= now);
         self.non_coalescible = remaining_nc;
         due.extend(due_nc.into_iter().map(|(cmd, _)| cmd));
+        depth.fetch_sub(due.len() as u64, Ordering::SeqCst);
         due
     }
 
@@ -87,9 +103,13 @@ impl DeviceClient {
         let (outcome_tx, _) = broadcast::channel(128);
         let domains = Arc::new(RwLock::new(unavailable_domains()));
         let connection = Arc::new(Mutex::new(None));
+        let connection_identity = Arc::new(Mutex::new(None));
         let (debounce_tx, mut debounce_rx) =
             tokio::sync::mpsc::channel::<(DeviceCommand, Duration)>(32);
         let installed_owner_generation = Arc::new(AtomicU64::new(0));
+        let debounce_depth = Arc::new(AtomicU64::new(0));
+        let restarts = Arc::new(AtomicU64::new(0));
+        let last_error = Arc::new(Mutex::new(None));
         let stale_updates = Arc::new(AtomicU64::new(0));
         let overloads = Arc::new(AtomicU64::new(0));
         let supersessions = Arc::new(AtomicU64::new(0));
@@ -99,23 +119,31 @@ impl DeviceClient {
             update_tx,
             outcome_tx,
             connection,
+            connection_identity,
             debounce_tx,
             installed_owner_generation,
+            debounce_depth,
+            restarts,
+            last_error,
             stale_updates,
             overloads,
             supersessions,
         };
         let debounce_client = client.clone();
         let supersessions_counter = client.supersessions.clone();
+        let debounce_depth_counter = client.debounce_depth.clone();
+        let overload_counter = client.overloads.clone();
         tokio::spawn(async move {
             let mut pending = DebouncedCommands::default();
             loop {
                 tokio::select! {
                     Some((command, delay)) = debounce_rx.recv() => {
-                        pending.replace(command, tokio::time::Instant::now() + delay, &supersessions_counter);
+                        if !pending.replace(command, tokio::time::Instant::now() + delay, &supersessions_counter, &debounce_depth_counter) {
+                            overload_counter.fetch_add(1, Ordering::SeqCst);
+                        }
                     }
                     _ = tokio::time::sleep(Duration::from_millis(20)), if !pending.is_empty() => {
-                        for command in pending.take_due(tokio::time::Instant::now()) {
+                        for command in pending.take_due(tokio::time::Instant::now(), &debounce_depth_counter) {
                             let _ = debounce_client.send_command(command).await;
                         }
                     }
@@ -145,13 +173,13 @@ impl DeviceClient {
     pub fn telemetry(&self) -> crate::protocol::DomainPortTelemetry {
         crate::protocol::DomainPortTelemetry {
             owner_generation: self.installed_owner_generation.load(Ordering::SeqCst),
-            current_queue_depth: 0,
+            current_queue_depth: self.debounce_depth.load(Ordering::SeqCst) as usize,
             queue_capacity: 32,
             overloads: self.overloads.load(Ordering::SeqCst),
             supersessions: self.supersessions.load(Ordering::SeqCst),
-            restarts: 0,
+            restarts: self.restarts.load(Ordering::SeqCst),
             stale_updates: self.stale_updates.load(Ordering::SeqCst),
-            last_error: None,
+            last_error: self.last_error.lock().unwrap().clone(),
         }
     }
 
@@ -180,8 +208,21 @@ impl DeviceClient {
         }
 
         // Increment installed owner generation on establishing a new owner connection
-        self.installed_owner_generation
-            .fetch_add(1, Ordering::SeqCst);
+        let identity = connection.unique_name().map(ToString::to_string);
+        let owner_changed = {
+            let mut installed = self.connection_identity.lock().unwrap();
+            let changed = *installed != identity;
+            if changed {
+                *installed = identity;
+            }
+            changed
+        };
+        if owner_changed {
+            self.installed_owner_generation
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        let installed_generation = self.installed_owner_generation();
+        *self.last_error.lock().unwrap() = None;
 
         let mut listener_tasks = Vec::new();
         let mut listener_readiness = Vec::new();
@@ -237,7 +278,7 @@ impl DeviceClient {
                         if let Ok(args) = signal.args() {
                             listener.update_local_domain_state(state_from_wire(
                                 $domain,
-                                args.owner_generation,
+                                installed_generation,
                                 args.revision,
                                 args.lifecycle,
                                 DomainPayload::$variant(args.payload.clone()),
@@ -303,12 +344,12 @@ impl DeviceClient {
         // signal racing with the matching snapshot response.
         macro_rules! load_state {
             ($method:ident, $domain:expr, $variant:ident) => {
-                if let Ok((owner_generation, revision, lifecycle, payload, error)) =
+                if let Ok((_owner_generation, revision, lifecycle, payload, error)) =
                     proxy.$method().await
                 {
                     self.update_local_domain_state(state_from_wire(
                         $domain,
-                        owner_generation,
+                        installed_generation,
                         revision,
                         lifecycle,
                         DomainPayload::$variant(payload),
@@ -358,7 +399,7 @@ impl DeviceClient {
                 Ok(()) => attempt = 0,
                 Err(error) => {
                     attempt = attempt.saturating_add(1);
-                    let delay = Duration::from_secs(2u64.saturating_pow(attempt.min(5)));
+                    let delay = reconnect_backoff(attempt);
                     self.mark_connection_lost(&error);
                     tokio::time::sleep(delay.min(Duration::from_secs(30))).await;
                 }
@@ -427,6 +468,8 @@ impl DeviceClient {
     }
 
     fn mark_connection_lost(&self, error: &str) {
+        self.restarts.fetch_add(1, Ordering::SeqCst);
+        *self.last_error.lock().unwrap() = Some(error.to_owned());
         let mut domains = self.domains.write().unwrap();
         for state in domains.values_mut() {
             state.lifecycle = DomainLifecycle::Reconnecting;
@@ -545,9 +588,32 @@ impl DeviceClient {
         Ok(outcome)
     }
 
-    pub fn send_command_debounced(&self, command: DeviceCommand, delay: Duration) {
-        let _ = self.debounce_tx.try_send((command, delay));
+    pub fn send_command_debounced(
+        &self,
+        command: DeviceCommand,
+        delay: Duration,
+    ) -> Result<(), crate::protocol::RejectionReason> {
+        match self.debounce_tx.try_send((command, delay)) {
+            Ok(()) => {
+                self.debounce_depth.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                self.overloads.fetch_add(1, Ordering::SeqCst);
+                Err(crate::protocol::RejectionReason::Overloaded)
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                Err(crate::protocol::RejectionReason::Unavailable)
+            }
+        }
     }
+}
+
+fn reconnect_backoff(attempt: u32) -> Duration {
+    Duration::from_millis(
+        250u64.saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1).min(7))),
+    )
+    .min(Duration::from_secs(30))
 }
 
 fn state_from_wire(
@@ -900,23 +966,27 @@ mod tests {
         use crate::protocol::{AudioAction, BrightnessAction};
         let now = tokio::time::Instant::now();
         let supersessions = Arc::new(AtomicU64::new(0));
+        let depth = Arc::new(AtomicU64::new(0));
         let mut pending = DebouncedCommands::default();
         pending.replace(
             DeviceCommand::Audio(AudioAction::SetVolume(20)),
             now,
             &supersessions,
+            &depth,
         );
         pending.replace(
             DeviceCommand::Audio(AudioAction::SetVolume(80)),
             now,
             &supersessions,
+            &depth,
         );
         pending.replace(
             DeviceCommand::Brightness(BrightnessAction::SetBrightness(60)),
             now,
             &supersessions,
+            &depth,
         );
-        let due = pending.take_due(now);
+        let due = pending.take_due(now, &depth);
         assert_eq!(due.len(), 2);
         assert!(due.contains(&DeviceCommand::Audio(AudioAction::SetVolume(80))));
         assert!(!due.contains(&DeviceCommand::Audio(AudioAction::SetVolume(20))));
