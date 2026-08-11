@@ -1,135 +1,14 @@
-use serde::{Deserialize, Serialize};
-use shilpo_ext::{AuthorizedHostEffect, ViewTree};
-use shilpo_ext_types::{CanonicalId, ExtensionId};
+use shilpo_ext_api::{CanonicalId, ViewTree};
+use shilpo_ext_runtime::{
+    CatalogPaths, ContributionDescriptor, ContributionSurface, ExtensionCommand,
+    ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, HostGeneration,
+    default_extension_state_dir,
+};
 use std::{
-    collections::BTreeMap,
     path::{Component, Path, PathBuf},
     sync::{Arc, mpsc},
     time::Duration,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum ContributionSurface {
-    Bar,
-    Desktop,
-    Settings,
-    SidePanel,
-    Launcher,
-    Action,
-    Background,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContributionDescriptor {
-    pub id: CanonicalId,
-    pub extension_name: String,
-    pub name: String,
-    pub surface: ContributionSurface,
-    pub settings_schema: Option<String>,
-    pub default_size: Option<(u32, u32)>,
-    pub minimum_size: Option<(u32, u32)>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ContributionInstance {
-    pub id: String,
-    pub contribution: CanonicalId,
-    pub output: Option<String>,
-    pub width: f32,
-    pub height: f32,
-    pub settings: serde_json::Value,
-}
-
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
-pub struct ExtensionGeneration(pub u64);
-
-impl ExtensionGeneration {
-    pub fn next(self) -> Self {
-        Self(self.0 + 1)
-    }
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct ExtensionSnapshot {
-    pub generation: ExtensionGeneration,
-    pub descriptors: Arc<[ContributionDescriptor]>,
-    pub views: Arc<BTreeMap<CanonicalId, ViewTree>>,
-    pub diagnostics: Arc<[String]>,
-    pub catalog_changed_at: Option<ExtensionGeneration>,
-    pub settings_schemas: Arc<BTreeMap<CanonicalId, serde_json::Value>>,
-    pub prevalidated_asset_roots: Arc<BTreeMap<ExtensionId, PathBuf>>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ExtensionChanges {
-    pub effects: Vec<(ExtensionId, AuthorizedHostEffect)>,
-    pub invalidated_views: Vec<CanonicalId>,
-    pub catalog_changed: bool,
-}
-
-impl ExtensionChanges {
-    pub fn merge(&mut self, mut other: Self) {
-        self.effects.append(&mut other.effects);
-        self.invalidated_views.append(&mut other.invalidated_views);
-        self.catalog_changed |= other.catalog_changed;
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ReplaceableEvent {
-    Power {
-        percentage: Option<f32>,
-        charging: bool,
-    },
-    Network {
-        connected: bool,
-    },
-    Media {
-        title: Option<String>,
-        artist: Option<String>,
-        playing: bool,
-    },
-    TimerFired(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ExtensionCommand {
-    Lifecycle {
-        expected: ExtensionGeneration,
-        event: shilpo_ext::ExtensionEvent,
-    },
-    Input {
-        expected: ExtensionGeneration,
-        contribution: CanonicalId,
-        instance_id: Option<String>,
-        event_id: String,
-        value: Option<serde_json::Value>,
-    },
-    Response {
-        expected: ExtensionGeneration,
-        extension_id: ExtensionId,
-        event: shilpo_ext::ExtensionEvent,
-    },
-    Replaceable(ReplaceableEvent),
-    ReconcileInstances {
-        expected: ExtensionGeneration,
-        desired: Vec<ContributionInstance>,
-    },
-    SourcesChanged,
-    Shutdown,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ExtensionUpdate {
-    #[serde(default)]
-    pub host_generation: super::process::HostGeneration,
-    pub generation: ExtensionGeneration,
-    pub snapshot: Option<ExtensionSnapshot>,
-    pub effects: Vec<(ExtensionId, AuthorizedHostEffect)>,
-    pub invalidated_views: Vec<CanonicalId>,
-}
 
 pub struct ExtensionCoordinator {
     supervisor: Arc<super::supervisor::ExtensionSupervisor>,
@@ -139,13 +18,13 @@ pub struct ExtensionCoordinator {
 
 impl ExtensionCoordinator {
     pub fn init(executor: gpui::BackgroundExecutor) -> Option<Self> {
-        let paths = shilpo_ext::CatalogPaths::platform_default();
+        let paths = CatalogPaths::platform_default();
         Self::init_with_paths(executor, paths)
     }
 
     pub fn init_with_paths(
         executor: gpui::BackgroundExecutor,
-        paths: shilpo_ext::CatalogPaths,
+        paths: CatalogPaths,
     ) -> Option<Self> {
         let supervisor = Arc::new(super::supervisor::ExtensionSupervisor::new());
         let (command_tx, command_rx) = std::sync::mpsc::sync_channel(64);
@@ -159,7 +38,7 @@ impl ExtensionCoordinator {
             .detach();
 
         let watch_paths = vec![
-            shilpo_ext::default_extension_state_dir().join("dev"),
+            default_extension_state_dir().join("dev"),
             paths.data_dir.join("installed"),
             paths.data_dir.join("activated"),
         ];
@@ -200,7 +79,7 @@ impl ExtensionCoordinator {
         self.supervisor.generation()
     }
 
-    pub fn host_generation(&self) -> super::process::HostGeneration {
+    pub fn host_generation(&self) -> HostGeneration {
         self.supervisor.host_generation()
     }
 
@@ -344,7 +223,7 @@ mod tests {
             std::env::temp_dir().join(format!("shilpo_ext_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(temp_base.join("data")).unwrap();
         std::fs::create_dir_all(temp_base.join("config")).unwrap();
-        let paths = shilpo_ext::CatalogPaths::new(temp_base.join("data"), temp_base.join("config"));
+        let paths = CatalogPaths::new(temp_base.join("data"), temp_base.join("config"));
 
         let executor = gpui::TestAppContext::single().executor().clone();
         let coordinator = ExtensionCoordinator::init_with_paths(executor, paths);

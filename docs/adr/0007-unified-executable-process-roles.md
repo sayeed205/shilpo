@@ -52,5 +52,5 @@ is the extension-host singleton authority.
 ## Follow-up boundaries
 
 - #125 completes public `org.shilpo.Shell` methods/signals and removes transitional shell socket/lock code.
-- #115 moves extension API/runtime ownership into the dependency-aligned crates.
+- #115 moves extension API (`shilpo-ext-api`) and runtime (`shilpo-ext-runtime`) into dependency-aligned crates.
 - #122 consolidates role modules into the target workspace topology.

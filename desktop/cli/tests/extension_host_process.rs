@@ -1,8 +1,7 @@
-use shilpo_shell::extensions::process::{
-    HostGeneration, HostMessage, PROTOCOL_VERSION, WorkerPayload, recv_worker_message,
-    send_host_message,
+use shilpo_ext_runtime::{
+    ExtensionCommand, ExtensionGeneration, HostGeneration, HostMessage, PROTOCOL_VERSION,
+    WorkerPayload, recv_worker_message, send_host_message,
 };
-use shilpo_shell::extensions::{ExtensionCommand, ExtensionGeneration};
 use std::io::{BufReader, BufWriter};
 use std::process::{Command, Stdio};
 

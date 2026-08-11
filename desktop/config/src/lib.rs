@@ -3,7 +3,7 @@ pub use session_store::*;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use shilpo_ext_types::{CanonicalId, ExtensionId, IdError};
+use shilpo_ext_api::{CanonicalId, ExtensionId, IdError};
 use std::{
     borrow::Cow,
     collections::HashMap,

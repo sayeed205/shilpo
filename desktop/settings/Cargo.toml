@@ -15,7 +15,6 @@ shilpo-device-client.workspace = true
 shilpo-theme.workspace = true
 shilpo-theme-daemon.workspace = true
 shilpo-config.workspace = true
-shilpo-ext.workspace = true
 futures-lite.workspace = true
 tokio.workspace = true
 anyhow.workspace = true

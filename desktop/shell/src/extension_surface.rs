@@ -2,7 +2,7 @@ use crate::{bar::ext_view_adapter::render_ext_view_tree, runtime::ShellRuntime};
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div,
 };
-use shilpo_ext_types::CanonicalId;
+use shilpo_ext_api::CanonicalId;
 use shilpo_ui::ActiveTheme;
 
 /// Generic adapter used by desktop, side-panel, settings, and

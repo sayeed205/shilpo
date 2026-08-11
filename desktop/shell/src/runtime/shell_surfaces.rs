@@ -11,7 +11,7 @@ use gpui::{
     App, AppContext, Bounds, DisplayId, Entity, Pixels, Point, Size, WindowBackgroundAppearance,
     WindowBounds, WindowHandle, WindowKind, WindowOptions, point, px, size,
 };
-use shilpo_ext_types::CanonicalId;
+use shilpo_ext_api::{CanonicalId, ExtensionId};
 use shilpo_services::{
     BarState, CompositorAdapter, CompositorOutput, CompositorSnapshot, ShellIpcServer,
 };
@@ -247,7 +247,7 @@ pub struct ExtensionSurfaceSpec {
 /// Merges the global extension settings with a per-instance override map.
 pub(crate) fn extension_settings(
     config: &shilpo_config::ShellConfig,
-    extension_id: &shilpo_ext_types::ExtensionId,
+    extension_id: &ExtensionId,
     instance_settings: Option<&serde_json::Value>,
 ) -> serde_json::Value {
     let mut settings = config
@@ -1031,7 +1031,10 @@ impl ShellSurfaces {
             }
         };
         if changed {
-            ShellRuntime::dispatch_extension_event(cx, shilpo_ext::ExtensionEvent::OutputsChanged);
+            ShellRuntime::dispatch_extension_event(
+                cx,
+                shilpo_ext_api::ExtensionEvent::OutputsChanged,
+            );
         }
 
         Self::reconcile_extension_surfaces(cx, &current_outputs);
@@ -2267,7 +2270,7 @@ mod tests {
                 "show_condition": false
             }),
         );
-        let id = shilpo_ext_types::ExtensionId::new("org.shilpo.weather").unwrap();
+        let id = ExtensionId::new("org.shilpo.weather").unwrap();
         assert_eq!(
             extension_settings(
                 &config,

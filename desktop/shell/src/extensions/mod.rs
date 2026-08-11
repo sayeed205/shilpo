@@ -5,21 +5,14 @@
 //! or scanning package filesystems during rendering.
 
 pub mod coordinator;
-pub mod engine;
-pub mod process;
 pub mod supervisor;
 pub mod watcher;
 
-pub use coordinator::{
+pub use coordinator::ExtensionCoordinator;
+pub use shilpo_ext_runtime::{
     ContributionDescriptor, ContributionInstance, ContributionSurface, ExtensionChanges,
-    ExtensionCommand, ExtensionCoordinator, ExtensionGeneration, ExtensionSnapshot,
-    ExtensionUpdate, ReplaceableEvent,
-};
-pub use engine::ExtensionEngine;
-pub use process::{
-    FrameReader, HostGeneration, HostMessage, PROTOCOL_VERSION, ProcessCodecError, WorkerMessage,
-    WorkerPayload, recv_host_message, recv_worker_message, recv_worker_message_nonblocking,
-    run_extension_host, send_host_message, send_worker_message,
+    ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, HostGeneration,
+    ReplaceableEvent,
 };
 pub use supervisor::{
     ChildSpawner, ExtensionHostDiagnostics, ExtensionSupervisor, SupervisorState,

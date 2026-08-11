@@ -1,6 +1,6 @@
-use crate::extensions::{ExtensionCommand, ExtensionGeneration, ExtensionUpdate};
+use super::protocol::{ExtensionCommand, ExtensionGeneration, ExtensionUpdate};
+use crate::{CatalogPaths, WasmRuntime};
 use serde::{Deserialize, Serialize};
-use shilpo_ext::{CatalogPaths, WasmRuntime};
 use std::io::{self, Read, Write};
 
 pub const PROTOCOL_VERSION: u16 = 1;

@@ -1,13 +1,12 @@
-use crate::effects::{HostEffect, WallpaperSource};
+use crate::effects::WallpaperSource;
 use crate::events::EventKind;
+use crate::id::{ContributionId, ExtensionId, IdError};
 use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::path::{Component, Path};
-
-use shilpo_ext_types::{ContributionId, ExtensionId, IdError};
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 pub const SUPPORTED_API_VERSION: &str = "0.2.0";
@@ -235,63 +234,9 @@ impl Capability {
     pub fn allows_event(&self, event: EventKind) -> bool {
         matches!(self, Self::EventsSubscribe { events } if events.contains(&event))
     }
-
-    pub fn allows_effect(&self, effect: &HostEffect) -> bool {
-        match (self, effect) {
-            (Self::NotificationsShow, HostEffect::ShowNotification { .. }) => true,
-            (Self::WallpaperRead, HostEffect::WallpaperMetadataRead) => true,
-            (Self::ThemeRead, HostEffect::ThemeRead) => true,
-            (Self::ThemeSetSource, HostEffect::SetThemeSource { .. }) => true,
-            (Self::ClipboardRead, HostEffect::ClipboardRead) => true,
-            (Self::ClipboardWrite, HostEffect::ClipboardWrite { .. }) => true,
-            (Self::WallpaperSet { sources }, HostEffect::SetWallpaper { source, .. }) => {
-                sources.contains(source)
-            }
-            (Self::ActionsInvoke { actions }, HostEffect::InvokeAction { action_id, .. }) => {
-                actions
-                    .iter()
-                    .any(|pattern| wildcard_matches(pattern, action_id))
-            }
-            (Self::NetworkHttp { .. }, HostEffect::HttpRequest { url, method, .. }) => {
-                crate::effects::CanonicalHttpTarget::parse(url, method)
-                    .is_some_and(|target| self.allows_http_target(&target))
-            }
-            (
-                Self::ProcessExec {
-                    command,
-                    args: patterns,
-                },
-                HostEffect::ExecProcess {
-                    command: actual,
-                    args,
-                },
-            ) => wildcard_matches(command, actual) && arguments_match(patterns, args),
-            (Self::FilesystemRead { paths }, HostEffect::ReadFile { path }) => {
-                paths.iter().any(|pattern| wildcard_matches(pattern, path))
-            }
-            (Self::FilesystemWrite { paths }, HostEffect::WriteFile { path, .. }) => {
-                paths.iter().any(|pattern| wildcard_matches(pattern, path))
-            }
-            (Self::LocationRead, HostEffect::LocationRead) => true,
-            _ => false,
-        }
-    }
-
-    pub(crate) fn allows_http_target(&self, target: &crate::effects::CanonicalHttpTarget) -> bool {
-        match self {
-            Self::NetworkHttp { hosts, paths } => {
-                let host = target.host();
-                let path = target.path();
-                hosts.iter().any(|pattern| wildcard_matches(pattern, host))
-                    && (paths.is_empty()
-                        || paths.iter().any(|pattern| wildcard_matches(pattern, path)))
-            }
-            _ => false,
-        }
-    }
 }
 
-fn wildcard_matches(pattern: &str, value: &str) -> bool {
+pub fn wildcard_matches(pattern: &str, value: &str) -> bool {
     let (mut pattern_index, mut value_index, mut star, mut retry) = (0, 0, None, 0);
     let pattern = pattern.as_bytes();
     let value = value.as_bytes();
@@ -317,7 +262,7 @@ fn wildcard_matches(pattern: &str, value: &str) -> bool {
     pattern_index == pattern.len()
 }
 
-fn arguments_match(patterns: &[String], arguments: &[String]) -> bool {
+pub fn arguments_match(patterns: &[String], arguments: &[String]) -> bool {
     if patterns.last().is_some_and(|pattern| pattern == "**") {
         arguments.len() >= patterns.len().saturating_sub(1)
             && patterns[..patterns.len() - 1]
@@ -530,7 +475,7 @@ fn validate_capabilities(capabilities: &[Capability]) -> Result<(), ManifestErro
     Ok(())
 }
 
-fn valid_virtual_path_pattern(value: &str) -> bool {
+pub fn valid_virtual_path_pattern(value: &str) -> bool {
     let path = Path::new(value);
     !value.trim().is_empty()
         && !path.is_absolute()

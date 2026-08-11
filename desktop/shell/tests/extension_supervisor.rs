@@ -1,11 +1,12 @@
-use shilpo_shell::extensions::process::HostGeneration;
+use shilpo_ext_runtime::{
+    HostGeneration, HostMessage, PROTOCOL_VERSION, ProcessCodecError, WorkerMessage, WorkerPayload,
+};
 use shilpo_shell::extensions::supervisor::{
     ChildSpawner, ChildStream, Clock, ExtensionSupervisor, READY_RESET_DURATION, RETRY_DELAYS,
     SupervisorState,
 };
 use shilpo_shell::extensions::{
-    ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, PROTOCOL_VERSION,
-    WorkerMessage, WorkerPayload,
+    ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate,
 };
 use std::{
     io,
@@ -51,16 +52,11 @@ impl ChildStream for StaleUpdateChild {
         Some(4343)
     }
 
-    fn write_host_message(
-        &mut self,
-        _message: &shilpo_shell::extensions::HostMessage,
-    ) -> Result<(), shilpo_shell::extensions::ProcessCodecError> {
+    fn write_host_message(&mut self, _message: &HostMessage) -> Result<(), ProcessCodecError> {
         Ok(())
     }
 
-    fn try_read_worker_message(
-        &mut self,
-    ) -> Result<Option<WorkerMessage>, shilpo_shell::extensions::ProcessCodecError> {
+    fn try_read_worker_message(&mut self) -> Result<Option<WorkerMessage>, ProcessCodecError> {
         let message = match self.phase {
             0 => Some(WorkerMessage {
                 protocol_version: PROTOCOL_VERSION,
@@ -123,17 +119,12 @@ impl ChildStream for ReadyChild {
         Some(4242)
     }
 
-    fn write_host_message(
-        &mut self,
-        message: &shilpo_shell::extensions::HostMessage,
-    ) -> Result<(), shilpo_shell::extensions::ProcessCodecError> {
+    fn write_host_message(&mut self, message: &HostMessage) -> Result<(), ProcessCodecError> {
         self.writes.lock().unwrap().push(message.command.clone());
         Ok(())
     }
 
-    fn try_read_worker_message(
-        &mut self,
-    ) -> Result<Option<WorkerMessage>, shilpo_shell::extensions::ProcessCodecError> {
+    fn try_read_worker_message(&mut self) -> Result<Option<WorkerMessage>, ProcessCodecError> {
         if !self.initial_sent {
             self.initial_sent = true;
             return Ok(Some(WorkerMessage {

@@ -1,6 +1,6 @@
 # Shilpo Extensions
 
-`shilpo-ext` provides the validated extension contract, policy-owning host, in-memory and Wasmtime Component Model
+`shilpo-ext-runtime` provides the policy-owning host, in-memory and Wasmtime Component Model
 runtime adapters, resource budgets, structured diagnostics, deterministic `.shilpo-ext` archives, Ed25519 signing,
 atomic installation and rollback, host-owned receipts and grants, signed registry resolution, update selection, and the
 catalog snapshots consumed by the shell, CLI, and Settings app.
@@ -195,7 +195,7 @@ serde_json = "1"
 wit-bindgen = "0.57"
 ```
 
-The versioned contract lives in [`wit/extension.wit`](wit/extension.wit):
+The provisional versioned contract lives in [`core/ext-api/wit/extension.wit`](../../core/ext-api/wit/extension.wit):
 
 ```wit
 package shilpo:extension@0.1.0;
@@ -246,16 +246,16 @@ user's stored grant for every privileged effect.
 Validate the manifest contract through the crate tests:
 
 ```bash
-cargo test -p shilpo-ext
+cargo test -p shilpo-ext-api -p shilpo-ext-runtime
 ```
 
 Regenerate the checked-in manifest schema after changing contract types:
 
 ```bash
-cargo run -p shilpo-ext --example generate_schema -- \
-  crates/ext/schema/extension-v1.schema.json
-cargo run -p shilpo-ext --example generate_distribution_schemas -- \
-  crates/ext/schema
+cargo run -p shilpo-ext-api --example generate_schema -- \
+  core/ext-api/schema/extension-v1.schema.json
+cargo run -p shilpo-ext-runtime --example generate_distribution_schemas -- \
+  desktop/ext-runtime/schema
 ```
 
 The generated distribution schemas define the package-signature sidecar and signed registry-index envelope consumed by

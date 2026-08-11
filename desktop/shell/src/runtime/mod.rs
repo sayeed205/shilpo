@@ -236,7 +236,7 @@ impl ShellRuntime {
                 WindowClosedOutcome::ExtensionPanel(contribution) => {
                     Self::dispatch_extension_event(
                         cx,
-                        shilpo_ext::ExtensionEvent::ContributionUnmounted {
+                        shilpo_ext_api::ExtensionEvent::ContributionUnmounted {
                             contribution_id: contribution.contribution_id.to_string(),
                             instance_id: None,
                         },

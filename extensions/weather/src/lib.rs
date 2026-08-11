@@ -594,7 +594,7 @@ mod guest {
     use std::cell::RefCell;
 
     wit_bindgen::generate!({
-        path: "../../desktop/ext/wit",
+        path: "../../core/ext-api/wit",
         world: "extension",
     });
 

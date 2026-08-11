@@ -427,7 +427,7 @@ impl ServiceHub {
                         );
                         ShellRuntime::dispatch_extension_event(
                             cx,
-                            shilpo_ext::ExtensionEvent::PowerChanged {
+                            shilpo_ext_api::ExtensionEvent::PowerChanged {
                                 percentage: info.is_present.then_some(info.percentage as f32),
                                 charging: info.is_charging(),
                             },
@@ -445,7 +445,7 @@ impl ServiceHub {
                     crate::bar::service_worker::WorkerUpdate::Network(info) => {
                         ShellRuntime::dispatch_extension_event(
                             cx,
-                            shilpo_ext::ExtensionEvent::NetworkChanged {
+                            shilpo_ext_api::ExtensionEvent::NetworkChanged {
                                 connected: info.available && info.is_connected,
                             },
                         );
@@ -453,7 +453,7 @@ impl ServiceHub {
                     crate::bar::service_worker::WorkerUpdate::Media(info) => {
                         ShellRuntime::dispatch_extension_event(
                             cx,
-                            shilpo_ext::ExtensionEvent::MediaChanged {
+                            shilpo_ext_api::ExtensionEvent::MediaChanged {
                                 title: (!info.title.is_empty()).then_some(info.title.clone()),
                                 artist: (!info.artist.is_empty()).then_some(info.artist.clone()),
                                 playing: info.playback_state

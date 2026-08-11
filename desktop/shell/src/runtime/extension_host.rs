@@ -1,4 +1,5 @@
-use shilpo_ext_types::{CanonicalId, ExtensionId};
+use shilpo_ext_api::{CanonicalId, ExtensionEvent, ExtensionId, HostEffect, ViewTree};
+use shilpo_ext_runtime::{AuthorizedHostEffect, AuthorizedHostEffectKind};
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
@@ -60,7 +61,7 @@ impl ExtensionHost {
             .map_or_else(Vec::new, |extensions| extensions.descriptors_for(surface))
     }
 
-    pub(crate) fn view(&self, id: &CanonicalId) -> Option<shilpo_ext::ViewTree> {
+    pub(crate) fn view(&self, id: &CanonicalId) -> Option<ViewTree> {
         self.extensions
             .as_ref()
             .and_then(|extensions| extensions.view(id))
@@ -93,22 +94,22 @@ impl ExtensionHost {
         }
     }
 
-    pub(crate) fn send_event(&self, event: shilpo_ext::ExtensionEvent) {
+    pub(crate) fn send_event(&self, event: ExtensionEvent) {
         if let Some(ext) = &self.extensions {
             let cmd = match event {
-                shilpo_ext::ExtensionEvent::PowerChanged {
+                ExtensionEvent::PowerChanged {
                     percentage,
                     charging,
                 } => ExtensionCommand::Replaceable(crate::extensions::ReplaceableEvent::Power {
                     percentage,
                     charging,
                 }),
-                shilpo_ext::ExtensionEvent::NetworkChanged { connected } => {
+                ExtensionEvent::NetworkChanged { connected } => {
                     ExtensionCommand::Replaceable(crate::extensions::ReplaceableEvent::Network {
                         connected,
                     })
                 }
-                shilpo_ext::ExtensionEvent::MediaChanged {
+                ExtensionEvent::MediaChanged {
                     title,
                     artist,
                     playing,
@@ -139,14 +140,14 @@ impl ExtensionHost {
             let expected_gen = ext.generation();
             for descriptor in self.descriptors_for(surface) {
                 let event = if mounted {
-                    shilpo_ext::ExtensionEvent::ContributionMounted {
+                    ExtensionEvent::ContributionMounted {
                         contribution_id: descriptor.id.contribution_id.to_string(),
                         instance_id: None,
                         width,
                         height,
                     }
                 } else {
-                    shilpo_ext::ExtensionEvent::ContributionUnmounted {
+                    ExtensionEvent::ContributionUnmounted {
                         contribution_id: descriptor.id.contribution_id.to_string(),
                         instance_id: None,
                     }
@@ -176,7 +177,7 @@ impl ExtensionHost {
         if let Some(ext) = &self.extensions
             && let Err(error) = ext.send_command(ExtensionCommand::Lifecycle {
                 expected: ext.generation(),
-                event: shilpo_ext::ExtensionEvent::ContributionMounted {
+                event: ExtensionEvent::ContributionMounted {
                     contribution_id: contribution.contribution_id.to_string(),
                     instance_id: None,
                     width,
@@ -192,7 +193,7 @@ impl ExtensionHost {
         if let Some(ext) = &self.extensions
             && let Err(error) = ext.send_command(ExtensionCommand::Lifecycle {
                 expected: ext.generation(),
-                event: shilpo_ext::ExtensionEvent::ContributionUnmounted {
+                event: ExtensionEvent::ContributionUnmounted {
                     contribution_id: contribution.contribution_id.to_string(),
                     instance_id: None,
                 },
@@ -206,7 +207,7 @@ impl ExtensionHost {
         &self,
         expected: ExtensionGeneration,
         extension_id: ExtensionId,
-        event: shilpo_ext::ExtensionEvent,
+        event: ExtensionEvent,
     ) {
         if let Some(ext) = &self.extensions
             && let Err(error) = ext.send_command(ExtensionCommand::Response {
@@ -333,12 +334,10 @@ impl ExtensionHost {
         cx: &mut App,
         extension_id: &ExtensionId,
         generation: ExtensionGeneration,
-        effect: shilpo_ext::AuthorizedHostEffect,
+        effect: AuthorizedHostEffect,
     ) {
         match effect.into_kind() {
-            shilpo_ext::AuthorizedHostEffectKind::NonHttp(
-                shilpo_ext::HostEffect::InvokeAction { action_id, payload },
-            ) => {
+            AuthorizedHostEffectKind::NonHttp(HostEffect::InvokeAction { action_id, payload }) => {
                 let invocation = action_id
                     .parse::<ActionId>()
                     .map_err(|err| err.to_string())
@@ -360,9 +359,11 @@ impl ExtensionHost {
                     ),
                 }
             }
-            shilpo_ext::AuthorizedHostEffectKind::NonHttp(
-                shilpo_ext::HostEffect::ShowNotification { title, body, icon },
-            ) => {
+            AuthorizedHostEffectKind::NonHttp(HostEffect::ShowNotification {
+                title,
+                body,
+                icon,
+            }) => {
                 let mut notification = shilpo_services::Notification::new(title, body);
                 notification.app_name = extension_id.to_string();
                 notification.app_icon = icon;
@@ -371,9 +372,7 @@ impl ExtensionHost {
                     super::SurfaceRequest::ShowNotification(notification),
                 );
             }
-            shilpo_ext::AuthorizedHostEffectKind::NonHttp(
-                shilpo_ext::HostEffect::SetThemeSource { color },
-            ) => {
+            AuthorizedHostEffectKind::NonHttp(HostEffect::SetThemeSource { color }) => {
                 let argb = crate::bar::view::parse_hex_color(&color).unwrap_or(0xFF006C4C);
                 shilpo_theme_daemon::ThemeClient::spawn_task(async move {
                     let client = shilpo_theme_daemon::ThemeClient::new().await;
@@ -383,17 +382,13 @@ impl ExtensionHost {
                         .await;
                 });
             }
-            shilpo_ext::AuthorizedHostEffectKind::NonHttp(
-                shilpo_ext::HostEffect::SetWallpaper { path, .. },
-            ) => {
+            AuthorizedHostEffectKind::NonHttp(HostEffect::SetWallpaper { path, .. }) => {
                 shilpo_theme_daemon::ThemeClient::spawn_task(async move {
                     let client = shilpo_theme_daemon::ThemeClient::new().await;
                     let _ = client.set_wallpaper(&path).await;
                 });
             }
-            shilpo_ext::AuthorizedHostEffectKind::NonHttp(
-                shilpo_ext::HostEffect::ClipboardWrite { text },
-            ) => {
+            AuthorizedHostEffectKind::NonHttp(HostEffect::ClipboardWrite { text }) => {
                 let result = cx
                     .global::<ShellRuntime>()
                     .service_hub
@@ -407,7 +402,7 @@ impl ExtensionHost {
                     );
                 }
             }
-            shilpo_ext::AuthorizedHostEffectKind::HttpRequest(request) => {
+            AuthorizedHostEffectKind::HttpRequest(request) => {
                 let request_id = request.request_id().to_string();
                 let key = (generation, extension_id.clone(), request_id.clone());
                 let accepted = {
@@ -424,7 +419,7 @@ impl ExtensionHost {
                         .send_response(
                         generation,
                         ext_id,
-                        shilpo_ext::ExtensionEvent::HttpResponse {
+                        ExtensionEvent::HttpResponse {
                             request_id,
                             status: None,
                             body: String::new(),
@@ -453,7 +448,7 @@ impl ExtensionHost {
                     .extension_host_mut()
                     .insert_task(key, task);
             }
-            shilpo_ext::AuthorizedHostEffectKind::NonHttp(shilpo_ext::HostEffect::LocationRead) => {
+            AuthorizedHostEffectKind::NonHttp(HostEffect::LocationRead) => {
                 let location_service = cx
                     .global::<ShellRuntime>()
                     .extension_host()
@@ -466,13 +461,13 @@ impl ExtensionHost {
                 let task = cx.spawn(async move |cx| {
                     let result = location_service.read_location_async().await;
                     let event = match result {
-                        Ok(info) => shilpo_ext::ExtensionEvent::LocationResponse {
+                        Ok(info) => ExtensionEvent::LocationResponse {
                             latitude: Some(info.latitude),
                             longitude: Some(info.longitude),
                             accuracy_meters: Some(info.accuracy_meters),
                             error: None,
                         },
-                        Err(error) => shilpo_ext::ExtensionEvent::LocationResponse {
+                        Err(error) => ExtensionEvent::LocationResponse {
                             latitude: None,
                             longitude: None,
                             accuracy_meters: None,
@@ -491,7 +486,7 @@ impl ExtensionHost {
                     .extension_host_mut()
                     .insert_task(key, task);
             }
-            shilpo_ext::AuthorizedHostEffectKind::NonHttp(effect) => tracing::debug!(
+            AuthorizedHostEffectKind::NonHttp(effect) => tracing::debug!(
                 extension = %extension_id,
                 ?effect,
                 "accepted extension effect has no shell service adapter yet"
@@ -513,7 +508,7 @@ impl ShellRuntime {
     pub fn extension_surface_views(
         cx: &App,
         surface: ContributionSurface,
-    ) -> Vec<(CanonicalId, shilpo_ext::ViewTree)> {
+    ) -> Vec<(CanonicalId, ViewTree)> {
         let descriptors = Self::extension_descriptors(cx, surface);
         descriptors
             .into_iter()
@@ -524,7 +519,7 @@ impl ShellRuntime {
             .collect()
     }
 
-    pub fn extension_view(cx: &App, id: &CanonicalId) -> Option<shilpo_ext::ViewTree> {
+    pub fn extension_view(cx: &App, id: &CanonicalId) -> Option<ViewTree> {
         cx.global::<Self>().extension_host().view(id)
     }
 
@@ -553,7 +548,7 @@ impl ShellRuntime {
         );
     }
 
-    pub fn dispatch_extension_event(cx: &mut App, event: shilpo_ext::ExtensionEvent) {
+    pub fn dispatch_extension_event(cx: &mut App, event: ExtensionEvent) {
         cx.global_mut::<Self>()
             .extension_host_mut()
             .send_event(event);

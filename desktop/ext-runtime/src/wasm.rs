@@ -1,8 +1,5 @@
 use crate::adapter::{ExtensionRuntime, RuntimeBudget, RuntimeError, RuntimeFailureKind};
-use crate::effects::HostEffect;
-use crate::events::ExtensionEvent;
-use crate::view::ViewTree;
-use shilpo_ext_types::ExtensionId;
+use shilpo_ext_api::{ExtensionEvent, ExtensionId, HostEffect, ViewTree};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -188,6 +185,10 @@ fn configure_store(
 
 impl ExtensionRuntime for WasmRuntime {
     type Module = WasmModule;
+
+    fn compile_module(&self, bytes: &[u8]) -> Result<Self::Module, String> {
+        Ok(WasmModule::from_bytes(bytes.to_vec()))
+    }
 
     fn load(
         &mut self,
