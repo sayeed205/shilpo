@@ -712,9 +712,8 @@ where
                 // active generation.
                 Some(self.build_update(changes, true))
             }
-            ExtensionCommand::Shutdown { reply } => {
+            ExtensionCommand::Shutdown => {
                 let _ = self.session.dispatch_all(&ExtensionEvent::ShellStopping);
-                let _ = reply.send(());
                 None
             }
         }
@@ -728,6 +727,7 @@ where
                 None
             };
         ExtensionUpdate {
+            host_generation: super::process::HostGeneration(0),
             generation: self.generation,
             snapshot,
             effects: changes.effects,
@@ -746,6 +746,7 @@ where
             let initial_snapshot = self.build_snapshot(true);
             *snapshot_lock.write().unwrap() = initial_snapshot.clone();
             let initial_update = ExtensionUpdate {
+                host_generation: super::process::HostGeneration(0),
                 generation: self.generation,
                 snapshot: Some(initial_snapshot),
                 effects: Vec::new(),
@@ -775,8 +776,8 @@ where
                             pending_sources_changed = true;
                             last_sources_changed = Some(Instant::now());
                         }
-                        ExtensionCommand::Shutdown { reply } => {
-                            let _ = self.handle_command(ExtensionCommand::Shutdown { reply });
+                        ExtensionCommand::Shutdown => {
+                            let _ = self.handle_command(ExtensionCommand::Shutdown);
                             return;
                         }
                         other => {

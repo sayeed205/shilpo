@@ -7886,6 +7886,8 @@ dependencies = [
  "shilpo-ext",
  "shilpo-ext-types",
  "shilpo-services",
+ "shilpo-settings",
+ "shilpo-shell",
  "shilpo-theme",
  "shilpo-theme-daemon",
  "tokio",
@@ -8049,6 +8051,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image",
+ "libc",
  "log",
  "notify",
  "resvg 0.48.1",
@@ -8071,6 +8074,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "zbus",
  "zed-reqwest",
 ]
 

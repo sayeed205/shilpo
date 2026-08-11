@@ -46,4 +46,4 @@ while [ -e "$SOCKET_PATH" ] || {
 done
 
 echo "[dev-shell] Release instance stopped cleanly. Starting development shell..."
-cargo run -p shilpo-shell -- "$@"
+cargo run -p shilpo-cli -- daemon "$@"

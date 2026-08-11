@@ -17,7 +17,7 @@ binds {
     Mod+Space repeat=false {
         spawn "shilpo" "overview" "toggle"; }
     Mod+Comma {
-        spawn "shilpo-settings"; }
+        spawn "shilpo" "settings"; }
     Ctrl+Alt+T {
         spawn "shilpo" "theme" "wallpaper" "random"; }
     Mod+Alt+L allow-when-locked=true {

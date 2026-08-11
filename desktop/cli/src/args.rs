@@ -28,6 +28,16 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
+    /// Shell daemon lifecycle, status, and telemetry (durable GPUI process role)
+    Daemon,
+    /// Standalone settings window (user-launched GPUI process role)
+    Settings,
+    /// Supervised Wasmtime extension runtime (private worker process role)
+    ExtensionHost,
+    /// Device integration daemon (systemd/DBus activated process role)
+    DeviceDaemon,
+    /// Theme synchronization daemon (systemd/DBus activated process role)
+    ThemeDaemon,
     /// Shell daemon lifecycle, status, and telemetry
     Shell {
         #[command(subcommand)]
@@ -237,6 +247,8 @@ pub enum ThemeWallpaperAction {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum ExtCommands {
+    /// Display extension host runtime status, supervisor state, and process diagnostics
+    Status,
     /// Inspect extension manifest, component, and assets
     Check { path: Option<PathBuf> },
     /// Pack extension directory into .shilpo-ext bundle

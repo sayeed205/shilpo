@@ -40,6 +40,17 @@ impl ExtensionHost {
         self.extensions.as_ref().map(|ext| ext.generation())
     }
 
+    pub(crate) fn host_generation(&self) -> crate::extensions::HostGeneration {
+        self.extensions
+            .as_ref()
+            .map(|ext| ext.host_generation())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn diagnostics(&self) -> Option<crate::extensions::ExtensionHostDiagnostics> {
+        self.extensions.as_ref().map(|ext| ext.host_diagnostics())
+    }
+
     pub(crate) fn descriptors_for(
         &self,
         surface: ContributionSurface,
@@ -270,6 +281,13 @@ impl ExtensionHost {
 
     pub(crate) fn apply_update(cx: &mut App, update: crate::extensions::ExtensionUpdate) {
         let current_gen = cx.global::<ShellRuntime>().extension_host().generation();
+        let current_host_gen = cx
+            .global::<ShellRuntime>()
+            .extension_host()
+            .host_generation();
+        if update.host_generation != current_host_gen {
+            return;
+        }
         if current_gen.is_some_and(|target_gen| update.generation < target_gen) {
             return;
         }

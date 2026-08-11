@@ -188,7 +188,13 @@ impl ShellRuntime {
                 shilpo_services::ipc::BarState::Hidden
             },
             overview_visible: runtime.shell_surfaces.overview_is_open(),
-            health: shilpo_services::ServiceHealth::default(),
+            health: shilpo_services::ServiceHealth {
+                extension_host: runtime
+                    .extension_host
+                    .diagnostics()
+                    .and_then(|diagnostics| serde_json::to_value(diagnostics).ok()),
+                ..Default::default()
+            },
             instance_id: std::process::id().to_string(),
             pid: std::process::id(),
         };

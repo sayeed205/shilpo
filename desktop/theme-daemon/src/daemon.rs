@@ -20,7 +20,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 use zbus::Connection;
-use zbus::connection::Builder;
 use zbus::names::BusName;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -165,11 +164,23 @@ impl ThemeDaemon {
             initial_state.theme.resolved_mode,
         );
 
+        let conn = Connection::session().await?;
+        use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
+        let dbus = DBusProxy::new(&conn).await?;
+        let reply = dbus
+            .request_name(
+                "org.shilpo.Theme".try_into()?,
+                RequestNameFlags::DoNotQueue.into(),
+            )
+            .await?;
+        if reply != RequestNameReply::PrimaryOwner {
+            eprintln!("org.shilpo.Theme is already owned by another process");
+            std::process::exit(1);
+        }
+
         let service = ThemeDbusService::new(actor_tx, effects.clone());
-        let conn = Builder::session()?
-            .name("org.shilpo.Theme")?
-            .serve_at("/org/shilpo/Theme", service)?
-            .build()
+        conn.object_server()
+            .at("/org/shilpo/Theme", service)
             .await?;
 
         info!("shilpo-themed registered D-Bus name org.shilpo.Theme at /org/shilpo/Theme");

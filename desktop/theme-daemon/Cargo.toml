@@ -23,7 +23,3 @@ anyhow = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
-
-[[bin]]
-name = "shilpo-themed"
-path = "src/bin/shilpo-themed.rs"

@@ -29,6 +29,7 @@ use shilpo_services::{CompositorSnapshot, ShellIpcServer};
 /// `pub(super)` accessor surface below.
 pub struct ShellRuntime {
     ipc_server: ShellIpcServer,
+    _shell_bus: Option<zbus::Connection>,
     active_config: shilpo_config::ShellConfig,
     shell_surfaces: ShellSurfaces,
     action_dispatcher: ActionDispatcher,
@@ -60,6 +61,7 @@ impl ShellRuntime {
         let wallpaper_preview = cx.new(WallpaperPreviewResource::new);
         cx.set_global(Self {
             ipc_server: ipc,
+            _shell_bus: None,
             active_config: shilpo_config::ShellConfig::default(),
             shell_surfaces: ShellSurfaces::new(Arc::new(CompositorSnapshot::default())),
             action_dispatcher: ActionDispatcher::new(),
@@ -166,7 +168,7 @@ impl ShellRuntime {
         }
     }
 
-    pub fn install(cx: &mut App, ipc_server: ShellIpcServer) {
+    pub fn install(cx: &mut App, ipc_server: ShellIpcServer, shell_bus: zbus::Connection) {
         let initial_wallpaper_path = theme_manager::init(cx);
         let session = session::SessionContext::init();
         let hub = ServiceHub::start(cx.background_executor().clone(), &session);
@@ -184,6 +186,7 @@ impl ShellRuntime {
 
         cx.set_global(Self {
             ipc_server,
+            _shell_bus: Some(shell_bus),
             active_config: session.active_config,
             shell_surfaces,
             action_dispatcher,
@@ -253,6 +256,7 @@ impl ShellRuntime {
                 cx.update(|cx| ShellSurfaces::request(cx, SurfaceRequest::SyncDisplays));
                 cx.update(ServiceHub::drain);
                 cx.update(Self::drain_extensions);
+                cx.update(Self::publish_status);
                 cx.update(Self::drain_ipc);
             }
         });

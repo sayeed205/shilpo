@@ -1,13 +1,13 @@
 [Unit]
 Description=Shilpo Theme Synchronization Engine Daemon
-Documentation=man:shilpo-themed(1)
+Documentation=man:shilpo(1)
 PartOf=niri.service
 After=niri.service
 
 [Service]
 Type=dbus
 BusName=org.shilpo.Theme
-ExecStart=/usr/bin/shilpo-themed
+ExecStart=/usr/bin/shilpo theme-daemon
 Restart=on-failure
 RestartSec=1s
 
