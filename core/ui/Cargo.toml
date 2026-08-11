@@ -100,9 +100,7 @@ dirs.workspace = true
 gpui = { workspace = true }
 gpui_macros.workspace = true
 reqwest.workspace = true
-shilpo-theme = { workspace = true }
 shilpo-macros = { workspace = true }
-shilpo-assets = { workspace = true }
 mcu-material-color.workspace = true
 notify.workspace = true
 ropey.workspace = true
@@ -228,11 +226,5 @@ indoc = "2"
 [lints]
 workspace = true
 
-# `shilpo-ui-assets` ships the canonical icon set whose variants we
-# enumerate to generate `IconName` at build time. Cargo's
-# `DEP_<links>_<key>` propagation (the bridge that hands the icons-dir
-# path from the assets crate's build.rs into our own) only works through
-# *regular* dependencies, not build-deps, so this has to live here even
-# though our use is entirely build-time.
 [package.metadata.cargo-machete]
-ignored = ["shilpo-ui-assets"]
+ignored = []

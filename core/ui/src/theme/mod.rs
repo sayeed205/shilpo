@@ -3,7 +3,8 @@ use crate::{
     scroll::ScrollbarShow, sheet::SheetSettings,
 };
 use gpui::{App, Global, Hsla, Pixels, SharedString, px};
-pub use shilpo_theme::{ThemeMode, ThemeState};
+pub mod state;
+pub use state::*;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -43,7 +44,7 @@ pub struct Theme {
     /// Resolved scheme used to build `colors`. Never `System`.
     effective_mode: ThemeMode,
     pub source_argb: u32,
-    pub scheme_variant: shilpo_theme::SchemeVariant,
+    pub scheme_variant: SchemeVariant,
     pub font_family: SharedString,
     pub font_size: Pixels,
     pub mono_font_family: SharedString,
@@ -90,7 +91,7 @@ impl Theme {
             mode: ThemeMode::System,
             effective_mode: ThemeMode::Light,
             source_argb,
-            scheme_variant: shilpo_theme::SchemeVariant::Auto,
+            scheme_variant: SchemeVariant::Auto,
             font_family: ".SystemUIFont".into(),
             font_size: px(16.),
             mono_font_family: if cfg!(target_os = "macos") {

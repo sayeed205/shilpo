@@ -10,7 +10,6 @@ use std::{
 use gpui::{prelude::FluentBuilder as _, *};
 use lsp_types::{SemanticToken, SemanticTokenType, SemanticTokens, SemanticTokensLegend};
 use regex::{Captures, Regex};
-use shilpo_assets::Assets;
 use shilpo_ui::{
     ActiveTheme as _, Icon, IconName, Sizable as _,
     avatar::Avatar,
@@ -28,6 +27,7 @@ use shilpo_ui::{
     },
     v_flex,
 };
+use storybook::Assets;
 use storybook::Open;
 
 /// Markers, each mapped to a different `HighlightTheme` token-type name so

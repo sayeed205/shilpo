@@ -88,7 +88,7 @@ Reload a running shell after editing the configuration:
 ./target/release/shilpo config reload
 ```
 
-When the shell was built with the default development profile, use `./target/debug/shilpo-shell` instead.
+When the shell was built with the default development profile, use `./target/debug/shilpo daemon` instead.
 
 ## Development loop
 

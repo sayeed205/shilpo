@@ -1,18 +1,17 @@
 use crate::adapters::{DesktopAdapter, select_desktop_adapter};
 use crate::dbus::{ActorMessage, EffectStatus, ThemeDbusService};
 use crate::executors::{AdapterExecutor, PersistenceExecutor, ProjectionStatus};
-use crate::persistence::read_state_snapshot;
 use crate::portal::PortalObserver;
 use anyhow::Result;
 use image::DynamicImage;
 use image::imageops::FilterType;
 use mcu_material_color::{Hct, QuantizerCelebi, Score};
 use serde::{Deserialize, Serialize};
-use shilpo_config::ShellConfig;
-use shilpo_theme::{
+use shilpo_ui::theme::{
     ColorSource, SchemeVariant, ThemeCommand, ThemeMode, ThemeState, generate_m3_palettes,
     materialize_seed_with_variant, reduce, resolve_variant,
 };
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -21,6 +20,18 @@ use tokio::sync::mpsc;
 use tracing::{debug, info};
 use zbus::Connection;
 use zbus::names::BusName;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ThemeDaemonOptions {
+    pub provider: Option<String>,
+    pub gtk_theme_light: Option<String>,
+    pub gtk_theme_dark: Option<String>,
+    pub custom_adapter_cmd: Option<Vec<String>>,
+    pub wallpaper_dir: Option<PathBuf>,
+    pub scheme_variant: Option<SchemeVariant>,
+    pub config_path: Option<PathBuf>,
+    pub state_path: Option<PathBuf>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DaemonState {
@@ -50,7 +61,7 @@ impl DaemonState {
 
 impl Default for DaemonState {
     fn default() -> Self {
-        Self::new(shilpo_theme::state::DEFAULT_TIMESTAMP)
+        Self::new(shilpo_ui::theme::state::DEFAULT_TIMESTAMP)
     }
 }
 
@@ -70,7 +81,7 @@ impl std::ops::DerefMut for DaemonState {
 /// A command handled by the theme daemon.
 ///
 /// Pure core transitions are carried as [`DaemonCommand::Theme`] and forwarded
-/// unchanged to `shilpo_theme::reduce`; wallpaper and portal concerns stay at
+/// unchanged to `shilpo_ui::theme::reduce`; wallpaper and portal concerns stay at
 /// this (daemon) layer, never leaking into `core/theme`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonCommand {
@@ -110,48 +121,41 @@ pub struct ThemeDaemon {
 
 impl ThemeDaemon {
     pub async fn new() -> Result<Self> {
+        Self::with_options(ThemeDaemonOptions::default()).await
+    }
+
+    pub async fn with_options(options: ThemeDaemonOptions) -> Result<Self> {
         let (actor_tx, actor_rx) = mpsc::unbounded_channel();
         let (portal_tx, portal_rx) = mpsc::unbounded_channel();
         let (wp_tx, wp_rx) = mpsc::unbounded_channel();
 
-        let config_path = shilpo_config::default_config_path();
-
-        let (
-            config_provider,
-            gtk_light,
-            gtk_dark,
-            custom_argv,
-            configured_wp_dir,
-            configured_variant,
-        ) = match ShellConfig::load_or_create(&config_path) {
-            Ok(cfg) => (
-                cfg.theme.provider,
-                cfg.theme.gtk_theme_light,
-                cfg.theme.gtk_theme_dark,
-                cfg.theme.custom_adapter_cmd,
-                Some(cfg.desktop.wallpaper_dir),
-                cfg.theme
-                    .scheme_variant
-                    .as_deref()
-                    .map(shilpo_theme::SchemeVariant::from_str),
-            ),
-            Err(_) => (None, None, None, None, None, None),
-        };
+        let state_path = options
+            .state_path
+            .clone()
+            .unwrap_or_else(crate::persistence::state_file_path);
+        let config_path = options.config_path.clone().unwrap_or_else(|| {
+            std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+                .unwrap_or_else(|| PathBuf::from(".config"))
+                .join("shilpo")
+                .join("config.toml")
+        });
 
         let adapter: Arc<dyn DesktopAdapter> = Arc::from(select_desktop_adapter(
-            config_provider.as_deref(),
-            gtk_light,
-            gtk_dark,
-            custom_argv,
+            options.provider.as_deref(),
+            options.gtk_theme_light,
+            options.gtk_theme_dark,
+            options.custom_adapter_cmd,
         ));
 
         let initial_state = initial_state(
-            read_state_snapshot(),
-            configured_wp_dir.as_deref(),
-            configured_variant,
+            crate::persistence::read_state_snapshot_from(&state_path),
+            options.wallpaper_dir.as_deref(),
+            options.scheme_variant,
         );
 
-        let persistence_executor = PersistenceExecutor::new(None);
+        let persistence_executor = PersistenceExecutor::new(Some(state_path));
         let adapter_executor = AdapterExecutor::new(adapter.clone());
         let effects = Arc::new(Mutex::new(EffectStatus {
             durable_revision: persistence_executor.durable_revision(),
@@ -317,9 +321,20 @@ impl ThemeDaemon {
                     .await;
                 let config_path = self.config_path.clone();
                 tokio::task::spawn_blocking(move || {
-                    if let Ok(mut config) = ShellConfig::load_or_create(&config_path) {
-                        config.theme.scheme_variant = Some(variant.as_str().to_string());
-                        let _ = config.save(&config_path);
+                    let content = fs::read_to_string(&config_path).unwrap_or_default();
+                    if let Ok(mut table) = content.parse::<toml::Table>() {
+                        let theme = table
+                            .entry("theme")
+                            .or_insert_with(|| toml::Value::Table(Default::default()));
+                        if let toml::Value::Table(theme_table) = theme {
+                            theme_table.insert(
+                                "scheme_variant".to_string(),
+                                toml::Value::String(variant.as_str().to_string()),
+                            );
+                            if let Ok(new_content) = toml::to_string(&table) {
+                                let _ = fs::write(&config_path, new_content);
+                            }
+                        }
                     }
                 });
                 self.respond_after_durable(reply, res);
@@ -392,11 +407,20 @@ impl ThemeDaemon {
     }
 
     fn persist_wallpaper_directory_config(&self, dir: &Path) -> Result<(), String> {
-        let mut config = ShellConfig::load_or_create(&self.config_path)
-            .map_err(|error| format!("Failed to load shell config: {error}"))?;
-        config.desktop.wallpaper_dir = dir.to_path_buf();
-        config
-            .save(&self.config_path)
+        let content = fs::read_to_string(&self.config_path).unwrap_or_default();
+        let mut table: toml::Table = content.parse().unwrap_or_default();
+        let desktop = table
+            .entry("desktop")
+            .or_insert_with(|| toml::Value::Table(Default::default()));
+        if let toml::Value::Table(desktop_table) = desktop {
+            desktop_table.insert(
+                "wallpaper_dir".to_string(),
+                toml::Value::String(dir.to_string_lossy().to_string()),
+            );
+        }
+        let new_content = toml::to_string(&table)
+            .map_err(|error| format!("Failed to serialize config: {error}"))?;
+        fs::write(&self.config_path, new_content)
             .map_err(|error| format!("Failed to persist wallpaper directory: {error}"))
     }
 
@@ -546,8 +570,12 @@ impl ThemeDaemon {
     }
 
     fn sync_wallpaper_dir_from_config(&mut self) {
-        if let Ok(cfg) = ShellConfig::load_or_create(&self.config_path) {
-            let config_dir = expand_tilde(&cfg.desktop.wallpaper_dir);
+        if let Ok(content) = fs::read_to_string(&self.config_path)
+            && let Ok(table) = content.parse::<toml::Table>()
+            && let Some(desktop) = table.get("desktop").and_then(|v| v.as_table())
+            && let Some(dir_str) = desktop.get("wallpaper_dir").and_then(|v| v.as_str())
+        {
+            let config_dir = expand_tilde(Path::new(dir_str));
             if config_dir != self.state.wallpaper_dir {
                 debug!(
                     old = %self.state.wallpaper_dir.display(),
@@ -641,7 +669,7 @@ struct ApplyOutcome {
 /// This is the daemon-side seam: it decides state transitions and which mode (if
 /// any) the desktop adapter must be told about, without touching D-Bus, files, or
 /// subprocesses, so every command's logic is testable without system mocks. Core
-/// transitions are delegated to `shilpo_theme::reduce`; wallpaper and portal
+/// transitions are delegated to `shilpo_ui::theme::reduce`; wallpaper and portal
 /// concerns are handled here, at the daemon layer (ADR-0002).
 fn apply_command(
     state: &mut DaemonState,
@@ -757,11 +785,11 @@ struct ChangeSnapshot {
     selected_mode: ThemeMode,
     resolved_mode: ThemeMode,
     color_source: ColorSource,
-    scheme_variant: shilpo_theme::SchemeVariant,
+    scheme_variant: shilpo_ui::theme::SchemeVariant,
     source_argb: u32,
     wallpaper_path: Option<PathBuf>,
     wallpaper_seed: Option<u32>,
-    wallpaper_detected_variant: shilpo_theme::SchemeVariant,
+    wallpaper_detected_variant: shilpo_ui::theme::SchemeVariant,
     wallpaper_dir: PathBuf,
 }
 
@@ -815,10 +843,10 @@ fn expand_tilde(path: &Path) -> PathBuf {
 fn initial_state(
     persisted: Option<DaemonState>,
     configured_wp_dir: Option<&Path>,
-    configured_variant: Option<shilpo_theme::SchemeVariant>,
+    configured_variant: Option<shilpo_ui::theme::SchemeVariant>,
 ) -> DaemonState {
     let mut state = persisted.unwrap_or_default();
-    if state.theme.updated_at == shilpo_theme::state::DEFAULT_TIMESTAMP {
+    if state.theme.updated_at == shilpo_ui::theme::state::DEFAULT_TIMESTAMP {
         let now = chrono::Utc::now().to_rfc3339();
         state.theme.updated_at = now.clone();
         state.theme.palette_generated_at = now;
@@ -991,7 +1019,7 @@ mod tests {
         let state = initial_state(None, None, None);
         assert_ne!(
             state.theme.updated_at,
-            shilpo_theme::state::DEFAULT_TIMESTAMP
+            shilpo_ui::theme::state::DEFAULT_TIMESTAMP
         );
         assert_eq!(state.theme.updated_at, state.theme.palette_generated_at);
     }
@@ -1341,14 +1369,14 @@ mod tests {
         let outcome = apply(
             &mut state,
             DaemonCommand::Theme(ThemeCommand::SetSchemeVariant(
-                shilpo_theme::SchemeVariant::Expressive,
+                shilpo_ui::theme::SchemeVariant::Expressive,
             )),
         )
         .unwrap();
 
         assert_eq!(
             state.theme.scheme_variant,
-            shilpo_theme::SchemeVariant::Expressive
+            shilpo_ui::theme::SchemeVariant::Expressive
         );
         assert_eq!(state.theme.revision, revision + 1);
         assert!(outcome.change_kind.variant);

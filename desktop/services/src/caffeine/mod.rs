@@ -1,7 +1,17 @@
+use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::watch;
+
+pub fn caffeine_state_path() -> PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
+        .unwrap_or_else(|| PathBuf::from(".local/state"))
+        .join("shilpo")
+        .join("caffeine.state")
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CaffeineInfo {
@@ -27,7 +37,7 @@ impl CaffeineService {
             process: Arc::new(Mutex::new(None)),
         };
 
-        let state_path = shilpo_config::caffeine_state_path();
+        let state_path = caffeine_state_path();
         if let Ok(content) = std::fs::read_to_string(&state_path)
             && content.trim() == "true"
         {
@@ -84,7 +94,7 @@ impl CaffeineService {
 
         let _ = self.tx.send_replace(CaffeineInfo { active: new_active });
 
-        let state_path = shilpo_config::caffeine_state_path();
+        let state_path = caffeine_state_path();
         if let Some(parent) = state_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }

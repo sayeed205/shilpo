@@ -2,12 +2,12 @@ pub mod dbus;
 pub mod in_memory_adapter;
 pub mod system_adapter;
 
-pub use dbus::DeviceDbusService;
-pub use in_memory_adapter::{DeviceAdapter, InMemoryDeviceAdapter};
-use shilpo_device_protocol::{
+use crate::device_protocol::{
     CommandId, CommandOutcome, DeviceCommand, DeviceDomain, DomainLifecycle, DomainState,
     check_protocol_version,
 };
+pub use dbus::DeviceDbusService;
+pub use in_memory_adapter::{DeviceAdapter, InMemoryDeviceAdapter};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -293,10 +293,10 @@ impl DeviceDaemonService {
     pub fn domain_state_if_revision(
         &self,
         domain: DeviceDomain,
-        outcome: &shilpo_device_protocol::CommandOutcome,
+        outcome: &crate::device_protocol::CommandOutcome,
     ) -> Option<DomainState> {
         let revision = match outcome {
-            shilpo_device_protocol::CommandOutcome::Applied { revision, .. } => *revision,
+            crate::device_protocol::CommandOutcome::Applied { revision, .. } => *revision,
             _ => return None,
         };
         let state = self.get_domain_state(domain);
@@ -348,8 +348,8 @@ fn confirmation_timeout(domain: DeviceDomain) -> Duration {
 }
 
 fn command_confirmed(command: &DeviceCommand, before: &DomainState, after: &DomainState) -> bool {
-    use shilpo_device_protocol::DomainPayload as P;
-    use shilpo_device_protocol::{
+    use crate::device_protocol::DomainPayload as P;
+    use crate::device_protocol::{
         AudioAction, BluetoothAction, BrightnessAction, CaffeineAction, MediaAction, NetworkAction,
         NightLightAction, PowerProfileAction,
     };
@@ -441,14 +441,14 @@ fn command_confirmed(command: &DeviceCommand, before: &DomainState, after: &Doma
     }
 }
 
-fn device_connected(payload: &shilpo_device_protocol::BluetoothPayload, address: &str) -> bool {
+fn device_connected(payload: &crate::device_protocol::BluetoothPayload, address: &str) -> bool {
     payload
         .devices
         .iter()
         .any(|device| device.address == address && device.connected)
 }
 
-fn vpn_active(payload: &shilpo_device_protocol::NetworkPayload, name: &str) -> bool {
+fn vpn_active(payload: &crate::device_protocol::NetworkPayload, name: &str) -> bool {
     payload
         .active_vpns
         .iter()
@@ -458,7 +458,7 @@ fn vpn_active(payload: &shilpo_device_protocol::NetworkPayload, name: &str) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shilpo_device_protocol::{AudioAction, BrightnessAction, DomainPayload};
+    use crate::device_protocol::{AudioAction, BrightnessAction, DomainPayload};
     use std::sync::Mutex;
 
     #[derive(Clone)]
@@ -474,7 +474,7 @@ mod tests {
                     domain: DeviceDomain::Audio,
                     revision: 1,
                     lifecycle: DomainLifecycle::Ready,
-                    payload: DomainPayload::Audio(shilpo_device_protocol::AudioPayload {
+                    payload: DomainPayload::Audio(crate::device_protocol::AudioPayload {
                         volume: 50,
                         ..Default::default()
                     }),
@@ -595,7 +595,7 @@ mod tests {
         let audio_state = service.get_domain_state(DeviceDomain::Audio);
         assert!(matches!(
             audio_state.payload,
-            shilpo_device_protocol::DomainPayload::Audio(payload) if payload.volume == 40
+            crate::device_protocol::DomainPayload::Audio(payload) if payload.volume == 40
         ));
     }
 

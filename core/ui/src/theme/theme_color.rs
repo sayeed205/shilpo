@@ -211,46 +211,46 @@ pub fn hsla_to_hex(hsla: Hsla) -> String {
 
 pub fn material_theme_with_variant(
     source_argb: u32,
-    variant: shilpo_theme::SchemeVariant,
+    variant: super::SchemeVariant,
     dark: bool,
 ) -> ThemeColor {
     use mcu_material_color::{
         SchemeContent, SchemeExpressive, SchemeFidelity, SchemeFruitSalad, SchemeMonochrome,
         SchemeNeutral, SchemeRainbow, SchemeTonalSpot,
     };
-    let variant = shilpo_theme::resolve_variant(source_argb, variant);
+    let variant = super::resolve_variant(source_argb, variant);
     let hct = Hct::from_int(source_argb);
     match variant {
-        shilpo_theme::SchemeVariant::Auto => unreachable!(),
-        shilpo_theme::SchemeVariant::TonalSpot => {
+        super::SchemeVariant::Auto => unreachable!(),
+        super::SchemeVariant::TonalSpot => {
             ThemeColor::from_scheme(&SchemeTonalSpot::new(hct, dark, 0.0))
         }
-        shilpo_theme::SchemeVariant::Content => {
+        super::SchemeVariant::Content => {
             ThemeColor::from_scheme(&SchemeContent::new(hct, dark, 0.0))
         }
-        shilpo_theme::SchemeVariant::Expressive => {
+        super::SchemeVariant::Expressive => {
             ThemeColor::from_scheme(&SchemeExpressive::new(hct, dark, 0.0))
         }
-        shilpo_theme::SchemeVariant::Fidelity => {
+        super::SchemeVariant::Fidelity => {
             ThemeColor::from_scheme(&SchemeFidelity::new(hct, dark, 0.0))
         }
-        shilpo_theme::SchemeVariant::FruitSalad => {
+        super::SchemeVariant::FruitSalad => {
             ThemeColor::from_scheme(&SchemeFruitSalad::new(hct, dark, 0.0))
         }
-        shilpo_theme::SchemeVariant::Monochrome => {
+        super::SchemeVariant::Monochrome => {
             ThemeColor::from_scheme(&SchemeMonochrome::new(hct, dark, 0.0))
         }
-        shilpo_theme::SchemeVariant::Neutral => {
+        super::SchemeVariant::Neutral => {
             ThemeColor::from_scheme(&SchemeNeutral::new(hct, dark, 0.0))
         }
-        shilpo_theme::SchemeVariant::Rainbow => {
+        super::SchemeVariant::Rainbow => {
             ThemeColor::from_scheme(&SchemeRainbow::new(hct, dark, 0.0))
         }
     }
 }
 
 pub fn material_theme(source_argb: u32, dark: bool) -> ThemeColor {
-    material_theme_with_variant(source_argb, shilpo_theme::SchemeVariant::Auto, dark)
+    material_theme_with_variant(source_argb, super::SchemeVariant::Auto, dark)
 }
 
 #[cfg(test)]

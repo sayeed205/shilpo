@@ -5,25 +5,22 @@ use super::protocol::{
 };
 use crate::{
     AuthorizedHostEffectKind, CURRENT_SHILPO_VERSION, CatalogPaths, ExtensionCatalog,
-    ExtensionHost, ExtensionRuntime, WasmModule,
+    ExtensionHost, ExtensionRuntime,
 };
 use semver::Version;
 use shilpo_ext_api::{
-    CanonicalId, Capability, ContributionId, ExtensionEvent, ExtensionId, ExtensionManifest,
-    HostEffect, ViewTree,
+    CanonicalId, Capability, ExtensionEvent, ExtensionId, ExtensionManifest, HostEffect, ViewTree,
 };
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
-    time::{Duration, Instant, UNIX_EPOCH},
+    sync::Arc,
+    time::UNIX_EPOCH,
 };
 
-const DEBOUNCE_DURATION: Duration = Duration::from_millis(200);
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ActiveSource {
     pub manifest: ExtensionManifest,
     pub root: PathBuf,
@@ -52,6 +49,15 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.host.clear();
+        self.manifests.clear();
+        self.runtime_ids.clear();
+        self.views.clear();
+        self.instances.clear();
+        self.state.clear();
+    }
+
     pub fn register(
         &mut self,
         manifest: ExtensionManifest,
@@ -65,13 +71,13 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
 
         for contribution in &manifest.contributions.bar_widgets {
             let canonical = CanonicalId::new(id.clone(), contribution.id.clone());
-            if let Some(view) = self.host.view(&canonical) {
+            if let Ok(Some(view)) = self.host.render_view(&canonical) {
                 self.views.insert(canonical, view);
             }
         }
         for contribution in &manifest.contributions.desktop_widgets {
             let canonical = CanonicalId::new(id.clone(), contribution.id.clone());
-            if let Some(view) = self.host.view(&canonical) {
+            if let Ok(Some(view)) = self.host.render_view(&canonical) {
                 self.views.insert(canonical, view);
             }
         }
@@ -91,9 +97,7 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
                 height,
             } => {
                 if let Ok(canonical) = contribution_id.parse::<CanonicalId>() {
-                    let instance_key = instance_id
-                        .clone()
-                        .unwrap_or_else(|| canonical.to_string());
+                    let instance_key = instance_id.clone().unwrap_or_else(|| canonical.to_string());
                     self.instances.insert(
                         instance_key,
                         ContributionInstance {
@@ -115,9 +119,7 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
                 instance_id,
             } => {
                 if let Ok(canonical) = contribution_id.parse::<CanonicalId>() {
-                    let instance_key = instance_id
-                        .clone()
-                        .unwrap_or_else(|| canonical.to_string());
+                    let instance_key = instance_id.clone().unwrap_or_else(|| canonical.to_string());
                     self.instances.remove(&instance_key);
                     vec![canonical.extension_id]
                 } else {
@@ -131,9 +133,7 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
                 height,
             } => {
                 if let Ok(canonical) = contribution_id.parse::<CanonicalId>() {
-                    let instance_key = instance_id
-                        .clone()
-                        .unwrap_or_else(|| canonical.to_string());
+                    let instance_key = instance_id.clone().unwrap_or_else(|| canonical.to_string());
                     if let Some(instance) = self.instances.get_mut(&instance_key) {
                         instance.width = *width;
                         instance.height = *height;
@@ -149,9 +149,7 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
                 settings,
             } => {
                 if let Ok(canonical) = contribution_id.parse::<CanonicalId>() {
-                    let instance_key = instance_id
-                        .clone()
-                        .unwrap_or_else(|| canonical.to_string());
+                    let instance_key = instance_id.clone().unwrap_or_else(|| canonical.to_string());
                     if let Some(instance) = self.instances.get_mut(&instance_key) {
                         instance.settings = settings.clone();
                     }
@@ -173,9 +171,10 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
         };
 
         for id in target_ids {
-            let effects = self.host.send_event(&id, event);
-            for effect in effects {
-                self.apply_effect(&id, effect.kind(), &mut changes);
+            if let Ok(result) = self.host.dispatch_event(&id, event) {
+                for authorized in result.accepted {
+                    self.apply_effect(&id, authorized.kind(), &mut changes);
+                }
             }
         }
         changes
@@ -187,9 +186,10 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
         event: &ExtensionEvent,
     ) -> ExtensionChanges {
         let mut changes = ExtensionChanges::default();
-        let effects = self.host.send_event(extension_id, event);
-        for effect in effects {
-            self.apply_effect(extension_id, effect.kind(), &mut changes);
+        if let Ok(result) = self.host.dispatch_event(extension_id, event) {
+            for authorized in result.accepted {
+                self.apply_effect(extension_id, authorized.kind(), &mut changes);
+            }
         }
         changes
     }
@@ -203,13 +203,12 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
         match effect_kind {
             AuthorizedHostEffectKind::NonHttp(effect) => match effect {
                 HostEffect::InvalidateView { contribution_id } => {
-                    if let Ok(canonical) = contribution_id.parse::<CanonicalId>() {
-                        if canonical.extension_id == *extension_id {
-                            if let Some(view) = self.host.view(&canonical) {
-                                self.views.insert(canonical.clone(), view);
-                                changes.invalidated_views.push(canonical);
-                            }
-                        }
+                    if let Ok(canonical) = contribution_id.parse::<CanonicalId>()
+                        && canonical.extension_id == *extension_id
+                        && let Ok(Some(view)) = self.host.render_view(&canonical)
+                    {
+                        self.views.insert(canonical.clone(), view);
+                        changes.invalidated_views.push(canonical);
                     }
                 }
                 HostEffect::StateRead { key } => {
@@ -239,9 +238,7 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
                 | HostEffect::ReadFile { .. }
                 | HostEffect::WriteFile { .. }
                 | HostEffect::LocationRead => {
-                    if let Ok(authorized) =
-                        crate::AuthorizedHostEffect::non_http(effect.clone())
-                    {
+                    if let Ok(authorized) = crate::AuthorizedHostEffect::non_http(effect.clone()) {
                         changes.effects.push((extension_id.clone(), authorized));
                     }
                 }
@@ -262,7 +259,6 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
 }
 
 pub struct ExtensionEngine<R = crate::WasmRuntime> {
-    runtime: R,
     paths: CatalogPaths,
     catalog: ExtensionCatalog,
     catalog_mtime: Option<std::time::SystemTime>,
@@ -276,12 +272,13 @@ pub struct ExtensionEngine<R = crate::WasmRuntime> {
 
 impl<R: ExtensionRuntime> ExtensionEngine<R> {
     pub fn new(runtime: R, paths: CatalogPaths) -> Result<Self, String> {
-        let catalog = ExtensionCatalog::open(paths.clone()).map_err(|error| error.to_string())?;
-        let catalog_mtime = catalog_mtime(&paths.catalog_db());
-        let session = ExtensionSession::new(runtime.clone());
+        let shilpo_version =
+            Version::parse(CURRENT_SHILPO_VERSION).expect("Shilpo version is valid semver");
+        let catalog = ExtensionCatalog::open(paths.clone(), shilpo_version);
+        let catalog_mtime = catalog_mtime(&paths.data_dir);
+        let session = ExtensionSession::new(runtime);
 
         let mut engine = Self {
-            runtime,
             paths,
             catalog,
             catalog_mtime,
@@ -428,10 +425,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
         }
     }
 
-    fn reconcile_instances(
-        &mut self,
-        desired: Vec<ContributionInstance>,
-    ) -> ExtensionChanges {
+    fn reconcile_instances(&mut self, desired: Vec<ContributionInstance>) -> ExtensionChanges {
         let desired_keys: HashMap<String, ContributionInstance> = desired
             .into_iter()
             .map(|inst| (inst.id.clone(), inst))
@@ -441,38 +435,48 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
         let current_keys: Vec<String> = self.session.instances.keys().cloned().collect();
 
         for key in current_keys {
-            if !desired_keys.contains_key(&key) {
-                if let Some(instance) = self.session.instances.get(&key) {
-                    let event = ExtensionEvent::ContributionUnmounted {
-                        contribution_id: instance.contribution.to_string(),
-                        instance_id: Some(instance.id.clone()),
-                    };
-                    changes.merge(self.session.dispatch(&event));
-                }
+            if !desired_keys.contains_key(&key)
+                && let Some(instance) = self.session.instances.get(&key)
+            {
+                let event = ExtensionEvent::ContributionUnmounted {
+                    contribution_id: instance.contribution.to_string(),
+                    instance_id: Some(instance.id.clone()),
+                };
+                changes.merge(self.session.dispatch(&event));
             }
         }
 
         for (key, instance) in desired_keys {
             if let Some(existing) = self.session.instances.get_mut(&key) {
-                if (existing.width - instance.width).abs() > f32::EPSILON
-                    || (existing.height - instance.height).abs() > f32::EPSILON
-                {
+                let width_changed = (existing.width - instance.width).abs() > f32::EPSILON
+                    || (existing.height - instance.height).abs() > f32::EPSILON;
+                let settings_changed = existing.settings != instance.settings;
+                if width_changed {
                     existing.width = instance.width;
                     existing.height = instance.height;
+                }
+                if settings_changed {
+                    existing.settings = instance.settings.clone();
+                }
+                let contribution_str = instance.contribution.to_string();
+                let instance_id = instance.id.clone();
+                let width = instance.width;
+                let height = instance.height;
+                let settings = instance.settings;
+                if width_changed {
                     let event = ExtensionEvent::ContributionResized {
-                        contribution_id: instance.contribution.to_string(),
-                        instance_id: Some(instance.id.clone()),
-                        width: instance.width,
-                        height: instance.height,
+                        contribution_id: contribution_str.clone(),
+                        instance_id: Some(instance_id.clone()),
+                        width,
+                        height,
                     };
                     changes.merge(self.session.dispatch(&event));
                 }
-                if existing.settings != instance.settings {
-                    existing.settings = instance.settings.clone();
+                if settings_changed {
                     let event = ExtensionEvent::ContributionSettingsChanged {
-                        contribution_id: instance.contribution.to_string(),
-                        instance_id: Some(instance.id.clone()),
-                        settings: instance.settings,
+                        contribution_id: contribution_str,
+                        instance_id: Some(instance_id),
+                        settings,
                     };
                     changes.merge(self.session.dispatch(&event));
                 }
@@ -493,7 +497,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
     pub fn reload_all(&mut self) -> Result<(), String> {
         self.diagnostics.clear();
         let new_sources = self.discover_sources()?;
-        let catalog_changed = self.catalog_mtime != catalog_mtime(&self.paths.catalog_db());
+        let catalog_changed = self.catalog_mtime != catalog_mtime(&self.paths.data_dir);
 
         if new_sources == self.active_sources && !catalog_changed {
             return Ok(());
@@ -502,22 +506,21 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
         let preserved_instances: Vec<ContributionInstance> =
             self.session.instances.values().cloned().collect();
 
-        self.session = ExtensionSession::new(self.runtime.clone());
+        self.session.clear();
         self.active_sources = new_sources;
-        self.catalog_mtime = catalog_mtime(&self.paths.catalog_db());
+        self.catalog_mtime = catalog_mtime(&self.paths.data_dir);
 
         for (id, source) in &self.active_sources {
             let wasm_file = source.root.join("extension.wasm");
             let wasm_bytes = match fs::read(&wasm_file) {
                 Ok(bytes) => bytes,
                 Err(error) => {
-                    self.diagnostics.push(format!(
-                        "failed to read extension WASM for '{id}': {error}"
-                    ));
+                    self.diagnostics
+                        .push(format!("failed to read extension WASM for '{id}': {error}"));
                     continue;
                 }
             };
-            let module = match self.runtime.compile_module(&wasm_bytes) {
+            let module = match self.session.host.runtime().compile_module(&wasm_bytes) {
                 Ok(mod_obj) => mod_obj,
                 Err(error) => {
                     self.diagnostics.push(format!(
@@ -527,11 +530,10 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                 }
             };
 
-            if let Err(error) = self.session.register(
-                source.manifest.clone(),
-                module,
-                source.grants.clone(),
-            ) {
+            if let Err(error) =
+                self.session
+                    .register(source.manifest.clone(), module, source.grants.clone())
+            {
                 self.diagnostics
                     .push(format!("failed to register extension '{id}': {error}"));
             }
@@ -549,11 +551,9 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     percentage: *percentage,
                     charging: *charging,
                 },
-                ReplaceableEvent::Network { connected } => {
-                    ExtensionEvent::NetworkChanged {
-                        connected: *connected,
-                    }
-                }
+                ReplaceableEvent::Network { connected } => ExtensionEvent::NetworkChanged {
+                    connected: *connected,
+                },
                 ReplaceableEvent::Media {
                     title,
                     artist,
@@ -563,9 +563,9 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     artist: artist.clone(),
                     playing: *playing,
                 },
-                ReplaceableEvent::TimerFired(name) => ExtensionEvent::TimerFired {
-                    name: name.clone(),
-                },
+                ReplaceableEvent::TimerFired(name) => {
+                    ExtensionEvent::TimerFired { name: name.clone() }
+                }
             };
             self.session.dispatch(&ext_event);
         }
@@ -579,35 +579,16 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
 
         let installed = self
             .catalog
-            .list_installed()
+            .installed()
             .map_err(|error| error.to_string())?;
 
         for cat_ext in installed {
-            let root = cat_ext.install_dir;
-            let manifest_path = root.join("extension.toml");
-            let toml_str = match fs::read_to_string(&manifest_path) {
-                Ok(s) => s,
-                Err(error) => {
-                    self.diagnostics.push(format!(
-                        "failed to read manifest at {}: {error}",
-                        manifest_path.display()
-                    ));
-                    continue;
-                }
-            };
-            let manifest = match ExtensionManifest::from_toml(&toml_str) {
-                Ok(m) => m,
-                Err(error) => {
-                    self.diagnostics.push(format!(
-                        "invalid manifest at {}: {error}",
-                        manifest_path.display()
-                    ));
-                    continue;
-                }
-            };
+            let root = cat_ext.package_dir.clone();
+            let manifest = cat_ext.manifest;
+            let grants = cat_ext.grants.granted_capabilities;
 
-            let shilpo_version = Version::parse(CURRENT_SHILPO_VERSION)
-                .expect("Shilpo version is valid semver");
+            let shilpo_version =
+                Version::parse(CURRENT_SHILPO_VERSION).expect("Shilpo version is valid semver");
             if manifest.min_shilpo_version > shilpo_version {
                 self.diagnostics.push(format!(
                     "extension '{}' requires Shilpo >= {}, but current is {}",
@@ -615,11 +596,6 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                 ));
                 continue;
             }
-
-            let grants = self
-                .catalog
-                .stored_grants(&manifest.id)
-                .unwrap_or_default();
 
             let fingerprint = compute_fingerprint(&root, &manifest);
             map.insert(
@@ -637,7 +613,9 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
         let (dev_registrations, diags) = crate::development_registrations(&state_dir);
         self.diagnostics.extend(diags);
 
-        for (id, root) in dev_registrations {
+        for reg in dev_registrations {
+            let id = reg.id;
+            let root = reg.path;
             let manifest_path = root.join("extension.toml");
             let toml_str = match fs::read_to_string(&manifest_path) {
                 Ok(s) => s,
@@ -662,7 +640,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
 
             let grants = self
                 .catalog
-                .stored_grants(&manifest.id)
+                .load_grants(&manifest.id)
+                .map(|g| g.granted_capabilities)
                 .unwrap_or_default();
 
             let fingerprint = compute_fingerprint(&root, &manifest);
@@ -726,10 +705,10 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
             for contrib in &m.contributions.settings_pages {
                 let canonical = CanonicalId::new(ext_id.clone(), contrib.id.clone());
                 let schema_path = source.root.join(&contrib.schema);
-                if let Ok(schema_str) = fs::read_to_string(&schema_path) {
-                    if let Ok(json_val) = serde_json::from_str(&schema_str) {
-                        settings_schemas.insert(canonical.clone(), json_val);
-                    }
+                if let Ok(schema_str) = fs::read_to_string(&schema_path)
+                    && let Ok(json_val) = serde_json::from_str(&schema_str)
+                {
+                    settings_schemas.insert(canonical.clone(), json_val);
                 }
                 descriptors.push(ContributionDescriptor {
                     id: canonical,
@@ -816,10 +795,10 @@ fn compute_fingerprint(root: &Path, manifest: &ExtensionManifest) -> u64 {
 
     let wasm_file = root.join("extension.wasm");
     if let Ok(meta) = fs::metadata(&wasm_file) {
-        if let Ok(modified) = meta.modified() {
-            if let Ok(duration) = modified.duration_since(UNIX_EPOCH) {
-                duration.as_nanos().hash(&mut hasher);
-            }
+        if let Ok(modified) = meta.modified()
+            && let Ok(duration) = modified.duration_since(UNIX_EPOCH)
+        {
+            duration.as_nanos().hash(&mut hasher);
         }
         meta.len().hash(&mut hasher);
     }
@@ -829,26 +808,24 @@ fn compute_fingerprint(root: &Path, manifest: &ExtensionManifest) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{GuestExtension, HostEffect, InMemoryRuntime};
+    use crate::{GuestExtension, InMemoryRuntime};
+    use shilpo_ext_api::HostEffect;
 
     struct TestGuest;
     impl GuestExtension for TestGuest {
-        fn on_event(
-            &mut self,
-            event: ExtensionEvent,
-        ) -> Result<Vec<HostEffect>, String> {
+        fn on_event(&mut self, event: &ExtensionEvent) -> Vec<HostEffect> {
             match event {
-                ExtensionEvent::ShellStarted => Ok(vec![HostEffect::ShowNotification {
+                ExtensionEvent::ShellStarted => vec![HostEffect::ShowNotification {
                     title: "Hello".into(),
                     body: "World".into(),
                     icon: None,
-                }]),
-                _ => Ok(Vec::new()),
+                }],
+                _ => Vec::new(),
             }
         }
 
-        fn view(&mut self, _contribution_id: &str) -> Result<Option<ViewTree>, String> {
-            Ok(None)
+        fn view(&self, _contribution_id: &str) -> Option<ViewTree> {
+            None
         }
     }
 
@@ -872,7 +849,11 @@ mod tests {
 
         let mut session = ExtensionSession::new(runtime);
         session
-            .register(manifest.clone(), TestGuest, manifest.capabilities.clone())
+            .register(
+                manifest.clone(),
+                Box::new(TestGuest),
+                manifest.capabilities.clone(),
+            )
             .unwrap();
 
         let changes = session.dispatch(&ExtensionEvent::ShellStarted);

@@ -1,10 +1,7 @@
+use crate::effects::AuthorizedHostEffect;
 use serde::{Deserialize, Serialize};
-use shilpo_ext_api::{AuthorizedHostEffect, CanonicalId, ExtensionId, ViewTree};
-use std::{
-    collections::BTreeMap,
-    path::PathBuf,
-    sync::Arc,
-};
+use shilpo_ext_api::{CanonicalId, ExtensionId, ViewTree};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ContributionSurface {

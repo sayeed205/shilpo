@@ -4,12 +4,19 @@ version = "0.1.0"
 edition.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+ocr = ["dep:tesseract", "dep:leptonica-sys"]
+
 [dependencies]
+shilpo-device.workspace = true
 gpui.workspace = true
 niri-ipc.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 zbus.workspace = true
+zvariant.workspace = true
 anyhow.workspace = true
+thiserror = "2"
 futures-lite.workspace = true
 log.workspace = true
 serde.workspace = true
@@ -24,12 +31,15 @@ image.workspace = true
 libc = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 wayland-client = "0.31"
+wayland-backend.workspace = true
 wayland-protocols.workspace = true
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+memfd = "0.6"
 rustix = { version = "1", features = ["fs"] }
-shilpo-config = { path = "../config" }
-shilpo-device-protocol = { workspace = true }
-shilpo-capture.workspace = true
+heed.workspace = true
+schemars.workspace = true
+tesseract = { version = "0.15", optional = true }
+leptonica-sys = { version = "0.4", optional = true }
 tokio-udev = { workspace = true }
 notify.workspace = true
 freedesktop-icons.workspace = true

@@ -1,6 +1,6 @@
 use crate::daemon::DaemonState;
 use crate::executors::ProjectionStatus;
-use shilpo_theme::{ColorSource, SchemeVariant, ThemeMode};
+use shilpo_ui::theme::{ColorSource, SchemeVariant, ThemeMode};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use zbus::object_server::SignalEmitter;

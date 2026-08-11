@@ -1,4 +1,4 @@
-use shilpo_assets::Assets;
+use storybook::Assets;
 use storybook::{Gallery, create_new_window, init};
 
 fn main() {

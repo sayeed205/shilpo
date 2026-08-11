@@ -3,7 +3,7 @@ use crate::dbus::ThemeDbusProxy;
 use crate::persistence::read_state_snapshot;
 use anyhow::{Context, Result, anyhow};
 use futures_lite::stream::StreamExt;
-use shilpo_theme::{ColorSource, ThemeMode};
+use shilpo_ui::theme::{ColorSource, ThemeMode};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -245,7 +245,7 @@ impl ThemeClient {
         }
     }
 
-    pub async fn set_scheme_variant(&self, variant: shilpo_theme::SchemeVariant) -> Result<()> {
+    pub async fn set_scheme_variant(&self, variant: shilpo_ui::theme::SchemeVariant) -> Result<()> {
         let proxy = self.proxy().await?;
         match proxy.set_scheme_variant(variant.as_str()).await {
             Ok(raw) => self.apply_response(raw),

@@ -2040,9 +2040,9 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "ddc"
-version = "0.2.2"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba69f2c53e320fc4abad17cb02bbbf04d1a36f18e9907f347589ec5991b3c6c5"
+checksum = "7bc039822002227f98f147b846bf32345e4e3721b139ee6e11290eb7152f7d1c"
 dependencies = [
  "mccs",
 ]
@@ -7839,99 +7839,58 @@ dependencies = [
 ]
 
 [[package]]
-name = "shilpo-assets"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "gpui",
- "log",
- "rust-embed",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "zed-reqwest",
-]
-
-[[package]]
-name = "shilpo-capture"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arboard",
- "chrono",
- "image",
- "leptonica-sys",
- "memfd",
- "serde",
- "tempfile",
- "tesseract",
- "tracing",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-wlr",
-]
-
-[[package]]
-name = "shilpo-cli"
+name = "shilpo"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "dirs 6.0.0",
+ "fasteval",
+ "futures-lite",
+ "gpui",
+ "gpui_platform",
+ "image",
+ "libc",
+ "log",
+ "niri-ipc",
+ "notify",
+ "resvg 0.48.1",
+ "rust-embed",
+ "schemars",
+ "semver",
  "serde",
  "serde_json",
- "shilpo-capture",
- "shilpo-config",
+ "serde_repr",
+ "shilpo-device",
  "shilpo-ext-api",
  "shilpo-ext-runtime",
  "shilpo-services",
- "shilpo-settings",
- "shilpo-shell",
- "shilpo-theme",
  "shilpo-theme-daemon",
+ "shilpo-ui",
+ "sysinfo 0.39.6",
+ "tempfile",
  "tokio",
+ "toml 1.1.3+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "zbus",
+ "zed-reqwest",
 ]
 
 [[package]]
-name = "shilpo-config"
+name = "shilpo-device"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "dirs 6.0.0",
- "heed",
- "schemars",
- "serde",
- "serde_json",
- "shilpo-ext-api",
- "toml 1.1.3+spec-1.1.0",
-]
-
-[[package]]
-name = "shilpo-device-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
  "futures-lite",
  "serde",
  "serde_json",
- "shilpo-device-protocol",
  "shilpo-services",
+ "thiserror 2.0.19",
  "tokio",
  "tracing",
  "zbus",
-]
-
-[[package]]
-name = "shilpo-device-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.19",
  "zvariant",
 ]
 
@@ -7992,92 +7951,35 @@ dependencies = [
  "freedesktop-icons",
  "futures-lite",
  "gpui",
+ "heed",
  "image",
+ "leptonica-sys",
  "libc",
  "libpulse-binding",
  "log",
+ "memfd",
  "niri-ipc",
  "notify",
  "rustix 1.1.4",
+ "schemars",
  "serde",
  "serde_json",
- "shilpo-capture",
- "shilpo-config",
- "shilpo-device-protocol",
+ "shilpo-device",
  "smol",
  "tempfile",
+ "tesseract",
+ "thiserror 2.0.19",
  "tokio",
  "tokio-udev",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wayland-backend",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
  "zbus",
-]
-
-[[package]]
-name = "shilpo-settings"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dirs 6.0.0",
- "futures-lite",
- "gpui",
- "gpui_platform",
- "niri-ipc",
- "serde",
- "serde_json",
- "shilpo-assets",
- "shilpo-config",
- "shilpo-device-client",
- "shilpo-device-protocol",
- "shilpo-services",
- "shilpo-theme",
- "shilpo-theme-daemon",
- "shilpo-ui",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "shilpo-shell"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "dirs 6.0.0",
- "fasteval",
- "futures-lite",
- "gpui",
- "gpui_platform",
- "image",
- "libc",
- "log",
- "notify",
- "resvg 0.48.1",
- "semver",
- "serde",
- "serde_json",
- "shilpo-assets",
- "shilpo-capture",
- "shilpo-config",
- "shilpo-device-client",
- "shilpo-device-protocol",
- "shilpo-ext-api",
- "shilpo-ext-runtime",
- "shilpo-services",
- "shilpo-theme",
- "shilpo-theme-daemon",
- "shilpo-ui",
- "sysinfo 0.39.6",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "zbus",
- "zed-reqwest",
+ "zvariant",
 ]
 
 [[package]]
@@ -8104,9 +8006,9 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "shilpo-config",
- "shilpo-theme",
+ "shilpo-ui",
  "tokio",
+ "toml 1.1.3+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -8155,9 +8057,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_repr",
- "shilpo-assets",
  "shilpo-macros",
- "shilpo-theme",
  "smallvec",
  "smol",
  "tracing",
@@ -8441,15 +8341,15 @@ dependencies = [
  "gpui_platform",
  "gpui_web",
  "itertools 0.14.0",
+ "log",
  "lsp-types 0.97.0",
  "rand 0.8.7",
  "regex",
  "reqwest_client",
+ "rust-embed",
  "rust-i18n",
  "serde",
  "serde_json",
- "shilpo-assets",
- "shilpo-theme",
  "shilpo-theme-daemon",
  "shilpo-ui",
  "smol",
@@ -8458,6 +8358,8 @@ dependencies = [
  "tracing-subscriber",
  "tree-sitter-navi",
  "unindent",
+ "wasm-bindgen-futures",
+ "zed-reqwest",
 ]
 
 [[package]]

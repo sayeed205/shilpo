@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use shilpo_theme::ThemeMode;
+use shilpo_ui::theme::ThemeMode;
 use std::env;
 use std::process::Command;
 use tracing::info;

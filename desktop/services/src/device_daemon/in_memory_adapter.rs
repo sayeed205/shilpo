@@ -1,4 +1,4 @@
-use shilpo_device_protocol::{
+use crate::device_protocol::{
     AudioAction, BrightnessAction, CaffeineAction, DeviceCommand, DeviceDomain, DomainLifecycle,
     DomainPayload, DomainState, NightLightAction,
 };
@@ -45,37 +45,37 @@ impl InMemoryDeviceAdapter {
                     revision: 1,
                     lifecycle: DomainLifecycle::Ready,
                     payload: match domain {
-                        DeviceDomain::Audio => DomainPayload::Audio(shilpo_device_protocol::AudioPayload {
+                        DeviceDomain::Audio => DomainPayload::Audio(crate::device_protocol::AudioPayload {
                             volume: 50,
                             ..Default::default()
                         }),
                         DeviceDomain::Brightness => {
-                            DomainPayload::Brightness(shilpo_device_protocol::BrightnessPayload {
+                            DomainPayload::Brightness(crate::device_protocol::BrightnessPayload {
                                 percentage: 70,
                                 ..Default::default()
                             })
                         }
                         DeviceDomain::NightLight => {
-                            DomainPayload::NightLight(shilpo_device_protocol::NightLightPayload {
+                            DomainPayload::NightLight(crate::device_protocol::NightLightPayload {
                                 temperature: 4000,
                                 ..Default::default()
                             })
                         }
                         DeviceDomain::Caffeine => {
-                            DomainPayload::Caffeine(shilpo_device_protocol::CaffeinePayload::default())
+                            DomainPayload::Caffeine(crate::device_protocol::CaffeinePayload::default())
                         }
                         DeviceDomain::Bluetooth => {
-                            DomainPayload::Bluetooth(shilpo_device_protocol::BluetoothPayload::default())
+                            DomainPayload::Bluetooth(crate::device_protocol::BluetoothPayload::default())
                         }
                         DeviceDomain::Network => {
-                            DomainPayload::Network(shilpo_device_protocol::NetworkPayload::default())
+                            DomainPayload::Network(crate::device_protocol::NetworkPayload::default())
                         }
                         DeviceDomain::PowerProfile => {
-                            DomainPayload::PowerProfile(shilpo_device_protocol::PowerProfilePayload::default())
+                            DomainPayload::PowerProfile(crate::device_protocol::PowerProfilePayload::default())
                         }
-                        DeviceDomain::Media => DomainPayload::Media(shilpo_device_protocol::MediaPayload::default()),
+                        DeviceDomain::Media => DomainPayload::Media(crate::device_protocol::MediaPayload::default()),
                         DeviceDomain::Battery => {
-                            DomainPayload::Battery(shilpo_device_protocol::BatteryPayload::default())
+                            DomainPayload::Battery(crate::device_protocol::BatteryPayload::default())
                         }
                     },
                     error: None,

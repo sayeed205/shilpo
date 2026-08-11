@@ -14,7 +14,6 @@ use lsp_types::{
     CompletionTextEdit, InlineCompletionContext, InlineCompletionItem, InlineCompletionResponse,
     InsertReplaceEdit, InsertTextFormat, TextEdit, WorkspaceEdit,
 };
-use shilpo_assets::Assets;
 use shilpo_ui::{
     ActiveTheme, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariants as _},
@@ -30,6 +29,7 @@ use shilpo_ui::{
     tree::{TreeItem, TreeState, tree},
     v_flex,
 };
+use storybook::Assets;
 use storybook::Open;
 
 enum Lang {

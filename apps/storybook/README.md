@@ -22,7 +22,7 @@ cargo run -p storybook -- switch
 
 ## How to Use `shilpo-ui` & Assets in Your Own App
 
-> **Asset Note**: `shilpo-assets` is an **internal crate** used for the Storybook demo and is **not published** to crates.io. Applications using `shilpo-ui` are expected to bring their own asset loader and SVG icon assets via GPUI's asset system or custom icon enums.
+> **Asset Note**: Storybook owns its GPUI asset source and embeds the canonical SVGs from `core/assets/icons/`. Applications using `shilpo-ui` must register their own asset source; the UI crate publishes icon names, not default icon bytes.
 
 ### 1. Add Dependencies to `Cargo.toml`
 

@@ -1,5 +1,5 @@
 use super::DeviceAdapter;
-use shilpo_device_protocol::{
+use crate::device_protocol::{
     AudioAction, BrightnessAction, CaffeineAction, DeviceCommand, DeviceDomain, DomainLifecycle,
     DomainPayload, DomainState, NightLightAction,
 };
@@ -95,7 +95,7 @@ fn payload_for(domain: DeviceDomain, payload: serde_json::Value) -> DomainPayloa
             DomainPayload::Network(serde_json::from_value(payload).unwrap_or_default())
         }
         DeviceDomain::NightLight => {
-            DomainPayload::NightLight(shilpo_device_protocol::NightLightPayload {
+            DomainPayload::NightLight(crate::device_protocol::NightLightPayload {
                 available: payload["available"].as_bool().unwrap_or(false),
                 enabled: payload["enabled"].as_bool().unwrap_or(false),
                 temperature: payload["temperature"].as_u64().unwrap_or(6500) as u32,
@@ -358,7 +358,7 @@ impl DeviceAdapter for SystemDeviceAdapter {
                 Ok(())
             }
             DeviceCommand::Bluetooth(action) => {
-                use shilpo_device_protocol::BluetoothAction;
+                use crate::device_protocol::BluetoothAction;
                 match action {
                     BluetoothAction::SetPowered(v) => {
                         self.bluetooth.set_powered(v).map_err(|e| e.to_string())
@@ -378,7 +378,7 @@ impl DeviceAdapter for SystemDeviceAdapter {
                 }
             }
             DeviceCommand::Network(action) => {
-                use shilpo_device_protocol::NetworkAction;
+                use crate::device_protocol::NetworkAction;
                 match action {
                     NetworkAction::SetWifiEnabled(v) => {
                         self.network.set_wifi_enabled(v).map_err(|e| e.to_string())
@@ -401,13 +401,13 @@ impl DeviceAdapter for SystemDeviceAdapter {
                 }
             }
             DeviceCommand::PowerProfile(action) => {
-                let shilpo_device_protocol::PowerProfileAction::SetProfile(profile) = action;
+                let crate::device_protocol::PowerProfileAction::SetProfile(profile) = action;
                 self.power_profile
                     .set_profile(crate::PowerProfile::parse(&profile))
                     .map_err(|e| e.to_string())
             }
             DeviceCommand::Media(action) => {
-                use shilpo_device_protocol::MediaAction;
+                use crate::device_protocol::MediaAction;
                 let command = match action {
                     MediaAction::PlayPause => crate::MediaCommand::PlayPause,
                     MediaAction::Next => crate::MediaCommand::Next,

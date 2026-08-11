@@ -21,14 +21,12 @@ impl<T: IconNamed> From<T> for Icon {
     }
 }
 
-// Generate `IconName` from the icons that `shilpo-ui-assets` ships.
-// The `$VAR` form resolves to the absolute path published by the assets
-// crate's `build.rs` (via cargo's `links` mechanism) and re-exported by
-// our own `build.rs`. See `shilpo_macros::icon_named!`'s doc
-// comment for the full mechanism.
+// Generate the stable public icon-name enum from the checked-in manifest.
+// Runtime SVG bytes are supplied by each consuming application through GPUI's
+// `AssetSource`; the published UI crate does not bundle a default asset set.
 icon_named!(
     IconName,
-    "$SHILPO_DEFAULT_ICONS_DIR",
+    "$SHILPO_ICON_MANIFEST",
     [Debug, Copy, PartialEq, Eq]
 );
 
