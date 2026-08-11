@@ -18,6 +18,6 @@ cp target/wasm32-wasip2/release/world_clock_extension.wasm extension.wasm
 From the Shilpo repository, validate and package it:
 
 ```bash
-cargo run -p shilpo-shell -- ext check examples/world-clock
-cargo run -p shilpo-shell -- ext pack examples/world-clock
+cargo run -p shilpo-cli -- ext check examples/world-clock
+cargo run -p shilpo-cli -- ext pack examples/world-clock
 ```

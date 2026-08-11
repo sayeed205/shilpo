@@ -34,6 +34,18 @@ assert_file_exists() {
   fi
 }
 
+assert_file_absent() {
+  local file=$1
+  local msg=$2
+  if [[ ! -e "$file" ]]; then
+    printf '  [✓ PASS] %s\n' "$msg"
+    PASSED=$((PASSED + 1))
+  else
+    printf '  [✗ FAIL] %s (unexpected file "%s")\n' "$msg" "$file" >&2
+    FAILED=$((FAILED + 1))
+  fi
+}
+
 assert_contains() {
   local haystack=$1
   local needle=$2
@@ -266,9 +278,9 @@ cleanup_test_env
 setup_test_env
 output=$("$REPO_ROOT/setup" install -y)
 assert_file_exists "$FAKE_HOME/.local/bin/shilpo" "Installs shilpo binary"
-assert_file_exists "$FAKE_HOME/.local/bin/shilpo-shell" "Installs shilpo-shell binary"
-assert_file_exists "$FAKE_HOME/.local/bin/shilpo-themed" "Installs shilpo-themed binary"
-assert_file_exists "$FAKE_HOME/.local/bin/shilpo-device-daemon" "Installs device daemon binary"
+assert_file_absent "$FAKE_HOME/.local/bin/shilpo-shell" "Does not install removed shilpo-shell binary"
+assert_file_absent "$FAKE_HOME/.local/bin/shilpo-themed" "Does not install removed shilpo-themed binary"
+assert_file_absent "$FAKE_HOME/.local/bin/shilpo-device-daemon" "Does not install removed device daemon binary"
 assert_file_exists "$FAKE_HOME/.config/systemd/user/shilpo-device-daemon.service" "Installs device daemon user unit"
 assert_file_exists "$FAKE_HOME/.local/share/dbus-1/services/org.shilpo.Device.service" "Installs device daemon DBus activation"
 assert_file_exists "$FAKE_HOME/.config/niri/config.kdl" "Installs Niri config"
