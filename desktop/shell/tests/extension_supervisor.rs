@@ -41,6 +41,83 @@ struct ReadyChild {
     writes: Arc<Mutex<Vec<ExtensionCommand>>>,
 }
 
+struct StaleUpdateChild {
+    host_generation: HostGeneration,
+    phase: u8,
+}
+
+impl ChildStream for StaleUpdateChild {
+    fn pid(&self) -> Option<u32> {
+        Some(4343)
+    }
+
+    fn write_host_message(
+        &mut self,
+        _message: &shilpo_shell::extensions::HostMessage,
+    ) -> Result<(), shilpo_shell::extensions::ProcessCodecError> {
+        Ok(())
+    }
+
+    fn try_read_worker_message(
+        &mut self,
+    ) -> Result<Option<WorkerMessage>, shilpo_shell::extensions::ProcessCodecError> {
+        let message = match self.phase {
+            0 => Some(WorkerMessage {
+                protocol_version: PROTOCOL_VERSION,
+                host_generation: self.host_generation,
+                engine_generation: ExtensionGeneration(0),
+                request_id: 1,
+                payload: WorkerPayload::Update(ExtensionUpdate {
+                    host_generation: self.host_generation,
+                    generation: ExtensionGeneration(0),
+                    snapshot: Some(ExtensionSnapshot::default()),
+                    effects: Vec::new(),
+                    invalidated_views: Vec::new(),
+                }),
+            }),
+            1 => Some(WorkerMessage {
+                protocol_version: PROTOCOL_VERSION,
+                host_generation: HostGeneration(0),
+                engine_generation: ExtensionGeneration(0),
+                request_id: 2,
+                payload: WorkerPayload::Update(ExtensionUpdate {
+                    host_generation: HostGeneration(0),
+                    generation: ExtensionGeneration(99),
+                    snapshot: Some(ExtensionSnapshot::default()),
+                    effects: Vec::new(),
+                    invalidated_views: Vec::new(),
+                }),
+            }),
+            _ => None,
+        };
+        self.phase = self.phase.saturating_add(1);
+        Ok(message)
+    }
+
+    fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        Ok(None)
+    }
+
+    fn shutdown_gracefully(&mut self, _timeout: Duration) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn kill(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct StaleUpdateSpawner;
+
+impl ChildSpawner for StaleUpdateSpawner {
+    fn spawn(&self, host_generation: HostGeneration) -> io::Result<Box<dyn ChildStream>> {
+        Ok(Box::new(StaleUpdateChild {
+            host_generation,
+            phase: 0,
+        }))
+    }
+}
+
 impl ChildStream for ReadyChild {
     fn pid(&self) -> Option<u32> {
         Some(4242)
@@ -187,7 +264,7 @@ fn shutdown_sends_typed_command_and_reaps_child() {
         clock,
     );
 
-    for _ in 0..100 {
+    for _ in 0..10_000 {
         if supervisor.state() == SupervisorState::Ready {
             break;
         }
@@ -200,4 +277,23 @@ fn shutdown_sends_typed_command_and_reaps_child() {
         writes.lock().unwrap().last(),
         Some(ExtensionCommand::Shutdown)
     ));
+}
+
+#[test]
+fn stale_host_generation_is_dropped_before_snapshot_publication() {
+    let clock = Arc::new(TestClock {
+        now: Arc::new(Mutex::new(Instant::now())),
+    });
+    let supervisor = ExtensionSupervisor::new_with_spawner(StaleUpdateSpawner, clock);
+
+    for _ in 0..100 {
+        if supervisor.diagnostics().stale_updates_dropped > 0 {
+            break;
+        }
+        std::thread::yield_now();
+    }
+
+    assert!(supervisor.diagnostics().stale_updates_dropped > 0);
+    assert_eq!(supervisor.snapshot().generation, ExtensionGeneration(0));
+    assert!(supervisor.shutdown(Duration::from_secs(1)));
 }
