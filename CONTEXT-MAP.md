@@ -46,3 +46,4 @@ library at its core.
 - **Services → LMDB Session Store**: Services owns operational/session persistence (clipboard history, output state) independently of Shilpo declarative config.
 - **Theme Daemon → Theme**: Daemon uses core theme types and color generation.
 - **Storybook → UI, Theme**: Demos the core component library.
+- **Services Domain Ports**: Long-lived service domains use domain-specific ports with the shared ADR-0008 operational semantics; process-owned ports use typed DBus clients and in-process ports use narrow handles.
