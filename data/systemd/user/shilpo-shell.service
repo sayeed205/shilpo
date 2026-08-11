@@ -1,6 +1,6 @@
 [Unit]
 Description=Shilpo Desktop Shell
-Documentation=man:shilpo-shell(1) https://github.com/sayeed205/shilpo
+Documentation=man:shilpo(1) https://github.com/sayeed205/shilpo
 PartOf=niri.service
 After=niri.service
 

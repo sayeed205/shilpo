@@ -90,24 +90,13 @@ impl ExtAdapter {
                 },
             }
         } else {
-            let data = serde_json::json!({
-                "state": "stopped",
-                "host_generation": 0,
-                "engine_generation": 0,
-                "pid": null,
-                "session_restart_count": 0,
-                "consecutive_crashes": 0,
-                "last_exit": null,
-                "last_error": null,
-                "stale_updates_dropped": 0,
-                "malformed_frames": 0,
-            });
             ExtOpResult {
-                success: true,
-                data,
-                human_message: "Extension host is stopped (shell daemon not running)".into(),
-                warnings: vec!["shell daemon is not running".into()],
-                exit_code: 0,
+                success: false,
+                data: serde_json::Value::Null,
+                human_message:
+                    "shell daemon is unavailable; cannot query extension host diagnostics".into(),
+                warnings: Vec::new(),
+                exit_code: 3,
             }
         }
     }
