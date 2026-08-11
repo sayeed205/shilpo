@@ -116,6 +116,8 @@ pub enum RejectionReason {
     TargetDisappeared(CompositorTarget),
     BackendRejected { message: String },
     Transport { message: String },
+    TimedOut,
+    Cancelled(CancellationReason),
 }
 
 impl RejectionReason {
@@ -128,6 +130,8 @@ impl RejectionReason {
             Self::TargetDisappeared(t) => format!("target disappeared before application: {t}"),
             Self::BackendRejected { message } => format!("backend rejected command: {message}"),
             Self::Transport { message } => format!("transport error: {message}"),
+            Self::TimedOut => "compositor command timed out".into(),
+            Self::Cancelled(reason) => format!("compositor command cancelled: {reason}"),
         }
     }
 }

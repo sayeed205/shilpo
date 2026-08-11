@@ -736,6 +736,8 @@ fn map_broker_error(err: &RejectionReason) -> IpcErrorBody {
             "target_disappeared",
             format!("target disappeared before application: {}", t),
         ),
+        RejectionReason::TimedOut => ("compositor_timeout", "compositor command timed out".into()),
+        RejectionReason::Cancelled(reason) => ("compositor_cancelled", reason.to_string()),
     };
     IpcErrorBody {
         code: code.into(),

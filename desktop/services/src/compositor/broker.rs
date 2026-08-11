@@ -89,6 +89,7 @@ pub enum CancellationReason {
     OwnerReplaced,
     Superseded,
     User,
+    Timeout,
 }
 
 impl fmt::Display for CancellationReason {
@@ -99,6 +100,7 @@ impl fmt::Display for CancellationReason {
             Self::Shutdown => write!(f, "broker shutdown"),
             Self::OwnerReplaced => write!(f, "owner generation replaced"),
             Self::Superseded => write!(f, "superseded by newer command"),
+            Self::Timeout => write!(f, "command deadline elapsed"),
         }
     }
 }
@@ -254,7 +256,7 @@ impl CommandTicket {
                 }
                 Err(oneshot::error::TryRecvError::Empty) => {
                     if start.elapsed() >= timeout {
-                        self.cancel();
+                        self.cancellation.cancel(CancellationReason::Timeout);
                         self.completed = true;
                         return CommandOutcome::TimedOut {
                             last_observed_version: DomainVersion::ZERO,
@@ -681,6 +683,7 @@ impl BrokerInner {
                 RejectionReason::TargetDisappeared(_) => {
                     self.target_disappeared.fetch_add(1, Ordering::Relaxed);
                 }
+                RejectionReason::TimedOut | RejectionReason::Cancelled(_) => {}
             },
             CommandOutcome::TimedOut { .. } => {
                 self.timed_out.fetch_add(1, Ordering::Relaxed);
@@ -834,15 +837,15 @@ impl CompositorCommandBroker {
                 CompositorConnection::Unavailable | CompositorConnection::Connecting
             );
 
-        if !is_initial_snapshot {
-            if installed_gen > 0 && snapshot.version.owner_generation > installed_gen {
-                self.inner.stale_updates.fetch_add(1, Ordering::Relaxed);
-                return Err(StaleUpdateError::UninstalledGeneration {
-                    installed: installed_gen,
-                    attempted: snapshot.version.owner_generation,
-                });
-            }
+        if snapshot.version.owner_generation > installed_gen {
+            self.inner.stale_updates.fetch_add(1, Ordering::Relaxed);
+            return Err(StaleUpdateError::UninstalledGeneration {
+                installed: installed_gen,
+                attempted: snapshot.version.owner_generation,
+            });
+        }
 
+        if !is_initial_snapshot {
             if snapshot.version < state.snapshot.version {
                 self.inner.stale_updates.fetch_add(1, Ordering::Relaxed);
                 return Err(StaleUpdateError::StaleVersion {
@@ -852,13 +855,7 @@ impl CompositorCommandBroker {
             }
 
             if snapshot.version == state.snapshot.version {
-                if state.snapshot.connection == snapshot.connection
-                    && state.snapshot.workspaces == snapshot.workspaces
-                    && state.snapshot.windows == snapshot.windows
-                    && state.snapshot.focused_workspace_id == snapshot.focused_workspace_id
-                    && state.snapshot.focused_window_id == snapshot.focused_window_id
-                    && state.snapshot.last_error == snapshot.last_error
-                {
+                if *state.snapshot == *snapshot {
                     return Ok(());
                 }
                 self.inner.stale_updates.fetch_add(1, Ordering::Relaxed);
@@ -1147,11 +1144,16 @@ impl CompositorCommandBroker {
                 continue;
             }
 
-            let cancelled = || CommandOutcome::Cancelled {
-                reason: item
-                    .cancellation
-                    .reason()
-                    .unwrap_or(CancellationReason::User),
+            let baseline_version = baseline.version;
+            let cancelled = || match item
+                .cancellation
+                .reason()
+                .unwrap_or(CancellationReason::User)
+            {
+                CancellationReason::Timeout => CommandOutcome::TimedOut {
+                    last_observed_version: baseline_version,
+                },
+                reason => CommandOutcome::Cancelled { reason },
             };
             if item.cancellation.is_cancelled() {
                 let outcome = cancelled();
@@ -1220,6 +1222,10 @@ impl CompositorCommandBroker {
                 cancelled()
             } else {
                 match execution {
+                    Err(RejectionReason::TimedOut) => CommandOutcome::TimedOut {
+                        last_observed_version: active.last_version(),
+                    },
+                    Err(RejectionReason::Cancelled(reason)) => CommandOutcome::Cancelled { reason },
                     Err(reason) => CommandOutcome::Rejected { reason },
                     Ok(_) if Instant::now() >= item.deadline => CommandOutcome::TimedOut {
                         last_observed_version: active.last_version(),

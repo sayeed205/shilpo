@@ -48,6 +48,7 @@ pub struct NiriCompositorService {
     tx: watch::Sender<Arc<CompositorSnapshot>>,
     rx: watch::Receiver<Arc<CompositorSnapshot>>,
     stop_flag: Arc<AtomicBool>,
+    quarantine_reset: Arc<AtomicBool>,
     broker: Arc<CompositorCommandBroker>,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
 }
@@ -70,22 +71,25 @@ impl NiriCompositorService {
         };
         let (tx, rx) = watch::channel(Arc::new(initial));
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let quarantine_reset = Arc::new(AtomicBool::new(false));
 
         let broker =
             CompositorCommandBroker::new(BrokerOptions::default(), Box::new(execute_niri_command));
 
         let tx_clone = tx.clone();
         let stop_clone = stop_flag.clone();
+        let quarantine_reset_clone = quarantine_reset.clone();
         let broker_clone = broker.clone();
 
         let handle = thread::spawn(move || {
-            run_niri_listener(tx_clone, stop_clone, broker_clone);
+            run_niri_listener(tx_clone, stop_clone, quarantine_reset_clone, broker_clone);
         });
 
         Arc::new(Self {
             tx,
             rx,
             stop_flag,
+            quarantine_reset,
             broker,
             handle: Mutex::new(Some(handle)),
         })
@@ -96,6 +100,7 @@ impl NiriCompositorService {
         let snap_arc = Arc::new(snapshot);
         let (tx, rx) = watch::channel(snap_arc.clone());
         let stop_flag = Arc::new(AtomicBool::new(true));
+        let quarantine_reset = Arc::new(AtomicBool::new(false));
 
         let broker = CompositorCommandBroker::new(
             BrokerOptions::default(),
@@ -110,6 +115,7 @@ impl NiriCompositorService {
             tx,
             rx,
             stop_flag,
+            quarantine_reset,
             broker,
             handle: Mutex::new(None),
         })
@@ -117,8 +123,14 @@ impl NiriCompositorService {
 
     pub fn update_snapshot(&self, snapshot: CompositorSnapshot) {
         let snap_arc = Arc::new(snapshot);
-        let _ = self.broker.observe_snapshot(snap_arc.clone());
-        let _ = self.tx.send(snap_arc);
+        if self.broker.observe_snapshot(snap_arc.clone()).is_ok() {
+            let _ = self.tx.send(snap_arc);
+        }
+    }
+
+    /// Explicitly clears quarantine and permits the supervisor to retry ownership.
+    pub fn reset_quarantine(&self) {
+        self.quarantine_reset.store(true, Ordering::Release);
     }
 }
 
@@ -173,15 +185,15 @@ fn execute_niri_command_on_socket(
     let deadline = start_time + timeout;
 
     if cancel.is_cancelled() {
-        return Err(RejectionReason::Unavailable);
+        return Err(RejectionReason::Cancelled(
+            cancel.reason().unwrap_or(super::CancellationReason::User),
+        ));
     }
 
     let remaining_timeout = || -> Result<Duration, RejectionReason> {
         deadline
             .checked_duration_since(std::time::Instant::now())
-            .ok_or(RejectionReason::BackendRejected {
-                message: format!("command timed out after {:?}", timeout),
-            })
+            .ok_or(RejectionReason::TimedOut)
     };
 
     let remaining = remaining_timeout()?;
@@ -229,14 +241,14 @@ fn execute_niri_command_on_socket(
 
         if let Err(err) = stream.write_all(json.as_bytes()) {
             if cancel.is_cancelled() {
-                return Err(RejectionReason::Unavailable);
+                return Err(RejectionReason::Cancelled(
+                    cancel.reason().unwrap_or(super::CancellationReason::User),
+                ));
             }
             if err.kind() == std::io::ErrorKind::TimedOut
                 || err.kind() == std::io::ErrorKind::WouldBlock
             {
-                return Err(RejectionReason::BackendRejected {
-                    message: format!("command timed out after {:?}", timeout),
-                });
+                return Err(RejectionReason::TimedOut);
             }
             return Err(RejectionReason::Transport {
                 message: err.to_string(),
@@ -247,14 +259,14 @@ fn execute_niri_command_on_socket(
         let mut line = String::new();
         if let Err(err) = reader.read_line(&mut line) {
             if cancel.is_cancelled() {
-                return Err(RejectionReason::Unavailable);
+                return Err(RejectionReason::Cancelled(
+                    cancel.reason().unwrap_or(super::CancellationReason::User),
+                ));
             }
             if err.kind() == std::io::ErrorKind::TimedOut
                 || err.kind() == std::io::ErrorKind::WouldBlock
             {
-                return Err(RejectionReason::BackendRejected {
-                    message: format!("command timed out after {:?}", timeout),
-                });
+                return Err(RejectionReason::TimedOut);
             }
             return Err(RejectionReason::Transport {
                 message: err.to_string(),
@@ -505,6 +517,7 @@ fn publish_reconnecting(
 fn run_niri_listener(
     tx: watch::Sender<Arc<CompositorSnapshot>>,
     stop_flag: Arc<AtomicBool>,
+    quarantine_reset: Arc<AtomicBool>,
     broker: Arc<CompositorCommandBroker>,
 ) {
     let mut backoff = Duration::from_millis(250);
@@ -513,22 +526,38 @@ fn run_niri_listener(
     let mut revision = 0u64;
     let mut failure_timestamps_ms: Vec<u64> = Vec::new();
     let start_instant = std::time::Instant::now();
+    let mut stable_since: Option<std::time::Instant> = None;
+    let mut quarantined = false;
 
     while !stop_flag.load(Ordering::Relaxed) {
         let now_ms = start_instant.elapsed().as_millis() as u64;
         failure_timestamps_ms.retain(|&ts| now_ms.saturating_sub(ts) <= 60_000);
 
+        if quarantine_reset.swap(false, Ordering::AcqRel) {
+            failure_timestamps_ms.clear();
+            stable_since = None;
+            backoff = Duration::from_millis(250);
+            quarantined = false;
+        }
+        if stable_since.is_some_and(|since| since.elapsed() >= Duration::from_secs(300)) {
+            failure_timestamps_ms.clear();
+        }
+
         if failure_timestamps_ms.len() >= 5 {
-            broker.record_quarantine_trip();
-            let previous = tx.borrow().clone();
-            let mut current = (*previous).clone();
-            revision += 1;
-            current.version = DomainVersion::new(owner_generation, revision);
-            current.connection = CompositorConnection::Unavailable;
-            current.last_error = Some("Quarantined after five failures in 60s".into());
-            let snap_arc = Arc::new(current);
-            let _ = broker.observe_snapshot(snap_arc.clone());
-            let _ = tx.send(snap_arc);
+            if !quarantined {
+                quarantined = true;
+                broker.record_quarantine_trip();
+                let previous = tx.borrow().clone();
+                let mut current = (*previous).clone();
+                revision += 1;
+                current.version = DomainVersion::new(owner_generation, revision);
+                current.connection = CompositorConnection::Unavailable;
+                current.last_error = Some("Quarantined after five failures in 60s".into());
+                let snap_arc = Arc::new(current);
+                if broker.observe_snapshot(snap_arc.clone()).is_ok() {
+                    let _ = tx.send(snap_arc);
+                }
+            }
             sleep_with_stop_flag(Duration::from_millis(100), &stop_flag);
             continue;
         }
@@ -537,6 +566,17 @@ fn run_niri_listener(
         revision = 0;
         broker.set_installed_generation(owner_generation);
         broker.record_restart();
+
+        let previous = tx.borrow().clone();
+        let mut connecting = (*previous).clone();
+        revision = revision.saturating_add(1);
+        connecting.version = DomainVersion::new(owner_generation, revision);
+        connecting.connection = CompositorConnection::Connecting;
+        connecting.last_error = None;
+        let connecting = Arc::new(connecting);
+        if broker.observe_snapshot(connecting.clone()).is_ok() {
+            let _ = tx.send(connecting);
+        }
 
         let socket_path = match resolve_niri_socket_path() {
             Some(path) => path,
@@ -698,6 +738,7 @@ fn run_niri_listener(
                         if initial_sync {
                             initial_sync = false;
                             backoff = Duration::from_millis(250);
+                            stable_since = Some(std::time::Instant::now());
                         }
 
                         publish_snapshot_from_state(
@@ -842,7 +883,9 @@ fn publish_snapshot_from_state(
         last_error: None,
     };
 
-    if *prev != new_snapshot {
+    let mut comparable = new_snapshot.clone();
+    comparable.version = prev.version;
+    if *prev != comparable {
         let mut new_snapshot = new_snapshot;
         *revision = revision.saturating_add(1);
         new_snapshot.version = DomainVersion::new(owner_generation, *revision);
@@ -1279,7 +1322,7 @@ mod tests {
             cancel,
             &reg,
         );
-        assert!(matches!(res, Err(RejectionReason::BackendRejected { .. })));
+        assert!(matches!(res, Err(RejectionReason::TimedOut)));
     }
 
     #[test]
