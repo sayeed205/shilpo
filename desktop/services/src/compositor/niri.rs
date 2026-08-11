@@ -1,7 +1,7 @@
 use super::{
     BrokerOptions, CompositorAdapter, CompositorCapabilities, CompositorCommand,
     CompositorCommandBroker, CompositorConnection, CompositorOutput, CompositorSnapshot,
-    DomainVersion, ExecutorAck, RejectionReason, WindowInfo, WorkspaceInfo,
+    DomainVersion, ExecutorAck, RejectionReason, SupervisorState, WindowInfo, WorkspaceInfo,
     broker::{CommandCancellation, StreamCancelHandle, create_stream_cancel_handle},
 };
 use anyhow::Result;
@@ -23,6 +23,79 @@ use std::{
     time::Duration,
 };
 use tokio::sync::watch;
+
+const INITIAL_BACKOFF_MS: u64 = 250;
+const MAX_BACKOFF_MS: u64 = 30_000;
+const FAILURE_WINDOW_MS: u64 = 60_000;
+const STABLE_RESET_MS: u64 = 300_000;
+const QUARANTINE_FAILURES: usize = 5;
+
+#[derive(Debug)]
+struct CompositorSupervisor {
+    state: SupervisorState,
+    failures_ms: Vec<u64>,
+    backoff_ms: u64,
+    stable_since_ms: Option<u64>,
+}
+
+impl CompositorSupervisor {
+    fn new() -> Self {
+        Self {
+            state: SupervisorState::Starting,
+            failures_ms: Vec::new(),
+            backoff_ms: INITIAL_BACKOFF_MS,
+            stable_since_ms: None,
+        }
+    }
+
+    fn begin_start(&mut self) {
+        self.state = SupervisorState::Starting;
+    }
+
+    fn record_failure(&mut self, now_ms: u64) {
+        self.failures_ms
+            .retain(|timestamp| now_ms.saturating_sub(*timestamp) <= FAILURE_WINDOW_MS);
+        self.failures_ms.push(now_ms);
+        self.stable_since_ms = None;
+        if self.failures_ms.len() >= QUARANTINE_FAILURES {
+            self.state = SupervisorState::Quarantined;
+        } else {
+            let attempt = self.failures_ms.len() as u32;
+            self.state = SupervisorState::Backoff {
+                attempt,
+                retry_at_ms: now_ms.saturating_add(self.backoff_ms),
+            };
+            self.backoff_ms = (self.backoff_ms.saturating_mul(2)).min(MAX_BACKOFF_MS);
+        }
+    }
+
+    fn mark_ready(&mut self, now_ms: u64) {
+        self.state = SupervisorState::Running;
+        self.stable_since_ms = Some(now_ms);
+        self.backoff_ms = INITIAL_BACKOFF_MS;
+    }
+
+    fn tick(&mut self, now_ms: u64) {
+        if self
+            .stable_since_ms
+            .is_some_and(|started| now_ms.saturating_sub(started) >= STABLE_RESET_MS)
+        {
+            self.failures_ms.clear();
+            self.backoff_ms = INITIAL_BACKOFF_MS;
+        }
+    }
+
+    fn reset(&mut self) {
+        self.failures_ms.clear();
+        self.stable_since_ms = None;
+        self.backoff_ms = INITIAL_BACKOFF_MS;
+        self.state = SupervisorState::Starting;
+    }
+
+    fn is_quarantined(&self) -> bool {
+        matches!(self.state, SupervisorState::Quarantined)
+    }
+}
 
 /// Resolves `NIRI_SOCKET`, then `NIRI_SOCKET_PATH`, falling back to scanning `XDG_RUNTIME_DIR`.
 pub fn resolve_niri_socket_path() -> Option<PathBuf> {
@@ -521,32 +594,26 @@ fn run_niri_listener(
     quarantine_reset: Arc<AtomicBool>,
     broker: Arc<CompositorCommandBroker>,
 ) {
-    let mut backoff = Duration::from_millis(250);
-    let max_backoff = Duration::from_secs(30);
+    let mut backoff = Duration::from_millis(INITIAL_BACKOFF_MS);
     let mut owner_generation = 0u64;
     let mut revision = 0u64;
-    let mut failure_timestamps_ms: Vec<u64> = Vec::new();
     let start_instant = std::time::Instant::now();
-    let mut stable_since: Option<std::time::Instant> = None;
-    let mut quarantined = false;
+    let mut supervisor = CompositorSupervisor::new();
+    let mut quarantine_published = false;
 
     while !stop_flag.load(Ordering::Relaxed) {
         let now_ms = start_instant.elapsed().as_millis() as u64;
-        failure_timestamps_ms.retain(|&ts| now_ms.saturating_sub(ts) <= 60_000);
+        supervisor.tick(now_ms);
 
         if quarantine_reset.swap(false, Ordering::AcqRel) {
-            failure_timestamps_ms.clear();
-            stable_since = None;
-            backoff = Duration::from_millis(250);
-            quarantined = false;
-        }
-        if stable_since.is_some_and(|since| since.elapsed() >= Duration::from_secs(300)) {
-            failure_timestamps_ms.clear();
+            supervisor.reset();
+            backoff = Duration::from_millis(INITIAL_BACKOFF_MS);
+            quarantine_published = false;
         }
 
-        if failure_timestamps_ms.len() >= 5 {
-            if !quarantined {
-                quarantined = true;
+        if supervisor.is_quarantined() {
+            if !quarantine_published {
+                quarantine_published = true;
                 broker.record_quarantine_trip();
                 let previous = tx.borrow().clone();
                 let mut current = (*previous).clone();
@@ -565,6 +632,7 @@ fn run_niri_listener(
 
         owner_generation += 1;
         revision = 0;
+        supervisor.begin_start();
         broker.set_installed_generation(owner_generation);
         broker.record_restart();
 
@@ -582,7 +650,7 @@ fn run_niri_listener(
         let socket_path = match resolve_niri_socket_path() {
             Some(path) => path,
             None => {
-                failure_timestamps_ms.push(now_ms);
+                supervisor.record_failure(now_ms);
                 publish_reconnecting(
                     &tx,
                     &broker,
@@ -591,7 +659,7 @@ fn run_niri_listener(
                     Some("Neither NIRI_SOCKET nor NIRI_SOCKET_PATH is set".to_string()),
                 );
                 sleep_with_stop_flag(backoff, &stop_flag);
-                backoff = (backoff * 2).min(max_backoff);
+                backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
                 continue;
             }
         };
@@ -599,7 +667,7 @@ fn run_niri_listener(
         let outputs = match query_outputs_from_socket_path(&socket_path) {
             Ok(outputs) => outputs,
             Err(err) => {
-                failure_timestamps_ms.push(now_ms);
+                supervisor.record_failure(now_ms);
                 publish_reconnecting(
                     &tx,
                     &broker,
@@ -608,7 +676,7 @@ fn run_niri_listener(
                     Some(format!("Failed to query Niri outputs: {err}")),
                 );
                 sleep_with_stop_flag(backoff, &stop_flag);
-                backoff = (backoff * 2).min(max_backoff);
+                backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
                 continue;
             }
         };
@@ -616,7 +684,7 @@ fn run_niri_listener(
         let mut event_stream = match UnixStream::connect(&socket_path) {
             Ok(s) => s,
             Err(err) => {
-                failure_timestamps_ms.push(now_ms);
+                supervisor.record_failure(now_ms);
                 publish_reconnecting(
                     &tx,
                     &broker,
@@ -625,7 +693,7 @@ fn run_niri_listener(
                     Some(format!("Failed to connect to Niri event socket: {err}")),
                 );
                 sleep_with_stop_flag(backoff, &stop_flag);
-                backoff = (backoff * 2).min(max_backoff);
+                backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
                 continue;
             }
         };
@@ -636,7 +704,7 @@ fn run_niri_listener(
                 j
             }
             Err(err) => {
-                failure_timestamps_ms.push(now_ms);
+                supervisor.record_failure(now_ms);
                 publish_reconnecting(
                     &tx,
                     &broker,
@@ -645,13 +713,13 @@ fn run_niri_listener(
                     Some(format!("Failed to serialize EventStream request: {err}")),
                 );
                 sleep_with_stop_flag(backoff, &stop_flag);
-                backoff = (backoff * 2).min(max_backoff);
+                backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
                 continue;
             }
         };
 
         if let Err(err) = event_stream.write_all(req_json.as_bytes()) {
-            failure_timestamps_ms.push(now_ms);
+            supervisor.record_failure(now_ms);
             publish_reconnecting(
                 &tx,
                 &broker,
@@ -660,7 +728,7 @@ fn run_niri_listener(
                 Some(format!("Failed to send EventStream request: {err}")),
             );
             sleep_with_stop_flag(backoff, &stop_flag);
-            backoff = (backoff * 2).min(max_backoff);
+            backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
             continue;
         }
 
@@ -668,7 +736,7 @@ fn run_niri_listener(
             .set_read_timeout(Some(Duration::from_millis(200)))
             .is_err()
         {
-            failure_timestamps_ms.push(now_ms);
+            supervisor.record_failure(now_ms);
             publish_reconnecting(
                 &tx,
                 &broker,
@@ -677,7 +745,7 @@ fn run_niri_listener(
                 Some("Failed to set read timeout on Niri socket".to_string()),
             );
             sleep_with_stop_flag(backoff, &stop_flag);
-            backoff = (backoff * 2).min(max_backoff);
+            backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
             continue;
         }
 
@@ -693,7 +761,7 @@ fn run_niri_listener(
             line.clear();
             match reader.read_line(&mut line) {
                 Ok(0) => {
-                    failure_timestamps_ms.push(now_ms);
+                    supervisor.record_failure(now_ms);
                     publish_reconnecting(
                         &tx,
                         &broker,
@@ -738,8 +806,8 @@ fn run_niri_listener(
                     if !initial_sync || initial_sync_boundary {
                         if initial_sync {
                             initial_sync = false;
-                            backoff = Duration::from_millis(250);
-                            stable_since = Some(std::time::Instant::now());
+                            supervisor.mark_ready(now_ms);
+                            backoff = Duration::from_millis(INITIAL_BACKOFF_MS);
                         }
 
                         publish_snapshot_from_state(
@@ -760,7 +828,7 @@ fn run_niri_listener(
                     continue;
                 }
                 Err(err) => {
-                    failure_timestamps_ms.push(now_ms);
+                    supervisor.record_failure(now_ms);
                     publish_reconnecting(
                         &tx,
                         &broker,
@@ -774,7 +842,7 @@ fn run_niri_listener(
         }
 
         sleep_with_stop_flag(backoff, &stop_flag);
-        backoff = (backoff * 2).min(max_backoff);
+        backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
     }
 
     publish_reconnecting(
@@ -1462,6 +1530,57 @@ mod tests {
             ticket.wait_timeout(Duration::from_secs(1)),
             CommandOutcome::Cancelled {
                 reason: CancellationReason::Reconnect
+            }
+        );
+    }
+
+    #[test]
+    fn supervisor_uses_capped_exponential_backoff_and_quarantines() {
+        let mut supervisor = CompositorSupervisor::new();
+        supervisor.record_failure(0);
+        assert_eq!(
+            supervisor.state,
+            SupervisorState::Backoff {
+                attempt: 1,
+                retry_at_ms: 250
+            }
+        );
+        supervisor.record_failure(1_000);
+        assert_eq!(
+            supervisor.state,
+            SupervisorState::Backoff {
+                attempt: 2,
+                retry_at_ms: 1_500
+            }
+        );
+        supervisor.record_failure(2_000);
+        supervisor.record_failure(3_000);
+        supervisor.record_failure(4_000);
+        assert_eq!(supervisor.state, SupervisorState::Quarantined);
+    }
+
+    #[test]
+    fn supervisor_clears_failures_after_stable_period_and_supports_reset() {
+        let mut supervisor = CompositorSupervisor::new();
+        supervisor.record_failure(0);
+        supervisor.mark_ready(1_000);
+        supervisor.tick(302_000);
+        supervisor.record_failure(303_000);
+        assert_eq!(
+            supervisor.state,
+            SupervisorState::Backoff {
+                attempt: 1,
+                retry_at_ms: 303_250
+            }
+        );
+        supervisor.reset();
+        assert_eq!(supervisor.state, SupervisorState::Starting);
+        supervisor.record_failure(400_000);
+        assert_eq!(
+            supervisor.state,
+            SupervisorState::Backoff {
+                attempt: 1,
+                retry_at_ms: 400_250
             }
         );
     }
