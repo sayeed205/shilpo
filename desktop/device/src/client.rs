@@ -1,9 +1,10 @@
 use crate::protocol::{
     CommandOutcome, DeviceCommand, DeviceDomain, DomainLifecycle, DomainPayload, DomainState,
-    PROTOCOL_VERSION,
+    DomainVersion, PROTOCOL_VERSION,
 };
 use futures_lite::StreamExt;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -20,32 +21,57 @@ pub struct DeviceClient {
     update_tx: broadcast::Sender<DeviceClientUpdate>,
     outcome_tx: broadcast::Sender<CommandOutcome>,
     connection: Arc<Mutex<Option<zbus::Connection>>>,
-    debounce_tx: tokio::sync::mpsc::UnboundedSender<(DeviceCommand, Duration)>,
+    debounce_tx: tokio::sync::mpsc::Sender<(DeviceCommand, Duration)>,
+    installed_owner_generation: Arc<AtomicU64>,
+    stale_updates: Arc<AtomicU64>,
+    overloads: Arc<AtomicU64>,
+    supersessions: Arc<AtomicU64>,
 }
 
 #[derive(Default)]
 struct DebouncedCommands {
-    pending: HashMap<DeviceDomain, (DeviceCommand, tokio::time::Instant)>,
+    pending: HashMap<String, (DeviceCommand, tokio::time::Instant)>,
+    non_coalescible: Vec<(DeviceCommand, tokio::time::Instant)>,
 }
 
 impl DebouncedCommands {
-    fn replace(&mut self, command: DeviceCommand, deadline: tokio::time::Instant) {
-        self.pending.insert(command.domain(), (command, deadline));
+    fn replace(
+        &mut self,
+        command: DeviceCommand,
+        deadline: tokio::time::Instant,
+        supersessions: &Arc<AtomicU64>,
+    ) {
+        if let Some(key) = command.coalescing_key() {
+            if self.pending.insert(key, (command, deadline)).is_some() {
+                supersessions.fetch_add(1, Ordering::SeqCst);
+            }
+        } else {
+            self.non_coalescible.push((command, deadline));
+        }
     }
 
     fn take_due(&mut self, now: tokio::time::Instant) -> Vec<DeviceCommand> {
-        let due = self
+        let mut due = Vec::new();
+        let due_keys: Vec<String> = self
             .pending
             .iter()
-            .filter_map(|(domain, (_, deadline))| (*deadline <= now).then_some(*domain))
-            .collect::<Vec<_>>();
-        due.into_iter()
-            .filter_map(|domain| self.pending.remove(&domain).map(|(command, _)| command))
-            .collect()
+            .filter_map(|(k, (_, deadline))| (*deadline <= now).then_some(k.clone()))
+            .collect();
+        for key in due_keys {
+            if let Some((command, _)) = self.pending.remove(&key) {
+                due.push(command);
+            }
+        }
+        let (due_nc, remaining_nc) = std::mem::take(&mut self.non_coalescible)
+            .into_iter()
+            .partition(|(_, deadline)| *deadline <= now);
+        self.non_coalescible = remaining_nc;
+        due.extend(due_nc.into_iter().map(|(cmd, _)| cmd));
+        due
     }
 
     fn is_empty(&self) -> bool {
-        self.pending.is_empty()
+        self.pending.is_empty() && self.non_coalescible.is_empty()
     }
 }
 
@@ -62,7 +88,11 @@ impl DeviceClient {
         let domains = Arc::new(RwLock::new(unavailable_domains()));
         let connection = Arc::new(Mutex::new(None));
         let (debounce_tx, mut debounce_rx) =
-            tokio::sync::mpsc::unbounded_channel::<(DeviceCommand, Duration)>();
+            tokio::sync::mpsc::channel::<(DeviceCommand, Duration)>(32);
+        let installed_owner_generation = Arc::new(AtomicU64::new(0));
+        let stale_updates = Arc::new(AtomicU64::new(0));
+        let overloads = Arc::new(AtomicU64::new(0));
+        let supersessions = Arc::new(AtomicU64::new(0));
 
         let client = Self {
             domains,
@@ -70,14 +100,19 @@ impl DeviceClient {
             outcome_tx,
             connection,
             debounce_tx,
+            installed_owner_generation,
+            stale_updates,
+            overloads,
+            supersessions,
         };
         let debounce_client = client.clone();
+        let supersessions_counter = client.supersessions.clone();
         tokio::spawn(async move {
             let mut pending = DebouncedCommands::default();
             loop {
                 tokio::select! {
                     Some((command, delay)) = debounce_rx.recv() => {
-                        pending.replace(command, tokio::time::Instant::now() + delay);
+                        pending.replace(command, tokio::time::Instant::now() + delay, &supersessions_counter);
                     }
                     _ = tokio::time::sleep(Duration::from_millis(20)), if !pending.is_empty() => {
                         for command in pending.take_due(tokio::time::Instant::now()) {
@@ -89,6 +124,35 @@ impl DeviceClient {
             }
         });
         client
+    }
+
+    pub fn installed_owner_generation(&self) -> u64 {
+        self.installed_owner_generation.load(Ordering::SeqCst)
+    }
+
+    pub fn stale_updates(&self) -> u64 {
+        self.stale_updates.load(Ordering::SeqCst)
+    }
+
+    pub fn overloads(&self) -> u64 {
+        self.overloads.load(Ordering::SeqCst)
+    }
+
+    pub fn supersessions(&self) -> u64 {
+        self.supersessions.load(Ordering::SeqCst)
+    }
+
+    pub fn telemetry(&self) -> crate::protocol::DomainPortTelemetry {
+        crate::protocol::DomainPortTelemetry {
+            owner_generation: self.installed_owner_generation.load(Ordering::SeqCst),
+            current_queue_depth: 0,
+            queue_capacity: 32,
+            overloads: self.overloads.load(Ordering::SeqCst),
+            supersessions: self.supersessions.load(Ordering::SeqCst),
+            restarts: 0,
+            stale_updates: self.stale_updates.load(Ordering::SeqCst),
+            last_error: None,
+        }
     }
 
     pub async fn connect(&self) -> Result<(), String> {
@@ -114,6 +178,11 @@ impl DeviceClient {
                 "device protocol mismatch: client {PROTOCOL_VERSION}, daemon {version}; restart or update both components"
             ));
         }
+
+        // Increment installed owner generation on establishing a new owner connection
+        self.installed_owner_generation
+            .fetch_add(1, Ordering::SeqCst);
+
         let mut listener_tasks = Vec::new();
         let mut listener_readiness = Vec::new();
         let outcome_listener = self.clone();
@@ -168,6 +237,7 @@ impl DeviceClient {
                         if let Ok(args) = signal.args() {
                             listener.update_local_domain_state(state_from_wire(
                                 $domain,
+                                args.owner_generation,
                                 args.revision,
                                 args.lifecycle,
                                 DomainPayload::$variant(args.payload.clone()),
@@ -233,9 +303,12 @@ impl DeviceClient {
         // signal racing with the matching snapshot response.
         macro_rules! load_state {
             ($method:ident, $domain:expr, $variant:ident) => {
-                if let Ok((revision, lifecycle, payload, error)) = proxy.$method().await {
+                if let Ok((owner_generation, revision, lifecycle, payload, error)) =
+                    proxy.$method().await
+                {
                     self.update_local_domain_state(state_from_wire(
                         $domain,
+                        owner_generation,
                         revision,
                         lifecycle,
                         DomainPayload::$variant(payload),
@@ -315,14 +388,39 @@ impl DeviceClient {
     }
 
     pub fn update_local_domain_state(&self, state: DomainState) {
+        let installed_gen = self.installed_owner_generation.load(Ordering::SeqCst);
         let domain = state.domain;
         let mut domains = self.domains.write().unwrap();
-        if domains
+        let current = domains
             .get(&domain)
-            .is_some_and(|current| current.revision > state.revision)
-        {
+            .cloned()
+            .unwrap_or_else(|| unavailable_state(domain));
+
+        // Reject future/uninstalled generation
+        if state.version.owner_generation > installed_gen {
+            self.stale_updates.fetch_add(1, Ordering::SeqCst);
             return;
         }
+
+        // Reject stale version (older generation or older revision in same generation)
+        if state.version < current.version {
+            self.stale_updates.fetch_add(1, Ordering::SeqCst);
+            return;
+        }
+
+        // Handle equal version: identical is idempotent; differing is a conflict rejection
+        if state.version == current.version {
+            if current.lifecycle == state.lifecycle
+                && current.payload == state.payload
+                && current.error == state.error
+            {
+                return;
+            }
+            self.stale_updates.fetch_add(1, Ordering::SeqCst);
+            return;
+        }
+
+        // Strictly newer version: accept and update
         domains.insert(domain, state.clone());
         drop(domains);
         let _ = self.update_tx.send(DeviceClientUpdate { domain, state });
@@ -438,21 +536,23 @@ impl DeviceClient {
             .map_err(|error| format!("invalid device command outcome: {error}"))?;
         let _command_id = match &outcome {
             CommandOutcome::Applied { command_id, .. }
+            | CommandOutcome::ReconciledApplied { command_id, .. }
             | CommandOutcome::Rejected { command_id, .. }
-            | CommandOutcome::Timeout { command_id, .. }
-            | CommandOutcome::ReconciledApplied { command_id, .. } => command_id.clone(),
+            | CommandOutcome::TimedOut { command_id, .. }
+            | CommandOutcome::Cancelled { command_id, .. } => command_id.clone(),
         };
         self.notify_command_outcome(outcome.clone());
         Ok(outcome)
     }
 
     pub fn send_command_debounced(&self, command: DeviceCommand, delay: Duration) {
-        let _ = self.debounce_tx.send((command, delay));
+        let _ = self.debounce_tx.try_send((command, delay));
     }
 }
 
 fn state_from_wire(
     domain: DeviceDomain,
+    owner_generation: u64,
     revision: u64,
     lifecycle: u8,
     payload: DomainPayload,
@@ -460,7 +560,7 @@ fn state_from_wire(
 ) -> DomainState {
     DomainState {
         domain,
-        revision,
+        version: DomainVersion::new(owner_generation, revision),
         lifecycle: match lifecycle {
             1 => DomainLifecycle::Connecting,
             2 => DomainLifecycle::Ready,
@@ -482,7 +582,7 @@ impl Default for DeviceClient {
 fn unavailable_state(domain: DeviceDomain) -> DomainState {
     DomainState {
         domain,
-        revision: 0,
+        version: DomainVersion::ZERO,
         lifecycle: DomainLifecycle::Unavailable,
         payload: DomainPayload::empty(domain),
         error: None,
@@ -503,27 +603,33 @@ fn unavailable_domains() -> HashMap<DeviceDomain, DomainState> {
 )]
 trait DeviceDbus {
     fn get_protocol_version(&self) -> zbus::Result<u32>;
-    fn get_audio_state(&self) -> zbus::Result<(u64, u8, crate::protocol::AudioPayload, String)>;
+    fn get_audio_state(
+        &self,
+    ) -> zbus::Result<(u64, u64, u8, crate::protocol::AudioPayload, String)>;
     fn get_bluetooth_state(
         &self,
-    ) -> zbus::Result<(u64, u8, crate::protocol::BluetoothPayload, String)>;
+    ) -> zbus::Result<(u64, u64, u8, crate::protocol::BluetoothPayload, String)>;
     fn get_brightness_state(
         &self,
-    ) -> zbus::Result<(u64, u8, crate::protocol::BrightnessPayload, String)>;
-    fn get_network_state(&self)
-    -> zbus::Result<(u64, u8, crate::protocol::NetworkPayload, String)>;
+    ) -> zbus::Result<(u64, u64, u8, crate::protocol::BrightnessPayload, String)>;
+    fn get_network_state(
+        &self,
+    ) -> zbus::Result<(u64, u64, u8, crate::protocol::NetworkPayload, String)>;
     fn get_night_light_state(
         &self,
-    ) -> zbus::Result<(u64, u8, crate::protocol::NightLightPayload, String)>;
+    ) -> zbus::Result<(u64, u64, u8, crate::protocol::NightLightPayload, String)>;
     fn get_power_profile_state(
         &self,
-    ) -> zbus::Result<(u64, u8, crate::protocol::PowerProfilePayload, String)>;
-    fn get_media_state(&self) -> zbus::Result<(u64, u8, crate::protocol::MediaPayload, String)>;
-    fn get_battery_state(&self)
-    -> zbus::Result<(u64, u8, crate::protocol::BatteryPayload, String)>;
+    ) -> zbus::Result<(u64, u64, u8, crate::protocol::PowerProfilePayload, String)>;
+    fn get_media_state(
+        &self,
+    ) -> zbus::Result<(u64, u64, u8, crate::protocol::MediaPayload, String)>;
+    fn get_battery_state(
+        &self,
+    ) -> zbus::Result<(u64, u64, u8, crate::protocol::BatteryPayload, String)>;
     fn get_caffeine_state(
         &self,
-    ) -> zbus::Result<(u64, u8, crate::protocol::CaffeinePayload, String)>;
+    ) -> zbus::Result<(u64, u64, u8, crate::protocol::CaffeinePayload, String)>;
     fn set_audio_volume(
         &self,
         value: u8,
@@ -626,6 +732,7 @@ trait DeviceDbus {
     #[zbus(signal)]
     fn audio_state_changed(
         &self,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: crate::protocol::AudioPayload,
@@ -634,6 +741,7 @@ trait DeviceDbus {
     #[zbus(signal)]
     fn bluetooth_state_changed(
         &self,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: crate::protocol::BluetoothPayload,
@@ -642,6 +750,7 @@ trait DeviceDbus {
     #[zbus(signal)]
     fn brightness_state_changed(
         &self,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: crate::protocol::BrightnessPayload,
@@ -650,6 +759,7 @@ trait DeviceDbus {
     #[zbus(signal)]
     fn network_state_changed(
         &self,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: crate::protocol::NetworkPayload,
@@ -658,6 +768,7 @@ trait DeviceDbus {
     #[zbus(signal)]
     fn night_light_state_changed(
         &self,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: crate::protocol::NightLightPayload,
@@ -666,6 +777,7 @@ trait DeviceDbus {
     #[zbus(signal)]
     fn power_profile_state_changed(
         &self,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: crate::protocol::PowerProfilePayload,
@@ -674,6 +786,7 @@ trait DeviceDbus {
     #[zbus(signal)]
     fn media_state_changed(
         &self,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: crate::protocol::MediaPayload,
@@ -682,6 +795,7 @@ trait DeviceDbus {
     #[zbus(signal)]
     fn battery_state_changed(
         &self,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: crate::protocol::BatteryPayload,
@@ -690,6 +804,7 @@ trait DeviceDbus {
     #[zbus(signal)]
     fn caffeine_state_changed(
         &self,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: crate::protocol::CaffeinePayload,
@@ -720,35 +835,93 @@ mod tests {
     #[tokio::test]
     async fn stale_domain_signal_cannot_overwrite_newer_projection() {
         let client = DeviceClient::new();
+        client.installed_owner_generation.store(1, Ordering::SeqCst);
         let mut newer = unavailable_state(DeviceDomain::Audio);
-        newer.revision = 3;
+        newer.version = DomainVersion::new(1, 3);
         newer.lifecycle = DomainLifecycle::Ready;
         let mut stale = newer.clone();
-        stale.revision = 2;
+        stale.version = DomainVersion::new(1, 2);
         stale.lifecycle = DomainLifecycle::Degraded;
 
         client.update_local_domain_state(newer.clone());
         client.update_local_domain_state(stale);
 
         assert_eq!(client.get_domain_state(DeviceDomain::Audio), newer);
+        assert_eq!(client.stale_updates(), 1);
+    }
+
+    #[tokio::test]
+    async fn freshness_rejects_uninstalled_generation_and_equal_version_conflicts() {
+        let client = DeviceClient::new();
+        client.installed_owner_generation.store(1, Ordering::SeqCst);
+
+        // 1. Uninstalled generation rejection
+        let uninstalled = DomainState {
+            domain: DeviceDomain::Audio,
+            version: DomainVersion::new(2, 0),
+            lifecycle: DomainLifecycle::Ready,
+            payload: DomainPayload::empty(DeviceDomain::Audio),
+            error: None,
+        };
+        client.update_local_domain_state(uninstalled);
+        assert_eq!(
+            client.get_domain_state(DeviceDomain::Audio).version,
+            DomainVersion::ZERO
+        );
+        assert_eq!(client.stale_updates(), 1);
+
+        // Install generation 1 state
+        let state_v1 = DomainState {
+            domain: DeviceDomain::Audio,
+            version: DomainVersion::new(1, 1),
+            lifecycle: DomainLifecycle::Ready,
+            payload: DomainPayload::empty(DeviceDomain::Audio),
+            error: None,
+        };
+        client.update_local_domain_state(state_v1.clone());
+        assert_eq!(
+            client.get_domain_state(DeviceDomain::Audio).version,
+            DomainVersion::new(1, 1)
+        );
+
+        // 2. Equal version identical is idempotent
+        client.update_local_domain_state(state_v1.clone());
+        assert_eq!(client.stale_updates(), 1); // Not incremented
+
+        // 3. Equal version with different error/payload is rejected as conflict
+        let mut conflict = state_v1.clone();
+        conflict.error = Some("conflict".to_string());
+        client.update_local_domain_state(conflict);
+        assert_eq!(client.stale_updates(), 2); // Incremented
     }
 
     #[tokio::test]
     async fn debounce_keeps_latest_absolute_intent_per_domain() {
         use crate::protocol::{AudioAction, BrightnessAction};
         let now = tokio::time::Instant::now();
+        let supersessions = Arc::new(AtomicU64::new(0));
         let mut pending = DebouncedCommands::default();
-        pending.replace(DeviceCommand::Audio(AudioAction::SetVolume(20)), now);
-        pending.replace(DeviceCommand::Audio(AudioAction::SetVolume(80)), now);
+        pending.replace(
+            DeviceCommand::Audio(AudioAction::SetVolume(20)),
+            now,
+            &supersessions,
+        );
+        pending.replace(
+            DeviceCommand::Audio(AudioAction::SetVolume(80)),
+            now,
+            &supersessions,
+        );
         pending.replace(
             DeviceCommand::Brightness(BrightnessAction::SetBrightness(60)),
             now,
+            &supersessions,
         );
         let due = pending.take_due(now);
         assert_eq!(due.len(), 2);
         assert!(due.contains(&DeviceCommand::Audio(AudioAction::SetVolume(80))));
         assert!(!due.contains(&DeviceCommand::Audio(AudioAction::SetVolume(20))));
         assert!(pending.is_empty());
+        assert_eq!(supersessions.load(Ordering::SeqCst), 1);
     }
 
     #[cfg(unix)]
@@ -795,7 +968,7 @@ mod tests {
             for _ in 0..50 {
                 let shell_state = shell.get_domain_state(DeviceDomain::Audio);
                 let settings_state = settings.get_domain_state(DeviceDomain::Audio);
-                if shell_state.revision == settings_state.revision
+                if shell_state.version == settings_state.version
                     && matches!(
                         settings_state.payload,
                         DomainPayload::Audio(AudioPayload { volume: 72, .. })
@@ -808,7 +981,7 @@ mod tests {
             }
             converged.expect("both clients should converge on the applied command")
         };
-        assert_eq!(shell_state.revision, settings_state.revision);
+        assert_eq!(shell_state.version, settings_state.version);
         assert!(matches!(
             shell_state.payload,
             DomainPayload::Audio(AudioPayload { volume: 72, .. })
@@ -866,7 +1039,7 @@ mod tests {
             ..Default::default()
         };
         let mut ready_state = initial_battery;
-        ready_state.revision += 1;
+        ready_state.version.revision += 1;
         ready_state.payload = DomainPayload::Battery(known_payload.clone());
         client.update_local_domain_state(ready_state);
 

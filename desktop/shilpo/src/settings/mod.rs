@@ -183,7 +183,7 @@ impl SettingsView {
                         domain,
                         shilpo_services::DomainState {
                             domain,
-                            revision: 0,
+                            version: shilpo_services::DomainVersion::ZERO,
                             lifecycle: shilpo_services::DomainLifecycle::Unavailable,
                             payload: shilpo_services::DomainPayload::empty(domain),
                             error: None,

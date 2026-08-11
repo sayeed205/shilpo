@@ -47,39 +47,109 @@ impl DeviceDbusService {
     }
 
     async fn emit_state(emitter: &SignalEmitter<'_>, state: DomainState) -> zbus::Result<()> {
-        let revision = state.revision;
+        let owner_generation = state.version.owner_generation;
+        let revision = state.version.revision;
         let lifecycle = lifecycle_code(state.lifecycle);
         let error = error_text(&state);
         match state.payload {
             DomainPayload::Audio(payload) => {
-                Self::audio_state_changed(emitter, revision, lifecycle, payload, &error).await?
+                Self::audio_state_changed(
+                    emitter,
+                    owner_generation,
+                    revision,
+                    lifecycle,
+                    payload,
+                    &error,
+                )
+                .await?
             }
             DomainPayload::Bluetooth(payload) => {
-                Self::bluetooth_state_changed(emitter, revision, lifecycle, payload, &error).await?
+                Self::bluetooth_state_changed(
+                    emitter,
+                    owner_generation,
+                    revision,
+                    lifecycle,
+                    payload,
+                    &error,
+                )
+                .await?
             }
             DomainPayload::Brightness(payload) => {
-                Self::brightness_state_changed(emitter, revision, lifecycle, payload, &error)
-                    .await?
+                Self::brightness_state_changed(
+                    emitter,
+                    owner_generation,
+                    revision,
+                    lifecycle,
+                    payload,
+                    &error,
+                )
+                .await?
             }
             DomainPayload::Network(payload) => {
-                Self::network_state_changed(emitter, revision, lifecycle, payload, &error).await?
+                Self::network_state_changed(
+                    emitter,
+                    owner_generation,
+                    revision,
+                    lifecycle,
+                    payload,
+                    &error,
+                )
+                .await?
             }
             DomainPayload::NightLight(payload) => {
-                Self::night_light_state_changed(emitter, revision, lifecycle, payload, &error)
-                    .await?
+                Self::night_light_state_changed(
+                    emitter,
+                    owner_generation,
+                    revision,
+                    lifecycle,
+                    payload,
+                    &error,
+                )
+                .await?
             }
             DomainPayload::PowerProfile(payload) => {
-                Self::power_profile_state_changed(emitter, revision, lifecycle, payload, &error)
-                    .await?
+                Self::power_profile_state_changed(
+                    emitter,
+                    owner_generation,
+                    revision,
+                    lifecycle,
+                    payload,
+                    &error,
+                )
+                .await?
             }
             DomainPayload::Media(payload) => {
-                Self::media_state_changed(emitter, revision, lifecycle, payload, &error).await?
+                Self::media_state_changed(
+                    emitter,
+                    owner_generation,
+                    revision,
+                    lifecycle,
+                    payload,
+                    &error,
+                )
+                .await?
             }
             DomainPayload::Battery(payload) => {
-                Self::battery_state_changed(emitter, revision, lifecycle, payload, &error).await?
+                Self::battery_state_changed(
+                    emitter,
+                    owner_generation,
+                    revision,
+                    lifecycle,
+                    payload,
+                    &error,
+                )
+                .await?
             }
             DomainPayload::Caffeine(payload) => {
-                Self::caffeine_state_changed(emitter, revision, lifecycle, payload, &error).await?
+                Self::caffeine_state_changed(
+                    emitter,
+                    owner_generation,
+                    revision,
+                    lifecycle,
+                    payload,
+                    &error,
+                )
+                .await?
             }
         }
         Ok(())
@@ -114,7 +184,7 @@ impl DeviceDbusService {
         PROTOCOL_VERSION
     }
 
-    async fn get_audio_state(&self) -> zbus::fdo::Result<(u64, u8, AudioPayload, String)> {
+    async fn get_audio_state(&self) -> zbus::fdo::Result<(u64, u64, u8, AudioPayload, String)> {
         typed_state(self.daemon.get_domain_state(DeviceDomain::Audio), |p| {
             if let DomainPayload::Audio(v) = p {
                 Some(v)
@@ -123,7 +193,9 @@ impl DeviceDbusService {
             }
         })
     }
-    async fn get_bluetooth_state(&self) -> zbus::fdo::Result<(u64, u8, BluetoothPayload, String)> {
+    async fn get_bluetooth_state(
+        &self,
+    ) -> zbus::fdo::Result<(u64, u64, u8, BluetoothPayload, String)> {
         typed_state(self.daemon.get_domain_state(DeviceDomain::Bluetooth), |p| {
             if let DomainPayload::Bluetooth(v) = p {
                 Some(v)
@@ -134,7 +206,7 @@ impl DeviceDbusService {
     }
     async fn get_brightness_state(
         &self,
-    ) -> zbus::fdo::Result<(u64, u8, BrightnessPayload, String)> {
+    ) -> zbus::fdo::Result<(u64, u64, u8, BrightnessPayload, String)> {
         typed_state(
             self.daemon.get_domain_state(DeviceDomain::Brightness),
             |p| {
@@ -146,7 +218,7 @@ impl DeviceDbusService {
             },
         )
     }
-    async fn get_network_state(&self) -> zbus::fdo::Result<(u64, u8, NetworkPayload, String)> {
+    async fn get_network_state(&self) -> zbus::fdo::Result<(u64, u64, u8, NetworkPayload, String)> {
         typed_state(self.daemon.get_domain_state(DeviceDomain::Network), |p| {
             if let DomainPayload::Network(v) = p {
                 Some(v)
@@ -157,7 +229,7 @@ impl DeviceDbusService {
     }
     async fn get_night_light_state(
         &self,
-    ) -> zbus::fdo::Result<(u64, u8, NightLightPayload, String)> {
+    ) -> zbus::fdo::Result<(u64, u64, u8, NightLightPayload, String)> {
         typed_state(
             self.daemon.get_domain_state(DeviceDomain::NightLight),
             |p| {
@@ -171,7 +243,7 @@ impl DeviceDbusService {
     }
     async fn get_power_profile_state(
         &self,
-    ) -> zbus::fdo::Result<(u64, u8, PowerProfilePayload, String)> {
+    ) -> zbus::fdo::Result<(u64, u64, u8, PowerProfilePayload, String)> {
         typed_state(
             self.daemon.get_domain_state(DeviceDomain::PowerProfile),
             |p| {
@@ -183,7 +255,7 @@ impl DeviceDbusService {
             },
         )
     }
-    async fn get_media_state(&self) -> zbus::fdo::Result<(u64, u8, MediaPayload, String)> {
+    async fn get_media_state(&self) -> zbus::fdo::Result<(u64, u64, u8, MediaPayload, String)> {
         typed_state(self.daemon.get_domain_state(DeviceDomain::Media), |p| {
             if let DomainPayload::Media(v) = p {
                 Some(v)
@@ -192,7 +264,7 @@ impl DeviceDbusService {
             }
         })
     }
-    async fn get_battery_state(&self) -> zbus::fdo::Result<(u64, u8, BatteryPayload, String)> {
+    async fn get_battery_state(&self) -> zbus::fdo::Result<(u64, u64, u8, BatteryPayload, String)> {
         typed_state(self.daemon.get_domain_state(DeviceDomain::Battery), |p| {
             if let DomainPayload::Battery(v) = p {
                 Some(v)
@@ -201,7 +273,9 @@ impl DeviceDbusService {
             }
         })
     }
-    async fn get_caffeine_state(&self) -> zbus::fdo::Result<(u64, u8, CaffeinePayload, String)> {
+    async fn get_caffeine_state(
+        &self,
+    ) -> zbus::fdo::Result<(u64, u64, u8, CaffeinePayload, String)> {
         typed_state(self.daemon.get_domain_state(DeviceDomain::Caffeine), |p| {
             if let DomainPayload::Caffeine(v) = p {
                 Some(v)
@@ -547,6 +621,7 @@ impl DeviceDbusService {
     #[zbus(signal)]
     async fn audio_state_changed(
         signal_emitter: &SignalEmitter<'_>,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: AudioPayload,
@@ -555,6 +630,7 @@ impl DeviceDbusService {
     #[zbus(signal)]
     async fn bluetooth_state_changed(
         signal_emitter: &SignalEmitter<'_>,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: BluetoothPayload,
@@ -563,6 +639,7 @@ impl DeviceDbusService {
     #[zbus(signal)]
     async fn brightness_state_changed(
         signal_emitter: &SignalEmitter<'_>,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: BrightnessPayload,
@@ -571,6 +648,7 @@ impl DeviceDbusService {
     #[zbus(signal)]
     async fn network_state_changed(
         signal_emitter: &SignalEmitter<'_>,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: NetworkPayload,
@@ -579,6 +657,7 @@ impl DeviceDbusService {
     #[zbus(signal)]
     async fn night_light_state_changed(
         signal_emitter: &SignalEmitter<'_>,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: NightLightPayload,
@@ -587,6 +666,7 @@ impl DeviceDbusService {
     #[zbus(signal)]
     async fn power_profile_state_changed(
         signal_emitter: &SignalEmitter<'_>,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: PowerProfilePayload,
@@ -595,6 +675,7 @@ impl DeviceDbusService {
     #[zbus(signal)]
     async fn media_state_changed(
         signal_emitter: &SignalEmitter<'_>,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: MediaPayload,
@@ -603,6 +684,7 @@ impl DeviceDbusService {
     #[zbus(signal)]
     async fn battery_state_changed(
         signal_emitter: &SignalEmitter<'_>,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: BatteryPayload,
@@ -611,6 +693,7 @@ impl DeviceDbusService {
     #[zbus(signal)]
     async fn caffeine_state_changed(
         signal_emitter: &SignalEmitter<'_>,
+        owner_generation: u64,
         revision: u64,
         lifecycle: u8,
         payload: CaffeinePayload,
@@ -627,11 +710,12 @@ impl DeviceDbusService {
 fn typed_state<T>(
     state: DomainState,
     take: impl FnOnce(DomainPayload) -> Option<T>,
-) -> zbus::fdo::Result<(u64, u8, T, String)> {
-    let revision = state.revision;
+) -> zbus::fdo::Result<(u64, u64, u8, T, String)> {
+    let owner_generation = state.version.owner_generation;
+    let revision = state.version.revision;
     let lifecycle = lifecycle_code(state.lifecycle);
     let error = error_text(&state);
     let payload = take(state.payload)
         .ok_or_else(|| zbus::fdo::Error::Failed("device domain payload mismatch".into()))?;
-    Ok((revision, lifecycle, payload, error))
+    Ok((owner_generation, revision, lifecycle, payload, error))
 }

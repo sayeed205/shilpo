@@ -159,7 +159,7 @@ async fn run(
     client: DeviceClient,
 ) {
     let _ = load_config(&updates, &config_path);
-    let mut revisions = std::collections::HashMap::new();
+    let mut versions = std::collections::HashMap::new();
     loop {
         while let Ok(command) = commands.try_recv() {
             match command {
@@ -183,7 +183,7 @@ async fn run(
                 }
             }
         }
-        emit_client_updates(&updates, &client, &mut revisions);
+        emit_client_updates(&updates, &client, &mut versions);
         executor.timer(Duration::from_millis(100)).await;
     }
 }
@@ -191,7 +191,10 @@ async fn run(
 fn emit_client_updates(
     updates: &UpdateSender,
     client: &DeviceClient,
-    revisions: &mut std::collections::HashMap<shilpo_services::DeviceDomain, u64>,
+    versions: &mut std::collections::HashMap<
+        shilpo_services::DeviceDomain,
+        shilpo_services::DomainVersion,
+    >,
 ) {
     use shilpo_services::DeviceDomain;
     for domain in [
@@ -202,10 +205,10 @@ fn emit_client_updates(
         DeviceDomain::Brightness,
     ] {
         let state = client.get_domain_state(domain);
-        if revisions.get(&domain) == Some(&state.revision) {
+        if versions.get(&domain) == Some(&state.version) {
             continue;
         }
-        revisions.insert(domain, state.revision);
+        versions.insert(domain, state.version);
         let update = match state.payload {
             shilpo_services::DomainPayload::Battery(payload) => {
                 Some(WorkerUpdate::Battery(payload))

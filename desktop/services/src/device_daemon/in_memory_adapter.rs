@@ -42,7 +42,7 @@ impl InMemoryDeviceAdapter {
                 domain,
                 DomainState {
                     domain,
-                    revision: 1,
+                    version: crate::device_protocol::DomainVersion::new(1, 1),
                     lifecycle: DomainLifecycle::Ready,
                     payload: match domain {
                         DeviceDomain::Audio => DomainPayload::Audio(crate::device_protocol::AudioPayload {
@@ -139,7 +139,7 @@ impl DeviceAdapter for InMemoryDeviceAdapter {
             let mut states_guard = states.lock().unwrap();
             let current = states_guard.get_mut(&domain).ok_or("Unknown domain")?;
 
-            current.revision += 1;
+            current.version.revision += 1;
 
             match command {
                 DeviceCommand::Audio(action) => match action {

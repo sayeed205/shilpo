@@ -1,6 +1,28 @@
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, zvariant::Type,
+)]
+pub struct DomainVersion {
+    pub owner_generation: u64,
+    pub revision: u64,
+}
+
+impl DomainVersion {
+    pub const ZERO: Self = Self {
+        owner_generation: 0,
+        revision: 0,
+    };
+
+    pub fn new(owner_generation: u64, revision: u64) -> Self {
+        Self {
+            owner_generation,
+            revision,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,10 +66,22 @@ pub enum DomainLifecycle {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DomainState {
     pub domain: DeviceDomain,
-    pub revision: u64,
+    pub version: DomainVersion,
     pub lifecycle: DomainLifecycle,
     pub payload: DomainPayload,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DomainPortTelemetry {
+    pub owner_generation: u64,
+    pub current_queue_depth: usize,
+    pub queue_capacity: usize,
+    pub overloads: u64,
+    pub supersessions: u64,
+    pub restarts: u64,
+    pub stale_updates: u64,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -536,6 +570,66 @@ pub struct CaffeinePayload {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, zvariant::Type)]
 pub struct CommandId(pub String);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, zvariant::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum RejectionReason {
+    Unavailable,
+    Overloaded,
+}
+
+impl std::fmt::Display for RejectionReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable => write!(f, "unavailable"),
+            Self::Overloaded => write!(f, "overloaded"),
+        }
+    }
+}
+
+impl std::str::FromStr for RejectionReason {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "unavailable" => Ok(Self::Unavailable),
+            "overloaded" => Ok(Self::Overloaded),
+            _ => Ok(Self::Unavailable),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, zvariant::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum CancellationReason {
+    Shutdown,
+    Reconnect,
+    OwnerReplaced,
+    Superseded,
+}
+
+impl std::fmt::Display for CancellationReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Shutdown => write!(f, "shutdown"),
+            Self::Reconnect => write!(f, "reconnect"),
+            Self::OwnerReplaced => write!(f, "owner_replaced"),
+            Self::Superseded => write!(f, "superseded"),
+        }
+    }
+}
+
+impl std::str::FromStr for CancellationReason {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "shutdown" => Ok(Self::Shutdown),
+            "reconnect" => Ok(Self::Reconnect),
+            "owner_replaced" => Ok(Self::OwnerReplaced),
+            "superseded" => Ok(Self::Superseded),
+            _ => Ok(Self::OwnerReplaced),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum CommandOutcome {
@@ -543,24 +637,31 @@ pub enum CommandOutcome {
         command_id: CommandId,
         arrival_sequence: u64,
         domain: DeviceDomain,
-        revision: u64,
-    },
-    Rejected {
-        command_id: CommandId,
-        arrival_sequence: u64,
-        domain: DeviceDomain,
-        reason: String,
-    },
-    Timeout {
-        command_id: CommandId,
-        arrival_sequence: u64,
-        domain: DeviceDomain,
+        version: DomainVersion,
     },
     ReconciledApplied {
         command_id: CommandId,
         arrival_sequence: u64,
         domain: DeviceDomain,
-        revision: u64,
+        version: DomainVersion,
+    },
+    Rejected {
+        command_id: CommandId,
+        arrival_sequence: u64,
+        domain: DeviceDomain,
+        reason: RejectionReason,
+    },
+    TimedOut {
+        command_id: CommandId,
+        arrival_sequence: u64,
+        domain: DeviceDomain,
+        last_observed_version: DomainVersion,
+    },
+    Cancelled {
+        command_id: CommandId,
+        arrival_sequence: u64,
+        domain: DeviceDomain,
+        reason: CancellationReason,
     },
 }
 
@@ -568,12 +669,20 @@ impl CommandOutcome {
     pub fn with_command(self, command_id: CommandId, arrival_sequence: u64) -> Self {
         match self {
             Self::Applied {
-                domain, revision, ..
+                domain, version, ..
             } => Self::Applied {
                 command_id,
                 arrival_sequence,
                 domain,
-                revision,
+                version,
+            },
+            Self::ReconciledApplied {
+                domain, version, ..
+            } => Self::ReconciledApplied {
+                command_id,
+                arrival_sequence,
+                domain,
+                version,
             },
             Self::Rejected { domain, reason, .. } => Self::Rejected {
                 command_id,
@@ -581,67 +690,44 @@ impl CommandOutcome {
                 domain,
                 reason,
             },
-            Self::Timeout { domain, .. } => Self::Timeout {
+            Self::TimedOut {
+                domain,
+                last_observed_version,
+                ..
+            } => Self::TimedOut {
                 command_id,
                 arrival_sequence,
                 domain,
+                last_observed_version,
             },
-            Self::ReconciledApplied {
-                domain, revision, ..
-            } => Self::ReconciledApplied {
+            Self::Cancelled { domain, reason, .. } => Self::Cancelled {
                 command_id,
                 arrival_sequence,
                 domain,
-                revision,
+                reason,
             },
         }
     }
 
     pub fn with_command_id(self, command_id: CommandId) -> Self {
-        match self {
+        let arrival_sequence = match &self {
             Self::Applied {
-                domain,
-                revision,
-                arrival_sequence,
-                ..
-            } => Self::Applied {
-                command_id,
-                arrival_sequence,
-                domain,
-                revision,
-            },
-            Self::Rejected {
-                domain,
-                reason,
-                arrival_sequence,
-                ..
-            } => Self::Rejected {
-                command_id,
-                arrival_sequence,
-                domain,
-                reason,
-            },
-            Self::Timeout {
-                domain,
-                arrival_sequence,
-                ..
-            } => Self::Timeout {
-                command_id,
-                arrival_sequence,
-                domain,
-            },
-            Self::ReconciledApplied {
-                domain,
-                revision,
-                arrival_sequence,
-                ..
-            } => Self::ReconciledApplied {
-                command_id,
-                arrival_sequence,
-                domain,
-                revision,
-            },
-        }
+                arrival_sequence, ..
+            }
+            | Self::ReconciledApplied {
+                arrival_sequence, ..
+            }
+            | Self::Rejected {
+                arrival_sequence, ..
+            }
+            | Self::TimedOut {
+                arrival_sequence, ..
+            }
+            | Self::Cancelled {
+                arrival_sequence, ..
+            } => *arrival_sequence,
+        };
+        self.with_command(command_id, arrival_sequence)
     }
 }
 
@@ -651,6 +737,7 @@ pub struct CommandOutcomeRecord {
     pub command_id: CommandId,
     pub arrival_sequence: u64,
     pub domain: u8,
+    pub owner_generation: u64,
     pub revision: u64,
     pub reason: String,
 }
@@ -662,13 +749,14 @@ impl From<CommandOutcome> for CommandOutcomeRecord {
                 command_id,
                 arrival_sequence,
                 domain,
-                revision,
+                version,
             } => Self {
                 kind: 0,
                 command_id,
                 arrival_sequence,
                 domain: domain_code(domain),
-                revision,
+                owner_generation: version.owner_generation,
+                revision: version.revision,
                 reason: String::new(),
             },
             CommandOutcome::Rejected {
@@ -681,33 +769,51 @@ impl From<CommandOutcome> for CommandOutcomeRecord {
                 command_id,
                 arrival_sequence,
                 domain: domain_code(domain),
+                owner_generation: 0,
                 revision: 0,
-                reason,
+                reason: reason.to_string(),
             },
-            CommandOutcome::Timeout {
+            CommandOutcome::TimedOut {
                 command_id,
                 arrival_sequence,
                 domain,
+                last_observed_version,
             } => Self {
                 kind: 2,
                 command_id,
                 arrival_sequence,
                 domain: domain_code(domain),
-                revision: 0,
+                owner_generation: last_observed_version.owner_generation,
+                revision: last_observed_version.revision,
                 reason: String::new(),
             },
             CommandOutcome::ReconciledApplied {
                 command_id,
                 arrival_sequence,
                 domain,
-                revision,
+                version,
             } => Self {
                 kind: 3,
                 command_id,
                 arrival_sequence,
                 domain: domain_code(domain),
-                revision,
+                owner_generation: version.owner_generation,
+                revision: version.revision,
                 reason: String::new(),
+            },
+            CommandOutcome::Cancelled {
+                command_id,
+                arrival_sequence,
+                domain,
+                reason,
+            } => Self {
+                kind: 4,
+                command_id,
+                arrival_sequence,
+                domain: domain_code(domain),
+                owner_generation: 0,
+                revision: 0,
+                reason: reason.to_string(),
             },
         }
     }
@@ -716,6 +822,7 @@ impl From<CommandOutcome> for CommandOutcomeRecord {
 impl TryFrom<CommandOutcomeRecord> for CommandOutcome {
     type Error = String;
     fn try_from(record: CommandOutcomeRecord) -> Result<Self, Self::Error> {
+        use std::str::FromStr;
         let domain =
             domain_from_code(record.domain).ok_or_else(|| "invalid device domain".to_string())?;
         Ok(match record.kind {
@@ -723,24 +830,31 @@ impl TryFrom<CommandOutcomeRecord> for CommandOutcome {
                 command_id: record.command_id,
                 arrival_sequence: record.arrival_sequence,
                 domain,
-                revision: record.revision,
+                version: DomainVersion::new(record.owner_generation, record.revision),
             },
             1 => Self::Rejected {
                 command_id: record.command_id,
                 arrival_sequence: record.arrival_sequence,
                 domain,
-                reason: record.reason,
+                reason: RejectionReason::from_str(&record.reason)?,
             },
-            2 => Self::Timeout {
+            2 => Self::TimedOut {
                 command_id: record.command_id,
                 arrival_sequence: record.arrival_sequence,
                 domain,
+                last_observed_version: DomainVersion::new(record.owner_generation, record.revision),
             },
             3 => Self::ReconciledApplied {
                 command_id: record.command_id,
                 arrival_sequence: record.arrival_sequence,
                 domain,
-                revision: record.revision,
+                version: DomainVersion::new(record.owner_generation, record.revision),
+            },
+            4 => Self::Cancelled {
+                command_id: record.command_id,
+                arrival_sequence: record.arrival_sequence,
+                domain,
+                reason: CancellationReason::from_str(&record.reason)?,
             },
             _ => return Err("invalid command outcome kind".into()),
         })
@@ -803,14 +917,37 @@ impl DeviceCommand {
         }
     }
 
+    /// Returns the key for replace-latest absolute setters, or None for non-coalescible commands.
+    pub fn coalescing_key(&self) -> Option<String> {
+        match self {
+            Self::Audio(AudioAction::SetVolume(_)) => Some("audio.volume".to_string()),
+            Self::Audio(AudioAction::SetMuted(_)) => Some("audio.muted".to_string()),
+            Self::Brightness(BrightnessAction::SetBrightness(_)) => {
+                Some("brightness.level".to_string())
+            }
+            Self::NightLight(NightLightAction::SetEnabled(_)) => {
+                Some("night_light.enabled".to_string())
+            }
+            Self::NightLight(NightLightAction::SetTemperature(_)) => {
+                Some("night_light.temperature".to_string())
+            }
+            Self::Bluetooth(BluetoothAction::SetPowered(_)) => {
+                Some("bluetooth.powered".to_string())
+            }
+            Self::Network(NetworkAction::SetWifiEnabled(_)) => {
+                Some("network.wifi_enabled".to_string())
+            }
+            Self::PowerProfile(PowerProfileAction::SetProfile(_)) => {
+                Some("power_profile.profile".to_string())
+            }
+            Self::Caffeine(CaffeineAction::SetEnabled(_)) => Some("caffeine.enabled".to_string()),
+            _ => None,
+        }
+    }
+
     /// Absolute set-value commands (sliders) can be coalesced in queue.
     pub fn is_coalescable(&self) -> bool {
-        matches!(
-            self,
-            Self::Audio(AudioAction::SetVolume(_))
-                | Self::Brightness(BrightnessAction::SetBrightness(_))
-                | Self::NightLight(NightLightAction::SetTemperature(_))
-        )
+        self.coalescing_key().is_some()
     }
 }
 
@@ -902,10 +1039,10 @@ mod tests {
 
     #[test]
     fn test_protocol_version_check() {
-        assert!(check_protocol_version(1).is_ok());
+        assert!(check_protocol_version(PROTOCOL_VERSION).is_ok());
         assert_eq!(
-            check_protocol_version(2),
-            Err(ProtocolError::VersionMismatch { client_version: 2 })
+            check_protocol_version(99),
+            Err(ProtocolError::VersionMismatch { client_version: 99 })
         );
     }
 
