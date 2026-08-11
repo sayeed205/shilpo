@@ -41,6 +41,82 @@ impl ExtAdapter {
         }
     }
 
+    pub fn status(&self) -> ExtOpResult {
+        if ShellIpcClient::is_socket_available() {
+            match self.ipc.send(IpcRequest::GetTelemetry) {
+                Ok(shilpo_services::IpcResponse {
+                    result: Some(shilpo_services::IpcResult::Telemetry(health)),
+                    ..
+                }) => {
+                    let ext_status = health
+                        .extension_host
+                        .unwrap_or_else(|| serde_json::json!({
+                            "state": "ready",
+                            "host_generation": 1,
+                            "engine_generation": 1,
+                            "pid": null,
+                            "session_restart_count": 0,
+                            "consecutive_crashes": 0,
+                            "last_exit": null,
+                            "last_error": null,
+                            "stale_updates_dropped": 0,
+                            "malformed_frames": 0,
+                        }));
+                    let state_str = ext_status
+                        .get("state")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let host_gen = ext_status
+                        .get("host_generation")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let engine_gen = ext_status
+                        .get("engine_generation")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let human = format!(
+                        "Extension Host Status:\n  State: {}\n  Host Generation: {}\n  Engine Generation: {}",
+                        state_str, host_gen, engine_gen
+                    );
+                    ExtOpResult {
+                        success: true,
+                        data: ext_status,
+                        human_message: human,
+                        warnings: Vec::new(),
+                        exit_code: 0,
+                    }
+                }
+                Ok(_) | Err(_) => ExtOpResult {
+                    success: false,
+                    data: serde_json::Value::Null,
+                    human_message: "Failed to query telemetry from daemon".into(),
+                    warnings: Vec::new(),
+                    exit_code: 1,
+                },
+            }
+        } else {
+            let data = serde_json::json!({
+                "state": "stopped",
+                "host_generation": 0,
+                "engine_generation": 0,
+                "pid": null,
+                "session_restart_count": 0,
+                "consecutive_crashes": 0,
+                "last_exit": null,
+                "last_error": null,
+                "stale_updates_dropped": 0,
+                "malformed_frames": 0,
+            });
+            ExtOpResult {
+                success: true,
+                data,
+                human_message: "Extension host is stopped (shell daemon not running)".into(),
+                warnings: vec!["shell daemon is not running".into()],
+                exit_code: 0,
+            }
+        }
+    }
+
     pub fn check(&self, path: Option<&Path>) -> ExtOpResult {
         let target = path.unwrap_or_else(|| Path::new("."));
         let cli_res = ExtensionCli::check(target);

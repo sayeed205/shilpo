@@ -138,6 +138,8 @@ pub struct ServiceHealth {
     pub brightness_last_error: Option<String>,
     pub heed_store_available: bool,
     pub uptime_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension_host: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

@@ -20,6 +20,7 @@ shilpo-ext.workspace = true
 shilpo-capture = { path = "../capture" }
 
 anyhow.workspace = true
+zbus.workspace = true
 dirs.workspace = true
 futures-lite.workspace = true
 chrono.workspace = true

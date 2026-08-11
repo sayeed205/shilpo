@@ -110,7 +110,7 @@ impl CanonicalHttpTarget {
 }
 
 /// An authorized HTTP request token containing a validated URL.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorizedHttpRequest {
     pub(crate) request_id: String,
     pub(crate) url: url::Url,
@@ -126,13 +126,13 @@ impl AuthorizedHttpRequest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum AuthorizedHostEffectKind {
     NonHttp(HostEffect),
     HttpRequest(AuthorizedHttpRequest),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AuthorizedHostEffect(pub(crate) AuthorizedHostEffectKind);
 
 impl AuthorizedHostEffect {

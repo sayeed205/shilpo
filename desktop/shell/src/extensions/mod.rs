@@ -6,6 +6,8 @@
 
 pub mod coordinator;
 pub mod engine;
+pub mod process;
+pub mod supervisor;
 pub mod watcher;
 
 pub use coordinator::{
@@ -14,4 +16,12 @@ pub use coordinator::{
     ExtensionUpdate, ReplaceableEvent,
 };
 pub use engine::ExtensionEngine;
+pub use process::{
+    HostGeneration, HostMessage, ProcessCodecError, WorkerMessage, WorkerPayload,
+    PROTOCOL_VERSION, recv_host_message, recv_worker_message, run_extension_host,
+    send_host_message, send_worker_message,
+};
+pub use supervisor::{
+    ChildSpawner, ExtensionHostDiagnostics, ExtensionSupervisor, SupervisorState,
+};
 pub use watcher::ExtensionWatcher;

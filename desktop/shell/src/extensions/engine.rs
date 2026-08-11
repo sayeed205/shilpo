@@ -712,9 +712,8 @@ where
                 // active generation.
                 Some(self.build_update(changes, true))
             }
-            ExtensionCommand::Shutdown { reply } => {
+            ExtensionCommand::Shutdown => {
                 let _ = self.session.dispatch_all(&ExtensionEvent::ShellStopping);
-                let _ = reply.send(());
                 None
             }
         }
@@ -775,8 +774,8 @@ where
                             pending_sources_changed = true;
                             last_sources_changed = Some(Instant::now());
                         }
-                        ExtensionCommand::Shutdown { reply } => {
-                            let _ = self.handle_command(ExtensionCommand::Shutdown { reply });
+                        ExtensionCommand::Shutdown => {
+                            let _ = self.handle_command(ExtensionCommand::Shutdown);
                             return;
                         }
                         other => {

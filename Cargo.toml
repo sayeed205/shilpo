@@ -40,6 +40,8 @@ shilpo-config = { path = "desktop/config" }
 shilpo-ext-types = { path = "desktop/ext-types" }
 shilpo-ext = { path = "desktop/ext" }
 shilpo-theme-daemon = { path = "desktop/theme-daemon" }
+shilpo-shell = { path = "desktop/shell" }
+shilpo-settings = { path = "desktop/settings" }
 shilpo-capture = { path = "desktop/capture" }
 
 niri-ipc = "26"
@@ -102,7 +104,7 @@ sha2 = "0.11"
 smol = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
-url = "2"
+url = { version = "2", features = ["serde"] }
 uuid = "1"
 wasm-bindgen = "0.2"
 errno = { version = "0.3", default-features = false }

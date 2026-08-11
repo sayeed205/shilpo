@@ -49,6 +49,56 @@ pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_u
 pub use notifications::{Notification, NotificationService, NotificationUrgency};
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
 
+pub async fn run_device_daemon() -> anyhow::Result<()> {
+    use std::sync::Arc;
+    use zbus::object_server::SignalEmitter;
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("shilpo_services=info".parse().unwrap()),
+        )
+        .init();
+
+    let adapter = Arc::new(SystemDeviceAdapter::new());
+    let daemon = Arc::new(DeviceDaemonService::new(adapter));
+    let mut outcomes = daemon.subscribe_outcomes();
+    let connection = zbus::Connection::session().await?;
+    use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
+    let dbus = DBusProxy::new(&connection).await?;
+    let reply = dbus
+        .request_name(
+            "org.shilpo.Device".try_into()?,
+            RequestNameFlags::DoNotQueue.into(),
+        )
+        .await?;
+    if reply != RequestNameReply::PrimaryOwner {
+        eprintln!("org.shilpo.Device is already owned by another process");
+        std::process::exit(1);
+    }
+
+    let service = DeviceDbusService::new(daemon);
+    connection
+        .object_server()
+        .at("/org/shilpo/Device", service.clone())
+        .await?;
+    let emitter = SignalEmitter::new(&connection, "/org/shilpo/Device")?.into_owned();
+
+    tracing::info!("shilpo-device-daemon registered org.shilpo.Device");
+    loop {
+        tokio::select! {
+            outcome = outcomes.recv() => {
+                if let Ok(outcome) = outcome {
+                    service.emit_outcome(&emitter, &outcome).await?;
+                }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {
+                service.emit_updates(&emitter).await?;
+            }
+        }
+    }
+}
+
 pub use tray::{TrayItem, TrayMenuItem, TrayService};
 pub use upower::{
     BatteryChargeState, BatteryCoarseLevel, BatteryDevicePayload, BatteryInfo, BatteryService,

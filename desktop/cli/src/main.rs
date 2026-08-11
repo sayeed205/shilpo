@@ -96,6 +96,32 @@ async fn main() {
     };
 
     let exit_code = match command {
+        Commands::Daemon => {
+            shilpo_shell::run_daemon();
+            std::process::exit(EXIT_SUCCESS);
+        }
+        Commands::Settings => {
+            shilpo_settings::run_settings().await;
+            std::process::exit(EXIT_SUCCESS);
+        }
+        Commands::ExtensionHost => {
+            shilpo_shell::extensions::run_extension_host();
+            std::process::exit(EXIT_SUCCESS);
+        }
+        Commands::DeviceDaemon => {
+            if let Err(e) = shilpo_services::run_device_daemon().await {
+                eprintln!("device daemon error: {e}");
+                std::process::exit(EXIT_FAILURE);
+            }
+            std::process::exit(EXIT_SUCCESS);
+        }
+        Commands::ThemeDaemon => {
+            if let Err(e) = shilpo_theme_daemon::run_theme_daemon().await {
+                eprintln!("theme daemon error: {e}");
+                std::process::exit(EXIT_FAILURE);
+            }
+            std::process::exit(EXIT_SUCCESS);
+        }
         Commands::Shell { command } => match command {
             ShellCommands::Status => {
                 let ipc = IpcAdapter::new();
@@ -583,6 +609,7 @@ async fn main() {
         Commands::Ext { command } => {
             let ext = ExtAdapter::new();
             let op = match command {
+                ExtCommands::Status => ext.status(),
                 ExtCommands::Check { path } => ext.check(path.as_deref()),
                 ExtCommands::Pack { path, output } => ext.pack(path.as_deref(), output.as_deref()),
                 ExtCommands::Dev { path } => ext.dev(&path),
