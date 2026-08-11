@@ -1,7 +1,6 @@
 use std::rc::Rc;
 
 use gpui::{StyleRefinement, prelude::FluentBuilder, *};
-use shilpo_assets::Assets;
 use shilpo_ui::{
     ActiveTheme, Colorize as _, ElementExt, IconName, Sizable,
     button::Button,
@@ -11,6 +10,7 @@ use shilpo_ui::{
     slider::{Slider, SliderState},
     v_flex,
 };
+use storybook::Assets;
 
 pub struct BrushStory {
     focus_handle: gpui::FocusHandle,

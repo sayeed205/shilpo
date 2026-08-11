@@ -3,10 +3,15 @@ pub mod audio;
 pub mod bluetooth;
 pub mod brightness;
 pub mod caffeine;
+pub mod capture;
 pub mod clipboard;
 pub mod compositor;
 pub mod device_daemon;
 pub mod error;
+pub use shilpo_device as device;
+pub use shilpo_device as device_protocol;
+pub use shilpo_device as device_client;
+pub use shilpo_device::*;
 pub mod ipc;
 pub mod location;
 pub mod media;
@@ -15,8 +20,11 @@ pub mod night_light;
 pub mod notifications;
 pub mod power_profile;
 pub(crate) mod runtime;
+pub mod session_store;
 pub mod tray;
 pub mod upower;
+
+pub use session_store::*;
 
 pub use applications::{
     AppScanner, Application, find_terminal_emulator, parse_uri_list, percent_decode,
@@ -100,10 +108,7 @@ pub async fn run_device_daemon() -> anyhow::Result<()> {
 }
 
 pub use tray::{TrayItem, TrayMenuItem, TrayService};
-pub use upower::{
-    BatteryChargeState, BatteryCoarseLevel, BatteryDevicePayload, BatteryInfo, BatteryService,
-    BatteryTechnology, BatteryWarningLevel,
-};
+pub use upower::{BatteryInfo, BatteryService};
 
 #[cfg(test)]
 pub(crate) mod test_support {

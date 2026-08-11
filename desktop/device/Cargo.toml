@@ -1,0 +1,18 @@
+[package]
+name = "shilpo-device"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+zbus.workspace = true
+zvariant.workspace = true
+thiserror = "2"
+futures-lite.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+shilpo-services.workspace = true

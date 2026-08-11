@@ -23,24 +23,15 @@ The workspace is split into two tiers (see [ADR-0001](docs/adr/0001-cross-platfo
 - **[`shilpo-ui`](core/ui)**: M3 GPUI component library. Generic, publishable UI primitives.
 - **[`shilpo-theme`](core/theme)**: M3 color math, scheme generation, and theme data types. Pure computation, no I/O.
 - **[`shilpo-macros`](core/macros)**: Procedural macros (`icon_named!`, `#[derive(IntoPlot)]`).
-- **[`shilpo-assets`](core/assets)**: Asset loader primitives and bundled demo SVG icons. **Note**: Unpublished;
-  applications bring their own asset loader.
 - **[`shilpo-ext-api`](core/ext-api)**: Extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`, `IdError`), manifest, events, guest host effects, ViewTree, WIT interface, schema files, and validation.
 
 #### Linux Desktop (`desktop/` — internal, never published)
 
-- **[`shilpo-shell`](desktop/shell)**: Desktop shell daemon — bar, workspace overview, notifications,
-  OSD, extension surfaces, shell-specific widgets.
-- **[`shilpo-settings`](desktop/settings)**: Control panel application — same product as shell, separate binary.
-- **[`shilpo-services`](desktop/services)**: System service integrations — Wayland/Niri, audio, bluetooth, brightness,
-  network, notifications, media, tray, upower, IPC.
-- **[`shilpo-device-protocol`](desktop/device-protocol)**: Desktop-only versioned device domain, lifecycle, command, and outcome types shared by the daemon and clients.
-- **[`shilpo-device-client`](desktop/device-client)**: Presentation-neutral typed DBus client used by Shell and Settings; owns reconnect/degraded projections and client-side debounce.
-- **[`shilpo-config`](desktop/config)**: TOML configuration, XDG directory resolution, LMDB session storage.
+- **[`shilpo`](desktop/shilpo)**: Consolidated desktop product — Shell daemon, Settings app, CLI dispatch, and declarative TOML config in one executable binary target (`shilpo`).
+- **[`shilpo-device`](desktop/device)**: Presentation-neutral versioned device domain protocol and typed DBus client with degraded/reconnect projections and client-side debounce.
+- **[`shilpo-services`](desktop/services)**: System service integrations — Wayland/Niri, audio, bluetooth, brightness, network, notifications, media, tray, upower, IPC, screen capture domain, and LMDB session store.
 - **[`shilpo-ext-runtime`](desktop/ext-runtime)**: Wasmtime-sandboxed extension runtime with capability authorization, catalog, and worker process protocol.
-- **[`shilpo-theme-daemon`](desktop/theme-daemon)**: Theme DBus daemon, XDG portal sync, persistence, third-party
-  adapters (see [ADR-0002](docs/adr/0002-theme-crate-split.md)).
-- **[`shilpo-cli`](desktop/cli)**: CLI tool for controlling the shell, themes, and extensions.
+- **[`shilpo-theme-daemon`](desktop/theme-daemon)**: Theme DBus daemon, XDG portal sync, persistence, third-party adapters (see [ADR-0002](docs/adr/0002-theme-crate-split.md)).
 
 #### Applications (`apps/`)
 

@@ -1,7 +1,7 @@
-use anyhow::Result;
-use shilpo_config::{
+use crate::session_store::{
     ClipboardItem, DEFAULT_CLIPBOARD_HISTORY_LIMIT, HeedSessionStore, SessionStoreError,
 };
+use anyhow::Result;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]

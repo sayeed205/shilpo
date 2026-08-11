@@ -2,7 +2,7 @@ use crate::adapters::DesktopAdapter;
 use crate::daemon::DaemonState;
 use crate::persistence::write_state_snapshot_to;
 use serde::{Deserialize, Serialize};
-use shilpo_theme::ThemeMode;
+use shilpo_ui::theme::ThemeMode;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;

@@ -394,8 +394,8 @@ mod tests {
     #[test]
     fn test_native_menu_icon_asset_resolves_to_bytes() {
         let icon = Icon::new(IconName::Github);
-        let image = resolve_icon_image(icon.path_ref(), &shilpo_assets::Assets)
-            .expect("icon asset should resolve");
+        let image =
+            resolve_icon_image(icon.path_ref(), &crate::Assets).expect("icon asset should resolve");
 
         assert_eq!(image.format, ImageFormat::Svg);
         assert!(!image.bytes.is_empty());

@@ -9,8 +9,8 @@ use shilpo_ui::{
 };
 
 use serde::Deserialize;
-use shilpo_assets::Assets;
 use std::{sync::Arc, time::Duration};
+use storybook::Assets;
 use storybook::{
     AccordionStory, AppState, AppTitleBar, ButtonStory, CalendarStory, DataTableStory, DialogStory,
     FormStory, IconStory, ImageStory, InputStory, LabelStory, ListStory, NotificationStory, Open,

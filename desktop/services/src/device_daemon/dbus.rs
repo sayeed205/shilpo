@@ -1,5 +1,5 @@
 use super::DeviceDaemonService;
-use shilpo_device_protocol::{
+use crate::device_protocol::{
     AudioPayload, BatteryPayload, BluetoothPayload, BrightnessPayload, CaffeinePayload,
     DeviceCommand, DeviceDomain, DomainLifecycle, DomainPayload, DomainState, MediaPayload,
     NetworkPayload, NightLightPayload, PROTOCOL_VERSION, PowerProfilePayload,
@@ -34,7 +34,7 @@ impl DeviceDbusService {
     pub async fn emit_outcome(
         &self,
         emitter: &SignalEmitter<'_>,
-        outcome: &shilpo_device_protocol::CommandOutcome,
+        outcome: &crate::device_protocol::CommandOutcome,
     ) -> zbus::Result<()> {
         Self::command_reconciled(emitter, outcome.clone().into()).await
     }
@@ -90,7 +90,7 @@ impl DeviceDbusService {
         command: DeviceCommand,
         client_protocol_version: u32,
         emitter: &SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         let domain = command.domain();
         let (_, outcome_rx) = self
             .daemon
@@ -216,9 +216,9 @@ impl DeviceDbusService {
         value: u8,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Audio(shilpo_device_protocol::AudioAction::SetVolume(value)),
+            DeviceCommand::Audio(crate::device_protocol::AudioAction::SetVolume(value)),
             version,
             &e,
         )
@@ -229,9 +229,9 @@ impl DeviceDbusService {
         value: bool,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Audio(shilpo_device_protocol::AudioAction::SetMuted(value)),
+            DeviceCommand::Audio(crate::device_protocol::AudioAction::SetMuted(value)),
             version,
             &e,
         )
@@ -241,9 +241,9 @@ impl DeviceDbusService {
         &self,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Audio(shilpo_device_protocol::AudioAction::ToggleMute),
+            DeviceCommand::Audio(crate::device_protocol::AudioAction::ToggleMute),
             version,
             &e,
         )
@@ -254,9 +254,9 @@ impl DeviceDbusService {
         value: bool,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Bluetooth(shilpo_device_protocol::BluetoothAction::SetPowered(value)),
+            DeviceCommand::Bluetooth(crate::device_protocol::BluetoothAction::SetPowered(value)),
             version,
             &e,
         )
@@ -266,9 +266,9 @@ impl DeviceDbusService {
         &self,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Bluetooth(shilpo_device_protocol::BluetoothAction::TogglePowered),
+            DeviceCommand::Bluetooth(crate::device_protocol::BluetoothAction::TogglePowered),
             version,
             &e,
         )
@@ -279,9 +279,9 @@ impl DeviceDbusService {
         address: String,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Bluetooth(shilpo_device_protocol::BluetoothAction::Connect(address)),
+            DeviceCommand::Bluetooth(crate::device_protocol::BluetoothAction::Connect(address)),
             version,
             &e,
         )
@@ -292,9 +292,9 @@ impl DeviceDbusService {
         address: String,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Bluetooth(shilpo_device_protocol::BluetoothAction::Disconnect(address)),
+            DeviceCommand::Bluetooth(crate::device_protocol::BluetoothAction::Disconnect(address)),
             version,
             &e,
         )
@@ -305,9 +305,9 @@ impl DeviceDbusService {
         value: u8,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Brightness(shilpo_device_protocol::BrightnessAction::SetBrightness(
+            DeviceCommand::Brightness(crate::device_protocol::BrightnessAction::SetBrightness(
                 value,
             )),
             version,
@@ -319,9 +319,9 @@ impl DeviceDbusService {
         &self,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Brightness(shilpo_device_protocol::BrightnessAction::StepUp),
+            DeviceCommand::Brightness(crate::device_protocol::BrightnessAction::StepUp),
             version,
             &e,
         )
@@ -331,9 +331,9 @@ impl DeviceDbusService {
         &self,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Brightness(shilpo_device_protocol::BrightnessAction::StepDown),
+            DeviceCommand::Brightness(crate::device_protocol::BrightnessAction::StepDown),
             version,
             &e,
         )
@@ -344,9 +344,9 @@ impl DeviceDbusService {
         value: bool,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Network(shilpo_device_protocol::NetworkAction::SetWifiEnabled(value)),
+            DeviceCommand::Network(crate::device_protocol::NetworkAction::SetWifiEnabled(value)),
             version,
             &e,
         )
@@ -356,9 +356,9 @@ impl DeviceDbusService {
         &self,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Network(shilpo_device_protocol::NetworkAction::ToggleWifi),
+            DeviceCommand::Network(crate::device_protocol::NetworkAction::ToggleWifi),
             version,
             &e,
         )
@@ -369,9 +369,9 @@ impl DeviceDbusService {
         ssid: String,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Network(shilpo_device_protocol::NetworkAction::ConnectWifi(ssid)),
+            DeviceCommand::Network(crate::device_protocol::NetworkAction::ConnectWifi(ssid)),
             version,
             &e,
         )
@@ -382,9 +382,9 @@ impl DeviceDbusService {
         name: String,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Network(shilpo_device_protocol::NetworkAction::ConnectVpn(name)),
+            DeviceCommand::Network(crate::device_protocol::NetworkAction::ConnectVpn(name)),
             version,
             &e,
         )
@@ -395,9 +395,9 @@ impl DeviceDbusService {
         name: String,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Network(shilpo_device_protocol::NetworkAction::DisconnectVpn(name)),
+            DeviceCommand::Network(crate::device_protocol::NetworkAction::DisconnectVpn(name)),
             version,
             &e,
         )
@@ -408,9 +408,9 @@ impl DeviceDbusService {
         value: bool,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::NightLight(shilpo_device_protocol::NightLightAction::SetEnabled(value)),
+            DeviceCommand::NightLight(crate::device_protocol::NightLightAction::SetEnabled(value)),
             version,
             &e,
         )
@@ -420,9 +420,9 @@ impl DeviceDbusService {
         &self,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::NightLight(shilpo_device_protocol::NightLightAction::ToggleEnabled),
+            DeviceCommand::NightLight(crate::device_protocol::NightLightAction::ToggleEnabled),
             version,
             &e,
         )
@@ -433,9 +433,9 @@ impl DeviceDbusService {
         value: u32,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::NightLight(shilpo_device_protocol::NightLightAction::SetTemperature(
+            DeviceCommand::NightLight(crate::device_protocol::NightLightAction::SetTemperature(
                 value,
             )),
             version,
@@ -448,9 +448,9 @@ impl DeviceDbusService {
         profile: String,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::PowerProfile(shilpo_device_protocol::PowerProfileAction::SetProfile(
+            DeviceCommand::PowerProfile(crate::device_protocol::PowerProfileAction::SetProfile(
                 profile,
             )),
             version,
@@ -462,9 +462,9 @@ impl DeviceDbusService {
         &self,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Media(shilpo_device_protocol::MediaAction::Play),
+            DeviceCommand::Media(crate::device_protocol::MediaAction::Play),
             version,
             &e,
         )
@@ -474,9 +474,9 @@ impl DeviceDbusService {
         &self,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Media(shilpo_device_protocol::MediaAction::Pause),
+            DeviceCommand::Media(crate::device_protocol::MediaAction::Pause),
             version,
             &e,
         )
@@ -486,9 +486,9 @@ impl DeviceDbusService {
         &self,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Media(shilpo_device_protocol::MediaAction::PlayPause),
+            DeviceCommand::Media(crate::device_protocol::MediaAction::PlayPause),
             version,
             &e,
         )
@@ -498,9 +498,9 @@ impl DeviceDbusService {
         &self,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Media(shilpo_device_protocol::MediaAction::Next),
+            DeviceCommand::Media(crate::device_protocol::MediaAction::Next),
             version,
             &e,
         )
@@ -510,9 +510,9 @@ impl DeviceDbusService {
         &self,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Media(shilpo_device_protocol::MediaAction::Previous),
+            DeviceCommand::Media(crate::device_protocol::MediaAction::Previous),
             version,
             &e,
         )
@@ -523,9 +523,9 @@ impl DeviceDbusService {
         value: bool,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Caffeine(shilpo_device_protocol::CaffeineAction::SetEnabled(value)),
+            DeviceCommand::Caffeine(crate::device_protocol::CaffeineAction::SetEnabled(value)),
             version,
             &e,
         )
@@ -535,9 +535,9 @@ impl DeviceDbusService {
         &self,
         version: u32,
         #[zbus(signal_emitter)] e: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<shilpo_device_protocol::CommandOutcomeRecord> {
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
         self.submit_typed(
-            DeviceCommand::Caffeine(shilpo_device_protocol::CaffeineAction::Toggle),
+            DeviceCommand::Caffeine(crate::device_protocol::CaffeineAction::Toggle),
             version,
             &e,
         )
@@ -620,7 +620,7 @@ impl DeviceDbusService {
     #[zbus(signal)]
     async fn command_reconciled(
         signal_emitter: &SignalEmitter<'_>,
-        outcome: shilpo_device_protocol::CommandOutcomeRecord,
+        outcome: crate::device_protocol::CommandOutcomeRecord,
     ) -> zbus::Result<()>;
 }
 

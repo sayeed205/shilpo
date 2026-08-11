@@ -51,7 +51,7 @@ pub enum IpcRequest {
     SetDisplayBrightness { id: String, percentage: u8 },
     GetStatus,
     GetTelemetry,
-    Capture(shilpo_capture::CaptureIntent),
+    Capture(crate::capture::CaptureIntent),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -163,7 +163,7 @@ pub enum IpcResult {
     CommandApplied(CommandOutcome),
     Status(IpcStatus),
     Telemetry(ServiceHealth),
-    Capture(shilpo_capture::CaptureOutcome),
+    Capture(crate::capture::CaptureOutcome),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -6,7 +6,12 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 pub fn state_file_path() -> PathBuf {
-    shilpo_config::state_dir().join("colors.json")
+    std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
+        .unwrap_or_else(|| PathBuf::from(".local/state"))
+        .join("shilpo")
+        .join("colors.json")
 }
 
 pub fn write_state_snapshot(state: &DaemonState) -> Result<PathBuf> {
@@ -67,10 +72,13 @@ pub fn write_state_snapshot_to(state: &DaemonState, path: &Path) -> Result<PathB
     Ok(path.to_path_buf())
 }
 
-pub fn read_state_snapshot() -> Option<DaemonState> {
-    let path = state_file_path();
-    let content = fs::read_to_string(&path).ok()?;
+pub fn read_state_snapshot_from(path: &Path) -> Option<DaemonState> {
+    let content = fs::read_to_string(path).ok()?;
     serde_json::from_str(&content).ok()
+}
+
+pub fn read_state_snapshot() -> Option<DaemonState> {
+    read_state_snapshot_from(&state_file_path())
 }
 
 #[cfg(test)]
@@ -81,7 +89,7 @@ mod tests {
     #[test]
     fn test_atomic_persistence_and_permissions() {
         let state = DaemonState {
-            theme: shilpo_theme::ThemeState {
+            theme: shilpo_ui::theme::ThemeState {
                 revision: 42,
                 ..Default::default()
             },

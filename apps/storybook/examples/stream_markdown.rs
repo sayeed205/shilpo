@@ -1,11 +1,11 @@
 use gpui::*;
-use shilpo_assets::Assets;
 use shilpo_ui::{
     button::Button,
     h_flex,
     text::{TextView, TextViewState},
     v_flex,
 };
+use storybook::Assets;
 
 pub struct Example {
     markdown_state: Entity<TextViewState>,

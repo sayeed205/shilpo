@@ -15,54 +15,34 @@ library at its core.
   `ThemeCommand`, `reduce()`. Zero I/O, zero system dependencies.
 - **Macros** (`core/macros`) — Procedural macros. `icon_named!` generates icon enums from SVG asset directories.
   `#[derive(IntoPlot)]` for chart traits.
-- **Assets** (`core/assets`) — Asset loader primitives. `rust-embed` on native desktop,
-  `reqwest` CDN fetching on WASM. Apps bring their own asset loader; this crate provides the interface and default
-  bundled SVG icons.
+- **Assets** (`core/assets/icons`) — Plain canonical SVG icon data. Applications own their GPUI `AssetSource`; no
+  asset Cargo package or default runtime loader is published.
 - **Extension API** (`core/ext-api`) — Extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`, `IdError`),
   extension manifest schemas, events, guest host effects, ViewTree declarative UI family, API/schema constants, and WIT interface contract (`wit/extension.wit`). Cross-platform, zero runtime/Wasmtime dependencies.
 
 ### Linux Desktop (`desktop/`)
 
-- **Shell** (`desktop/shell`) — The main desktop shell daemon. Top bar, workspace overview, notifications, OSD, extension surface rendering, action registry, keybinding management. Also owns shell-specific presentational widgets (Bluetooth, Network, SysInfo, Media, Caffeine).
-- **Settings** (`desktop/settings`) — Standalone Linux control panel application. Material 3 settings UI with navigation rail and category pages for network, bluetooth, themes, bar, and desktop configuration. Same product as Shell, separate binary.
-- **Device Protocol** (`desktop/device-protocol`) — Desktop device protocol types (`DeviceDomain`, `DomainLifecycle`, `DomainState`, `CommandId`, `CommandOutcome`, `DeviceCommand`). Pure data types with exact protocol version check (`PROTOCOL_VERSION = 1`).
-- **Device Client** (`desktop/device-client`) — Desktop device client consumed by Shell and Settings. Manages DBus client connections, debounced control setters, and typed degraded state when daemon is unavailable.
-- **Services** (`desktop/services`) — Linux system integration services. Device daemon (`DeviceDaemonService`, production `SystemDeviceAdapter`, deterministic `InMemoryDeviceAdapter` for tests), Wayland/Niri compositor IPC, audio, bluetooth, brightness, caffeine, clipboard, location, media, network, night light, notifications, power profile, screen capture, tray, upower, app scanning.
-- **Config** (`desktop/config`) — Shell configuration management. TOML config loading/validation, XDG directory
-  resolution, LMDB session storage via `heed`. Imports extension ID types from `shilpo-ext-api` for validating extension contribution
-  references in config.
-- **Extension Runtime** (`desktop/ext-runtime`) — Wasmtime-sandboxed extension runtime. Capability authorization,
-  package catalog/registry index, WASI component-model host, worker process protocol (`shilpo extension-host`).
-- **Theme Daemon** (`desktop/theme-daemon`) — Linux theme system integration. DBus service (`org.shilpo.Theme`), XDG
-  portal appearance sync, wallpaper watching, atomic JSON persistence, theme adapters for third-party tools (GTK, Foot,
-  Alacritty, Kitty, Hyprland).
-- **CLI** (`desktop/cli`) — Command-line interface (`shilpo`). Controls shell daemon, switches theme modes, manages
-  extensions, runs environment doctor checks.
+- **Shilpo** (`desktop/shilpo`) — Consolidated desktop product package. Contains Shell daemon (`shell`), Settings app (`settings`), public CLI dispatch (`cli`), and declarative TOML configuration/validation (`config`). Produces the single installed executable binary target (`shilpo`).
+- **Device** (`desktop/device`) — Presentation-neutral versioned device domain protocol (`protocol`) and typed DBus client (`client`) with degraded/reconnect projections and client-side debounce.
+- **Services** (`desktop/services`) — Linux system integration services. Device daemon (`DeviceDaemonService`), Wayland/Niri compositor IPC, audio, bluetooth, brightness, caffeine, clipboard, location, media, network, night light, notifications, power profile, screen capture domain (`capture`), tray, upower, app scanning, and LMDB session store.
+- **Extension Runtime** (`desktop/ext-runtime`) — Wasmtime-sandboxed extension runtime. Capability authorization, package catalog/registry index, WASI component-model host, worker process protocol (`shilpo extension-host`).
+- **Theme Daemon** (`desktop/theme-daemon`) — Linux theme system integration. DBus service (`org.shilpo.Theme`), XDG portal appearance sync, wallpaper watching, atomic JSON persistence, theme adapters for third-party tools (GTK, Foot, Alacritty, Kitty, Hyprland).
 
 ### Applications (`apps/`)
 
-- **Storybook** (`apps/storybook`) — Interactive desktop gallery for exploring and testing core UI components.
-  Cross-platform. Demos the generic M3 component library only, not shell-specific widgets.
+- **Storybook** (`apps/storybook`) — Interactive desktop gallery for exploring and testing core UI components. Cross-platform. Demos the generic M3 component library only, not shell-specific widgets.
 
 ## Relationships
 
-- **UI → Theme**: UI imports `ThemeMode`, `SchemeVariant`, `ThemeState` as pure data types. UI owns the GPUI `Theme`
-  global and `ThemeColor` rendering; Theme provides the color math.
+- **UI → Theme**: UI imports `ThemeMode`, `SchemeVariant`, `ThemeState` as pure data types. UI owns the GPUI `Theme` global and `ThemeColor` rendering; Theme provides the color math.
 - **UI → Macros**: UI uses `icon_named!` to generate icon enums from SVG assets at compile time.
-- **UI → Assets**: UI loads bundled SVG icons via the asset source interface.
-- **Shell → UI**: Shell renders all UI using core M3 components.
-- **Shell → Theme Daemon**: Shell subscribes to theme daemon for system-wide theme synchronization.
-- **Shell → Services**: Shell wires system service data into presentational widgets via service worker channels.
-- **Shell → Device Client → Device Protocol**: Shell submits live device commands and observes per-domain daemon revisions through the typed client seam.
-- **Settings → Device Client → Device Protocol**: Settings uses the same daemon-owned device projection independently of Shell.
-- **Device Client → Device Daemon**: The client negotiates the exact protocol version and consumes typed DBus methods/signals from the Services-hosted daemon.
-- **Services → Device Protocol**: The device daemon owns command arbitration, per-domain queues, and Linux service adapters while remaining separate from the client.
-- **Shell → Config**: Shell loads and validates its configuration.
-- **Shell → Ext Runtime**: Shell hosts and coordinates extensions via supervisor worker process.
+- **Shilpo → UI**: Shilpo renders Shell and Settings UI using core M3 components.
+- **Shilpo → Theme Daemon**: Shilpo subscribes to theme daemon for system-wide theme synchronization and runs the theme daemon role with narrow options.
+- **Shilpo → Services**: Shilpo wires system service data into presentational widgets via service worker channels.
+- **Shilpo → Device**: Shilpo submits live device commands and observes per-domain daemon revisions through the typed client seam.
+- **Services → Device**: Services hosts the device daemon (`DeviceDaemonService`), which owns command arbitration, per-domain queues, and Linux service adapters.
+- **Shilpo → Ext Runtime**: Shilpo hosts and coordinates extensions via supervisor worker process (`shilpo extension-host`).
 - **Ext Runtime → Ext API**: Ext Runtime implements guest contracts and capability authorization for Extension API types.
-- **Settings → UI, Services, Theme Daemon, Config, Ext Runtime, Ext API**: Same dependency set as Shell — same product, separate binary.
-- **Config → Ext API**: Config imports `CanonicalId`, `ExtensionId` for validating extension references in TOML config
-  files. Lightweight pure-data dependency without Wasmtime runtime overhead.
+- **Services → LMDB Session Store**: Services owns operational/session persistence (clipboard history, output state) independently of Shilpo declarative config.
 - **Theme Daemon → Theme**: Daemon uses core theme types and color generation.
-- **Theme Daemon → Config**: Daemon reads shell config and uses XDG state directories for persistence.
-- **Storybook → UI, Theme, Assets**: Demos the core component library.
+- **Storybook → UI, Theme**: Demos the core component library.

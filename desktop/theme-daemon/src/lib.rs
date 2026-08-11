@@ -7,11 +7,15 @@ pub mod persistence;
 pub mod portal;
 
 pub use client::ThemeClient;
-pub use daemon::{ChangeKind, DaemonCommand, DaemonState, ThemeDaemon, ThemeUpdate};
+pub use daemon::{
+    ChangeKind, DaemonCommand, DaemonState, ThemeDaemon, ThemeDaemonOptions, ThemeUpdate,
+};
 pub use executors::{AdapterExecutor, PersistenceExecutor, ProjectionStatus};
-pub use persistence::{read_state_snapshot, state_file_path, write_state_snapshot};
+pub use persistence::{
+    read_state_snapshot, read_state_snapshot_from, state_file_path, write_state_snapshot,
+};
 
-pub async fn run_theme_daemon() -> anyhow::Result<()> {
+pub async fn run_theme_daemon(options: ThemeDaemonOptions) -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -20,7 +24,7 @@ pub async fn run_theme_daemon() -> anyhow::Result<()> {
         .init();
 
     tracing::info!("Starting shilpo theme-daemon session daemon");
-    let daemon = ThemeDaemon::new().await?;
+    let daemon = ThemeDaemon::with_options(options).await?;
     daemon.run().await;
     Ok(())
 }

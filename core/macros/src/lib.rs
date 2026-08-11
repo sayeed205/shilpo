@@ -141,21 +141,42 @@ pub fn icon_named(input: TokenStream) -> TokenStream {
 
     let mut entries: Vec<(String, String)> = Vec::new();
 
-    let dir = std::fs::read_dir(&icons_dir).unwrap_or_else(|e| {
-        panic!(
-            "generate_icon_enum: failed to read '{}': {}",
-            icons_dir.display(),
-            e
-        )
-    });
+    if icons_dir.is_file() {
+        let manifest = std::fs::read_to_string(&icons_dir).unwrap_or_else(|e| {
+            panic!(
+                "generate_icon_enum: failed to read '{}': {}",
+                icons_dir.display(),
+                e
+            )
+        });
+        for filename in manifest
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            if filename.ends_with(".svg") {
+                let variant_name = pascal_case(filename);
+                let path = format!("icons/{filename}");
+                entries.push((variant_name, path));
+            }
+        }
+    } else {
+        let dir = std::fs::read_dir(&icons_dir).unwrap_or_else(|e| {
+            panic!(
+                "generate_icon_enum: failed to read '{}': {}",
+                icons_dir.display(),
+                e
+            )
+        });
 
-    for entry in dir {
-        let entry = entry.expect("failed to read directory entry");
-        let filename = entry.file_name().to_string_lossy().to_string();
-        if filename.ends_with(".svg") {
-            let variant_name = pascal_case(&filename);
-            let path = format!("icons/{}", filename);
-            entries.push((variant_name, path));
+        for entry in dir {
+            let entry = entry.expect("failed to read directory entry");
+            let filename = entry.file_name().to_string_lossy().to_string();
+            if filename.ends_with(".svg") {
+                let variant_name = pascal_case(&filename);
+                let path = format!("icons/{filename}");
+                entries.push((variant_name, path));
+            }
         }
     }
 

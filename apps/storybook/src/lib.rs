@@ -21,11 +21,13 @@ use shilpo_ui::{
 };
 
 mod app_menus;
+pub mod assets;
 mod gallery;
 mod stories;
 mod themes;
 mod title_bar;
 pub use crate::title_bar::AppTitleBar;
+pub use assets::Assets;
 pub use gallery::Gallery;
 pub use stories::*;
 

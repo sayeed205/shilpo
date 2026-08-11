@@ -1,7 +1,7 @@
 # Screen capture crate architecture (Screenshot-Only)
 
-Shilpo's screen capture feature (`shilpo-capture`) is a native implementation replacing the
-legacy `grim` shell-out approach. This ADR records the key trade-offs and architecture.
+Shilpo's screen capture feature is a native implementation replacing the
+legacy `grim` shell-out approach. Originally in `desktop/capture`, screen capture has been absorbed into `shilpo-services::capture` as a focused domain module.
 
 ## Scope & Deferral of Screen Recording
 
@@ -11,11 +11,11 @@ and to keep the shell runtime lightweight and reliable, **screen recording has b
 and intentionally deferred until the shell architecture stabilizes. No specific future recording backend
 (libobs, Avio, GStreamer, or CLI subprocess) is pre-selected.
 
-`shilpo-capture` is now a focused, deep module dedicated exclusively to one-shot screenshot capture.
+`shilpo-services::capture` is now a focused, deep module dedicated exclusively to one-shot screenshot capture.
 
-## Crate placement: `desktop/capture` (Linux-only)
+## Placement: `desktop/services::capture` (Linux-only)
 
-The crate lives in `desktop/` because it depends on Wayland protocols (`wlr-screencopy-unstable-v1`) —
+Screen capture lives in `shilpo-services` because it depends on Wayland protocols (`wlr-screencopy-unstable-v1`) —
 Linux-specific. A future cross-platform abstraction layer can be extracted when macOS/Windows backends
 exist (ADR-0001 principle).
 
@@ -29,7 +29,7 @@ every capture — unnecessary friction when Shilpo IS the trusted shell environm
 
 ## One-shot Capture Architecture
 
-The `shilpo-capture` API exposes synchronous functions for one-shot screen capture:
+The `shilpo-services::capture` API exposes synchronous functions for one-shot screen capture:
 
 ```
 Wayland Compositor → wlr-screencopy → SHM Buffer → Frame → frame_to_rgba → RgbaImage

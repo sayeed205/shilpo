@@ -1,5 +1,4 @@
 use gpui::*;
-use shilpo_assets::Assets;
 use shilpo_ui::{
     ActiveTheme as _,
     highlighter::Language,
@@ -7,6 +6,7 @@ use shilpo_ui::{
     resizable::h_resizable,
     text::html,
 };
+use storybook::Assets;
 
 pub struct Example {
     input_state: Entity<InputState>,

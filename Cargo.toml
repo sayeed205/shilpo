@@ -1,25 +1,19 @@
 [workspace]
 members = [
     # Cross-platform core crates
-    "core/theme",
     "core/ui",
+    "core/theme",
     "core/macros",
-    "core/assets",
     "core/ext-api",
 
     # Linux desktop shell crates
+    "desktop/shilpo",
+    "desktop/device",
     "desktop/services",
-    "desktop/device-protocol",
-    "desktop/device-client",
-    "desktop/config",
     "desktop/ext-runtime",
     "desktop/theme-daemon",
-    "desktop/shell",
-    "desktop/settings",
-    "desktop/cli",
 
     # Other
-    "desktop/capture",
     "apps/storybook",
 ]
 resolver = "2"
@@ -29,20 +23,15 @@ publish = false
 edition = "2024"
 
 [workspace.dependencies]
-shilpo-theme = { path = "core/theme" }
+shilpo = { path = "desktop/shilpo" }
 shilpo-ui = { path = "core/ui" }
-shilpo-assets = { path = "core/assets" }
+shilpo-theme = { path = "core/theme" }
 shilpo-macros = { path = "core/macros" }
 shilpo-ext-api = { path = "core/ext-api" }
+shilpo-device = { path = "desktop/device" }
 shilpo-services = { path = "desktop/services" }
-shilpo-device-protocol = { path = "desktop/device-protocol" }
-shilpo-device-client = { path = "desktop/device-client" }
-shilpo-config = { path = "desktop/config" }
 shilpo-ext-runtime = { path = "desktop/ext-runtime" }
 shilpo-theme-daemon = { path = "desktop/theme-daemon" }
-shilpo-shell = { path = "desktop/shell" }
-shilpo-settings = { path = "desktop/settings" }
-shilpo-capture = { path = "desktop/capture" }
 
 niri-ipc = "26"
 zbus = { version = "5", features = ["p2p"] }
@@ -125,6 +114,7 @@ wasmtime-wasi = { version = "47.0.2", default-features = false, features = ["p2"
 libpulse-binding = "2"
 ddc = "0.2"
 ddc-i2c = { version = "0.2", features = ["i2c-linux"] }
+heed = "0.22"
 
 [workspace.dependencies.windows]
 features = ["Wdk", "Wdk_System", "Wdk_System_SystemServices"]

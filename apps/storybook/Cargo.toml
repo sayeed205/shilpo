@@ -15,8 +15,10 @@ futures-lite.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 shilpo-ui = { workspace = true }
-shilpo-theme = { workspace = true }
-shilpo-assets = { workspace = true }
+log.workspace = true
+rust-embed = { version = "8.7.2", features = ["interpolate-folder-path", "include-exclude"] }
+reqwest.workspace = true
+wasm-bindgen-futures = "0.4"
 
 autocorrect = "2.14.2"
 chrono = "0.4"

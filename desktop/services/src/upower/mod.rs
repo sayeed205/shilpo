@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 use zbus::{Connection, proxy};
 
-pub use shilpo_device_protocol::{
+pub use crate::device_protocol::{
     BatteryChargeState, BatteryCoarseLevel, BatteryDevicePayload, BatteryPayload as BatteryInfo,
     BatteryTechnology, BatteryWarningLevel, OptionalBool, OptionalF64, OptionalU64,
 };
