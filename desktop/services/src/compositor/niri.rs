@@ -650,7 +650,7 @@ fn run_niri_listener(
         let socket_path = match resolve_niri_socket_path() {
             Some(path) => path,
             None => {
-                supervisor.record_failure(now_ms);
+                supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
                 publish_reconnecting(
                     &tx,
                     &broker,
@@ -667,7 +667,7 @@ fn run_niri_listener(
         let outputs = match query_outputs_from_socket_path(&socket_path) {
             Ok(outputs) => outputs,
             Err(err) => {
-                supervisor.record_failure(now_ms);
+                supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
                 publish_reconnecting(
                     &tx,
                     &broker,
@@ -684,7 +684,7 @@ fn run_niri_listener(
         let mut event_stream = match UnixStream::connect(&socket_path) {
             Ok(s) => s,
             Err(err) => {
-                supervisor.record_failure(now_ms);
+                supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
                 publish_reconnecting(
                     &tx,
                     &broker,
@@ -704,7 +704,7 @@ fn run_niri_listener(
                 j
             }
             Err(err) => {
-                supervisor.record_failure(now_ms);
+                supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
                 publish_reconnecting(
                     &tx,
                     &broker,
@@ -719,7 +719,7 @@ fn run_niri_listener(
         };
 
         if let Err(err) = event_stream.write_all(req_json.as_bytes()) {
-            supervisor.record_failure(now_ms);
+            supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
             publish_reconnecting(
                 &tx,
                 &broker,
@@ -736,7 +736,7 @@ fn run_niri_listener(
             .set_read_timeout(Some(Duration::from_millis(200)))
             .is_err()
         {
-            supervisor.record_failure(now_ms);
+            supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
             publish_reconnecting(
                 &tx,
                 &broker,
@@ -761,7 +761,7 @@ fn run_niri_listener(
             line.clear();
             match reader.read_line(&mut line) {
                 Ok(0) => {
-                    supervisor.record_failure(now_ms);
+                    supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
                     publish_reconnecting(
                         &tx,
                         &broker,
@@ -828,7 +828,7 @@ fn run_niri_listener(
                     continue;
                 }
                 Err(err) => {
-                    supervisor.record_failure(now_ms);
+                    supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
                     publish_reconnecting(
                         &tx,
                         &broker,
