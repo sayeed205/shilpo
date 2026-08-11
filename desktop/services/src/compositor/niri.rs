@@ -510,8 +510,9 @@ fn publish_reconnecting(
     current.connection = CompositorConnection::Reconnecting;
     current.last_error = last_error;
     let snap_arc = Arc::new(current);
-    let _ = broker.observe_snapshot(snap_arc.clone());
-    let _ = tx.send(snap_arc);
+    if broker.observe_snapshot(snap_arc.clone()).is_ok() {
+        let _ = tx.send(snap_arc);
+    }
 }
 
 fn run_niri_listener(
@@ -890,8 +891,9 @@ fn publish_snapshot_from_state(
         *revision = revision.saturating_add(1);
         new_snapshot.version = DomainVersion::new(owner_generation, *revision);
         let snap_arc = Arc::new(new_snapshot);
-        let _ = broker.observe_snapshot(snap_arc.clone());
-        let _ = tx.send(snap_arc);
+        if broker.observe_snapshot(snap_arc.clone()).is_ok() {
+            let _ = tx.send(snap_arc);
+        }
     }
 }
 
