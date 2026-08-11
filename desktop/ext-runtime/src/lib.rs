@@ -3,10 +3,8 @@ pub mod catalog;
 pub mod circuit_breaker;
 pub mod cli;
 pub mod effects;
-pub mod events;
-pub mod manifest;
-pub mod view;
 pub mod wasm;
+pub mod worker;
 
 pub use adapter::{
     DispatchResult, ExtensionHost, ExtensionRuntime, GuestExtension, HostError, InMemoryRuntime,
@@ -14,9 +12,9 @@ pub use adapter::{
 };
 pub use catalog::{
     CURRENT_SHILPO_VERSION, CatalogError, CatalogExtension, CatalogPaths, ExtensionCatalog,
-    ExtensionCatalogSnapshot, ExtensionUpdate, InstallationReceipt, InstalledExtension,
-    InstalledVersionReceipt, PackageSignature, RegistryIndex, RegistryRelease, RegistrySource,
-    ReleaseChannel, SignedRegistryIndex, StoredGrants, TrustState, UpdateState,
+    ExtensionCatalogSnapshot, ExtensionUpdate as CatalogExtensionUpdate, InstallationReceipt,
+    InstalledExtension, InstalledVersionReceipt, PackageSignature, RegistryIndex, RegistryRelease,
+    RegistrySource, ReleaseChannel, SignedRegistryIndex, StoredGrants, TrustState, UpdateState,
     default_extension_config_dir, default_extension_data_dir, generate_signing_key,
     package_signature_path, sign_package, sign_registry_index, sign_release,
 };
@@ -26,22 +24,29 @@ pub use cli::{
     development_registrations, follow_log, source_command, write_signing_key,
 };
 pub use effects::{
-    AuthorizedHostEffect, AuthorizedHostEffectKind, AuthorizedHttpRequest, HostEffect,
-    WallpaperSource,
-};
-pub use events::{EventKind, ExtensionEvent};
-pub use manifest::{Capability, CapabilityKind, ExtensionManifest, ManifestError};
-pub use view::{
-    ContainerDirection, ContainerNode, LoadingIndicatorNode, SemanticColorToken, TextNode,
-    ViewLimits, ViewNode, ViewStyle, ViewTree, ViewValidationError,
+    AuthorizedHostEffect, AuthorizedHostEffectKind, AuthorizedHttpRequest, CanonicalHttpTarget,
+    capability_allows_effect, capability_allows_http_target,
 };
 pub use wasm::{WasmModule, WasmRuntime};
+pub use worker::{
+    ActiveSource, ContributionDescriptor, ContributionInstance, ContributionSurface,
+    ExtensionChanges, ExtensionCommand, ExtensionEngine, ExtensionGeneration, ExtensionSession,
+    ExtensionSnapshot, ExtensionUpdate, FrameReader, HostGeneration, HostMessage, MAX_FRAME_SIZE,
+    MAX_QUEUE_BOUND, PROTOCOL_VERSION, ProcessCodecError, ReplaceableEvent, WorkerMessage,
+    WorkerPayload, read_frame, recv_host_message, recv_worker_message,
+    recv_worker_message_nonblocking, run_extension_host, send_host_message, send_worker_message,
+    write_frame,
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use flate2::read::GzDecoder;
-    use shilpo_ext_types::{CanonicalId, ExtensionId};
+    use shilpo_ext_api::{
+        CanonicalId, Capability, ContainerDirection, ContainerNode, EventKind, ExtensionEvent,
+        ExtensionId, ExtensionManifest, HostEffect, ManifestError, TextNode, ViewLimits, ViewNode,
+        ViewTree,
+    };
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
@@ -534,7 +539,7 @@ mod tests {
 
     #[test]
     fn view_validation_rejects_unsafe_or_unbounded_content() {
-        let unsafe_view = ViewTree::new(ViewNode::Image(crate::view::ImageNode {
+        let unsafe_view = ViewTree::new(ViewNode::Image(shilpo_ext_api::ImageNode {
             asset_path: "../secret.png".into(),
             width: None,
             height: None,
@@ -565,12 +570,18 @@ mod tests {
         let capability = Capability::FilesystemRead {
             paths: vec!["assets/icons/*".into()],
         };
-        assert!(capability.allows_effect(&HostEffect::ReadFile {
-            path: "assets/icons/clock.svg".into(),
-        }));
-        assert!(!capability.allows_effect(&HostEffect::ReadFile {
-            path: "data/private.json".into(),
-        }));
+        assert!(capability_allows_effect(
+            &capability,
+            &HostEffect::ReadFile {
+                path: "assets/icons/clock.svg".into(),
+            }
+        ));
+        assert!(!capability_allows_effect(
+            &capability,
+            &HostEffect::ReadFile {
+                path: "data/private.json".into(),
+            }
+        ));
 
         let invalid = format!(
             "{MANIFEST}\n[[capabilities]]\nkind = \"filesystem:read\"\npaths = [\"../secrets/**\"]"
@@ -584,8 +595,14 @@ mod tests {
     #[test]
     fn location_read_capability_allows_location_read_effect() {
         let capability = Capability::LocationRead;
-        assert!(capability.allows_effect(&HostEffect::LocationRead));
-        assert!(!capability.allows_effect(&HostEffect::ClipboardRead));
+        assert!(capability_allows_effect(
+            &capability,
+            &HostEffect::LocationRead
+        ));
+        assert!(!capability_allows_effect(
+            &capability,
+            &HostEffect::ClipboardRead
+        ));
     }
 
     #[test]
@@ -596,8 +613,10 @@ mod tests {
         assert!(schema.contains("\"network:http\""));
 
         let generated: serde_json::Value = serde_json::from_str(&schema).unwrap();
-        let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("../schema/extension-v1.schema.json")).unwrap();
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../core/ext-api/schema/extension-v1.schema.json"
+        ))
+        .unwrap();
         assert_eq!(fixture, generated);
     }
 
@@ -754,6 +773,10 @@ mod tests {
 
     impl ExtensionRuntime for FailingRuntime {
         type Module = ();
+
+        fn compile_module(&self, _bytes: &[u8]) -> Result<Self::Module, String> {
+            Ok(())
+        }
 
         fn load(
             &mut self,

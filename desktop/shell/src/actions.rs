@@ -1,5 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use shilpo_ext_types::{CanonicalId, IdError};
+use shilpo_ext_api::{CanonicalId, IdError};
 use std::{borrow::Cow, collections::BTreeMap, fmt, str::FromStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

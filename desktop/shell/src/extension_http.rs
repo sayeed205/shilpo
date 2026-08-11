@@ -1,4 +1,5 @@
-use shilpo_ext::{AuthorizedHttpRequest, ExtensionEvent};
+use shilpo_ext_api::ExtensionEvent;
+use shilpo_ext_runtime::AuthorizedHttpRequest;
 
 pub(crate) fn build_client() -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
@@ -14,67 +15,66 @@ pub(crate) fn build_request(
 ) -> reqwest::Request {
     client
         .get(request.url().clone())
+        .header(reqwest::header::ACCEPT, "application/json, text/plain, */*")
         .build()
-        .expect("valid request")
+        .expect("authorized HTTP request builds valid reqwest::Request")
 }
 
 pub(crate) async fn fetch(request: AuthorizedHttpRequest) -> ExtensionEvent {
-    const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
     let request_id = request.request_id().to_string();
-
-    let fail = |error: String| ExtensionEvent::HttpResponse {
-        request_id: request_id.clone(),
-        status: None,
-        body: String::new(),
-        error: Some(error),
-    };
-
     let client = match build_client() {
-        Ok(client) => client,
-        Err(error) => return fail(format!("failed to initialize HTTP transport: {error}")),
+        Ok(c) => c,
+        Err(e) => {
+            return ExtensionEvent::HttpResponse {
+                request_id,
+                status: None,
+                body: String::new(),
+                error: Some(e.to_string()),
+            };
+        }
     };
     let req = build_request(&client, &request);
-    let mut response = match client.execute(req).await {
-        Ok(response) => response,
-        Err(error) => return fail(format!("request failed: {error}")),
-    };
-    let status = response.status().as_u16();
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
-    {
-        return fail("response exceeds the 1 MiB limit".into());
-    }
-    let mut bytes = Vec::new();
-    loop {
-        match response.chunk().await {
-            Ok(Some(chunk)) => {
-                if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-                    return fail("response exceeds the 1 MiB limit".into());
-                }
-                bytes.extend_from_slice(&chunk);
+    let res = client.execute(req).await;
+    build_response_event(request_id, res).await
+}
+
+pub(crate) async fn build_response_event(
+    request_id: String,
+    result: Result<reqwest::Response, reqwest::Error>,
+) -> ExtensionEvent {
+    match result {
+        Ok(response) => {
+            let status = Some(response.status().as_u16());
+            match response.text().await {
+                Ok(body) => ExtensionEvent::HttpResponse {
+                    request_id,
+                    status,
+                    body,
+                    error: None,
+                },
+                Err(error) => ExtensionEvent::HttpResponse {
+                    request_id,
+                    status,
+                    body: String::new(),
+                    error: Some(error.to_string()),
+                },
             }
-            Ok(None) => break,
-            Err(error) => return fail(format!("failed to read response: {error}")),
         }
-    }
-    match String::from_utf8(bytes) {
-        Ok(body) => ExtensionEvent::HttpResponse {
+        Err(error) => ExtensionEvent::HttpResponse {
             request_id,
-            status: Some(status),
-            body,
-            error: None,
+            status: None,
+            body: String::new(),
+            error: Some(error.to_string()),
         },
-        Err(_) => fail("response is not valid UTF-8".into()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shilpo_ext::{
-        AuthorizedHostEffectKind, Capability, ExtensionHost, ExtensionManifest, GuestExtension,
-        HostEffect, InMemoryRuntime,
+    use shilpo_ext_api::{Capability, ExtensionManifest, HostEffect, ViewTree};
+    use shilpo_ext_runtime::{
+        AuthorizedHostEffectKind, ExtensionHost, GuestExtension, InMemoryRuntime,
     };
 
     struct TestGuest(HostEffect);
@@ -83,7 +83,7 @@ mod tests {
             vec![self.0.clone()]
         }
 
-        fn view(&self, _: &str) -> Option<shilpo_ext::ViewTree> {
+        fn view(&self, _: &str) -> Option<ViewTree> {
             None
         }
     }

@@ -1,5 +1,5 @@
 use gpui::App;
-use shilpo_ext_types::CanonicalId;
+use shilpo_ext_api::CanonicalId;
 use shilpo_services::{CompositorCommand, CompositorSnapshot, Notification};
 
 use crate::{
@@ -519,7 +519,7 @@ mod tests {
 
     #[test]
     fn test_action_dispatcher_extension_action_registration() {
-        use shilpo_ext_types::{ContributionId, ExtensionId};
+        use shilpo_ext_api::{ContributionId, ExtensionId};
         let mut dispatcher = ActionDispatcher::new();
         let ext_id = ExtensionId::new("org.shilpo.test").unwrap();
         let contrib_id = ContributionId::new("test-action").unwrap();
@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn extension_actions_are_replaced_during_sync() {
-        use shilpo_ext_types::{ContributionId, ExtensionId};
+        use shilpo_ext_api::{ContributionId, ExtensionId};
         let mut dispatcher = ActionDispatcher::new();
         let ext_id = ExtensionId::new("org.shilpo.test").unwrap();
         let cid = CanonicalId::new(ext_id.clone(), ContributionId::new("first").unwrap());

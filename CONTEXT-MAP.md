@@ -18,6 +18,8 @@ library at its core.
 - **Assets** (`core/assets`) — Asset loader primitives. `rust-embed` on native desktop,
   `reqwest` CDN fetching on WASM. Apps bring their own asset loader; this crate provides the interface and default
   bundled SVG icons.
+- **Extension API** (`core/ext-api`) — Extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`, `IdError`),
+  extension manifest schemas, events, guest host effects, ViewTree declarative UI family, API/schema constants, and WIT interface contract (`wit/extension.wit`). Cross-platform, zero runtime/Wasmtime dependencies.
 
 ### Linux Desktop (`desktop/`)
 
@@ -27,12 +29,10 @@ library at its core.
 - **Device Client** (`desktop/device-client`) — Desktop device client consumed by Shell and Settings. Manages DBus client connections, debounced control setters, and typed degraded state when daemon is unavailable.
 - **Services** (`desktop/services`) — Linux system integration services. Device daemon (`DeviceDaemonService`, production `SystemDeviceAdapter`, deterministic `InMemoryDeviceAdapter` for tests), Wayland/Niri compositor IPC, audio, bluetooth, brightness, caffeine, clipboard, location, media, network, night light, notifications, power profile, screen capture, tray, upower, app scanning.
 - **Config** (`desktop/config`) — Shell configuration management. TOML config loading/validation, XDG directory
-  resolution, LMDB session storage via `heed`. Imports extension ID types from Ext Types for validating extension contribution
+  resolution, LMDB session storage via `heed`. Imports extension ID types from `shilpo-ext-api` for validating extension contribution
   references in config.
-- **Ext Types** (`desktop/ext-types`) — Extension ID types (`ExtensionId`, `ContributionId`, `CanonicalId`) and string validation logic. Pure data types, zero WASM/Wasmtime dependencies.
-- **Ext** (`desktop/ext`) — Wasmtime-sandboxed extension runtime. Capability-based security model, extension manifests,
-  package catalog/registry, WASI component-model host, ViewTree schema rendering. Shell-only — extends shell
-  capabilities.
+- **Extension Runtime** (`desktop/ext-runtime`) — Wasmtime-sandboxed extension runtime. Capability authorization,
+  package catalog/registry index, WASI component-model host, worker process protocol (`shilpo extension-host`).
 - **Theme Daemon** (`desktop/theme-daemon`) — Linux theme system integration. DBus service (`org.shilpo.Theme`), XDG
   portal appearance sync, wallpaper watching, atomic JSON persistence, theme adapters for third-party tools (GTK, Foot,
   Alacritty, Kitty, Hyprland).
@@ -58,10 +58,10 @@ library at its core.
 - **Device Client → Device Daemon**: The client negotiates the exact protocol version and consumes typed DBus methods/signals from the Services-hosted daemon.
 - **Services → Device Protocol**: The device daemon owns command arbitration, per-domain queues, and Linux service adapters while remaining separate from the client.
 - **Shell → Config**: Shell loads and validates its configuration.
-- **Shell → Ext**: Shell hosts and coordinates extensions.
-- **Ext → Ext Types**: Ext re-exports extension ID types from Ext Types.
-- **Settings → UI, Services, Theme Daemon, Config, Ext**: Same dependency set as Shell — same product, separate binary.
-- **Config → Ext Types**: Config imports `CanonicalId`, `ExtensionId` for validating extension references in TOML config
+- **Shell → Ext Runtime**: Shell hosts and coordinates extensions via supervisor worker process.
+- **Ext Runtime → Ext API**: Ext Runtime implements guest contracts and capability authorization for Extension API types.
+- **Settings → UI, Services, Theme Daemon, Config, Ext Runtime, Ext API**: Same dependency set as Shell — same product, separate binary.
+- **Config → Ext API**: Config imports `CanonicalId`, `ExtensionId` for validating extension references in TOML config
   files. Lightweight pure-data dependency without Wasmtime runtime overhead.
 - **Theme Daemon → Theme**: Daemon uses core theme types and color generation.
 - **Theme Daemon → Config**: Daemon reads shell config and uses XDG state directories for persistence.

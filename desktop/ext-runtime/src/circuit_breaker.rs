@@ -1,4 +1,4 @@
-use shilpo_ext_types::ExtensionId;
+use shilpo_ext_api::ExtensionId;
 use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 

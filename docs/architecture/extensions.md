@@ -99,22 +99,14 @@ flowchart LR
     CATALOG --> REGISTRIES[Signed registries]
 ```
 
-### `shilpo-ext`
+### `shilpo-ext-api` and `shilpo-ext-runtime`
 
-`desktop/ext` is the extension runtime crate. It owns:
+The extension ecosystem is split across two dependency-aligned crates:
 
-- manifest parsing and validation;
-- contribution descriptors;
-- settings schema types;
-- shell event and host-effect messages;
-- capability declarations;
-- the declarative view tree and UI event types;
-- the versioned WIT contract and low-level Rust guest interface;
-- WASM Component Model loading and execution via Wasmtime.
+- **`shilpo-ext-api`** (`core/ext-api`) is the cross-platform extension contract crate. It owns extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`, `IdError`), manifest parsing and validation, contribution descriptors, settings schema types, shell event and host-effect messages, capability declarations, the declarative view tree and UI event types, versioned schema files, and the canonical WIT contract (`wit/extension.wit`). Cross-platform, zero Wasmtime or desktop dependencies.
+- **`shilpo-ext-runtime`** (`desktop/ext-runtime`) is the Linux desktop extension runtime crate. It owns capability authorization, Wasmtime Component Model execution, package catalog and registry management, and the worker process framing and protocol (`shilpo extension-host`). Internal to Linux desktop.
 
-Extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`) live in `shilpo-config` and are shared across
-the config system and extension runtime without importing Wasmtime. `shilpo-ext` does not depend on GPUI, `shilpo-ui`,
-`shilpo-shell`, or concrete service implementations.
+`shilpo-ext-api` does not depend on GPUI, `shilpo-ui`, `shilpo-shell`, or concrete service implementations. `shilpo-config` depends only on `shilpo-ext-api`.
 
 ### `ExtensionHost`
 

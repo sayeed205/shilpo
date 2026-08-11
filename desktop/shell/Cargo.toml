@@ -15,8 +15,8 @@ shilpo-device-client.workspace = true
 shilpo-theme.workspace = true
 shilpo-theme-daemon.workspace = true
 shilpo-config.workspace = true
-shilpo-ext-types.workspace = true
-shilpo-ext.workspace = true
+shilpo-ext-api.workspace = true
+shilpo-ext-runtime.workspace = true
 shilpo-capture = { path = "../capture" }
 
 anyhow.workspace = true

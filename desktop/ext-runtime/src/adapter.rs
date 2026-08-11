@@ -1,9 +1,9 @@
-use crate::effects::{AuthorizedHostEffect, HostEffect};
-use crate::events::ExtensionEvent;
-use crate::manifest::{Capability, ExtensionManifest, ManifestError};
-use crate::view::{ViewLimits, ViewTree, ViewValidationError};
+use crate::effects::{AuthorizedHostEffect, capability_allows_effect};
 use crate::{CircuitBreaker, DiagnosticCode, ExtensionDiagnostic};
-use shilpo_ext_types::{CanonicalId, ContributionId, ExtensionId};
+use shilpo_ext_api::{
+    CanonicalId, Capability, ContributionId, ExtensionEvent, ExtensionId, ExtensionManifest,
+    HostEffect, IdError, ManifestError, ViewLimits, ViewTree, ViewValidationError,
+};
 use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
@@ -114,6 +114,7 @@ pub trait ExtensionRuntime {
         contribution_id: &str,
         budget: RuntimeBudget,
     ) -> Result<Option<ViewTree>, RuntimeError>;
+    fn compile_module(&self, bytes: &[u8]) -> Result<Self::Module, String>;
 }
 
 #[derive(Default)]
@@ -121,8 +122,18 @@ pub struct InMemoryRuntime {
     guests: HashMap<ExtensionId, Box<dyn GuestExtension>>,
 }
 
+impl InMemoryRuntime {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 impl ExtensionRuntime for InMemoryRuntime {
     type Module = Box<dyn GuestExtension>;
+
+    fn compile_module(&self, _bytes: &[u8]) -> Result<Self::Module, String> {
+        Err("in-memory runtime does not compile WASM bytes".to_owned())
+    }
 
     fn load(
         &mut self,
@@ -224,8 +235,8 @@ impl From<ManifestError> for HostError {
     }
 }
 
-impl From<shilpo_ext_types::IdError> for HostError {
-    fn from(value: shilpo_ext_types::IdError) -> Self {
+impl From<IdError> for HostError {
+    fn from(value: IdError) -> Self {
         Self::Manifest(ManifestError::Id(value))
     }
 }
@@ -270,6 +281,22 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             runtime_budget: RuntimeBudget::default(),
             circuit_breaker: CircuitBreaker::default(),
         }
+    }
+
+    pub fn runtime(&self) -> &R {
+        &self.runtime
+    }
+
+    pub fn runtime_mut(&mut self) -> &mut R {
+        &mut self.runtime
+    }
+
+    pub fn clear(&mut self) {
+        let ids: Vec<_> = self.registrations.keys().cloned().collect();
+        for id in ids {
+            let _ = self.runtime.unload(&id);
+        }
+        self.registrations.clear();
     }
 
     pub fn with_view_limits(mut self, limits: ViewLimits) -> Self {
@@ -485,10 +512,6 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             .map(|registration| &registration.manifest)
     }
 
-    pub fn runtime(&self) -> &R {
-        &self.runtime
-    }
-
     pub fn diagnostics(&self) -> &[ExtensionDiagnostic] {
         self.circuit_breaker.diagnostics()
     }
@@ -567,11 +590,11 @@ fn authorize_effect(
                 .manifest
                 .capabilities
                 .iter()
-                .any(|capability| capability.allows_http_target(&target));
+                .any(|capability| crate::capability_allows_http_target(capability, &target));
             let granted = registration
                 .grants
                 .iter()
-                .any(|capability| capability.allows_http_target(&target));
+                .any(|capability| crate::capability_allows_http_target(capability, &target));
             if declared && granted {
                 Ok(AuthorizedHostEffect::http_request(request_id, target))
             } else {
@@ -588,11 +611,11 @@ fn authorize_effect(
                     .manifest
                     .capabilities
                     .iter()
-                    .any(|capability| capability.allows_effect(&effect))
+                    .any(|capability| capability_allows_effect(capability, &effect))
                     && registration
                         .grants
                         .iter()
-                        .any(|capability| capability.allows_effect(&effect)));
+                        .any(|capability| capability_allows_effect(capability, &effect)));
             if allowed {
                 AuthorizedHostEffect::non_http(effect)
             } else {

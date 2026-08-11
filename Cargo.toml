@@ -5,14 +5,14 @@ members = [
     "core/ui",
     "core/macros",
     "core/assets",
+    "core/ext-api",
 
     # Linux desktop shell crates
     "desktop/services",
     "desktop/device-protocol",
     "desktop/device-client",
     "desktop/config",
-    "desktop/ext-types",
-    "desktop/ext",
+    "desktop/ext-runtime",
     "desktop/theme-daemon",
     "desktop/shell",
     "desktop/settings",
@@ -33,12 +33,12 @@ shilpo-theme = { path = "core/theme" }
 shilpo-ui = { path = "core/ui" }
 shilpo-assets = { path = "core/assets" }
 shilpo-macros = { path = "core/macros" }
+shilpo-ext-api = { path = "core/ext-api" }
 shilpo-services = { path = "desktop/services" }
 shilpo-device-protocol = { path = "desktop/device-protocol" }
 shilpo-device-client = { path = "desktop/device-client" }
 shilpo-config = { path = "desktop/config" }
-shilpo-ext-types = { path = "desktop/ext-types" }
-shilpo-ext = { path = "desktop/ext" }
+shilpo-ext-runtime = { path = "desktop/ext-runtime" }
 shilpo-theme-daemon = { path = "desktop/theme-daemon" }
 shilpo-shell = { path = "desktop/shell" }
 shilpo-settings = { path = "desktop/settings" }

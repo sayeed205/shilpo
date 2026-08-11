@@ -1,8 +1,8 @@
-use shilpo_ext::{
+use shilpo_ext_api::ExtensionId;
+use shilpo_ext_runtime::{
     ExtensionCatalog, ExtensionCli, ExtensionCliResult, ReleaseChannel, UpdateState,
     default_extension_state_dir, sign_package,
 };
-use shilpo_ext_types::ExtensionId;
 use shilpo_services::{IpcRequest, ShellIpcClient};
 use std::path::{Path, PathBuf};
 
@@ -217,13 +217,13 @@ impl ExtAdapter {
             exit_code: if cli_res.success { 0 } else { 1 },
         };
         if result.success && follow {
-            shilpo_ext::follow_log(&id, &self.state_dir);
+            shilpo_ext_runtime::follow_log(&id, &self.state_dir);
         }
         result
     }
 
     pub fn list(&self, dev_only: bool) -> ExtOpResult {
-        let dev_regs = shilpo_ext::development_registrations(&self.state_dir).0;
+        let dev_regs = shilpo_ext_runtime::development_registrations(&self.state_dir).0;
         let installed = self.catalog.installed().unwrap_or_default();
         let installed_count = installed.len();
         ExtOpResult {
@@ -600,7 +600,7 @@ impl ExtAdapter {
     }
 
     pub fn source(&self, args: &[String]) -> ExtOpResult {
-        match shilpo_ext::source_command(args, &self.catalog) {
+        match shilpo_ext_runtime::source_command(args, &self.catalog) {
             Ok(message) => ExtOpResult {
                 success: true,
                 data: serde_json::json!({ "arguments": args, "message": message }),
@@ -678,7 +678,7 @@ impl ExtAdapter {
     }
 
     pub fn keygen(&self, output: &Path) -> ExtOpResult {
-        match shilpo_ext::write_signing_key(output) {
+        match shilpo_ext_runtime::write_signing_key(output) {
             Ok(public_path) => ExtOpResult {
                 success: true,
                 data: serde_json::json!({

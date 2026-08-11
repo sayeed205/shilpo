@@ -25,6 +25,7 @@ The workspace is split into two tiers (see [ADR-0001](docs/adr/0001-cross-platfo
 - **[`shilpo-macros`](core/macros)**: Procedural macros (`icon_named!`, `#[derive(IntoPlot)]`).
 - **[`shilpo-assets`](core/assets)**: Asset loader primitives and bundled demo SVG icons. **Note**: Unpublished;
   applications bring their own asset loader.
+- **[`shilpo-ext-api`](core/ext-api)**: Extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`, `IdError`), manifest, events, guest host effects, ViewTree, WIT interface, schema files, and validation.
 
 #### Linux Desktop (`desktop/` — internal, never published)
 
@@ -36,8 +37,7 @@ The workspace is split into two tiers (see [ADR-0001](docs/adr/0001-cross-platfo
 - **[`shilpo-device-protocol`](desktop/device-protocol)**: Desktop-only versioned device domain, lifecycle, command, and outcome types shared by the daemon and clients.
 - **[`shilpo-device-client`](desktop/device-client)**: Presentation-neutral typed DBus client used by Shell and Settings; owns reconnect/degraded projections and client-side debounce.
 - **[`shilpo-config`](desktop/config)**: TOML configuration, XDG directory resolution, LMDB session storage.
-- **[`shilpo-ext-types`](desktop/ext-types)**: Extension ID types (`ExtensionId`, `ContributionId`, `CanonicalId`) and string validation logic.
-- **[`shilpo-ext`](desktop/ext)**: Wasmtime-sandboxed extension runtime with capability-based security.
+- **[`shilpo-ext-runtime`](desktop/ext-runtime)**: Wasmtime-sandboxed extension runtime with capability authorization, catalog, and worker process protocol.
 - **[`shilpo-theme-daemon`](desktop/theme-daemon)**: Theme DBus daemon, XDG portal sync, persistence, third-party
   adapters (see [ADR-0002](docs/adr/0002-theme-crate-split.md)).
 - **[`shilpo-cli`](desktop/cli)**: CLI tool for controlling the shell, themes, and extensions.
@@ -311,7 +311,10 @@ Multi-context repo (one `CONTEXT.md` per crate/app):
 │   ├── macros/
 │   │   ├── CONTEXT.md
 │   │   └── docs/adr/
-│   └── assets/
+│   ├── assets/
+│   │   ├── CONTEXT.md
+│   │   └── docs/adr/
+│   └── ext-api/
 │       ├── CONTEXT.md
 │       └── docs/adr/
 ├── desktop/
@@ -327,7 +330,7 @@ Multi-context repo (one `CONTEXT.md` per crate/app):
 │   ├── config/
 │   │   ├── CONTEXT.md
 │   │   └── docs/adr/
-│   ├── ext/
+│   ├── ext-runtime/
 │   │   ├── CONTEXT.md
 │   │   └── docs/adr/
 │   ├── theme-daemon/

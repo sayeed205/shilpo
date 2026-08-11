@@ -1,4 +1,5 @@
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use shilpo_ext_runtime::ExtensionCommand;
 use std::{path::PathBuf, sync::mpsc};
 
 pub struct ExtensionWatcher {
@@ -7,7 +8,7 @@ pub struct ExtensionWatcher {
 
 impl ExtensionWatcher {
     pub fn new(
-        command_tx: mpsc::SyncSender<super::coordinator::ExtensionCommand>,
+        command_tx: mpsc::SyncSender<ExtensionCommand>,
         watch_paths: Vec<PathBuf>,
     ) -> Result<Self, String> {
         let watcher_tx = command_tx;
@@ -16,8 +17,7 @@ impl ExtensionWatcher {
                 if let Ok(event) = res
                     && (event.kind.is_modify() || event.kind.is_create() || event.kind.is_remove())
                 {
-                    let _ =
-                        watcher_tx.try_send(super::coordinator::ExtensionCommand::SourcesChanged);
+                    let _ = watcher_tx.try_send(ExtensionCommand::SourcesChanged);
                 }
             },
             Config::default(),

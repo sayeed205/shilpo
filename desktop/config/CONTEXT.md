@@ -2,15 +2,15 @@
 
 Shell configuration: TOML loading and validation, XDG directory resolution, and
 session state storage. Reads and validates extension references but owns no
-extension runtime — it depends on `shilpo-ext-types` for ID validation, not on
-the `shilpo-ext` runtime.
+extension runtime — it depends on `shilpo-ext-api` for ID validation, not on
+the `shilpo-ext-runtime` runtime.
 
 ## Language
 
 **Extension contribution reference** (`ExtensionContributionRef`):
 The config-serialization form of a Canonical ID: `ext:<extension>/<contribution>`
 as written in TOML config values. The underlying identifier is the Canonical ID
-from `shilpo-ext-types`; the `ext:` prefix is the config language's namespacing
+from `shilpo-ext-api`; the `ext:` prefix is the config language's namespacing
 for extension references.
 _Avoid_: canonical ID (the bare composite has no `ext:` prefix)
 

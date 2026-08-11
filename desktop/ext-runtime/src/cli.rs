@@ -3,15 +3,12 @@ use crate::catalog::{
     ExtensionCatalog, RegistrySource, ReleaseChannel, UpdateState, generate_signing_key,
     sign_package,
 };
-use crate::events::ExtensionEvent;
-use crate::manifest::ExtensionManifest;
-use crate::view::ViewLimits;
 use crate::wasm::{WasmModule, WasmRuntime};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use shilpo_ext_types::ExtensionId;
+use shilpo_ext_api::{ExtensionEvent, ExtensionId, ExtensionManifest, ViewLimits};
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};

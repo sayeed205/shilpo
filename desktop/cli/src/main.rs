@@ -105,7 +105,7 @@ async fn main() {
             std::process::exit(EXIT_SUCCESS);
         }
         Commands::ExtensionHost => {
-            shilpo_shell::extensions::run_extension_host();
+            shilpo_ext_runtime::run_extension_host();
             std::process::exit(EXIT_SUCCESS);
         }
         Commands::DeviceDaemon => {
@@ -626,7 +626,7 @@ async fn main() {
                 ExtCommands::Logs { id, follow } => ext.logs(id.as_deref(), follow),
                 ExtCommands::List { dev } => ext.list(dev),
                 ExtCommands::Search { query } => {
-                    let snapshot = shilpo_ext::ExtensionCatalog::open_default().snapshot();
+                    let snapshot = shilpo_ext_runtime::ExtensionCatalog::open_default().snapshot();
                     let q = query.unwrap_or_default().to_lowercase();
                     let matches = snapshot
                         .discover
@@ -645,7 +645,7 @@ async fn main() {
                     }
                 }
                 ExtCommands::Info { id } => {
-                    let snapshot = shilpo_ext::ExtensionCatalog::open_default().snapshot();
+                    let snapshot = shilpo_ext_runtime::ExtensionCatalog::open_default().snapshot();
                     if let Some(item) = snapshot
                         .discover
                         .into_iter()

@@ -246,16 +246,16 @@ user's stored grant for every privileged effect.
 Validate the manifest contract through the crate tests:
 
 ```bash
-cargo test -p shilpo-ext
+cargo test -p shilpo-ext-api -p shilpo-ext-runtime
 ```
 
 Regenerate the checked-in manifest schema after changing contract types:
 
 ```bash
-cargo run -p shilpo-ext --example generate_schema -- \
-  crates/ext/schema/extension-v1.schema.json
-cargo run -p shilpo-ext --example generate_distribution_schemas -- \
-  crates/ext/schema
+cargo run -p shilpo-ext-api --example generate_schema -- \
+  core/ext-api/schema/extension-v1.schema.json
+cargo run -p shilpo-ext-runtime --example generate_distribution_schemas -- \
+  desktop/ext-runtime/schema
 ```
 
 The generated distribution schemas define the package-signature sidecar and signed registry-index envelope consumed by
