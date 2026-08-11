@@ -1,0 +1,11 @@
+format_code_in_doc_comments = true
+imports_layout = "Vertical"
+wrap_comments = false
+
+# Group and sort imports
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+
+
+# Put trailing commas where possible
+trailing_comma = "Always"

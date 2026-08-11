@@ -54,9 +54,8 @@ impl TextareaStory {
                 .rows(10)
                 .placeholder("Enter text here...")
                 .searchable(true)
-                .default_value(
-                    unindent::unindent(
-                        r#"Hello 世界，this is GPUI component.
+                .default_value(unindent::unindent(
+                    r#"Hello 世界，this is GPUI component.
 
                     The GPUI Component is a collection of UI components for GPUI framework, including.
 
@@ -74,8 +73,7 @@ impl TextareaStory {
 
                     If you want to see the demo, here is a some demo applications.
                     "#,
-                    )
-                )
+                ))
         });
 
         let textarea_no_wrap = cx.new(|cx| {

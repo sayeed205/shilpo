@@ -596,7 +596,7 @@ mod tests {
         assert_eq!(
             layout.wrapper,
             SidebarWrapperLayout::Animated {
-                target_width: px(240.),
+                target_width: px(240.)
             }
         );
     }
@@ -635,7 +635,7 @@ mod tests {
         assert_eq!(
             layout.wrapper,
             SidebarWrapperLayout::Animated {
-                target_width: px(0.),
+                target_width: px(0.)
             }
         );
     }
@@ -654,7 +654,7 @@ mod tests {
         assert_eq!(
             layout.wrapper,
             SidebarWrapperLayout::Animated {
-                target_width: px(240.),
+                target_width: px(240.)
             }
         );
     }

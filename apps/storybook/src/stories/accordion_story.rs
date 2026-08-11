@@ -91,21 +91,13 @@ impl Render for AccordionStory {
                                     .label("XSmall")
                                     .selected(self.size == Size::XSmall),
                             )
-                            .child(
-                                Button::new("small")
-                                    .label("Small")
-                                    .selected(self.size == Size::Small),
-                            )
+                            .child(Button::new("small").label("Small").selected(self.size == Size::Small))
                             .child(
                                 Button::new("medium")
                                     .label("Medium")
                                     .selected(self.size == Size::Medium),
                             )
-                            .child(
-                                Button::new("large")
-                                    .label("Large")
-                                    .selected(self.size == Size::Large),
-                            )
+                            .child(Button::new("large").label("Large").selected(self.size == Size::Large))
                             .on_click(cx.listener(|this, selecteds: &Vec<usize>, window, cx| {
                                 let size = match selecteds[0] {
                                     0 => Size::XSmall,
@@ -173,23 +165,19 @@ impl Render for AccordionStory {
                         })
                         .item(|this| {
                             this.open(self.open_ixs.contains(&1))
-                            .when(self.show_icon, |this| this.icon(IconName::Inbox))
-                            .title("Is it styled with complex elements?")
-                            .child(
-                                v_flex()
-                                    .gap_4()
-                                    .child(
-                                        "We can put any view here, like a v_flex with a text view",
-                                    )
-                                    .child(
-                                        h_flex()
-                                            .gap_4()
-                                            .child(Switch::new("switch1").label("Switch"))
-                                            .child(
-                                                Checkbox::new("checkbox1").label("Or a Checkbox"),
-                                            ),
-                                    ),
-                            )
+                                .when(self.show_icon, |this| this.icon(IconName::Inbox))
+                                .title("Is it styled with complex elements?")
+                                .child(
+                                    v_flex()
+                                        .gap_4()
+                                        .child("We can put any view here, like a v_flex with a text view")
+                                        .child(
+                                            h_flex()
+                                                .gap_4()
+                                                .child(Switch::new("switch1").label("Switch"))
+                                                .child(Checkbox::new("checkbox1").label("Or a Checkbox")),
+                                        ),
+                                )
                         })
                         .item(|this| {
                             this.open(self.open_ixs.contains(&2))

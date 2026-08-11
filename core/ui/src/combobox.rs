@@ -1117,9 +1117,7 @@ mod tests {
         let cx = cx.add_empty_window();
         cx.update(|window, cx| {
             let items = SearchableVec::new(vec!["React", "Vue", "Angular"]);
-            let state = cx.new(|cx| {
-                ComboboxState::new(items, vec![IndexPath::new(1)], window, cx).multiple(true)
-            });
+            let state = cx.new(|cx| ComboboxState::new(items, vec![IndexPath::new(1)], window, cx).multiple(true));
 
             let state_ref = state.read(cx);
             assert_eq!(

@@ -2178,7 +2178,6 @@ where
 
     fn render_vertical_scrollbar(
         &mut self,
-
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<impl IntoElement> {

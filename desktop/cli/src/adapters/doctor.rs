@@ -210,7 +210,9 @@ impl DoctorChecker {
                 } else {
                     format!("Inactive Shilpo user units: {}", inactive_units.join(", "))
                 },
-                repair_command: Some("systemctl --user reset-failed && systemctl --user restart niri.service.wants/*".into()),
+                repair_command: Some(
+                    "systemctl --user reset-failed && systemctl --user restart niri.service.wants/*".into(),
+                ),
                 unit_identifier: Some("shilpo-shell.service".into()),
                 fix_applied: false,
             }
@@ -585,7 +587,8 @@ impl DoctorChecker {
                 category: "Appearance".into(),
                 name: "Shell, Fonts & Cursor Theme".into(),
                 status: DiagnosticStatus::Warn,
-                message: "One or more desktop theme assets (Fish, JetBrains Mono, Capitaine cursors) need installation".into(),
+                message: "One or more desktop theme assets (Fish, JetBrains Mono, Capitaine cursors) need installation"
+                    .into(),
                 repair_command: Some("sudo pacman -S fish ttf-jetbrains-mono-nerd capitaine-cursors".into()),
                 unit_identifier: None,
                 fix_applied: false,

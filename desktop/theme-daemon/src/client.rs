@@ -110,8 +110,7 @@ impl ThemeClient {
                                             // 3. Process signals
                                             while let Some(signal) = signal_stream.next().await {
                                                 if let Ok(signal) = signal.args()
-                                                    && let Ok(update) =
-                                                        serde_json::from_str(&signal.state)
+                                                    && let Ok(update) = serde_json::from_str(&signal.state)
                                                 {
                                                     client_clone.handle_signal_update(update);
                                                 }

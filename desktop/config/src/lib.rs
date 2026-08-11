@@ -220,9 +220,7 @@ impl FromStr for ExtensionContributionRef {
         value
             .strip_prefix("ext:")
             .ok_or_else(|| {
-                format!(
-                    "invalid extension contribution '{value}': expected 'ext:<extension>/<contribution>'"
-                )
+                format!("invalid extension contribution '{value}': expected 'ext:<extension>/<contribution>'")
             })?
             .parse()
             .map(Self)

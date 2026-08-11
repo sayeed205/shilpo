@@ -91,22 +91,14 @@ impl Render for ButtonStory {
                         v_flex()
                             .items_center()
                             .gap_2()
-                            .child(variant_button(
-                                "tonal",
-                                "Continue",
-                                ButtonVariant::FilledTonal,
-                            ))
+                            .child(variant_button("tonal", "Continue", ButtonVariant::FilledTonal))
                             .child("Filled tonal"),
                     )
                     .child(
                         v_flex()
                             .items_center()
                             .gap_2()
-                            .child(variant_button(
-                                "outlined",
-                                "Continue",
-                                ButtonVariant::Outlined,
-                            ))
+                            .child(variant_button("outlined", "Continue", ButtonVariant::Outlined))
                             .child("Outlined"),
                     )
                     .child(
@@ -119,7 +111,9 @@ impl Render for ButtonStory {
             )
             .child(
                 section("Size scale")
-                    .sub_title(Label::new("Static showcase heights; large controls stay in separate cells"))
+                    .sub_title(Label::new(
+                        "Static showcase heights; large controls stay in separate cells",
+                    ))
                     .child(
                         v_flex()
                             .items_center()
@@ -262,7 +256,9 @@ impl Render for ButtonStory {
             )
             .child(
                 section("Content and grouping")
-                    .sub_title(Label::new("Button content stays label-bearing; icon-only actions belong to IconButton."))
+                    .sub_title(Label::new(
+                        "Button content stays label-bearing; icon-only actions belong to IconButton.",
+                    ))
                     .child(Button::new("content-label").filled().label("Label only"))
                     .child(
                         Button::new("content-icon-label")
@@ -270,11 +266,7 @@ impl Render for ButtonStory {
                             .icon(shilpo_ui::IconName::Check)
                             .label("Confirmed"),
                     )
-                    .child(
-                        Button::new("content-text")
-                            .text()
-                            .label("Learn more"),
-                    )
+                    .child(Button::new("content-text").text().label("Learn more"))
                     .child(
                         Button::new("content-full-width")
                             .filled()

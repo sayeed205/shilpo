@@ -53,86 +53,97 @@ impl Focusable for AlertDialogStory {
 
 impl Render for AlertDialogStory {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().id("alert-dialog-story").track_focus(&self.focus_handle).size_full().child(
-            v_flex()
-                .gap_6()
-                .child(
-                    section("AlertDialog").child(
-                        AlertDialog::new(cx)
-                            .p_0()
-                            .trigger(Button::new("info-alert").outline().label("Show Info Alert"))
-                            .on_ok(|_, window, cx| {
-                                window.push_notification("You have confirmed the alert", cx);
-                                true
-                            })
-                            .on_cancel(|_, window, cx| {
-                                window.push_notification("Ok, you canceled the alert", cx);
-                                true
-                            })
-                            .content(|content, _, cx| {
-                                content
-                                    .child(DialogHeader::new().p_4().child(DialogTitle::new().child("Are you absolutely sure?")).child(
-                                        DialogDescription::new().child(
-                                            "This action cannot be undone. \
+        div()
+            .id("alert-dialog-story")
+            .track_focus(&self.focus_handle)
+            .size_full()
+            .child(
+                v_flex()
+                    .gap_6()
+                    .child(
+                        section("AlertDialog").child(
+                            AlertDialog::new(cx)
+                                .p_0()
+                                .trigger(Button::new("info-alert").outline().label("Show Info Alert"))
+                                .on_ok(|_, window, cx| {
+                                    window.push_notification("You have confirmed the alert", cx);
+                                    true
+                                })
+                                .on_cancel(|_, window, cx| {
+                                    window.push_notification("Ok, you canceled the alert", cx);
+                                    true
+                                })
+                                .content(|content, _, cx| {
+                                    content
+                                        .child(
+                                            DialogHeader::new()
+                                                .p_4()
+                                                .child(DialogTitle::new().child("Are you absolutely sure?"))
+                                                .child(DialogDescription::new().child(
+                                                    "This action cannot be undone. \
                                             This will permanently delete your account from our servers.",
-                                        ),
-                                    ))
-                                    .child(DialogFooter::new()
-                                        .p_4()
-                                        .border_t_1()
-                                        .border_color(cx.theme().outline)
-                                        .bg(cx.theme().surface_variant)
-                                        .child(
-                                            DialogClose::new().child(
-                                                Button::new("cancel").outline().label("Cancel")
-                                            )
+                                                )),
                                         )
                                         .child(
-                                            DialogAction::new().child(
-                                                Button::new("ok").label("Continue").filled()
-                                            )
+                                            DialogFooter::new()
+                                                .p_4()
+                                                .border_t_1()
+                                                .border_color(cx.theme().outline)
+                                                .bg(cx.theme().surface_variant)
+                                                .child(
+                                                    DialogClose::new()
+                                                        .child(Button::new("cancel").outline().label("Cancel")),
+                                                )
+                                                .child(
+                                                    DialogAction::new()
+                                                        .child(Button::new("ok").label("Continue").filled()),
+                                                ),
                                         )
-                                    )
-                            }),
-                    ),
-                )
-                .child(section("With open_alert_dialog").child(
-                    Button::new("confirm-alert").outline().label("Show Confirmation").on_click(cx.listener(
-                        |_, _, window, cx| {
-                            use shilpo_ui::dialog::DialogButtonProps;
+                                }),
+                        ),
+                    )
+                    .child(
+                        section("With open_alert_dialog").child(
+                            Button::new("confirm-alert")
+                                .outline()
+                                .label("Show Confirmation")
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    use shilpo_ui::dialog::DialogButtonProps;
 
-                            window.open_alert_dialog(cx, |alert, _, cx| {
-                                alert
-                                    .icon(Icon::new(IconName::Info).text_color(cx.theme().error))
-                                    .title("Delete File")
-                                    .description(
-                                        "Are you sure you want to delete this file? \
+                                    window.open_alert_dialog(cx, |alert, _, cx| {
+                                        alert
+                                            .icon(Icon::new(IconName::Info).text_color(cx.theme().error))
+                                            .title("Delete File")
+                                            .description(
+                                                "Are you sure you want to delete this file? \
                                                 This action cannot be undone.",
-                                    )
-                                    .button_props(
-                                        DialogButtonProps::default()
-                                            .ok_variant(ButtonVariant::Filled)
-                                            .ok_text("Delete")
-                                            .cancel_text("Cancel")
-                                            .show_cancel(true),
-                                    )
-                                    .on_ok(|_, window, cx| {
-                                        window.push_notification("File deleted", cx);
-                                        true
-                                    })
-                            });
-                        },
-                    )),
-                ))
-                .child(section("With Icon").child(
-                    AlertDialog::new(cx).w(px(320.)).trigger(
-                        Button::new("icon-alert").outline().label("Request Permission"),
-                    ).on_ok(|_, window, cx| {
-                        window.push_notification("Thank you for allowing network access", cx);
-                        true
-                    })
-                    .content(|content, _, cx| {
-                        content
+                                            )
+                                            .button_props(
+                                                DialogButtonProps::default()
+                                                    .ok_variant(ButtonVariant::Filled)
+                                                    .ok_text("Delete")
+                                                    .cancel_text("Cancel")
+                                                    .show_cancel(true),
+                                            )
+                                            .on_ok(|_, window, cx| {
+                                                window.push_notification("File deleted", cx);
+                                                true
+                                            })
+                                    });
+                                })),
+                        ),
+                    )
+                    .child(
+                        section("With Icon").child(
+                            AlertDialog::new(cx)
+                                .w(px(320.))
+                                .trigger(Button::new("icon-alert").outline().label("Request Permission"))
+                                .on_ok(|_, window, cx| {
+                                    window.push_notification("Thank you for allowing network access", cx);
+                                    true
+                                })
+                                .content(|content, _, cx| {
+                                    content
                             .child(
                                 DialogHeader::new()
                                     .items_center()
@@ -160,184 +171,210 @@ impl Render for AlertDialogStory {
                                         )
                                     )
                             )
-                    }),
-                ))
-                .child(
-                    section("Destructive Action").child(
-                        AlertDialog::new(cx)
-                            .trigger(Button::new("destructive-action").outline().filled().label("Delete Account"))
-                            .on_ok(|_, window, cx| {
-                                window.push_notification("Your account has been deleted", cx);
-                                true
-                            })
-                            .content(|content, _, _| {
-                                content
-                                    .child(DialogHeader::new().child(DialogTitle::new().child("Delete Account")).child(
-                                        DialogDescription::new().child(
-                                            "This will permanently delete your account \
-                                                    and all associated data. This action cannot be undone.",
-                                        ),
-                                    ))
-                                    .child(
-                                        DialogFooter::new()
-                                            .child(
-                                                DialogClose::new().child(
-                                                    Button::new("cancel").flex_1().outline().label("Cancel")
-                                                )
-                                            )
-                                            .child(
-                                                DialogAction::new().child(
-                                                    Button::new("delete")
-                                                        .flex_1()
-                                                        .outline()
-                                                        .filled()
-                                                        .label("Delete Forever")
-                                                )
-                                            )
-                                    )
-                            }),
-                    ),
-                )
-                .child(section("Without Title").child(
-                    Button::new("without-title").outline().label("Dialog without Title").on_click(cx.listener(
-                        |_, _, window, cx| {
-                            window.open_alert_dialog(cx, |alert, _, _| {
-                                alert
-                                    .confirm()
-                                    .child("This is a AlertDialog with `confirm` mode.\
-                                        Will have OK, CANCEL buttons.")
-                            });
-                        },
-                    )),
-                ))
-                .child(section("Session Timeout").child(
-                    Button::new("session-timeout").outline().label("Session Timeout").on_click(cx.listener(
-                        |_, _, window, cx| {
-                            window.open_alert_dialog(cx, |alert, _, _| {
-                                alert
-                                    .on_ok(|_, window, cx| {
-                                        window.push_notification("Redirecting to login...", cx);
-                                        true
-                                    })
-                                    .title("Session Expired")
-                                    .description("Your session has expired due to inactivity.\
-                                        Please log in again to continue.")
-                                    .footer(
-                                        DialogFooter::new().child(
-                                            Button::new("sign-in").label("Sign in").filled().flex_1().on_click(
-                                                move |_, window, cx| {
-                                                    window.push_notification("Redirecting to login...", cx);
-                                                    window.close_dialog(cx);
-                                                },
-                                            ),
-                                        )
-                                    )
-                            });
-                        },
-                    )),
-                ))
-                .child(section("Update Available").child(
-                    AlertDialog::new(cx)
-                        .trigger(Button::new("update").outline().label("Update Available"))
-                        .on_cancel(|_, window, cx| {
-                            window.push_notification("Update postponed", cx);
-                            true
-                        })
-                        .on_ok(|_, window, cx| {
-                            window.push_notification("Starting update...", cx);
-                            true
-                        })
-                        .content(
-                        |content, _, cx| {
-                            content
-                                .child(DialogHeader::new().child(DialogTitle::new().child("Update Available")).child(
-                                    DialogDescription::new().child(
-                                        "A new version (v2.0.0) is available.\
-                                                This update includes new features and bug fixes.",
-                                    ),
-                                ))
-                                .child(
-                                    DialogFooter::new()
-                                        .bg(cx.theme().surface_variant)
-                                        .child(
-                                            DialogClose::new().child(
-                                                Button::new("later").flex_1().outline().label("Later")
-                                            ),
-                                        )
-                                        .child(
-                                            DialogAction::new().child(
-                                                Button::new("update-now").flex_1().filled().label("Update Now")
-                                            )
-                                        )
+                                }),
+                        ),
+                    )
+                    .child(
+                        section("Destructive Action").child(
+                            AlertDialog::new(cx)
+                                .trigger(
+                                    Button::new("destructive-action")
+                                        .outline()
+                                        .filled()
+                                        .label("Delete Account"),
                                 )
-                        },
-                    ),
-                ))
-                .child(section("Keyboard Disabled").child(
-                    Button::new("keyboard-disabled").outline().label("Keyboard Disabled").on_click(cx.listener(
-                        |_, _, window, cx| {
-                            window.open_alert_dialog(cx, |alert, _, _| {
-                                alert
-                                    .title("Important Notice")
-                                    .description(
-                                        "Please read this important notice \
+                                .on_ok(|_, window, cx| {
+                                    window.push_notification("Your account has been deleted", cx);
+                                    true
+                                })
+                                .content(|content, _, _| {
+                                    content
+                                        .child(
+                                            DialogHeader::new()
+                                                .child(DialogTitle::new().child("Delete Account"))
+                                                .child(DialogDescription::new().child(
+                                                    "This will permanently delete your account \
+                                                    and all associated data. This action cannot be undone.",
+                                                )),
+                                        )
+                                        .child(
+                                            DialogFooter::new()
+                                                .child(
+                                                    DialogClose::new().child(
+                                                        Button::new("cancel").flex_1().outline().label("Cancel"),
+                                                    ),
+                                                )
+                                                .child(
+                                                    DialogAction::new().child(
+                                                        Button::new("delete")
+                                                            .flex_1()
+                                                            .outline()
+                                                            .filled()
+                                                            .label("Delete Forever"),
+                                                    ),
+                                                ),
+                                        )
+                                }),
+                        ),
+                    )
+                    .child(
+                        section("Without Title").child(
+                            Button::new("without-title")
+                                .outline()
+                                .label("Dialog without Title")
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    window.open_alert_dialog(cx, |alert, _, _| {
+                                        alert.confirm().child(
+                                            "This is a AlertDialog with `confirm` mode.\
+                                        Will have OK, CANCEL buttons.",
+                                        )
+                                    });
+                                })),
+                        ),
+                    )
+                    .child(
+                        section("Session Timeout").child(
+                            Button::new("session-timeout")
+                                .outline()
+                                .label("Session Timeout")
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    window.open_alert_dialog(cx, |alert, _, _| {
+                                        alert
+                                            .on_ok(|_, window, cx| {
+                                                window.push_notification("Redirecting to login...", cx);
+                                                true
+                                            })
+                                            .title("Session Expired")
+                                            .description(
+                                                "Your session has expired due to inactivity.\
+                                        Please log in again to continue.",
+                                            )
+                                            .footer(DialogFooter::new().child(
+                                                Button::new("sign-in").label("Sign in").filled().flex_1().on_click(
+                                                    move |_, window, cx| {
+                                                        window.push_notification("Redirecting to login...", cx);
+                                                        window.close_dialog(cx);
+                                                    },
+                                                ),
+                                            ))
+                                    });
+                                })),
+                        ),
+                    )
+                    .child(
+                        section("Update Available").child(
+                            AlertDialog::new(cx)
+                                .trigger(Button::new("update").outline().label("Update Available"))
+                                .on_cancel(|_, window, cx| {
+                                    window.push_notification("Update postponed", cx);
+                                    true
+                                })
+                                .on_ok(|_, window, cx| {
+                                    window.push_notification("Starting update...", cx);
+                                    true
+                                })
+                                .content(|content, _, cx| {
+                                    content
+                                        .child(
+                                            DialogHeader::new()
+                                                .child(DialogTitle::new().child("Update Available"))
+                                                .child(DialogDescription::new().child(
+                                                    "A new version (v2.0.0) is available.\
+                                                This update includes new features and bug fixes.",
+                                                )),
+                                        )
+                                        .child(
+                                            DialogFooter::new()
+                                                .bg(cx.theme().surface_variant)
+                                                .child(
+                                                    DialogClose::new()
+                                                        .child(Button::new("later").flex_1().outline().label("Later")),
+                                                )
+                                                .child(DialogAction::new().child(
+                                                    Button::new("update-now").flex_1().filled().label("Update Now"),
+                                                )),
+                                        )
+                                }),
+                        ),
+                    )
+                    .child(
+                        section("Keyboard Disabled").child(
+                            Button::new("keyboard-disabled")
+                                .outline()
+                                .label("Keyboard Disabled")
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    window.open_alert_dialog(cx, |alert, _, _| {
+                                        alert
+                                            .title("Important Notice")
+                                            .description(
+                                                "Please read this important notice \
                                                 carefully before proceeding.",
-                                    )
-                                    .keyboard(false)
-                            });
-                        },
-                    )),
-                ))
-                .child(section("With confirm mode").child(
-                    Button::new("overlay-closable").outline().label("Confirm Mode").on_click(cx.listener(
-                        |_, _, window, cx| {
-                            window.open_alert_dialog(cx, |alert, _, _| {
-                                alert
-                                    .confirm()
-                                    .title("Are you sure?")
-                                    .child("This is a AlertDialog with `confirm` mode.\
-                                        Will have OK, CANCEL buttons.")
-                            });
-                        },
-                    )),
-                ))
-                .child(section("Overlay Closable").child(
-                    Button::new("overlay-closable").outline().label("Overlay Closable").on_click(cx.listener(
-                        |_, _, window, cx| {
-                            window.open_alert_dialog(cx, |alert, _, _| {
-                                alert
-                                    .title("Overlay Closable")
-                                    .description("Click outside this dialog or press ESC to close it.")
-                                    .overlay_closable(true)
-                            });
-                        },
-                    )),
-                ))
-                .child(section("Prevent Close").child(
-                    Button::new("prevent-close").outline().label("Prevent Close").on_click(cx.listener(
-                        |_, _, window, cx| {
-                            window.open_alert_dialog(cx, |alert, _, _| {
-                                alert
-                                    .title("Processing")
-                                    .close_button(true)
-                                    .description(
-                                        "A process is running. \
+                                            )
+                                            .keyboard(false)
+                                    });
+                                })),
+                        ),
+                    )
+                    .child(
+                        section("With confirm mode").child(
+                            Button::new("overlay-closable")
+                                .outline()
+                                .label("Confirm Mode")
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    window.open_alert_dialog(cx, |alert, _, _| {
+                                        alert.confirm().title("Are you sure?").child(
+                                            "This is a AlertDialog with `confirm` mode.\
+                                        Will have OK, CANCEL buttons.",
+                                        )
+                                    });
+                                })),
+                        ),
+                    )
+                    .child(
+                        section("Overlay Closable").child(
+                            Button::new("overlay-closable")
+                                .outline()
+                                .label("Overlay Closable")
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    window.open_alert_dialog(cx, |alert, _, _| {
+                                        alert
+                                            .title("Overlay Closable")
+                                            .description("Click outside this dialog or press ESC to close it.")
+                                            .overlay_closable(true)
+                                    });
+                                })),
+                        ),
+                    )
+                    .child(
+                        section("Prevent Close").child(
+                            Button::new("prevent-close")
+                                .outline()
+                                .label("Prevent Close")
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    window.open_alert_dialog(cx, |alert, _, _| {
+                                        alert
+                                            .title("Processing")
+                                            .close_button(true)
+                                            .description(
+                                                "A process is running. \
                                                 Click Continue to stop it or Cancel to keep waiting.",
-                                    )
-                                    .button_props(DialogButtonProps::default().ok_text("Continue").show_cancel(true))
-                                    .on_ok(|_, window, cx| {
-                                        // Return false to prevent closing
-                                        window.push_notification("Cannot close: Process still running", cx);
-                                        false
-                                    })
-                                    .on_cancel(|_, window, cx| {
-                                        window.push_notification("Waiting...", cx);
-                                        false
-                                    })
-                            });
-                        },
-                    )),
-                ))
-        )
+                                            )
+                                            .button_props(
+                                                DialogButtonProps::default().ok_text("Continue").show_cancel(true),
+                                            )
+                                            .on_ok(|_, window, cx| {
+                                                // Return false to prevent closing
+                                                window.push_notification("Cannot close: Process still running", cx);
+                                                false
+                                            })
+                                            .on_cancel(|_, window, cx| {
+                                                window.push_notification("Waiting...", cx);
+                                                false
+                                            })
+                                    });
+                                })),
+                        ),
+                    ),
+            )
     }
 }

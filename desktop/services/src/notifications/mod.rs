@@ -24,9 +24,7 @@ impl NotificationSignalSink for DbusNotificationSignalSink {
             .executor()
             .spawn(
                 async move {
-                    if let Err(error) =
-                        NotificationServer::action_invoked(&emitter, id, &action_key).await
-                    {
+                    if let Err(error) = NotificationServer::action_invoked(&emitter, id, &action_key).await {
                         tracing::warn!(%error, id, action = %action_key, "failed to emit notification action signal");
                     }
                 },
@@ -42,9 +40,7 @@ impl NotificationSignalSink for DbusNotificationSignalSink {
             .executor()
             .spawn(
                 async move {
-                    if let Err(error) =
-                        NotificationServer::notification_closed(&emitter, id, reason as u32).await
-                    {
+                    if let Err(error) = NotificationServer::notification_closed(&emitter, id, reason as u32).await {
                         tracing::warn!(%error, id, ?reason, "failed to emit notification closed signal");
                     }
                 },

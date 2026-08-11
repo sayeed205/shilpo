@@ -48,12 +48,7 @@ impl HoverCardStory {
                     v_flex()
                         .gap_1()
                         .w(px(450.))
-                        .child(
-                            div()
-                                .child("This is a hover card")
-                                .font_semibold()
-                                .text_sm(),
-                        )
+                        .child(div().child("This is a hover card").font_semibold().text_sm())
                         .child(
                             div()
                                 .child("You can display rich content when hovering over a trigger element.")

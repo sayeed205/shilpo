@@ -234,8 +234,7 @@ impl Render for SettingsView {
                         cx.notify();
                     }));
 
-                let rail_header =
-                    NavigationRailHeader::new("settings-rail-header").child(menu_button);
+                let rail_header = NavigationRailHeader::new("settings-rail-header").child(menu_button);
 
                 let rail_items: Vec<_> = self
                     .page_registry
@@ -306,10 +305,7 @@ impl Render for SettingsView {
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().on_surface_variant)
-                                    .child(format!(
-                                        "Configure {} settings and system preferences.",
-                                        active_label
-                                    )),
+                                    .child(format!("Configure {} settings and system preferences.", active_label)),
                             )
                             .child(if active == SettingsCategory::Quick {
                                 quick_page::QuickPage::render(
@@ -318,7 +314,8 @@ impl Render for SettingsView {
                                     &self.device_states,
                                     _window,
                                     cx,
-                                ).into_any_element()
+                                )
+                                    .into_any_element()
                             } else {
                                 v_flex()
                                     .flex_1()
@@ -346,9 +343,7 @@ impl Render for SettingsView {
                                         div()
                                             .text_xs()
                                             .text_color(cx.theme().on_surface_variant)
-                                            .child(
-                                                "Settings page options will be added here in future updates.",
-                                            ),
+                                            .child("Settings page options will be added here in future updates."),
                                     )
                                     .into_any_element()
                             }),

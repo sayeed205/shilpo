@@ -58,10 +58,12 @@ impl std::fmt::Display for ProcessCodecError {
             Self::FrameTooLarge { length } => {
                 write!(f, "frame length {length} exceeds maximum {MAX_FRAME_SIZE}")
             }
-            Self::ProtocolVersionMismatch { expected, found } => write!(
-                f,
-                "protocol version mismatch: expected {expected}, found {found}"
-            ),
+            Self::ProtocolVersionMismatch { expected, found } => {
+                write!(
+                    f,
+                    "protocol version mismatch: expected {expected}, found {found}"
+                )
+            }
             Self::Io(err) => write!(f, "I/O error: {err}"),
             Self::Json(err) => write!(f, "JSON serialization error: {err}"),
         }
