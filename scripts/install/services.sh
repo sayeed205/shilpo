@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 # Service activation, SDDM setup, login shell, and session wiring module
 
+reinstall_bundled_extension() {
+  local shilpo_binary=$1
+  local extension_id=$2
+  local package=$3
+  local uninstall_output
+
+  if uninstall_output=$("$shilpo_binary" ext uninstall "$extension_id" 2>&1); then
+    [[ -z $uninstall_output ]] || printf '%s\n' "$uninstall_output"
+  elif [[ $uninstall_output != *"error[uninstall.failed]: not found: $extension_id"* ]]; then
+    printf '%s\n' "$uninstall_output" >&2
+    return 1
+  fi
+
+  run "$shilpo_binary" ext install "$package"
+}
+
 activate_services_and_shell() {
   log "Wiring systemd user services for Niri session"
 
@@ -107,7 +123,7 @@ activate_services_and_shell() {
       error "Weather extension package was not produced at $package"
       exit 1
     fi
-    run "$HOME/.local/bin/shilpo" ext install "$package"
+    reinstall_bundled_extension "$HOME/.local/bin/shilpo" org.shilpo.weather "$package"
     run "$HOME/.local/bin/shilpo" ext approve org.shilpo.weather --grant-all
     run "$HOME/.local/bin/shilpo" ext enable org.shilpo.weather
   else

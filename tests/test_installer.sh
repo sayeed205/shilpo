@@ -116,6 +116,22 @@ EOF
   cat >"$FAKE_BIN/cargo" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$*" == *"build"* ]]; then
+  if [[ "$*" != *"--manifest-path extensions/Cargo.toml"* ]]; then
+    package=""
+    previous=""
+    for argument in "$@"; do
+      if [[ "$previous" == "-p" || "$previous" == "--package" ]]; then
+        package=$argument
+        break
+      fi
+      previous=$argument
+    done
+    if [[ "$package" != "shilpo" ]]; then
+      echo "native build must target the consolidated shilpo package, got '$package'" >&2
+      exit 1
+    fi
+  fi
+
   mkdir -p "$SHILPO_BUILD_DIR/release" "$SHILPO_EXTENSION_TARGET_DIR/wasm32-wasip2/release"
   cat >"$SHILPO_BUILD_DIR/release/shilpo" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -133,6 +149,23 @@ if [[ "$1" == "ext" && "$2" == "pack" ]]; then
   done
   mkdir -p "$output_dir"
   touch "$output_dir/org.shilpo.weather-1.0.0.shilpo-ext"
+fi
+if [[ "$1" == "ext" && "$2" == "install" ]]; then
+  installed_marker="$SHILPO_PACKAGE_DIR/.mock-weather-installed"
+  if [[ -e "$installed_marker" ]]; then
+    echo "error: error[install.failed]: invalid package: org.shilpo.weather 1.0.0 is immutable and already exists" >&2
+    exit 1
+  fi
+  mkdir -p "$SHILPO_PACKAGE_DIR"
+  touch "$installed_marker"
+fi
+if [[ "$1" == "ext" && "$2" == "uninstall" ]]; then
+  installed_marker="$SHILPO_PACKAGE_DIR/.mock-weather-installed"
+  if [[ ! -e "$installed_marker" ]]; then
+    echo "error: error[uninstall.failed]: not found: org.shilpo.weather" >&2
+    exit 1
+  fi
+  rm -f "$installed_marker"
 fi
 exit 0
 SCRIPT
