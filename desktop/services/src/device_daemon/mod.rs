@@ -3,17 +3,19 @@ pub mod in_memory_adapter;
 pub mod system_adapter;
 
 use crate::device_protocol::{
-    CommandId, CommandOutcome, DeviceCommand, DeviceDomain, DomainLifecycle, DomainState,
-    check_protocol_version,
+    CancellationReason, CommandId, CommandOutcome, DeviceCommand, DeviceDomain, DomainLifecycle,
+    DomainPortTelemetry, DomainState, DomainVersion, RejectionReason, check_protocol_version,
 };
 pub use dbus::DeviceDbusService;
 pub use in_memory_adapter::{DeviceAdapter, InMemoryDeviceAdapter};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 pub use system_adapter::SystemDeviceAdapter;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{Notify, broadcast, oneshot};
+
+const DOMAIN_QUEUE_CAPACITY: usize = 16;
 
 #[derive(Clone)]
 struct TimedOutCommand {
@@ -26,25 +28,67 @@ struct TimedOutCommand {
 pub struct PendingDeviceCommand {
     pub id: CommandId,
     pub arrival_sequence: u64,
+    pub generation: u64,
     pub command: DeviceCommand,
     pub reply: oneshot::Sender<CommandOutcome>,
+}
+
+#[derive(Clone)]
+struct DomainQueueHandle {
+    pending: Arc<std::sync::Mutex<VecDeque<PendingDeviceCommand>>>,
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl DomainQueueHandle {
+    fn new() -> Self {
+        Self {
+            pending: Arc::new(std::sync::Mutex::new(VecDeque::new())),
+            notify: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    fn queue_depth(&self) -> usize {
+        self.pending.lock().unwrap().len()
+    }
+}
+
+struct ExecContext<'a> {
+    adapter: &'a Arc<dyn DeviceAdapter>,
+    states: &'a Arc<std::sync::Mutex<HashMap<DeviceDomain, DomainState>>>,
+    timed_out: &'a Arc<std::sync::Mutex<HashMap<DeviceDomain, Vec<TimedOutCommand>>>>,
+    outcome_tx: &'a broadcast::Sender<CommandOutcome>,
+    owner_generation: u64,
+    owner_generation_source: &'a Arc<AtomicU64>,
+    owner_generation_notify: &'a Arc<Notify>,
 }
 
 pub struct DeviceDaemonService {
     adapter: Arc<dyn DeviceAdapter>,
     next_arrival_sequence: Arc<AtomicU64>,
-    domain_queues: HashMap<DeviceDomain, mpsc::UnboundedSender<PendingDeviceCommand>>,
+    owner_generation: Arc<AtomicU64>,
+    owner_generation_notify: Arc<Notify>,
+    domain_queues: HashMap<DeviceDomain, DomainQueueHandle>,
     domain_states: Arc<std::sync::Mutex<HashMap<DeviceDomain, DomainState>>>,
     timed_out: Arc<std::sync::Mutex<HashMap<DeviceDomain, Vec<TimedOutCommand>>>>,
     outcome_tx: broadcast::Sender<CommandOutcome>,
+    overloads: Arc<AtomicU64>,
+    supersessions: Arc<AtomicU64>,
+    stale_updates: Arc<AtomicU64>,
+    restarts: Arc<AtomicU64>,
 }
 
 impl DeviceDaemonService {
     pub fn new(adapter: Arc<dyn DeviceAdapter>) -> Self {
         let next_arrival_sequence = Arc::new(AtomicU64::new(1));
+        let owner_generation = Arc::new(AtomicU64::new(1));
+        let owner_generation_notify = Arc::new(Notify::new());
         let domain_states = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let timed_out = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let (outcome_tx, _) = broadcast::channel(128);
+        let overloads = Arc::new(AtomicU64::new(0));
+        let supersessions = Arc::new(AtomicU64::new(0));
+        let stale_updates = Arc::new(AtomicU64::new(0));
+        let restarts = Arc::new(AtomicU64::new(0));
         let mut domain_queues = HashMap::new();
 
         for domain in DeviceDomain::ALL {
@@ -53,169 +97,251 @@ impl DeviceDaemonService {
                 .unwrap()
                 .insert(domain, adapter.get_domain_state(domain));
 
-            let (tx, mut rx) = mpsc::unbounded_channel::<PendingDeviceCommand>();
+            let queue_handle = DomainQueueHandle::new();
             let adapter_clone = adapter.clone();
             let states_clone = domain_states.clone();
             let timed_out_clone = timed_out.clone();
             let outcome_tx_clone = outcome_tx.clone();
+            let pending_queue = queue_handle.pending.clone();
+            let notify = queue_handle.notify.clone();
+            let owner_gen_clone = owner_generation.clone();
+            let owner_gen_notify_clone = owner_generation_notify.clone();
 
             tokio::spawn(async move {
-                while let Some(first) = rx.recv().await {
-                    let mut current_cmd = first.command;
-                    let mut current_id = first.id;
-                    let mut current_sequence = first.arrival_sequence;
-                    let mut current_replies =
-                        vec![(current_id.clone(), first.arrival_sequence, first.reply)];
+                loop {
+                    let next_item = {
+                        let mut guard = pending_queue.lock().unwrap();
+                        guard.pop_front()
+                    };
 
-                    // Coalesce set-value commands if available in queue
-                    if current_cmd.is_coalescable() {
-                        while let Ok(next) = rx.try_recv() {
-                            if next.command.is_coalescable()
-                                && next.command.domain() == current_cmd.domain()
-                            {
-                                for (command_id, sequence, reply) in current_replies.drain(..) {
-                                    let _ = reply.send(CommandOutcome::Rejected {
-                                        command_id,
-                                        arrival_sequence: sequence,
-                                        domain,
-                                        reason: "superseded by a newer set-value command".into(),
-                                    });
-                                }
-                                current_cmd = next.command;
-                                current_id = next.id.clone();
-                                current_sequence = next.arrival_sequence;
-                                current_replies =
-                                    vec![(next.id, next.arrival_sequence, next.reply)];
-                            } else {
-                                let outcome = Self::execute_single(
-                                    &adapter_clone,
-                                    &states_clone,
-                                    &timed_out_clone,
-                                    &outcome_tx_clone,
-                                    current_id.clone(),
-                                    current_sequence,
-                                    current_cmd,
-                                )
-                                .await;
-
-                                for (command_id, sequence, reply) in current_replies {
-                                    let _ = reply
-                                        .send(outcome.clone().with_command(command_id, sequence));
-                                }
-
-                                current_cmd = next.command;
-                                current_id = next.id;
-                                current_sequence = next.arrival_sequence;
-                                current_replies =
-                                    vec![(current_id.clone(), current_sequence, next.reply)];
-                                break;
-                            }
+                    if let Some(first) = next_item {
+                        let current_gen = owner_gen_clone.load(Ordering::SeqCst);
+                        if first.generation != current_gen {
+                            let outcome = CommandOutcome::Cancelled {
+                                command_id: first.id,
+                                arrival_sequence: first.arrival_sequence,
+                                domain,
+                                reason: CancellationReason::OwnerReplaced,
+                            };
+                            let _ = first.reply.send(outcome);
+                            continue;
                         }
-                    }
 
-                    let outcome = Self::execute_single(
-                        &adapter_clone,
-                        &states_clone,
-                        &timed_out_clone,
-                        &outcome_tx_clone,
-                        current_id.clone(),
-                        current_sequence,
-                        current_cmd,
-                    )
-                    .await;
+                        let current_cmd = first.command;
+                        let current_id = first.id;
+                        let current_sequence = first.arrival_sequence;
 
-                    for (command_id, sequence, reply) in current_replies {
-                        let _ = reply.send(outcome.clone().with_command(command_id, sequence));
+                        let outcome = Self::execute_single(
+                            ExecContext {
+                                adapter: &adapter_clone,
+                                states: &states_clone,
+                                timed_out: &timed_out_clone,
+                                outcome_tx: &outcome_tx_clone,
+                                owner_generation: current_gen,
+                                owner_generation_source: &owner_gen_clone,
+                                owner_generation_notify: &owner_gen_notify_clone,
+                            },
+                            current_id,
+                            current_sequence,
+                            current_cmd,
+                        )
+                        .await;
+
+                        let _ = first.reply.send(outcome.clone());
+                    } else {
+                        notify.notified().await;
                     }
                 }
             });
 
-            domain_queues.insert(domain, tx);
+            domain_queues.insert(domain, queue_handle);
         }
 
         Self {
             adapter,
             next_arrival_sequence,
+            owner_generation,
+            owner_generation_notify,
             domain_queues,
             domain_states,
             timed_out,
             outcome_tx,
+            overloads,
+            supersessions,
+            stale_updates,
+            restarts,
+        }
+    }
+
+    pub fn owner_generation(&self) -> u64 {
+        self.owner_generation.load(Ordering::SeqCst)
+    }
+
+    pub fn increment_owner_generation(&self) -> u64 {
+        let new_gen = self.owner_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.restarts.fetch_add(1, Ordering::SeqCst);
+        for (domain, queue) in &self.domain_queues {
+            let mut guard = queue.pending.lock().unwrap();
+            for item in std::mem::take(&mut *guard) {
+                let outcome = CommandOutcome::Cancelled {
+                    command_id: item.id,
+                    arrival_sequence: item.arrival_sequence,
+                    domain: *domain,
+                    reason: CancellationReason::OwnerReplaced,
+                };
+                let _ = item.reply.send(outcome);
+            }
+        }
+        {
+            let mut states = self.domain_states.lock().unwrap();
+            for state in states.values_mut() {
+                state.version = DomainVersion::new(new_gen, 0);
+                state.lifecycle = DomainLifecycle::Reconnecting;
+                state.error = Some("device owner replaced".into());
+            }
+        }
+        self.owner_generation_notify.notify_waiters();
+        new_gen
+    }
+
+    pub fn telemetry(&self) -> DomainPortTelemetry {
+        let current_queue_depth: usize = self.domain_queues.values().map(|q| q.queue_depth()).sum();
+        let last_error = self
+            .domain_states
+            .lock()
+            .unwrap()
+            .values()
+            .find_map(|state| state.error.clone());
+        DomainPortTelemetry {
+            owner_generation: self.owner_generation.load(Ordering::SeqCst),
+            current_queue_depth,
+            queue_capacity: DOMAIN_QUEUE_CAPACITY * DeviceDomain::ALL.len(),
+            overloads: self.overloads.load(Ordering::SeqCst),
+            supersessions: self.supersessions.load(Ordering::SeqCst),
+            restarts: self.restarts.load(Ordering::SeqCst),
+            stale_updates: self.stale_updates.load(Ordering::SeqCst),
+            last_error,
         }
     }
 
     async fn execute_single(
-        adapter: &Arc<dyn DeviceAdapter>,
-        states: &Arc<std::sync::Mutex<HashMap<DeviceDomain, DomainState>>>,
-        timed_out: &Arc<std::sync::Mutex<HashMap<DeviceDomain, Vec<TimedOutCommand>>>>,
-        outcome_tx: &broadcast::Sender<CommandOutcome>,
+        cx: ExecContext<'_>,
         id: CommandId,
         arrival_sequence: u64,
         command: DeviceCommand,
     ) -> CommandOutcome {
         let domain = command.domain();
-        let before = states
+        let before = cx
+            .states
             .lock()
             .unwrap()
             .get(&domain)
             .cloned()
-            .unwrap_or_else(|| adapter.get_domain_state(domain));
+            .unwrap_or_else(|| cx.adapter.get_domain_state(domain));
         let timeout_duration = confirmation_timeout(domain);
 
-        let exec_fut = adapter.execute_command(command.clone());
-        match tokio::time::timeout(timeout_duration, exec_fut).await {
+        let exec_fut = cx.adapter.execute_command(command.clone());
+        let execution = tokio::select! {
+            result = tokio::time::timeout(timeout_duration, exec_fut) => result,
+            _ = cx.owner_generation_notify.notified() => {
+                return CommandOutcome::Cancelled {
+                    command_id: id,
+                    arrival_sequence,
+                    domain,
+                    reason: CancellationReason::OwnerReplaced,
+                };
+            }
+        };
+        if cx.owner_generation_source.load(Ordering::SeqCst) != cx.owner_generation {
+            return CommandOutcome::Cancelled {
+                command_id: id,
+                arrival_sequence,
+                domain,
+                reason: CancellationReason::OwnerReplaced,
+            };
+        }
+        match execution {
             Ok(Ok(_)) => {
                 let started = tokio::time::Instant::now();
                 loop {
-                    let observed = adapter.get_domain_state(domain);
+                    let mut observed = cx.adapter.get_domain_state(domain);
+                    if cx.owner_generation_source.load(Ordering::SeqCst) != cx.owner_generation {
+                        return CommandOutcome::Cancelled {
+                            command_id: id,
+                            arrival_sequence,
+                            domain,
+                            reason: CancellationReason::OwnerReplaced,
+                        };
+                    }
                     if command_confirmed(&command, &before, &observed) {
-                        states.lock().unwrap().insert(domain, observed.clone());
+                        observed.version =
+                            DomainVersion::new(cx.owner_generation, observed.version.revision);
+                        cx.states.lock().unwrap().insert(domain, observed.clone());
                         break CommandOutcome::Applied {
                             command_id: id.clone(),
                             arrival_sequence,
                             domain,
-                            revision: observed.revision,
+                            version: observed.version,
                         };
                     }
                     if started.elapsed() >= timeout_duration {
-                        timed_out.lock().unwrap().entry(domain).or_default().push(
-                            TimedOutCommand {
+                        cx.timed_out
+                            .lock()
+                            .unwrap()
+                            .entry(domain)
+                            .or_default()
+                            .push(TimedOutCommand {
                                 id: id.clone(),
                                 arrival_sequence,
                                 command: command.clone(),
                                 before: before.clone(),
-                            },
-                        );
-                        let outcome = CommandOutcome::Timeout {
+                            });
+                        let outcome = CommandOutcome::TimedOut {
                             command_id: id,
                             arrival_sequence,
                             domain,
+                            last_observed_version: DomainVersion::new(
+                                cx.owner_generation,
+                                observed.version.revision,
+                            ),
                         };
-                        let _ = outcome_tx.send(outcome.clone());
+                        let _ = cx.outcome_tx.send(outcome.clone());
                         break outcome;
                     }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                        _ = cx.owner_generation_notify.notified() => {
+                            return CommandOutcome::Cancelled {
+                                command_id: id,
+                                arrival_sequence,
+                                domain,
+                                reason: CancellationReason::OwnerReplaced,
+                            };
+                        }
+                    }
                 }
             }
-            Ok(Err(err)) => {
-                let mut guard = states.lock().unwrap();
+            Ok(Err(_err)) => {
+                let mut guard = cx.states.lock().unwrap();
                 if let Some(state) = guard.get_mut(&domain) {
                     state.lifecycle = DomainLifecycle::Degraded;
-                    state.error = Some(err.clone());
+                    state.error = Some("Device command rejected".to_string());
                 }
                 CommandOutcome::Rejected {
                     command_id: id,
                     arrival_sequence,
                     domain,
-                    reason: err,
+                    reason: RejectionReason::Unavailable,
                 }
             }
             Err(_) => {
-                let mut guard = states.lock().unwrap();
+                let observed = cx.adapter.get_domain_state(domain);
+                let mut guard = cx.states.lock().unwrap();
                 if let Some(state) = guard.get_mut(&domain) {
                     state.lifecycle = DomainLifecycle::Degraded;
                     state.error = Some("Command timed out".into());
                 }
-                timed_out
+                cx.timed_out
                     .lock()
                     .unwrap()
                     .entry(domain)
@@ -226,10 +352,14 @@ impl DeviceDaemonService {
                         command,
                         before,
                     });
-                CommandOutcome::Timeout {
+                CommandOutcome::TimedOut {
                     command_id: id,
                     arrival_sequence,
                     domain,
+                    last_observed_version: DomainVersion::new(
+                        cx.owner_generation,
+                        observed.version.revision,
+                    ),
                 }
             }
         }
@@ -247,6 +377,7 @@ impl DeviceDaemonService {
     /// Reconciles adapter observations into the daemon-owned projection and
     /// returns only domains whose payload or lifecycle changed.
     pub fn refresh_domain_states(&self) -> Vec<DomainState> {
+        let current_gen = self.owner_generation.load(Ordering::SeqCst);
         let mut changed = Vec::new();
         let mut states = self.domain_states.lock().unwrap();
         for domain in DeviceDomain::ALL {
@@ -257,10 +388,11 @@ impl DeviceDaemonService {
                     || state.lifecycle != observed.lifecycle
                     || state.error != observed.error
             }) {
-                let revision =
-                    previous.map_or(observed.revision, |state| state.revision.saturating_add(1));
+                let revision = previous.map_or(observed.version.revision, |state| {
+                    state.version.revision.saturating_add(1)
+                });
                 let state = DomainState {
-                    revision,
+                    version: DomainVersion::new(current_gen, revision),
                     ..observed
                 };
                 states.insert(domain, state.clone());
@@ -272,7 +404,7 @@ impl DeviceDaemonService {
                                 command_id: command.id.clone(),
                                 arrival_sequence: command.arrival_sequence,
                                 domain,
-                                revision: state.revision,
+                                version: state.version,
                             });
                             false
                         } else {
@@ -295,12 +427,13 @@ impl DeviceDaemonService {
         domain: DeviceDomain,
         outcome: &crate::device_protocol::CommandOutcome,
     ) -> Option<DomainState> {
-        let revision = match outcome {
-            crate::device_protocol::CommandOutcome::Applied { revision, .. } => *revision,
+        let version = match outcome {
+            crate::device_protocol::CommandOutcome::Applied { version, .. }
+            | crate::device_protocol::CommandOutcome::ReconciledApplied { version, .. } => *version,
             _ => return None,
         };
         let state = self.get_domain_state(domain);
-        (state.revision == revision).then_some(state)
+        (state.version == version).then_some(state)
     }
 
     pub fn submit_command(
@@ -312,24 +445,64 @@ impl DeviceDaemonService {
             .map_err(|err| format!("Protocol version error: {err}"))?;
 
         let domain = command.domain();
-        let queue = self
+        let queue_handle = self
             .domain_queues
             .get(&domain)
             .ok_or_else(|| format!("No queue for domain {domain:?}"))?;
 
         let arrival_sequence = self.next_arrival_sequence.fetch_add(1, Ordering::SeqCst);
+        let generation = self.owner_generation.load(Ordering::SeqCst);
         let id = CommandId(uuid::Uuid::new_v4().to_string());
         let (reply_tx, reply_rx) = oneshot::channel();
 
-        queue
-            .send(PendingDeviceCommand {
-                id: id.clone(),
-                arrival_sequence,
-                command,
-                reply: reply_tx,
-            })
-            .map_err(|_| "Domain queue channel closed".to_string())?;
+        let mut queue = queue_handle.pending.lock().unwrap();
 
+        // Check coalescing key / replace-latest policy
+        if let Some(key) = command.coalescing_key() {
+            let mut replaced_idx = None;
+            for (idx, item) in queue.iter().enumerate() {
+                if let Some(existing_key) = item.command.coalescing_key()
+                    && existing_key == key
+                {
+                    replaced_idx = Some(idx);
+                    break;
+                }
+            }
+            if let Some(idx) = replaced_idx {
+                let old_item = queue.remove(idx).unwrap();
+                let outcome = CommandOutcome::Cancelled {
+                    command_id: old_item.id,
+                    arrival_sequence: old_item.arrival_sequence,
+                    domain,
+                    reason: CancellationReason::Superseded,
+                };
+                let _ = old_item.reply.send(outcome);
+                self.supersessions.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        // Bounded capacity overflow check
+        if queue.len() >= DOMAIN_QUEUE_CAPACITY {
+            self.overloads.fetch_add(1, Ordering::SeqCst);
+            let outcome = CommandOutcome::Rejected {
+                command_id: id.clone(),
+                arrival_sequence,
+                domain,
+                reason: RejectionReason::Overloaded,
+            };
+            let _ = reply_tx.send(outcome);
+            return Ok((id, reply_rx));
+        }
+
+        queue.push_back(PendingDeviceCommand {
+            id: id.clone(),
+            arrival_sequence,
+            generation,
+            command,
+            reply: reply_tx,
+        });
+
+        queue_handle.notify.notify_one();
         Ok((id, reply_rx))
     }
 }
@@ -458,7 +631,7 @@ fn vpn_active(payload: &crate::device_protocol::NetworkPayload, name: &str) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device_protocol::{AudioAction, BrightnessAction, DomainPayload};
+    use crate::device_protocol::{AudioAction, BrightnessAction, DomainPayload, PROTOCOL_VERSION};
     use std::sync::Mutex;
 
     #[derive(Clone)]
@@ -472,7 +645,7 @@ mod tests {
             Self {
                 state: Arc::new(Mutex::new(DomainState {
                     domain: DeviceDomain::Audio,
-                    revision: 1,
+                    version: DomainVersion::new(1, 1),
                     lifecycle: DomainLifecycle::Ready,
                     payload: DomainPayload::Audio(crate::device_protocol::AudioPayload {
                         volume: 50,
@@ -496,7 +669,7 @@ mod tests {
             } else {
                 DomainState {
                     domain,
-                    revision: 1,
+                    version: DomainVersion::new(1, 1),
                     lifecycle: DomainLifecycle::Ready,
                     payload: DomainPayload::empty(domain),
                     error: None,
@@ -519,7 +692,7 @@ mod tests {
                 tokio::spawn(async move {
                     tokio::time::sleep(delay).await;
                     let mut state = state.lock().unwrap();
-                    state.revision += 1;
+                    state.version.revision += 1;
                     if let DomainPayload::Audio(payload) = &mut state.payload {
                         payload.volume = volume;
                     }
@@ -541,7 +714,12 @@ mod tests {
                 arrival_sequence,
                 ..
             }
-            | CommandOutcome::Timeout {
+            | CommandOutcome::TimedOut {
+                command_id,
+                arrival_sequence,
+                ..
+            }
+            | CommandOutcome::Cancelled {
                 command_id,
                 arrival_sequence,
                 ..
@@ -560,7 +738,11 @@ mod tests {
         let service = DeviceDaemonService::new(adapter);
 
         let cmd = DeviceCommand::Audio(AudioAction::SetVolume(80));
-        assert!(service.submit_command(cmd.clone(), 1).is_ok());
+        assert!(
+            service
+                .submit_command(cmd.clone(), PROTOCOL_VERSION)
+                .is_ok()
+        );
 
         let err = service.submit_command(cmd, 99).unwrap_err();
         assert!(err.contains("version mismatch"));
@@ -574,15 +756,17 @@ mod tests {
         let cmd1 = DeviceCommand::Audio(AudioAction::SetVolume(20));
         let cmd2 = DeviceCommand::Audio(AudioAction::SetVolume(40));
 
-        let (_id1, rx1) = service.submit_command(cmd1, 1).unwrap();
-        let (_id2, rx2) = service.submit_command(cmd2, 1).unwrap();
+        let (_id1, rx1) = service.submit_command(cmd1, PROTOCOL_VERSION).unwrap();
+        let (_id2, rx2) = service.submit_command(cmd2, PROTOCOL_VERSION).unwrap();
 
         let outcome1 = rx1.await.unwrap();
         let outcome2 = rx2.await.unwrap();
 
         assert!(matches!(
             outcome1,
-            CommandOutcome::Applied { .. } | CommandOutcome::Rejected { .. }
+            CommandOutcome::Applied { .. }
+                | CommandOutcome::Rejected { .. }
+                | CommandOutcome::Cancelled { .. }
         ));
         assert!(matches!(outcome2, CommandOutcome::Applied { .. }));
         let (id1, sequence1) = outcome_identity(&outcome1);
@@ -607,10 +791,10 @@ mod tests {
         let service = DeviceDaemonService::new(adapter);
         let cmd = DeviceCommand::Audio(AudioAction::SetVolume(90));
 
-        let (_id, rx) = service.submit_command(cmd, 1).unwrap();
+        let (_id, rx) = service.submit_command(cmd, PROTOCOL_VERSION).unwrap();
         let outcome = rx.await.unwrap();
 
-        assert!(matches!(outcome, CommandOutcome::Timeout { .. }));
+        assert!(matches!(outcome, CommandOutcome::TimedOut { .. }));
         let audio_state = service.get_domain_state(DeviceDomain::Audio);
         assert_eq!(audio_state.lifecycle, DomainLifecycle::Degraded);
     }
@@ -619,12 +803,15 @@ mod tests {
     async fn applied_requires_observed_state_confirmation() {
         let service = DeviceDaemonService::new(Arc::new(DeferredAdapter::new(None)));
         let (_, reply) = service
-            .submit_command(DeviceCommand::Audio(AudioAction::SetVolume(90)), 1)
+            .submit_command(
+                DeviceCommand::Audio(AudioAction::SetVolume(90)),
+                PROTOCOL_VERSION,
+            )
             .unwrap();
 
         assert!(matches!(
             reply.await.unwrap(),
-            CommandOutcome::Timeout { .. }
+            CommandOutcome::TimedOut { .. }
         ));
     }
 
@@ -635,7 +822,10 @@ mod tests {
         ))));
         let mut outcomes = service.subscribe_outcomes();
         let (_, reply) = service
-            .submit_command(DeviceCommand::Audio(AudioAction::SetVolume(90)), 1)
+            .submit_command(
+                DeviceCommand::Audio(AudioAction::SetVolume(90)),
+                PROTOCOL_VERSION,
+            )
             .unwrap();
         let timeout = reply.await.unwrap();
         let (timed_out_id, timed_out_sequence) = outcome_identity(&timeout);
@@ -654,9 +844,9 @@ mod tests {
             CommandOutcome::ReconciledApplied {
                 command_id,
                 arrival_sequence,
-                revision: 2,
+                version,
                 ..
-            } if &command_id == timed_out_id && arrival_sequence == timed_out_sequence
+            } if &command_id == timed_out_id && arrival_sequence == timed_out_sequence && version.revision == 2
         ));
     }
 
@@ -667,12 +857,15 @@ mod tests {
         let service = DeviceDaemonService::new(adapter);
         let started = tokio::time::Instant::now();
         let (_, audio) = service
-            .submit_command(DeviceCommand::Audio(AudioAction::SetVolume(60)), 1)
+            .submit_command(
+                DeviceCommand::Audio(AudioAction::SetVolume(60)),
+                PROTOCOL_VERSION,
+            )
             .unwrap();
         let (_, brightness) = service
             .submit_command(
                 DeviceCommand::Brightness(BrightnessAction::SetBrightness(60)),
-                1,
+                PROTOCOL_VERSION,
             )
             .unwrap();
         let (audio, brightness) = tokio::join!(audio, brightness);
@@ -682,5 +875,87 @@ mod tests {
             CommandOutcome::Applied { .. }
         ));
         assert!(started.elapsed() < Duration::from_millis(90));
+    }
+
+    #[tokio::test]
+    async fn owner_generation_increment_cancels_pending_commands() {
+        let adapter = Arc::new(InMemoryDeviceAdapter::new());
+        adapter.set_forced_delay(Some(Duration::from_millis(200)));
+        let service = DeviceDaemonService::new(adapter);
+
+        let (_id1, rx1) = service
+            .submit_command(
+                DeviceCommand::Audio(AudioAction::ToggleMute),
+                PROTOCOL_VERSION,
+            )
+            .unwrap();
+        let (_id2, rx2) = service
+            .submit_command(
+                DeviceCommand::Audio(AudioAction::ToggleMute),
+                PROTOCOL_VERSION,
+            )
+            .unwrap();
+
+        let new_gen = service.increment_owner_generation();
+        assert_eq!(new_gen, 2);
+        let reset_state = service.get_domain_state(DeviceDomain::Audio);
+        assert_eq!(reset_state.version, DomainVersion::new(2, 0));
+        assert_eq!(reset_state.lifecycle, DomainLifecycle::Reconnecting);
+
+        let outcome2 = rx2.await.unwrap();
+        let outcome1 = rx1.await.unwrap();
+        assert!(matches!(
+            outcome1,
+            CommandOutcome::Cancelled {
+                reason: CancellationReason::OwnerReplaced,
+                ..
+            }
+        ));
+        assert!(matches!(
+            outcome2,
+            CommandOutcome::Cancelled {
+                reason: CancellationReason::OwnerReplaced,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn bounded_lossless_overflow_rejects_with_overloaded() {
+        let adapter = Arc::new(InMemoryDeviceAdapter::new());
+        adapter.set_forced_delay(Some(Duration::from_secs(10)));
+        let service = DeviceDaemonService::new(adapter);
+
+        // Submit 1 in-flight + 16 queued non-coalescible commands
+        let mut rxs = Vec::new();
+        for _ in 0..17 {
+            let (_, rx) = service
+                .submit_command(
+                    DeviceCommand::Audio(AudioAction::ToggleMute),
+                    PROTOCOL_VERSION,
+                )
+                .unwrap();
+            rxs.push(rx);
+        }
+
+        // The 18th command should be rejected as Overloaded
+        let (_, rx_overflow) = service
+            .submit_command(
+                DeviceCommand::Audio(AudioAction::ToggleMute),
+                PROTOCOL_VERSION,
+            )
+            .unwrap();
+
+        let overflow_outcome = rx_overflow.await.unwrap();
+        assert!(matches!(
+            overflow_outcome,
+            CommandOutcome::Rejected {
+                reason: RejectionReason::Overloaded,
+                ..
+            }
+        ));
+
+        let telemetry = service.telemetry();
+        assert!(telemetry.overloads >= 1);
     }
 }

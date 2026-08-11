@@ -71,7 +71,7 @@ impl SystemDeviceAdapter {
         };
         DomainState {
             domain,
-            revision: *revision,
+            version: crate::device_protocol::DomainVersion::new(1, *revision),
             lifecycle,
             payload: payload_for(domain, payload),
             error: None,
