@@ -70,10 +70,14 @@ fn test_compositor_snapshot_stale_and_conflicting_updates() {
     ));
 }
 
-#[test]
-fn test_compositor_generation_fence_cancels_previous_commands() {
-    let executor: CommandExecutorFn = Box::new(|_cmd, _timeout, _cancel, _register| {
-        std::thread::sleep(Duration::from_millis(200));
+#[tokio::test]
+async fn test_compositor_generation_fence_cancels_previous_commands() {
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let release_executor = release.clone();
+    let executor: CommandExecutorFn = Box::new(move |_cmd, _timeout, _cancel, _register| {
+        started_tx.send(()).unwrap();
+        release_executor.wait();
         Ok(ExecutorAck::Success)
     });
     let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
@@ -81,29 +85,39 @@ fn test_compositor_generation_fence_cancels_previous_commands() {
     let _ = broker.observe_snapshot(Arc::new(ready_snapshot(1, 1)));
 
     let t1 = broker.submit(CompositorCommand::FocusWorkspace(1)).unwrap();
+    started_rx.recv().unwrap();
     let t2 = broker.submit(CompositorCommand::FocusWindow(10)).unwrap();
 
     // Owner generation replaced
     broker.set_installed_generation(2);
 
+    release.wait();
     assert_eq!(
-        t1.wait_timeout(Duration::from_secs(1)),
+        t1.await,
         CommandOutcome::Cancelled {
             reason: CancellationReason::OwnerReplaced
         }
     );
     assert_eq!(
-        t2.wait_timeout(Duration::from_secs(1)),
+        t2.await,
         CommandOutcome::Cancelled {
             reason: CancellationReason::OwnerReplaced
         }
     );
 }
 
-#[test]
-fn test_compositor_mailbox_policy_supersedes_duplicate_key() {
-    let executor: CommandExecutorFn = Box::new(|_cmd, _timeout, _cancel, _register| {
-        std::thread::sleep(Duration::from_millis(200));
+#[tokio::test]
+async fn test_compositor_mailbox_policy_supersedes_duplicate_key() {
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let release_executor = release.clone();
+    let first = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let first_executor = first.clone();
+    let executor: CommandExecutorFn = Box::new(move |_cmd, _timeout, _cancel, _register| {
+        if first_executor.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            started_tx.send(()).unwrap();
+            release_executor.wait();
+        }
         Ok(ExecutorAck::Success)
     });
     let broker = CompositorCommandBroker::new(
@@ -115,6 +129,9 @@ fn test_compositor_mailbox_policy_supersedes_duplicate_key() {
     );
     broker.set_installed_generation(1);
     let _ = broker.observe_snapshot(Arc::new(ready_snapshot(1, 1)));
+
+    let blocker = broker.submit(CompositorCommand::CloseWindow(10)).unwrap();
+    started_rx.recv().unwrap();
 
     let t1 = broker
         .submit_with_policy(
@@ -135,7 +152,7 @@ fn test_compositor_mailbox_policy_supersedes_duplicate_key() {
         .unwrap();
 
     assert_eq!(
-        t1.wait_timeout(Duration::from_secs(1)),
+        t1.await,
         CommandOutcome::Cancelled {
             reason: CancellationReason::Superseded
         }
@@ -143,7 +160,9 @@ fn test_compositor_mailbox_policy_supersedes_duplicate_key() {
 
     let telem = broker.telemetry();
     assert_eq!(telem.supersessions, 1);
-    drop(t2);
+    release.wait();
+    let _ = blocker.await;
+    let _ = t2.await;
 }
 
 #[test]
