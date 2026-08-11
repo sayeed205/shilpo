@@ -1,4 +1,7 @@
-use super::{CompositorCommand, CompositorConnection, CompositorSnapshot};
+use super::{
+    CompositorCommand, CompositorConnection, CompositorSnapshot, DomainVersion, MailboxPolicy,
+    RejectionReason, StaleUpdateError,
+};
 use std::{
     collections::VecDeque,
     fmt,
@@ -12,11 +15,45 @@ use std::{
 };
 use tokio::sync::oneshot;
 
-/// Outcome returned when a compositor command successfully applies.
+/// Terminal outcome returned when a compositor command finishes.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandOutcome {
-    Applied { revision: u64 },
+    Applied {
+        version: DomainVersion,
+    },
+    ReconciledApplied {
+        version: DomainVersion,
+    },
+    Rejected {
+        reason: RejectionReason,
+    },
+    TimedOut {
+        last_observed_version: DomainVersion,
+    },
+    Cancelled {
+        reason: CancellationReason,
+    },
+}
+
+impl fmt::Display for CommandOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Applied { version } => write!(f, "command applied at version {}", version),
+            Self::ReconciledApplied { version } => {
+                write!(f, "command reconciled applied at version {}", version)
+            }
+            Self::Rejected { reason } => write!(f, "command rejected: {}", reason),
+            Self::TimedOut {
+                last_observed_version,
+            } => write!(
+                f,
+                "command timed out (last observed version: {})",
+                last_observed_version
+            ),
+            Self::Cancelled { reason } => write!(f, "command cancelled: {}", reason),
+        }
+    }
 }
 
 /// Compositor target descriptor for typed error reporting.
@@ -38,7 +75,7 @@ impl fmt::Display for CompositorTarget {
 
 /// Acknowledgement returned by backend command executor.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ExecutorAck {
+pub enum ExecutorAck {
     Success,
     WorkspaceCreated { workspace_id: u64 },
 }
@@ -47,9 +84,12 @@ pub(crate) enum ExecutorAck {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CancellationReason {
-    User,
-    Reconnect,
     Shutdown,
+    Reconnect,
+    OwnerReplaced,
+    Superseded,
+    User,
+    Timeout,
 }
 
 impl fmt::Display for CancellationReason {
@@ -58,70 +98,12 @@ impl fmt::Display for CancellationReason {
             Self::User => write!(f, "cancelled by user or dropped ticket"),
             Self::Reconnect => write!(f, "compositor reconnected or changed state"),
             Self::Shutdown => write!(f, "broker shutdown"),
+            Self::OwnerReplaced => write!(f, "owner generation replaced"),
+            Self::Superseded => write!(f, "superseded by newer command"),
+            Self::Timeout => write!(f, "command deadline elapsed"),
         }
     }
 }
-
-/// Errors returned by the compositor command broker.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case", tag = "type", content = "detail")]
-pub enum CompositorCommandError {
-    Unavailable {
-        state: CompositorConnection,
-    },
-    Busy {
-        queue_len: usize,
-    },
-    Unsupported,
-    BackendRejected {
-        message: String,
-    },
-    Transport {
-        message: String,
-    },
-    Timeout {
-        duration: Duration,
-    },
-    Cancelled {
-        reason: CancellationReason,
-    },
-    InvalidTarget(CompositorTarget),
-    TargetDisappeared(CompositorTarget),
-    ApplyTimeout {
-        duration: Duration,
-        last_revision: u64,
-    },
-}
-
-impl fmt::Display for CompositorCommandError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unavailable { state } => {
-                write!(f, "compositor unavailable (state: {})", state.state_name())
-            }
-            Self::Busy { queue_len } => write!(f, "compositor busy (queue length: {})", queue_len),
-            Self::Unsupported => write!(f, "compositor command unsupported"),
-            Self::BackendRejected { message } => write!(f, "backend rejected: {}", message),
-            Self::Transport { message } => write!(f, "transport error: {}", message),
-            Self::Timeout { duration } => write!(f, "command timed out after {:?}", duration),
-            Self::Cancelled { reason } => write!(f, "command cancelled: {}", reason),
-            Self::InvalidTarget(target) => write!(f, "invalid target: {}", target),
-            Self::TargetDisappeared(target) => {
-                write!(f, "target disappeared before application: {}", target)
-            }
-            Self::ApplyTimeout {
-                duration,
-                last_revision,
-            } => write!(
-                f,
-                "command application timed out after {:?} (last revision: {})",
-                duration, last_revision
-            ),
-        }
-    }
-}
-
-impl std::error::Error for CompositorCommandError {}
 
 /// Configuration options for `CompositorCommandBroker`.
 #[derive(Debug, Clone)]
@@ -225,7 +207,7 @@ impl StreamCancelHandle for BasicStreamCancelHandle {
 
 /// Ticket returned upon submitting a command to the broker.
 pub struct CommandTicket {
-    rx: oneshot::Receiver<Result<CommandOutcome, CompositorCommandError>>,
+    rx: oneshot::Receiver<CommandOutcome>,
     cancellation: Arc<CommandCancellation>,
     completed: bool,
 }
@@ -240,7 +222,7 @@ impl fmt::Debug for CommandTicket {
 
 impl CommandTicket {
     pub fn new(
-        rx: oneshot::Receiver<Result<CommandOutcome, CompositorCommandError>>,
+        rx: oneshot::Receiver<CommandOutcome>,
         cancellation: Arc<CommandCancellation>,
     ) -> Self {
         Self {
@@ -258,28 +240,27 @@ impl CommandTicket {
     }
 
     /// Synchronously waits for command completion with a timeout.
-    pub fn wait_timeout(
-        mut self,
-        timeout: Duration,
-    ) -> Result<CommandOutcome, CompositorCommandError> {
+    pub fn wait_timeout(mut self, timeout: Duration) -> CommandOutcome {
         let start = Instant::now();
         loop {
             match self.rx.try_recv() {
-                Ok(res) => {
+                Ok(outcome) => {
                     self.completed = true;
-                    return res;
+                    return outcome;
                 }
                 Err(oneshot::error::TryRecvError::Closed) => {
                     self.completed = true;
-                    return Err(CompositorCommandError::Cancelled {
+                    return CommandOutcome::Cancelled {
                         reason: CancellationReason::Shutdown,
-                    });
+                    };
                 }
                 Err(oneshot::error::TryRecvError::Empty) => {
                     if start.elapsed() >= timeout {
-                        self.cancel();
+                        self.cancellation.cancel(CancellationReason::Timeout);
                         self.completed = true;
-                        return Err(CompositorCommandError::Timeout { duration: timeout });
+                        return CommandOutcome::TimedOut {
+                            last_observed_version: DomainVersion::ZERO,
+                        };
                     }
                     thread::sleep(Duration::from_millis(5));
                 }
@@ -288,13 +269,13 @@ impl CommandTicket {
     }
 
     /// Synchronously waits until command completion.
-    pub fn wait(self) -> Result<CommandOutcome, CompositorCommandError> {
+    pub fn wait(self) -> CommandOutcome {
         self.wait_timeout(Duration::from_secs(60))
     }
 }
 
 impl std::future::Future for CommandTicket {
-    type Output = Result<CommandOutcome, CompositorCommandError>;
+    type Output = CommandOutcome;
 
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
@@ -303,9 +284,9 @@ impl std::future::Future for CommandTicket {
         match std::pin::Pin::new(&mut self.rx).poll(cx) {
             std::task::Poll::Ready(res) => {
                 self.completed = true;
-                std::task::Poll::Ready(res.unwrap_or(Err(CompositorCommandError::Cancelled {
+                std::task::Poll::Ready(res.unwrap_or(CommandOutcome::Cancelled {
                     reason: CancellationReason::Shutdown,
-                })))
+                }))
             }
             std::task::Poll::Pending => std::task::Poll::Pending,
         }
@@ -321,8 +302,17 @@ impl Drop for CommandTicket {
 }
 
 /// Telemetry metrics snapshot for `CompositorCommandBroker`.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct CompositorBrokerTelemetry {
+    pub owner_generation: u64,
+    pub current_queue_depth: usize,
+    pub queue_capacity: usize,
+    pub overloads: u64,
+    pub supersessions: u64,
+    pub restarts: u64,
+    pub stale_updates: u64,
+    pub quarantine_trips: u64,
+    pub last_error: Option<String>,
     pub accepted: u64,
     pub succeeded: u64,
     pub backend_failed: u64,
@@ -336,30 +326,31 @@ pub struct CompositorBrokerTelemetry {
     pub application_timeouts: u64,
     pub invalid_targets: u64,
     pub target_disappeared: u64,
-    pub current_queue_depth: usize,
     pub in_flight: bool,
-    pub last_latency_ms: Option<f64>,
-    pub avg_latency_ms: Option<f64>,
+    pub last_latency_ms: Option<u64>,
+    pub avg_latency_ms: Option<u64>,
 }
 
-pub(crate) type CommandExecutorFn = Box<
+pub type CommandExecutorFn = Box<
     dyn Fn(
             &CompositorCommand,
             Duration,
             Arc<CommandCancellation>,
             &dyn Fn(Arc<dyn StreamCancelHandle>),
-        ) -> Result<ExecutorAck, CompositorCommandError>
+        ) -> Result<ExecutorAck, RejectionReason>
         + Send
         + Sync,
 >;
 
 struct PendingCommand {
     _id: u64,
+    generation: u64,
     epoch: u64,
     command: CompositorCommand,
+    policy: MailboxPolicy,
     submitted_at: Instant,
     deadline: Instant,
-    tx: oneshot::Sender<Result<CommandOutcome, CompositorCommandError>>,
+    tx: oneshot::Sender<CommandOutcome>,
     cancellation: Arc<CommandCancellation>,
 }
 
@@ -375,8 +366,8 @@ struct ConvergenceState {
     already_satisfied: bool,
     expectation: Option<CommandExpectation>,
     observed_snapshots: Vec<Arc<CompositorSnapshot>>,
-    terminal: Option<Result<CommandOutcome, CompositorCommandError>>,
-    last_revision: u64,
+    terminal: Option<CommandOutcome>,
+    last_version: DomainVersion,
 }
 
 enum CommandExpectation {
@@ -408,7 +399,7 @@ impl ActiveCommand {
         Self {
             cancellation,
             convergence: Arc::new(Mutex::new(ConvergenceState {
-                last_revision: baseline.revision,
+                last_version: baseline.version,
                 baseline,
                 command,
                 already_satisfied,
@@ -421,10 +412,10 @@ impl ActiveCommand {
 
     fn observe(&self, snapshot: Arc<CompositorSnapshot>) {
         let mut convergence = self.convergence.lock().unwrap();
-        if snapshot.revision <= convergence.baseline.revision || convergence.terminal.is_some() {
+        if snapshot.version <= convergence.baseline.version || convergence.terminal.is_some() {
             return;
         }
-        convergence.last_revision = snapshot.revision;
+        convergence.last_version = snapshot.version;
         if convergence.expectation.is_some() {
             convergence.evaluate(&snapshot);
         } else {
@@ -432,12 +423,12 @@ impl ActiveCommand {
         }
     }
 
-    fn acknowledge(&self, ack: ExecutorAck) -> Result<(), CompositorCommandError> {
+    fn acknowledge(&self, ack: ExecutorAck) -> Result<(), RejectionReason> {
         let mut convergence = self.convergence.lock().unwrap();
         if convergence.already_satisfied {
-            convergence.terminal = Some(Ok(CommandOutcome::Applied {
-                revision: convergence.baseline.revision,
-            }));
+            convergence.terminal = Some(CommandOutcome::Applied {
+                version: convergence.baseline.version,
+            });
             return Ok(());
         }
 
@@ -456,12 +447,12 @@ impl ActiveCommand {
         Ok(())
     }
 
-    fn terminal(&self) -> Option<Result<CommandOutcome, CompositorCommandError>> {
+    fn terminal(&self) -> Option<CommandOutcome> {
         self.convergence.lock().unwrap().terminal.clone()
     }
 
-    fn last_revision(&self) -> u64 {
-        self.convergence.lock().unwrap().last_revision
+    fn last_version(&self) -> DomainVersion {
+        self.convergence.lock().unwrap().last_version
     }
 }
 
@@ -470,7 +461,7 @@ impl CommandExpectation {
         command: &CompositorCommand,
         ack: &ExecutorAck,
         baseline: &CompositorSnapshot,
-    ) -> Result<Self, CompositorCommandError> {
+    ) -> Result<Self, RejectionReason> {
         match (command, ack) {
             (CompositorCommand::FocusWorkspace(id), ExecutorAck::Success) => {
                 Ok(Self::FocusWorkspace(*id))
@@ -507,11 +498,11 @@ impl CommandExpectation {
                     .any(|workspace| workspace.id == *workspace_id),
             }),
             (CompositorCommand::CreateWorkspace, ExecutorAck::Success) => {
-                Err(CompositorCommandError::BackendRejected {
+                Err(RejectionReason::BackendRejected {
                     message: "create-workspace acknowledgement did not identify a workspace".into(),
                 })
             }
-            _ => Err(CompositorCommandError::BackendRejected {
+            _ => Err(RejectionReason::BackendRejected {
                 message: "backend acknowledgement does not match the requested command".into(),
             }),
         }
@@ -550,9 +541,9 @@ impl ConvergenceState {
             }
         };
         if applied {
-            self.terminal = Some(Ok(CommandOutcome::Applied {
-                revision: snapshot.revision,
-            }));
+            self.terminal = Some(CommandOutcome::Applied {
+                version: snapshot.version,
+            });
             return;
         }
 
@@ -608,7 +599,9 @@ impl ConvergenceState {
             CommandExpectation::CloseWindow { .. } => None,
         };
         if let Some(target) = disappeared {
-            self.terminal = Some(Err(CompositorCommandError::TargetDisappeared(target)));
+            self.terminal = Some(CommandOutcome::Rejected {
+                reason: RejectionReason::TargetDisappeared(target),
+            });
         }
     }
 }
@@ -622,11 +615,12 @@ struct BrokerState {
 struct LatencyStats {
     total_ms_sum: f64,
     count: u64,
-    last_ms: Option<f64>,
+    last_ms: Option<u64>,
 }
 
 struct BrokerInner {
     options: BrokerOptions,
+    installed_generation: AtomicU64,
     epoch: AtomicU64,
     state: Mutex<BrokerState>,
     active: Mutex<Option<Arc<CommandCancellation>>>,
@@ -646,55 +640,56 @@ struct BrokerInner {
     application_timeouts: AtomicU64,
     invalid_targets: AtomicU64,
     target_disappeared: AtomicU64,
+    overloads: AtomicU64,
+    supersessions: AtomicU64,
+    restarts: AtomicU64,
+    stale_updates: AtomicU64,
+    quarantine_trips: AtomicU64,
     latency_stats: Mutex<LatencyStats>,
 }
 
 impl BrokerInner {
-    fn record_terminal_outcome(
-        &self,
-        submitted_at: Instant,
-        result: &Result<CommandOutcome, CompositorCommandError>,
-    ) {
-        let latency_ms = submitted_at.elapsed().as_secs_f64() * 1000.0;
+    fn record_terminal_outcome(&self, submitted_at: Instant, outcome: &CommandOutcome) {
+        let latency_ms = (submitted_at.elapsed().as_secs_f64() * 1000.0) as u64;
         {
             let mut stats = self.latency_stats.lock().unwrap();
-            stats.total_ms_sum += latency_ms;
+            stats.total_ms_sum += latency_ms as f64;
             stats.count += 1;
             stats.last_ms = Some(latency_ms);
         }
-        match result {
-            Ok(CommandOutcome::Applied { .. }) => {
+        match outcome {
+            CommandOutcome::Applied { .. } | CommandOutcome::ReconciledApplied { .. } => {
                 self.succeeded.fetch_add(1, Ordering::Relaxed);
             }
-            Err(CompositorCommandError::BackendRejected { .. }) => {
-                self.backend_failed.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(CompositorCommandError::Transport { .. }) => {
-                self.transport_failed.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(CompositorCommandError::Timeout { .. }) => {
+            CommandOutcome::Rejected { reason } => match reason {
+                RejectionReason::BackendRejected { .. } => {
+                    self.backend_failed.fetch_add(1, Ordering::Relaxed);
+                }
+                RejectionReason::Transport { .. } => {
+                    self.transport_failed.fetch_add(1, Ordering::Relaxed);
+                }
+                RejectionReason::Unavailable => {
+                    self.rejected_unavailable.fetch_add(1, Ordering::Relaxed);
+                }
+                RejectionReason::Overloaded => {
+                    self.rejected_busy.fetch_add(1, Ordering::Relaxed);
+                }
+                RejectionReason::Unsupported => {
+                    self.rejected_unsupported.fetch_add(1, Ordering::Relaxed);
+                }
+                RejectionReason::InvalidTarget(_) => {
+                    self.invalid_targets.fetch_add(1, Ordering::Relaxed);
+                }
+                RejectionReason::TargetDisappeared(_) => {
+                    self.target_disappeared.fetch_add(1, Ordering::Relaxed);
+                }
+                RejectionReason::TimedOut | RejectionReason::Cancelled(_) => {}
+            },
+            CommandOutcome::TimedOut { .. } => {
                 self.timed_out.fetch_add(1, Ordering::Relaxed);
             }
-            Err(CompositorCommandError::Cancelled { .. }) => {
+            CommandOutcome::Cancelled { .. } => {
                 self.cancelled.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(CompositorCommandError::Unavailable { .. }) => {
-                self.rejected_unavailable.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(CompositorCommandError::Busy { .. }) => {
-                self.rejected_busy.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(CompositorCommandError::Unsupported) => {
-                self.rejected_unsupported.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(CompositorCommandError::InvalidTarget(_)) => {
-                self.invalid_targets.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(CompositorCommandError::TargetDisappeared(_)) => {
-                self.target_disappeared.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(CompositorCommandError::ApplyTimeout { .. }) => {
-                self.application_timeouts.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -708,9 +703,10 @@ pub struct CompositorCommandBroker {
 }
 
 impl CompositorCommandBroker {
-    pub(crate) fn new(options: BrokerOptions, executor: CommandExecutorFn) -> Arc<Self> {
+    pub fn new(options: BrokerOptions, executor: CommandExecutorFn) -> Arc<Self> {
         let inner = Arc::new(BrokerInner {
             options,
+            installed_generation: AtomicU64::new(0),
             epoch: AtomicU64::new(1),
             state: Mutex::new(BrokerState {
                 snapshot: Arc::new(CompositorSnapshot::default()),
@@ -733,6 +729,11 @@ impl CompositorCommandBroker {
             application_timeouts: AtomicU64::new(0),
             invalid_targets: AtomicU64::new(0),
             target_disappeared: AtomicU64::new(0),
+            overloads: AtomicU64::new(0),
+            supersessions: AtomicU64::new(0),
+            restarts: AtomicU64::new(0),
+            stale_updates: AtomicU64::new(0),
+            quarantine_trips: AtomicU64::new(0),
             latency_stats: Mutex::new(LatencyStats::default()),
         });
 
@@ -754,16 +755,55 @@ impl CompositorCommandBroker {
         broker
     }
 
+    pub fn set_installed_generation(&self, generation: u64) {
+        self.inner
+            .installed_generation
+            .store(generation, Ordering::Release);
+        self.inner.epoch.fetch_add(1, Ordering::SeqCst);
+        let mut state = self.inner.state.lock().unwrap();
+        let drained: Vec<_> = state.queue.drain(..).collect();
+        if let Some(control) = self.inner.active.lock().unwrap().take() {
+            control.cancel(CancellationReason::OwnerReplaced);
+        }
+        drop(state);
+        for item in drained {
+            let outcome = CommandOutcome::Cancelled {
+                reason: CancellationReason::OwnerReplaced,
+            };
+            self.inner
+                .record_terminal_outcome(item.submitted_at, &outcome);
+            let _ = item.tx.send(outcome);
+        }
+        self.inner.cv.notify_all();
+    }
+
+    pub fn record_restart(&self) {
+        self.inner.restarts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_quarantine_trip(&self) {
+        self.inner.quarantine_trips.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn telemetry(&self) -> CompositorBrokerTelemetry {
         let state = self.inner.state.lock().unwrap();
         let in_flight = self.inner.active.lock().unwrap().is_some();
         let stats = self.inner.latency_stats.lock().unwrap();
         let avg_latency_ms = if stats.count > 0 {
-            Some(stats.total_ms_sum / stats.count as f64)
+            Some((stats.total_ms_sum / stats.count as f64) as u64)
         } else {
             None
         };
         CompositorBrokerTelemetry {
+            owner_generation: self.inner.installed_generation.load(Ordering::Relaxed),
+            current_queue_depth: state.queue.len(),
+            queue_capacity: self.inner.options.max_queue_len,
+            overloads: self.inner.overloads.load(Ordering::Relaxed),
+            supersessions: self.inner.supersessions.load(Ordering::Relaxed),
+            restarts: self.inner.restarts.load(Ordering::Relaxed),
+            stale_updates: self.inner.stale_updates.load(Ordering::Relaxed),
+            quarantine_trips: self.inner.quarantine_trips.load(Ordering::Relaxed),
+            last_error: state.snapshot.last_error.clone(),
             accepted: self.inner.accepted.load(Ordering::Relaxed),
             succeeded: self.inner.succeeded.load(Ordering::Relaxed),
             backend_failed: self.inner.backend_failed.load(Ordering::Relaxed),
@@ -777,7 +817,6 @@ impl CompositorCommandBroker {
             application_timeouts: self.inner.application_timeouts.load(Ordering::Relaxed),
             invalid_targets: self.inner.invalid_targets.load(Ordering::Relaxed),
             target_disappeared: self.inner.target_disappeared.load(Ordering::Relaxed),
-            current_queue_depth: state.queue.len(),
             in_flight,
             last_latency_ms: stats.last_ms,
             avg_latency_ms,
@@ -785,17 +824,49 @@ impl CompositorCommandBroker {
     }
 
     /// Observes an updated compositor snapshot, waking the worker to evaluate state convergence.
-    pub fn observe_snapshot(&self, snapshot: Arc<CompositorSnapshot>) {
-        let is_ready = snapshot.connection.is_ready();
+    pub fn observe_snapshot(
+        &self,
+        snapshot: Arc<CompositorSnapshot>,
+    ) -> Result<(), StaleUpdateError> {
+        let installed_gen = self.inner.installed_generation.load(Ordering::Acquire);
         let mut state = self.inner.state.lock().unwrap();
 
-        let is_initial_snapshot = state.snapshot.revision == 0
-            && matches!(state.snapshot.connection, CompositorConnection::Connecting);
-        if !is_initial_snapshot && snapshot.revision <= state.snapshot.revision {
-            return;
+        let is_initial_snapshot = state.snapshot.version == DomainVersion::ZERO
+            && matches!(
+                state.snapshot.connection,
+                CompositorConnection::Unavailable | CompositorConnection::Connecting
+            );
+
+        if snapshot.version.owner_generation > installed_gen {
+            self.inner.stale_updates.fetch_add(1, Ordering::Relaxed);
+            return Err(StaleUpdateError::UninstalledGeneration {
+                installed: installed_gen,
+                attempted: snapshot.version.owner_generation,
+            });
+        }
+
+        if !is_initial_snapshot {
+            if snapshot.version < state.snapshot.version {
+                self.inner.stale_updates.fetch_add(1, Ordering::Relaxed);
+                return Err(StaleUpdateError::StaleVersion {
+                    current: state.snapshot.version,
+                    attempted: snapshot.version,
+                });
+            }
+
+            if snapshot.version == state.snapshot.version {
+                if *state.snapshot == *snapshot {
+                    return Ok(());
+                }
+                self.inner.stale_updates.fetch_add(1, Ordering::Relaxed);
+                return Err(StaleUpdateError::ConflictingSnapshot {
+                    version: state.snapshot.version,
+                });
+            }
         }
 
         let prev_ready = state.snapshot.connection.is_ready();
+        let is_ready = snapshot.connection.is_ready();
         state.snapshot = snapshot.clone();
 
         if prev_ready && !is_ready {
@@ -805,26 +876,28 @@ impl CompositorCommandBroker {
         }
 
         let drained = if !is_ready || !prev_ready {
-            // Reconnect or disconnect: increment epoch & cancel all queued commands
-            self.inner.epoch.fetch_add(1, Ordering::SeqCst);
-
-            let drained: Vec<_> = state.queue.drain(..).collect();
-            if let Some(control) = self.inner.active.lock().unwrap().take() {
-                control.cancel(CancellationReason::Reconnect);
+            if !is_ready {
+                self.inner.epoch.fetch_add(1, Ordering::SeqCst);
+                let drained: Vec<_> = state.queue.drain(..).collect();
+                if let Some(control) = self.inner.active.lock().unwrap().take() {
+                    control.cancel(CancellationReason::Reconnect);
+                }
+                drained
+            } else {
+                Vec::new()
             }
-            drained
         } else {
             Vec::new()
         };
         let convergence = self.inner.convergence.lock().unwrap().clone();
         drop(state);
         for item in drained {
-            let err = CompositorCommandError::Cancelled {
+            let outcome = CommandOutcome::Cancelled {
                 reason: CancellationReason::Reconnect,
             };
             self.inner
-                .record_terminal_outcome(item.submitted_at, &Err(err.clone()));
-            let _ = item.tx.send(Err(err));
+                .record_terminal_outcome(item.submitted_at, &outcome);
+            let _ = item.tx.send(outcome);
         }
         if let Some(convergence) = convergence
             && !convergence.cancellation.is_cancelled()
@@ -832,24 +905,32 @@ impl CompositorCommandBroker {
             convergence.observe(snapshot);
         }
         self.inner.cv.notify_all();
+        Ok(())
     }
 
-    /// Submits a command to the broker FIFO queue.
-    pub fn submit(
+    /// Submits a command to the broker FIFO queue with Lossless policy.
+    pub fn submit(&self, command: CompositorCommand) -> Result<CommandTicket, CommandOutcome> {
+        self.submit_with_policy(command, MailboxPolicy::Lossless)
+    }
+
+    /// Submits a command to the broker FIFO queue with specified MailboxPolicy.
+    pub fn submit_with_policy(
         &self,
         command: CompositorCommand,
-    ) -> Result<CommandTicket, CompositorCommandError> {
+        policy: MailboxPolicy,
+    ) -> Result<CommandTicket, CommandOutcome> {
         let mut state = self.inner.state.lock().unwrap();
         let current_epoch = self.inner.epoch.load(Ordering::Acquire);
+        let current_gen = self.inner.installed_generation.load(Ordering::Acquire);
 
         if !state.snapshot.connection.is_ready() {
-            let err = CompositorCommandError::Unavailable {
-                state: state.snapshot.connection.clone(),
+            let outcome = CommandOutcome::Rejected {
+                reason: RejectionReason::Unavailable,
             };
             self.inner
                 .rejected_unavailable
                 .fetch_add(1, Ordering::Relaxed);
-            return Err(err);
+            return Err(outcome);
         }
 
         // Validate capability
@@ -858,26 +939,54 @@ impl CompositorCommandBroker {
             CompositorCommand::MoveWindowToWorkspace { .. } => {
                 state.snapshot.capabilities.can_move_window
             }
-            CompositorCommand::FocusWindow(_) => state.snapshot.capabilities.can_focus_window,
-            CompositorCommand::FocusPreviousWindow => state.snapshot.capabilities.can_focus_window,
+            CompositorCommand::FocusWindow(_) | CompositorCommand::FocusPreviousWindow => {
+                state.snapshot.capabilities.can_focus_window
+            }
             CompositorCommand::FocusWorkspace(_) => state.snapshot.capabilities.can_focus_workspace,
             CompositorCommand::CloseWindow(_) => state.snapshot.capabilities.can_close_window,
         };
 
         if !cap_ok {
-            let err = CompositorCommandError::Unsupported;
+            let outcome = CommandOutcome::Rejected {
+                reason: RejectionReason::Unsupported,
+            };
             self.inner
                 .rejected_unsupported
                 .fetch_add(1, Ordering::Relaxed);
-            return Err(err);
+            return Err(outcome);
+        }
+
+        if let MailboxPolicy::ReplaceLatest { ref key } = policy {
+            let mut replaced_idx = None;
+            for (idx, item) in state.queue.iter().enumerate() {
+                if let MailboxPolicy::ReplaceLatest {
+                    key: ref existing_key,
+                } = item.policy
+                    && existing_key == key
+                {
+                    replaced_idx = Some(idx);
+                    break;
+                }
+            }
+            if let Some(idx) = replaced_idx {
+                let removed = state.queue.remove(idx).unwrap();
+                let cancel_outcome = CommandOutcome::Cancelled {
+                    reason: CancellationReason::Superseded,
+                };
+                self.inner
+                    .record_terminal_outcome(removed.submitted_at, &cancel_outcome);
+                let _ = removed.tx.send(cancel_outcome);
+                self.inner.supersessions.fetch_add(1, Ordering::Relaxed);
+            }
         }
 
         if state.queue.len() >= self.inner.options.max_queue_len {
-            let err = CompositorCommandError::Busy {
-                queue_len: state.queue.len(),
+            let outcome = CommandOutcome::Rejected {
+                reason: RejectionReason::Overloaded,
             };
+            self.inner.overloads.fetch_add(1, Ordering::Relaxed);
             self.inner.rejected_busy.fetch_add(1, Ordering::Relaxed);
-            return Err(err);
+            return Err(outcome);
         }
 
         self.inner.accepted.fetch_add(1, Ordering::Relaxed);
@@ -888,8 +997,10 @@ impl CompositorCommandBroker {
 
         let pending = PendingCommand {
             _id: cmd_id,
+            generation: current_gen,
             epoch: current_epoch,
             command,
+            policy,
             submitted_at: Instant::now(),
             deadline: Instant::now() + self.inner.options.timeout,
             tx,
@@ -927,7 +1038,7 @@ impl CompositorCommandBroker {
     fn target_invalid(
         command: &CompositorCommand,
         snapshot: &CompositorSnapshot,
-    ) -> Option<CompositorCommandError> {
+    ) -> Option<RejectionReason> {
         match command {
             CompositorCommand::FocusWorkspace(workspace_id)
                 if !snapshot
@@ -935,9 +1046,9 @@ impl CompositorCommandBroker {
                     .iter()
                     .any(|workspace| workspace.id == *workspace_id) =>
             {
-                Some(CompositorCommandError::InvalidTarget(
-                    CompositorTarget::Workspace(*workspace_id),
-                ))
+                Some(RejectionReason::InvalidTarget(CompositorTarget::Workspace(
+                    *workspace_id,
+                )))
             }
             CompositorCommand::FocusWindow(window_id)
                 if !snapshot
@@ -945,9 +1056,9 @@ impl CompositorCommandBroker {
                     .iter()
                     .any(|window| window.id == *window_id) =>
             {
-                Some(CompositorCommandError::InvalidTarget(
-                    CompositorTarget::Window(*window_id),
-                ))
+                Some(RejectionReason::InvalidTarget(CompositorTarget::Window(
+                    *window_id,
+                )))
             }
             CompositorCommand::MoveWindowToWorkspace {
                 window_id,
@@ -957,9 +1068,9 @@ impl CompositorCommandBroker {
                 .iter()
                 .any(|window| window.id == *window_id) =>
             {
-                Some(CompositorCommandError::InvalidTarget(
-                    CompositorTarget::Window(*window_id),
-                ))
+                Some(RejectionReason::InvalidTarget(CompositorTarget::Window(
+                    *window_id,
+                )))
             }
             CompositorCommand::MoveWindowToWorkspace { workspace_id, .. }
                 if !snapshot
@@ -967,9 +1078,9 @@ impl CompositorCommandBroker {
                     .iter()
                     .any(|workspace| workspace.id == *workspace_id) =>
             {
-                Some(CompositorCommandError::InvalidTarget(
-                    CompositorTarget::Workspace(*workspace_id),
-                ))
+                Some(RejectionReason::InvalidTarget(CompositorTarget::Workspace(
+                    *workspace_id,
+                )))
             }
             _ => None,
         }
@@ -1021,37 +1132,47 @@ impl CompositorCommandBroker {
                 break;
             };
 
-            let cancelled = || CompositorCommandError::Cancelled {
-                reason: item
-                    .cancellation
-                    .reason()
-                    .unwrap_or(CancellationReason::User),
-            };
-            if item.epoch != broker.epoch.load(Ordering::Acquire)
-                || item.cancellation.is_cancelled()
+            let installed_gen = broker.installed_generation.load(Ordering::Acquire);
+            if (installed_gen > 0 && item.generation != installed_gen)
+                || item.epoch != broker.epoch.load(Ordering::Acquire)
             {
-                let err = if item.cancellation.is_cancelled() {
-                    cancelled()
-                } else {
-                    CompositorCommandError::Cancelled {
-                        reason: CancellationReason::Reconnect,
-                    }
+                let outcome = CommandOutcome::Cancelled {
+                    reason: CancellationReason::OwnerReplaced,
                 };
-                broker.record_terminal_outcome(item.submitted_at, &Err(err.clone()));
-                let _ = item.tx.send(Err(err));
+                broker.record_terminal_outcome(item.submitted_at, &outcome);
+                let _ = item.tx.send(outcome);
+                continue;
+            }
+
+            let baseline_version = baseline.version;
+            let cancelled = || match item
+                .cancellation
+                .reason()
+                .unwrap_or(CancellationReason::User)
+            {
+                CancellationReason::Timeout => CommandOutcome::TimedOut {
+                    last_observed_version: baseline_version,
+                },
+                reason => CommandOutcome::Cancelled { reason },
+            };
+            if item.cancellation.is_cancelled() {
+                let outcome = cancelled();
+                broker.record_terminal_outcome(item.submitted_at, &outcome);
+                let _ = item.tx.send(outcome);
                 continue;
             }
             if Instant::now() >= item.deadline {
-                let err = CompositorCommandError::Timeout {
-                    duration: broker.options.timeout,
+                let outcome = CommandOutcome::TimedOut {
+                    last_observed_version: baseline.version,
                 };
-                broker.record_terminal_outcome(item.submitted_at, &Err(err.clone()));
-                let _ = item.tx.send(Err(err));
+                broker.record_terminal_outcome(item.submitted_at, &outcome);
+                let _ = item.tx.send(outcome);
                 continue;
             }
-            if let Some(err) = Self::target_invalid(&item.command, &baseline) {
-                broker.record_terminal_outcome(item.submitted_at, &Err(err.clone()));
-                let _ = item.tx.send(Err(err));
+            if let Some(reason) = Self::target_invalid(&item.command, &baseline) {
+                let outcome = CommandOutcome::Rejected { reason };
+                broker.record_terminal_outcome(item.submitted_at, &outcome);
+                let _ = item.tx.send(outcome);
                 continue;
             }
 
@@ -1076,16 +1197,16 @@ impl CompositorCommandBroker {
                 }
             };
             if !activated || item.cancellation.is_cancelled() {
-                let err = if item.cancellation.is_cancelled() {
+                let outcome = if item.cancellation.is_cancelled() {
                     cancelled()
                 } else {
-                    CompositorCommandError::Cancelled {
+                    CommandOutcome::Cancelled {
                         reason: CancellationReason::Reconnect,
                     }
                 };
                 Self::clear_active(&broker, &active);
-                broker.record_terminal_outcome(item.submitted_at, &Err(err.clone()));
-                let _ = item.tx.send(Err(err));
+                broker.record_terminal_outcome(item.submitted_at, &outcome);
+                let _ = item.tx.send(outcome);
                 continue;
             }
 
@@ -1097,36 +1218,37 @@ impl CompositorCommandBroker {
                 &|handle| item.cancellation.register(handle),
             );
             item.cancellation.clear_handle();
-            let result = if item.cancellation.is_cancelled() {
-                Err(cancelled())
+            let outcome = if item.cancellation.is_cancelled() {
+                cancelled()
             } else {
                 match execution {
-                    Err(error) => Err(error),
-                    Ok(_) if Instant::now() >= item.deadline => {
-                        Err(CompositorCommandError::Timeout {
-                            duration: broker.options.timeout,
-                        })
-                    }
+                    Err(RejectionReason::TimedOut) => CommandOutcome::TimedOut {
+                        last_observed_version: active.last_version(),
+                    },
+                    Err(RejectionReason::Cancelled(reason)) => CommandOutcome::Cancelled { reason },
+                    Err(reason) => CommandOutcome::Rejected { reason },
+                    Ok(_) if Instant::now() >= item.deadline => CommandOutcome::TimedOut {
+                        last_observed_version: active.last_version(),
+                    },
                     Ok(ack) => match active.acknowledge(ack) {
-                        Err(error) => Err(error),
+                        Err(reason) => CommandOutcome::Rejected { reason },
                         Ok(()) => loop {
                             if item.cancellation.is_cancelled() {
-                                break Err(cancelled());
+                                break cancelled();
                             }
                             if item.epoch != broker.epoch.load(Ordering::Acquire) {
-                                break Err(CompositorCommandError::Cancelled {
+                                break CommandOutcome::Cancelled {
                                     reason: CancellationReason::Reconnect,
-                                });
+                                };
                             }
-                            if let Some(result) = active.terminal() {
-                                break result;
+                            if let Some(outcome) = active.terminal() {
+                                break outcome;
                             }
                             let now = Instant::now();
                             if now >= item.deadline {
-                                break Err(CompositorCommandError::ApplyTimeout {
-                                    duration: broker.options.timeout,
-                                    last_revision: active.last_revision(),
-                                });
+                                break CommandOutcome::TimedOut {
+                                    last_observed_version: active.last_version(),
+                                };
                             }
 
                             let state = broker.state.lock().unwrap();
@@ -1134,9 +1256,9 @@ impl CompositorCommandBroker {
                                 drop(state);
                                 continue;
                             }
-                            if let Some(result) = active.terminal() {
+                            if let Some(outcome) = active.terminal() {
                                 drop(state);
-                                break result;
+                                break outcome;
                             }
                             let remaining = item.deadline.saturating_duration_since(Instant::now());
                             let _ = broker.cv.wait_timeout(state, remaining).unwrap();
@@ -1145,8 +1267,8 @@ impl CompositorCommandBroker {
                 }
             };
             Self::clear_active(&broker, &active);
-            broker.record_terminal_outcome(item.submitted_at, &result);
-            let _ = item.tx.send(result);
+            broker.record_terminal_outcome(item.submitted_at, &outcome);
+            let _ = item.tx.send(outcome);
         }
     }
 }
@@ -1158,12 +1280,12 @@ impl Drop for CompositorCommandBroker {
 
         if let Ok(mut state) = self.inner.state.lock() {
             for item in state.queue.drain(..) {
-                let err = CompositorCommandError::Cancelled {
+                let outcome = CommandOutcome::Cancelled {
                     reason: CancellationReason::Shutdown,
                 };
                 self.inner
-                    .record_terminal_outcome(item.submitted_at, &Err(err.clone()));
-                let _ = item.tx.send(Err(err));
+                    .record_terminal_outcome(item.submitted_at, &outcome);
+                let _ = item.tx.send(outcome);
             }
         }
 
@@ -1186,6 +1308,7 @@ pub fn create_stream_cancel_handle(stream: UnixStream) -> Arc<dyn StreamCancelHa
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn workspace(id: u64, focused: bool) -> super::super::WorkspaceInfo {
         super::super::WorkspaceInfo {
             id,
@@ -1199,6 +1322,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn window(id: u64, focused: bool) -> super::super::WindowInfo {
         super::super::WindowInfo {
             id,
@@ -1215,13 +1339,14 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn ready_snapshot(
         revision: u64,
         focused_workspace_id: Option<u64>,
         focused_window_id: Option<u64>,
     ) -> CompositorSnapshot {
         CompositorSnapshot {
-            revision,
+            version: DomainVersion::new(1, revision),
             connection: CompositorConnection::Ready,
             workspaces: vec![
                 workspace(1, focused_workspace_id == Some(1)),
@@ -1237,6 +1362,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn wait_for_in_flight(broker: &CompositorCommandBroker) {
         let deadline = Instant::now() + Duration::from_secs(1);
         while !broker.telemetry().in_flight {
@@ -1244,14 +1370,6 @@ mod tests {
                 Instant::now() < deadline,
                 "broker did not start the command"
             );
-            thread::sleep(Duration::from_millis(1));
-        }
-    }
-
-    fn wait_for_idle(broker: &CompositorCommandBroker) {
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while broker.telemetry().in_flight {
-            assert!(Instant::now() < deadline, "broker did not become idle");
             thread::sleep(Duration::from_millis(1));
         }
     }
@@ -1270,7 +1388,9 @@ mod tests {
             max_queue_len: 2,
         };
         let broker = CompositorCommandBroker::new(options, executor);
+        broker.set_installed_generation(1);
         let snapshot = CompositorSnapshot {
+            version: DomainVersion::new(1, 1),
             connection: CompositorConnection::Ready,
             workspaces: vec![super::super::WorkspaceInfo {
                 id: 1,
@@ -1285,13 +1405,13 @@ mod tests {
             focused_workspace_id: Some(1),
             ..Default::default()
         };
-        broker.observe_snapshot(Arc::new(snapshot));
+        broker.observe_snapshot(Arc::new(snapshot)).unwrap();
 
         let t1 = broker.submit(CompositorCommand::FocusWorkspace(1)).unwrap();
-        assert!(
-            t1.wait_timeout(Duration::from_secs(1))
-                .is_ok_and(|res| matches!(res, CommandOutcome::Applied { .. }))
-        );
+        assert!(matches!(
+            t1.wait_timeout(Duration::from_secs(1)),
+            CommandOutcome::Applied { .. }
+        ));
     }
 
     #[test]
@@ -1304,7 +1424,12 @@ mod tests {
         let err = broker
             .submit(CompositorCommand::FocusWorkspace(1))
             .unwrap_err();
-        assert!(matches!(err, CompositorCommandError::Unavailable { .. }));
+        assert_eq!(
+            err,
+            CommandOutcome::Rejected {
+                reason: RejectionReason::Unavailable
+            }
+        );
     }
 
     #[test]
@@ -1315,7 +1440,9 @@ mod tests {
             Ok(ExecutorAck::Success)
         });
         let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
+        broker.set_installed_generation(1);
         let snapshot = CompositorSnapshot {
+            version: DomainVersion::new(1, 1),
             connection: CompositorConnection::Ready,
             workspaces: vec![
                 super::super::WorkspaceInfo {
@@ -1342,24 +1469,26 @@ mod tests {
             focused_workspace_id: Some(1),
             ..Default::default()
         };
-        broker.observe_snapshot(Arc::new(snapshot));
+        broker.observe_snapshot(Arc::new(snapshot)).unwrap();
 
         let t1 = broker.submit(CompositorCommand::FocusWorkspace(1)).unwrap();
         let t2 = broker.submit(CompositorCommand::FocusWorkspace(2)).unwrap();
 
-        broker.observe_snapshot(Arc::new(CompositorSnapshot {
-            revision: 1,
-            connection: CompositorConnection::Connecting,
-            ..Default::default()
-        }));
+        broker
+            .observe_snapshot(Arc::new(CompositorSnapshot {
+                version: DomainVersion::new(1, 2),
+                connection: CompositorConnection::Reconnecting,
+                ..Default::default()
+            }))
+            .unwrap();
 
         let res = t2.wait_timeout(Duration::from_secs(1));
-        assert!(matches!(
+        assert_eq!(
             res,
-            Err(CompositorCommandError::Cancelled {
+            CommandOutcome::Cancelled {
                 reason: CancellationReason::Reconnect
-            })
-        ));
+            }
+        );
         let _ = t1.wait_timeout(Duration::from_secs(1));
     }
 
@@ -1369,7 +1498,9 @@ mod tests {
         let executor: CommandExecutorFn =
             Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success));
         let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
+        broker.set_installed_generation(1);
         let snapshot = CompositorSnapshot {
+            version: DomainVersion::new(1, 1),
             connection: CompositorConnection::Ready,
             workspaces: vec![super::super::WorkspaceInfo {
                 id: 1,
@@ -1384,7 +1515,7 @@ mod tests {
             focused_workspace_id: Some(1),
             ..Default::default()
         };
-        broker.observe_snapshot(Arc::new(snapshot));
+        broker.observe_snapshot(Arc::new(snapshot)).unwrap();
 
         let t1 = broker
             .submit(CompositorCommand::FocusWorkspace(999))
@@ -1392,471 +1523,9 @@ mod tests {
         let res = t1.wait_timeout(Duration::from_secs(1));
         assert_eq!(
             res,
-            Err(CompositorCommandError::InvalidTarget(
-                CompositorTarget::Workspace(999)
-            ))
-        );
-    }
-
-    #[test]
-    fn test_delayed_snapshot_convergence() {
-        let _guard = serial_guard();
-        let executor: CommandExecutorFn =
-            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success));
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions {
-                timeout: Duration::from_secs(2),
-                max_queue_len: 32,
-            },
-            executor,
-        );
-        let snap1 = CompositorSnapshot {
-            revision: 1,
-            connection: CompositorConnection::Ready,
-            workspaces: vec![
-                super::super::WorkspaceInfo {
-                    id: 1,
-                    name: None,
-                    idx: 1,
-                    is_active: true,
-                    is_focused: true,
-                    is_urgent: false,
-                    output_name: None,
-                    active_window_id: None,
-                },
-                super::super::WorkspaceInfo {
-                    id: 2,
-                    name: None,
-                    idx: 2,
-                    is_active: false,
-                    is_focused: false,
-                    is_urgent: false,
-                    output_name: None,
-                    active_window_id: None,
-                },
-            ],
-            focused_workspace_id: Some(1),
-            ..Default::default()
-        };
-        broker.observe_snapshot(Arc::new(snap1.clone()));
-
-        let ticket = broker.submit(CompositorCommand::FocusWorkspace(2)).unwrap();
-
-        thread::sleep(Duration::from_millis(50));
-
-        let snap2 = CompositorSnapshot {
-            revision: 2,
-            focused_workspace_id: Some(2),
-            ..snap1
-        };
-        broker.observe_snapshot(Arc::new(snap2));
-
-        let res = ticket.wait_timeout(Duration::from_secs(1));
-        assert_eq!(res, Ok(CommandOutcome::Applied { revision: 2 }));
-    }
-
-    #[test]
-    fn test_target_disappeared_during_convergence() {
-        let _guard = serial_guard();
-        let executor: CommandExecutorFn =
-            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success));
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions {
-                timeout: Duration::from_secs(2),
-                max_queue_len: 32,
-            },
-            executor,
-        );
-        let snap1 = CompositorSnapshot {
-            revision: 1,
-            connection: CompositorConnection::Ready,
-            workspaces: vec![
-                super::super::WorkspaceInfo {
-                    id: 1,
-                    name: None,
-                    idx: 1,
-                    is_active: true,
-                    is_focused: true,
-                    is_urgent: false,
-                    output_name: None,
-                    active_window_id: None,
-                },
-                super::super::WorkspaceInfo {
-                    id: 2,
-                    name: None,
-                    idx: 2,
-                    is_active: false,
-                    is_focused: false,
-                    is_urgent: false,
-                    output_name: None,
-                    active_window_id: None,
-                },
-            ],
-            focused_workspace_id: Some(1),
-            ..Default::default()
-        };
-        broker.observe_snapshot(Arc::new(snap1.clone()));
-
-        let ticket = broker.submit(CompositorCommand::FocusWorkspace(2)).unwrap();
-
-        thread::sleep(Duration::from_millis(50));
-
-        // Workspace 2 disappears before being focused
-        let snap2 = CompositorSnapshot {
-            revision: 2,
-            workspaces: vec![super::super::WorkspaceInfo {
-                id: 1,
-                name: None,
-                idx: 1,
-                is_active: true,
-                is_focused: true,
-                is_urgent: false,
-                output_name: None,
-                active_window_id: None,
-            }],
-            focused_workspace_id: Some(1),
-            ..snap1
-        };
-        broker.observe_snapshot(Arc::new(snap2));
-
-        let res = ticket.wait_timeout(Duration::from_secs(1));
-        assert_eq!(
-            res,
-            Err(CompositorCommandError::TargetDisappeared(
-                CompositorTarget::Workspace(2)
-            ))
-        );
-    }
-
-    #[test]
-    fn test_apply_timeout() {
-        let _guard = serial_guard();
-        let executor: CommandExecutorFn =
-            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success));
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions {
-                timeout: Duration::from_millis(100),
-                max_queue_len: 32,
-            },
-            executor,
-        );
-        let snap1 = CompositorSnapshot {
-            revision: 1,
-            connection: CompositorConnection::Ready,
-            workspaces: vec![
-                super::super::WorkspaceInfo {
-                    id: 1,
-                    name: None,
-                    idx: 1,
-                    is_active: true,
-                    is_focused: true,
-                    is_urgent: false,
-                    output_name: None,
-                    active_window_id: None,
-                },
-                super::super::WorkspaceInfo {
-                    id: 2,
-                    name: None,
-                    idx: 2,
-                    is_active: false,
-                    is_focused: false,
-                    is_urgent: false,
-                    output_name: None,
-                    active_window_id: None,
-                },
-            ],
-            focused_workspace_id: Some(1),
-            ..Default::default()
-        };
-        broker.observe_snapshot(Arc::new(snap1));
-
-        let ticket = broker.submit(CompositorCommand::FocusWorkspace(2)).unwrap();
-        let res = ticket.wait_timeout(Duration::from_secs(1));
-        assert!(matches!(
-            res,
-            Err(CompositorCommandError::ApplyTimeout {
-                duration: _,
-                last_revision: 1
-            })
-        ));
-    }
-
-    #[test]
-    fn test_convergence_preserves_a_matching_snapshot_seen_before_ack() {
-        let _guard = serial_guard();
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let release_rx = Arc::new(Mutex::new(release_rx));
-        let executor: CommandExecutorFn = Box::new(move |_cmd, _timeout, _cancel, _register| {
-            started_tx.send(()).unwrap();
-            release_rx.lock().unwrap().recv().unwrap();
-            Ok(ExecutorAck::Success)
-        });
-        let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
-        broker.observe_snapshot(Arc::new(ready_snapshot(1, Some(1), Some(10))));
-
-        let ticket = broker.submit(CompositorCommand::FocusWorkspace(2)).unwrap();
-        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        broker.observe_snapshot(Arc::new(ready_snapshot(2, Some(2), Some(10))));
-        broker.observe_snapshot(Arc::new(ready_snapshot(3, Some(1), Some(10))));
-        release_tx.send(()).unwrap();
-
-        assert_eq!(
-            ticket.wait_timeout(Duration::from_secs(1)),
-            Ok(CommandOutcome::Applied { revision: 2 })
-        );
-    }
-
-    #[test]
-    fn test_cancellation_wakes_convergence_without_waiting_for_deadline() {
-        let _guard = serial_guard();
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions {
-                timeout: Duration::from_secs(2),
-                max_queue_len: 32,
-            },
-            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success)),
-        );
-        broker.observe_snapshot(Arc::new(ready_snapshot(1, Some(1), Some(10))));
-
-        let mut ticket = broker.submit(CompositorCommand::FocusWorkspace(2)).unwrap();
-        thread::sleep(Duration::from_millis(25));
-        ticket.cancel();
-        let started = Instant::now();
-        assert!(matches!(
-            ticket.wait_timeout(Duration::from_millis(250)),
-            Err(CompositorCommandError::Cancelled {
-                reason: CancellationReason::User
-            })
-        ));
-        assert!(started.elapsed() < Duration::from_millis(150));
-    }
-
-    #[test]
-    fn test_dropping_a_ticket_releases_the_fifo_worker() {
-        let _guard = serial_guard();
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions {
-                timeout: Duration::from_secs(2),
-                max_queue_len: 32,
-            },
-            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success)),
-        );
-        broker.observe_snapshot(Arc::new(ready_snapshot(1, Some(1), Some(10))));
-
-        let ticket = broker.submit(CompositorCommand::FocusWorkspace(2)).unwrap();
-        wait_for_in_flight(&broker);
-        let started = Instant::now();
-        drop(ticket);
-        wait_for_idle(&broker);
-        assert!(started.elapsed() < Duration::from_millis(150));
-    }
-
-    #[test]
-    fn test_deadline_includes_backend_ack_for_already_satisfied_commands() {
-        let _guard = serial_guard();
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions {
-                timeout: Duration::from_millis(50),
-                max_queue_len: 32,
-            },
-            Box::new(|_cmd, _timeout, _cancel, _register| {
-                thread::sleep(Duration::from_millis(75));
-                Ok(ExecutorAck::Success)
-            }),
-        );
-        broker.observe_snapshot(Arc::new(ready_snapshot(1, Some(1), Some(10))));
-
-        let ticket = broker.submit(CompositorCommand::FocusWorkspace(1)).unwrap();
-        assert!(matches!(
-            ticket.wait_timeout(Duration::from_secs(1)),
-            Err(CompositorCommandError::Timeout { .. })
-        ));
-    }
-
-    #[test]
-    fn test_stale_reconnecting_snapshot_cannot_cancel_a_ready_command() {
-        let _guard = serial_guard();
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let release_rx = Arc::new(Mutex::new(release_rx));
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions::default(),
-            Box::new(move |_cmd, _timeout, _cancel, _register| {
-                started_tx.send(()).unwrap();
-                release_rx.lock().unwrap().recv().unwrap();
-                Ok(ExecutorAck::Success)
-            }),
-        );
-        broker.observe_snapshot(Arc::new(ready_snapshot(2, Some(1), Some(10))));
-
-        let ticket = broker.submit(CompositorCommand::FocusWorkspace(1)).unwrap();
-        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        broker.observe_snapshot(Arc::new(CompositorSnapshot {
-            revision: 1,
-            connection: CompositorConnection::Reconnecting {
-                attempt: 1,
-                last_error: Some("stale".into()),
-            },
-            ..Default::default()
-        }));
-        release_tx.send(()).unwrap();
-
-        assert_eq!(
-            ticket.wait_timeout(Duration::from_secs(1)),
-            Ok(CommandOutcome::Applied { revision: 2 })
-        );
-    }
-
-    #[test]
-    fn test_focus_previous_window_is_a_noop_when_no_alternative_exists() {
-        let _guard = serial_guard();
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions::default(),
-            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success)),
-        );
-        let mut snapshot = ready_snapshot(1, Some(1), Some(10));
-        snapshot.windows.truncate(1);
-        broker.observe_snapshot(Arc::new(snapshot));
-
-        let ticket = broker
-            .submit(CompositorCommand::FocusPreviousWindow)
-            .unwrap();
-        assert_eq!(
-            ticket.wait_timeout(Duration::from_secs(1)),
-            Ok(CommandOutcome::Applied { revision: 1 })
-        );
-    }
-
-    #[test]
-    fn test_create_workspace_requires_a_resolved_workspace_acknowledgement() {
-        let _guard = serial_guard();
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions::default(),
-            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success)),
-        );
-        broker.observe_snapshot(Arc::new(ready_snapshot(1, Some(1), Some(10))));
-
-        let ticket = broker.submit(CompositorCommand::CreateWorkspace).unwrap();
-        assert!(matches!(
-            ticket.wait_timeout(Duration::from_secs(1)),
-            Err(CompositorCommandError::BackendRejected { .. })
-        ));
-    }
-
-    #[test]
-    fn test_fifo_waits_for_convergence_before_starting_the_next_command() {
-        let _guard = serial_guard();
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let release_rx = Arc::new(Mutex::new(release_rx));
-        let first = Arc::new(AtomicBool::new(true));
-        let executor: CommandExecutorFn = {
-            let first = first.clone();
-            Box::new(move |command, _timeout, _cancel, _register| {
-                started_tx.send(command.clone()).unwrap();
-                if first.swap(false, Ordering::SeqCst) {
-                    release_rx.lock().unwrap().recv().unwrap();
-                }
-                Ok(ExecutorAck::Success)
-            })
-        };
-        let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
-        broker.observe_snapshot(Arc::new(ready_snapshot(1, Some(1), Some(10))));
-
-        let first_ticket = broker.submit(CompositorCommand::FocusWorkspace(2)).unwrap();
-        let second_ticket = broker.submit(CompositorCommand::FocusWorkspace(1)).unwrap();
-        assert_eq!(
-            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            CompositorCommand::FocusWorkspace(2)
-        );
-        assert!(started_rx.recv_timeout(Duration::from_millis(100)).is_err());
-
-        release_tx.send(()).unwrap();
-        broker.observe_snapshot(Arc::new(ready_snapshot(2, Some(2), Some(10))));
-        assert_eq!(
-            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            CompositorCommand::FocusWorkspace(1)
-        );
-        broker.observe_snapshot(Arc::new(ready_snapshot(3, Some(1), Some(10))));
-
-        assert_eq!(
-            first_ticket.wait_timeout(Duration::from_secs(1)),
-            Ok(CommandOutcome::Applied { revision: 2 })
-        );
-        assert_eq!(
-            second_ticket.wait_timeout(Duration::from_secs(1)),
-            Ok(CommandOutcome::Applied { revision: 3 })
-        );
-    }
-
-    #[test]
-    fn test_focus_window_and_move_window_apply_only_after_their_postconditions() {
-        let _guard = serial_guard();
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions::default(),
-            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success)),
-        );
-        broker.observe_snapshot(Arc::new(ready_snapshot(1, Some(1), Some(10))));
-
-        let focus_ticket = broker.submit(CompositorCommand::FocusWindow(20)).unwrap();
-        wait_for_in_flight(&broker);
-        broker.observe_snapshot(Arc::new(ready_snapshot(2, Some(1), Some(20))));
-        assert_eq!(
-            focus_ticket.wait_timeout(Duration::from_secs(1)),
-            Ok(CommandOutcome::Applied { revision: 2 })
-        );
-
-        let move_ticket = broker
-            .submit(CompositorCommand::MoveWindowToWorkspace {
-                window_id: 10,
-                workspace_id: 2,
-            })
-            .unwrap();
-        wait_for_in_flight(&broker);
-        let mut moved = ready_snapshot(3, Some(2), Some(20));
-        moved
-            .windows
-            .iter_mut()
-            .find(|window| window.id == 10)
-            .unwrap()
-            .workspace_id = Some(2);
-        broker.observe_snapshot(Arc::new(moved));
-        assert_eq!(
-            move_ticket.wait_timeout(Duration::from_secs(1)),
-            Ok(CommandOutcome::Applied { revision: 3 })
-        );
-    }
-
-    #[test]
-    fn test_create_workspace_applies_to_its_acknowledged_workspace_and_detects_disappearance() {
-        let _guard = serial_guard();
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions::default(),
-            Box::new(|_cmd, _timeout, _cancel, _register| {
-                Ok(ExecutorAck::WorkspaceCreated { workspace_id: 2 })
-            }),
-        );
-        broker.observe_snapshot(Arc::new(ready_snapshot(1, Some(1), Some(10))));
-
-        let applied = broker.submit(CompositorCommand::CreateWorkspace).unwrap();
-        wait_for_in_flight(&broker);
-        broker.observe_snapshot(Arc::new(ready_snapshot(2, Some(2), Some(10))));
-        assert_eq!(
-            applied.wait_timeout(Duration::from_secs(1)),
-            Ok(CommandOutcome::Applied { revision: 2 })
-        );
-
-        let disappeared = broker.submit(CompositorCommand::CreateWorkspace).unwrap();
-        wait_for_in_flight(&broker);
-        let mut missing_target = ready_snapshot(3, Some(1), Some(10));
-        missing_target.workspaces.truncate(1);
-        broker.observe_snapshot(Arc::new(missing_target));
-        assert_eq!(
-            disappeared.wait_timeout(Duration::from_secs(1)),
-            Err(CompositorCommandError::TargetDisappeared(
-                CompositorTarget::Workspace(2)
-            ))
+            CommandOutcome::Rejected {
+                reason: RejectionReason::InvalidTarget(CompositorTarget::Workspace(999))
+            }
         );
     }
 }

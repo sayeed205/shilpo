@@ -36,10 +36,12 @@ pub use brightness::{BrightnessInfo, BrightnessService};
 pub use caffeine::{CaffeineInfo, CaffeineService};
 pub use clipboard::ClipboardService;
 pub use compositor::{
-    BrokerOptions, CancellationReason, CommandCancellation, CommandOutcome, CommandTicket,
-    CompositorAdapter, CompositorCapabilities, CompositorCommand, CompositorCommandBroker,
-    CompositorCommandError, CompositorConnection, CompositorOutput, CompositorSnapshot,
-    CompositorTarget, NiriCompositorService, TestCompositorAdapter, WindowInfo, WorkspaceInfo,
+    BrokerOptions, CancellationReason, CommandCancellation, CommandExecutorFn, CommandOutcome,
+    CommandTicket, CompositorAdapter, CompositorCapabilities, CompositorCommand,
+    CompositorCommandBroker, CompositorCommandError, CompositorConnection, CompositorOutput,
+    CompositorSnapshot, CompositorTarget, DomainVersion, ExecutorAck, MailboxPolicy,
+    NiriCompositorService, RejectionReason, StaleUpdateError, SupervisorState,
+    TestCompositorAdapter, WindowInfo, WorkspaceInfo,
 };
 pub use device_daemon::{
     DeviceAdapter, DeviceDaemonService, DeviceDbusService, InMemoryDeviceAdapter,

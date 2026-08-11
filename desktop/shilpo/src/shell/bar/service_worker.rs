@@ -193,7 +193,7 @@ fn emit_client_updates(
     client: &DeviceClient,
     versions: &mut std::collections::HashMap<
         shilpo_services::DeviceDomain,
-        shilpo_services::DomainVersion,
+        shilpo_device::DomainVersion,
     >,
 ) {
     use shilpo_services::DeviceDomain;

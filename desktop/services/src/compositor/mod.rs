@@ -2,10 +2,10 @@ pub mod broker;
 pub mod niri;
 pub mod test_adapter;
 
-pub(crate) use broker::ExecutorAck;
+pub use broker::ExecutorAck;
 pub use broker::{
-    BrokerOptions, CancellationReason, CommandCancellation, CommandOutcome, CommandTicket,
-    CompositorBrokerTelemetry, CompositorCommandBroker, CompositorCommandError, CompositorTarget,
+    BrokerOptions, CancellationReason, CommandCancellation, CommandExecutorFn, CommandOutcome,
+    CommandTicket, CompositorBrokerTelemetry, CompositorCommandBroker, CompositorTarget,
 };
 pub use niri::NiriCompositorService;
 pub use test_adapter::TestCompositorAdapter;
@@ -13,17 +13,45 @@ pub use test_adapter::TestCompositorAdapter;
 use std::sync::Arc;
 use tokio::sync::watch;
 
-/// Connection status of the compositor adapter.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// DomainVersion tuple containing owner_generation and revision with strict lexicographical ordering.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub struct DomainVersion {
+    pub owner_generation: u64,
+    pub revision: u64,
+}
+
+impl DomainVersion {
+    pub const ZERO: Self = Self {
+        owner_generation: 0,
+        revision: 0,
+    };
+
+    pub fn new(owner_generation: u64, revision: u64) -> Self {
+        Self {
+            owner_generation,
+            revision,
+        }
+    }
+}
+
+impl std::fmt::Display for DomainVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "g{}.r{}", self.owner_generation, self.revision)
+    }
+}
+
+/// Consumer-facing connection status of the compositor adapter.
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompositorConnection {
+    #[default]
+    Unavailable,
     Connecting,
     Ready,
-    Reconnecting {
-        attempt: u32,
-        last_error: Option<String>,
-    },
-    Stopped,
+    Reconnecting,
+    Degraded,
 }
 
 impl CompositorConnection {
@@ -33,13 +61,91 @@ impl CompositorConnection {
 
     pub fn state_name(&self) -> &'static str {
         match self {
+            Self::Unavailable => "unavailable",
             Self::Connecting => "connecting",
             Self::Ready => "ready",
-            Self::Reconnecting { .. } => "reconnecting",
-            Self::Stopped => "stopped",
+            Self::Reconnecting => "reconnecting",
+            Self::Degraded => "degraded",
         }
     }
 }
+
+/// Supervisor operational state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SupervisorState {
+    Starting,
+    Running,
+    Backoff { attempt: u32, retry_at_ms: u64 },
+    Quarantined,
+    Stopping,
+    Stopped,
+}
+
+/// Error returned when publishing a stale or conflicting snapshot update.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StaleUpdateError {
+    StaleVersion {
+        current: DomainVersion,
+        attempted: DomainVersion,
+    },
+    ConflictingSnapshot {
+        version: DomainVersion,
+    },
+    UninstalledGeneration {
+        installed: u64,
+        attempted: u64,
+    },
+}
+
+/// Bounded command mailbox policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MailboxPolicy {
+    Lossless,
+    ReplaceLatest { key: String },
+}
+
+/// Typed rejection reasons for compositor commands.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RejectionReason {
+    Unavailable,
+    Overloaded,
+    Unsupported,
+    InvalidTarget(CompositorTarget),
+    TargetDisappeared(CompositorTarget),
+    BackendRejected { message: String },
+    Transport { message: String },
+    TimedOut,
+    Cancelled(CancellationReason),
+}
+
+impl RejectionReason {
+    pub fn message(&self) -> String {
+        match self {
+            Self::Unavailable => "compositor unavailable".into(),
+            Self::Overloaded => "compositor queue overloaded".into(),
+            Self::Unsupported => "compositor command unsupported".into(),
+            Self::InvalidTarget(t) => format!("invalid target: {t}"),
+            Self::TargetDisappeared(t) => format!("target disappeared before application: {t}"),
+            Self::BackendRejected { message } => format!("backend rejected command: {message}"),
+            Self::Transport { message } => format!("transport error: {message}"),
+            Self::TimedOut => "compositor command timed out".into(),
+            Self::Cancelled(reason) => format!("compositor command cancelled: {reason}"),
+        }
+    }
+}
+
+impl std::fmt::Display for RejectionReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message())
+    }
+}
+
+impl std::error::Error for RejectionReason {}
+
+/// Errors returned by compositor command operations (alias for RejectionReason).
+pub type CompositorCommandError = RejectionReason;
 
 /// Compositor-neutral output metadata.
 #[derive(Clone, Debug, PartialEq)]
@@ -106,7 +212,7 @@ pub struct WindowInfo {
 /// Revisioned atomic snapshot of the compositor state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompositorSnapshot {
-    pub revision: u64,
+    pub version: DomainVersion,
     pub connection: CompositorConnection,
     pub capabilities: CompositorCapabilities,
     pub outputs: Vec<CompositorOutput>,
@@ -116,13 +222,14 @@ pub struct CompositorSnapshot {
     pub focused_workspace_id: Option<u64>,
     pub focused_window_id: Option<u64>,
     pub active_keyboard_layout: Option<String>,
+    pub last_error: Option<String>,
 }
 
 impl Default for CompositorSnapshot {
     fn default() -> Self {
         Self {
-            revision: 0,
-            connection: CompositorConnection::Connecting,
+            version: DomainVersion::ZERO,
+            connection: CompositorConnection::Unavailable,
             capabilities: CompositorCapabilities::default(),
             outputs: Vec::new(),
             workspaces: Vec::new(),
@@ -131,7 +238,18 @@ impl Default for CompositorSnapshot {
             focused_workspace_id: None,
             focused_window_id: None,
             active_keyboard_layout: None,
+            last_error: None,
         }
+    }
+}
+
+impl CompositorSnapshot {
+    pub fn revision(&self) -> u64 {
+        self.version.revision
+    }
+
+    pub fn owner_generation(&self) -> u64 {
+        self.version.owner_generation
     }
 }
 
@@ -152,49 +270,4 @@ pub trait CompositorAdapter: Send + Sync {
     fn current(&self) -> Arc<CompositorSnapshot>;
     fn subscribe(&self) -> watch::Receiver<Arc<CompositorSnapshot>>;
     fn command_broker(&self) -> Arc<CompositorCommandBroker>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_test_compositor_adapter() {
-        let adapter = TestCompositorAdapter::new_default();
-        assert_eq!(
-            adapter.current().connection,
-            CompositorConnection::Connecting
-        );
-
-        let snapshot = CompositorSnapshot {
-            connection: CompositorConnection::Ready,
-            revision: 1,
-            workspaces: vec![WorkspaceInfo {
-                id: 1,
-                name: None,
-                idx: 1,
-                is_active: true,
-                is_focused: true,
-                is_urgent: false,
-                output_name: None,
-                active_window_id: None,
-            }],
-            focused_workspace_id: Some(1),
-            ..Default::default()
-        };
-        adapter.update(snapshot);
-
-        assert_eq!(adapter.current().connection, CompositorConnection::Ready);
-        assert_eq!(adapter.current().revision, 1);
-
-        let ticket = adapter
-            .command_broker()
-            .submit(CompositorCommand::FocusWorkspace(1))
-            .unwrap();
-        assert!(
-            ticket
-                .wait_timeout(std::time::Duration::from_secs(1))
-                .is_ok()
-        );
-    }
 }

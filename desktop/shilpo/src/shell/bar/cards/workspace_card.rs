@@ -153,10 +153,10 @@ impl CardProvider for WorkspacePreviewProvider {
                     .corner_radii(24.0, 24.0);
 
                 let status_overlay = match connection {
-                    CompositorConnection::Reconnecting { attempt, .. } => {
-                        Some(format!("Reconnecting ({attempt})"))
+                    CompositorConnection::Reconnecting => Some("Reconnecting".to_string()),
+                    CompositorConnection::Unavailable | CompositorConnection::Degraded => {
+                        Some("Compositor Unavailable".to_string())
                     }
-                    CompositorConnection::Stopped => Some("Compositor Unavailable".to_string()),
                     _ => None,
                 };
 
@@ -197,8 +197,10 @@ impl CardProvider for WorkspacePreviewProvider {
                 // Compositor disconnected / stopped and no workspace cached.
                 let status_text = match connection {
                     CompositorConnection::Connecting => "Connecting to compositor...",
-                    CompositorConnection::Reconnecting { .. } => "Reconnecting to compositor...",
-                    CompositorConnection::Stopped => "Compositor unavailable",
+                    CompositorConnection::Reconnecting => "Reconnecting to compositor...",
+                    CompositorConnection::Unavailable | CompositorConnection::Degraded => {
+                        "Compositor unavailable"
+                    }
                     CompositorConnection::Ready => "Workspace unavailable",
                 };
 

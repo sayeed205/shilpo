@@ -7,7 +7,7 @@ use crate::{
     error::ShellError,
 };
 
-use super::{ShellRuntime, ShellSurfaces};
+use super::{ActionDispatcher, ShellRuntime, ShellSurfaces};
 
 impl ShellRuntime {
     pub fn save_audio_preference(cx: &App, device: Option<String>, port: Option<String>) {
@@ -35,14 +35,23 @@ impl ShellRuntime {
                     .submit(cmd)
                     .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
                 cx.spawn(async move |cx| match ticket.await {
-                    Ok(shilpo_services::CommandOutcome::Applied { revision }) => {
-                        tracing::trace!(revision, "compositor command applied");
+                    shilpo_services::CommandOutcome::Applied { version }
+                    | shilpo_services::CommandOutcome::ReconciledApplied { version } => {
+                        tracing::trace!(%version, "compositor command applied");
                     }
-                    Err(err) => {
+                    shilpo_services::CommandOutcome::Rejected { reason } => {
                         cx.update(|cx: &mut gpui::App| {
-                            tracing::warn!(error = %err, "compositor command failed");
-                            Self::show_compositor_error_toast(cx, &err);
+                            tracing::warn!(error = %reason, "compositor command rejected");
+                            ActionDispatcher::show_compositor_error_toast(cx, &reason);
                         });
+                    }
+                    shilpo_services::CommandOutcome::TimedOut {
+                        last_observed_version,
+                    } => {
+                        tracing::warn!(%last_observed_version, "compositor command timed out");
+                    }
+                    shilpo_services::CommandOutcome::Cancelled { reason } => {
+                        tracing::debug!(%reason, "compositor command cancelled");
                     }
                 })
                 .detach();
