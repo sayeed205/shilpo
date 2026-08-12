@@ -158,13 +158,41 @@ async fn run(
     config_path: PathBuf,
     client: DeviceClient,
 ) {
-    let _ = load_config(&updates, &config_path);
+    let resolver = crate::config::ConfigResolver::from_primary_path(&config_path);
+    let mut committed_snapshot = match resolver.resolve_initial() {
+        Ok((snapshot, _)) => {
+            let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Loaded(Box::new(
+                snapshot.config.clone(),
+            ))));
+            snapshot
+        }
+        Err(e) => {
+            let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Failed(e.to_string())));
+            crate::config::ConfigSnapshot::default()
+        }
+    };
     let mut versions = std::collections::HashMap::new();
     loop {
         while let Ok(command) = commands.try_recv() {
             match command {
                 WorkerCommand::ReloadConfig => {
-                    let _ = load_config(&updates, &config_path);
+                    let (new_snapshot, _changeset, report) =
+                        resolver.resolve_reload(&committed_snapshot);
+                    if report.recovery_scope == Some(crate::config::RecoveryScope::RejectCandidate)
+                    {
+                        let msg = report
+                            .diagnostics
+                            .iter()
+                            .map(|d| format!("{}: {}", d.path, d.message))
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Failed(msg)));
+                    } else {
+                        committed_snapshot = new_snapshot;
+                        let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Loaded(
+                            Box::new(committed_snapshot.config.clone()),
+                        )));
+                    }
                 }
                 WorkerCommand::Device(command) => {
                     let client = client.clone();
@@ -399,18 +427,6 @@ fn network_info(p: shilpo_services::NetworkPayload) -> NetworkInfo {
         }),
     }
 }
-
-fn load_config(updates: &UpdateSender, path: &PathBuf) -> bool {
-    let update = match ShellConfig::load_or_create(path) {
-        Ok(config) => WorkerUpdate::Config(ConfigUpdate::Loaded(Box::new(config))),
-        Err(error) => WorkerUpdate::Config(ConfigUpdate::Failed(error.to_string())),
-    };
-    !matches!(
-        updates.try_send(update),
-        Err(mpsc::TrySendError::Disconnected(_))
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
