@@ -5,6 +5,7 @@ pub mod report;
 pub mod resolver;
 pub mod source;
 pub mod types;
+pub mod unknown_keys;
 pub mod validation;
 
 pub use changeset::ConfigChangeSet;
@@ -13,6 +14,7 @@ pub use report::EffectiveWithOriginsReport;
 pub use resolver::{ConfigResolver, ConfigSnapshot, ResolutionReport};
 pub use source::{ConfigSource, SourceLocation, discover_sources};
 pub use types::*;
+pub use unknown_keys::UnknownConfigKey;
 pub use validation::{RecoveryScope, apply_scoped_recovery, classify_diagnostic};
 
 #[cfg(test)]
@@ -843,5 +845,235 @@ margin = { horizontal = 600, vertical = 6 }
 
         let invalid: Result<BarWidget, _> = serde_json::from_str(r#""builtin:active_window""#);
         assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn unknown_keys_warn_and_are_ignored_in_memory() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("config.toml");
+        let content = "version = 1\nbaer = 1\n[bar]\nheight = 32\nheigth = 64\npadding = 12\n";
+        std::fs::write(&primary, content).unwrap();
+
+        let resolver = ConfigResolver::from_primary_path(&primary);
+        let (snapshot, report) = resolver.resolve_initial().unwrap();
+
+        assert_eq!(snapshot.config.bar.height, 32);
+        assert_eq!(snapshot.config.bar.padding, 12);
+        assert_eq!(report.recovery_scope, None);
+        assert!(report.diagnostics.is_empty());
+
+        let paths: Vec<String> = report
+            .unknown_keys
+            .iter()
+            .map(|key| key.path.clone())
+            .collect();
+        assert_eq!(paths, vec!["baer", "bar.heigth"]);
+        assert_eq!(report.unknown_keys[0].suggestion.as_deref(), Some("bar"));
+        assert_eq!(
+            report.unknown_keys[1].suggestion.as_deref(),
+            Some("bar.height")
+        );
+        // Source documents are never rewritten.
+        assert_eq!(std::fs::read_to_string(&primary).unwrap(), content);
+    }
+
+    #[test]
+    fn unknown_keys_report_exact_source_line_and_column() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("config.toml");
+        std::fs::write(&primary, "version = 1\n\n[bar]\nheigth = 64\n").unwrap();
+
+        let resolver = ConfigResolver::from_primary_path(&primary);
+        let (_snapshot, report) = resolver.resolve_initial().unwrap();
+
+        assert_eq!(report.unknown_keys.len(), 1);
+        let warning = &report.unknown_keys[0];
+        assert_eq!(warning.source, ConfigSource::Primary { path: primary });
+        assert_eq!(warning.line, Some(4));
+        assert_eq!(warning.column, Some(1));
+    }
+
+    #[test]
+    fn unknown_output_child_warns_while_output_name_is_accepted() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("config.toml");
+        std::fs::write(
+            &primary,
+            "version = 1\n[outputs.\"DP-1\"]\nheigth = 32\nenabled = true\n",
+        )
+        .unwrap();
+
+        let resolver = ConfigResolver::from_primary_path(&primary);
+        let (snapshot, report) = resolver.resolve_initial().unwrap();
+
+        assert!(snapshot.config.outputs.contains_key("DP-1"));
+        assert_eq!(report.unknown_keys.len(), 1);
+        assert_eq!(report.unknown_keys[0].path, "outputs.\"DP-1\".heigth");
+        assert_eq!(
+            report.unknown_keys[0].suggestion.as_deref(),
+            Some("outputs.\"DP-1\".height")
+        );
+    }
+
+    #[test]
+    fn open_extension_settings_produce_no_warnings() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("config.toml");
+        std::fs::write(
+            &primary,
+            "version = 1\n[extensions.settings.\"org.shilpo.weather\"]\nlocation = \"Kolkata\"\nmetadata = { anything = [1, 2] }\n",
+        )
+        .unwrap();
+
+        let resolver = ConfigResolver::from_primary_path(&primary);
+        let (snapshot, report) = resolver.resolve_initial().unwrap();
+
+        assert!(report.unknown_keys.is_empty());
+        assert_eq!(
+            snapshot.config.extensions.settings["org.shilpo.weather"]["location"],
+            "Kolkata"
+        );
+    }
+
+    #[test]
+    fn unknown_higher_precedence_entry_does_not_shadow_lower_valid_value() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("config.toml");
+        std::fs::write(&primary, "version = 1\n[bar]\nheight = 40\n").unwrap();
+
+        let overrides = dir.path().join("overrides.toml");
+        std::fs::write(&overrides, "[bar]\nheigth = 56\n").unwrap();
+
+        let resolver = ConfigResolver::new(dir.path());
+        let (snapshot, report) = resolver.resolve_initial().unwrap();
+
+        assert_eq!(snapshot.config.bar.height, 40);
+        assert_eq!(report.unknown_keys.len(), 1);
+        assert_eq!(
+            report.unknown_keys[0].source,
+            ConfigSource::Overrides { path: overrides }
+        );
+        assert!(!report.unknown_keys[0].path.is_empty());
+    }
+
+    #[test]
+    fn warnings_keep_deterministic_source_then_document_order() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("config.toml");
+        std::fs::write(&primary, "version = 1\nbaer = 1\nzat = 2\n").unwrap();
+
+        let conf_d = dir.path().join("conf.d");
+        std::fs::create_dir_all(&conf_d).unwrap();
+        std::fs::write(conf_d.join("01-first.toml"), "[bar]\nheigth = 32\n").unwrap();
+        std::fs::write(
+            conf_d.join("02-second.toml"),
+            "[theme]\nfont_famly = \"X\"\nfont_fmaily = \"Y\"\n",
+        )
+        .unwrap();
+
+        let overrides = dir.path().join("overrides.toml");
+        std::fs::write(&overrides, "[capture]\nshwo_pointer = false\n").unwrap();
+
+        let resolver = ConfigResolver::new(dir.path());
+        let (_snapshot, report) = resolver.resolve_initial().unwrap();
+
+        let paths: Vec<String> = report.unknown_keys.iter().map(|k| k.path.clone()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "baer",
+                "zat",
+                "bar.heigth",
+                "theme.font_famly",
+                "theme.font_fmaily",
+                "capture.shwo_pointer",
+            ]
+        );
+        let sources: Vec<ConfigSource> = report
+            .unknown_keys
+            .iter()
+            .map(|k| k.source.clone())
+            .collect();
+        assert_eq!(
+            sources,
+            vec![
+                ConfigSource::Primary {
+                    path: primary.clone()
+                },
+                ConfigSource::Primary { path: primary },
+                ConfigSource::Fragment {
+                    path: conf_d.join("01-first.toml")
+                },
+                ConfigSource::Fragment {
+                    path: conf_d.join("02-second.toml")
+                },
+                ConfigSource::Fragment {
+                    path: conf_d.join("02-second.toml")
+                },
+                ConfigSource::Overrides { path: overrides },
+            ]
+        );
+    }
+
+    #[test]
+    fn repeated_typo_in_two_files_produces_two_warnings() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("config.toml");
+        std::fs::write(&primary, "version = 1\n[bar]\nheigth = 32\n").unwrap();
+
+        let conf_d = dir.path().join("conf.d");
+        std::fs::create_dir_all(&conf_d).unwrap();
+        std::fs::write(conf_d.join("01-fragment.toml"), "[bar]\nheigth = 40\n").unwrap();
+
+        let resolver = ConfigResolver::new(dir.path());
+        let (_snapshot, report) = resolver.resolve_initial().unwrap();
+
+        assert_eq!(report.unknown_keys.len(), 2);
+        assert!(report.unknown_keys.iter().all(|k| k.path == "bar.heigth"));
+        assert!(report.unknown_keys[0].source != report.unknown_keys[1].source);
+    }
+
+    #[test]
+    fn reload_strips_unknown_key_and_keeps_previous_valid_value() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("config.toml");
+        std::fs::write(&primary, "version = 1\n[bar]\nheight = 40\n").unwrap();
+
+        let resolver = ConfigResolver::new(dir.path());
+        let (initial_snapshot, _report) = resolver.resolve_initial().unwrap();
+
+        let overrides = dir.path().join("overrides.toml");
+        std::fs::write(&overrides, "[bar]\nheigth = 56\n").unwrap();
+
+        let (reload_snapshot, changeset, report) = resolver.resolve_reload(&initial_snapshot);
+
+        assert_eq!(reload_snapshot.config.bar.height, 40);
+        assert!(changeset.is_empty());
+        assert_eq!(report.recovery_scope, None);
+        assert_eq!(report.unknown_keys.len(), 1);
+        assert_eq!(
+            report.unknown_keys[0].source,
+            ConfigSource::Overrides { path: overrides }
+        );
+        assert_eq!(report.unknown_keys[0].path, "bar.heigth");
+    }
+
+    #[test]
+    fn unknown_keys_do_not_trigger_recovery_on_initial_or_reload() {
+        let dir = TempDir::new().unwrap();
+        let primary = dir.path().join("config.toml");
+        std::fs::write(&primary, "version = 1\nbaer = 1\n[bar]\nheight = 48\n").unwrap();
+
+        let resolver = ConfigResolver::from_primary_path(&primary);
+        let (initial_snapshot, initial_report) = resolver.resolve_initial().unwrap();
+        assert_eq!(initial_report.recovery_scope, None);
+        assert_eq!(initial_report.unknown_keys.len(), 1);
+
+        let (reload_snapshot, changeset, reload_report) =
+            resolver.resolve_reload(&initial_snapshot);
+        assert_eq!(reload_snapshot, initial_snapshot);
+        assert!(changeset.is_empty());
+        assert_eq!(reload_report.recovery_scope, None);
+        assert_eq!(reload_report.unknown_keys.len(), 1);
     }
 }

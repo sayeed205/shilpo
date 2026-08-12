@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -460,18 +460,46 @@ impl DoctorChecker {
     }
 
     pub fn check_config_file(&self, auto_fix: bool) -> DiagnosticItem {
-        let config_path = Self::default_config_path();
+        self.check_config_file_at(&Self::default_config_path(), auto_fix)
+    }
+
+    pub fn check_config_file_at(&self, config_path: &Path, auto_fix: bool) -> DiagnosticItem {
         if config_path.exists() {
-            match crate::config::ShellConfig::load_or_create(&config_path) {
-                Ok(_) => DiagnosticItem {
-                    category: "Configuration".into(),
-                    name: "Shilpo config.toml".into(),
-                    status: DiagnosticStatus::Pass,
-                    message: format!("Valid configuration at {}", config_path.display()),
-                    repair_command: None,
-                    unit_identifier: None,
-                    fix_applied: false,
-                },
+            let resolver = crate::config::ConfigResolver::from_primary_path(config_path);
+            match resolver.resolve_initial() {
+                Ok((_snapshot, report)) => {
+                    if report.unknown_keys.is_empty() {
+                        DiagnosticItem {
+                            category: "Configuration".into(),
+                            name: "Shilpo config.toml".into(),
+                            status: DiagnosticStatus::Pass,
+                            message: format!("Valid configuration at {}", config_path.display()),
+                            repair_command: None,
+                            unit_identifier: None,
+                            fix_applied: false,
+                        }
+                    } else {
+                        let details = report
+                            .unknown_keys
+                            .iter()
+                            .map(|key| key.describe())
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        DiagnosticItem {
+                            category: "Configuration".into(),
+                            name: "Shilpo config.toml".into(),
+                            status: DiagnosticStatus::Warn,
+                            message: format!(
+                                "Valid configuration with unknown keys at {}: {}",
+                                config_path.display(),
+                                details
+                            ),
+                            repair_command: None,
+                            unit_identifier: None,
+                            fix_applied: false,
+                        }
+                    }
+                }
                 Err(err) => DiagnosticItem {
                     category: "Configuration".into(),
                     name: "Shilpo config.toml".into(),
@@ -483,7 +511,7 @@ impl DoctorChecker {
                 },
             }
         } else if auto_fix {
-            let _ = crate::config::ShellConfig::load_or_create(&config_path);
+            let _ = crate::config::ShellConfig::load_or_create(config_path);
             DiagnosticItem {
                 category: "Configuration".into(),
                 name: "Shilpo config.toml".into(),
@@ -830,7 +858,9 @@ fn expand_home_path(path: PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::expand_home_path;
+    use crate::cli::adapters::doctor::{DiagnosticStatus, DoctorChecker};
     use std::path::PathBuf;
+    use tempfile::TempDir;
 
     #[test]
     fn wallpaper_path_expands_home_prefix() {
@@ -845,5 +875,69 @@ mod tests {
     fn absolute_wallpaper_path_is_preserved() {
         let path = PathBuf::from("/srv/wallpapers");
         assert_eq!(expand_home_path(path.clone()), path);
+    }
+
+    fn write_config(dir: &TempDir, content: &str) -> PathBuf {
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn clean_valid_config_passes() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(&dir, "version = 1\n[bar]\nheight = 48\n");
+        let item = DoctorChecker::new().check_config_file_at(&path, false);
+        assert_eq!(item.status, DiagnosticStatus::Pass);
+        assert!(!item.fix_applied);
+    }
+
+    #[test]
+    fn valid_config_with_unknown_keys_warns_with_details() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "version = 1\nbaer = 1\n[bar]\nheight = 48\nheigth = 64\n",
+        );
+        let item = DoctorChecker::new().check_config_file_at(&path, false);
+        assert_eq!(item.status, DiagnosticStatus::Warn);
+        assert!(item.message.contains("unknown config key 'baer'"));
+        assert!(item.message.contains("suggestion: 'bar'"));
+        assert!(item.message.contains("bar.heigth"));
+        assert!(item.message.contains("suggestion: 'bar.height'"));
+        assert!(item.message.contains(path.display().to_string().as_str()));
+    }
+
+    #[test]
+    fn invalid_config_fails() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(&dir, "invalid = [ \n");
+        let item = DoctorChecker::new().check_config_file_at(&path, false);
+        assert_eq!(item.status, DiagnosticStatus::Fail);
+    }
+
+    #[test]
+    fn auto_fix_never_rewrites_existing_file_with_unknown_keys() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(&dir, "version = 1\nbaer = 1\n");
+        let original = std::fs::read_to_string(&path).unwrap();
+        let item = DoctorChecker::new().check_config_file_at(&path, true);
+        assert_eq!(item.status, DiagnosticStatus::Warn);
+        assert!(!item.fix_applied);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn missing_file_warns_and_auto_fix_creates_default() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        let item = DoctorChecker::new().check_config_file_at(&path, false);
+        assert_eq!(item.status, DiagnosticStatus::Warn);
+        assert!(!path.exists());
+
+        let item = DoctorChecker::new().check_config_file_at(&path, true);
+        assert_eq!(item.status, DiagnosticStatus::Pass);
+        assert!(item.fix_applied);
+        assert!(path.exists());
     }
 }
