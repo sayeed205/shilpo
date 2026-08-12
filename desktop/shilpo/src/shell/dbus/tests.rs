@@ -6,18 +6,13 @@ use tokio::sync::mpsc;
 async fn test_pair(service: ShellDbusService) -> (zbus::Connection, zbus::Connection) {
     let (server_stream, client_stream) = UnixStream::pair().unwrap();
     let guid = zbus::Guid::generate();
-    let server = zbus::connection::Builder::unix_stream(server_stream)
+    let server_builder = zbus::connection::Builder::unix_stream(server_stream)
         .server(guid)
         .unwrap()
-        .p2p()
-        .build()
-        .await
-        .unwrap();
-    let client = zbus::connection::Builder::unix_stream(client_stream)
-        .p2p()
-        .build()
-        .await
-        .unwrap();
+        .p2p();
+    let client_builder = zbus::connection::Builder::unix_stream(client_stream).p2p();
+    let (server, client) =
+        tokio::try_join!(server_builder.build(), client_builder.build()).unwrap();
     server
         .object_server()
         .at("/org/shilpo/Shell", service)
@@ -27,7 +22,10 @@ async fn test_pair(service: ShellDbusService) -> (zbus::Connection, zbus::Connec
 }
 
 fn service() -> ShellDbusService {
-    let (tx, _rx) = mpsc::channel(128);
+    let (tx, rx) = mpsc::channel(128);
+    // Keep the receiver alive so this exercises mailbox capacity rather than
+    // the production stopping/closed-mailbox error path.
+    std::mem::forget(rx);
     ShellDbusService::new(
         tx,
         Arc::new(Mutex::new(None)),
