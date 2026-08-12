@@ -23,6 +23,15 @@ pub fn clear_icon_cache() {
 /// XDG data paths, hicolor fallback, and pixmaps fallback are delegated to
 /// `freedesktop-icons`, matching the behavior used by desktop environments.
 pub fn lookup_icon(name: &str) -> Option<PathBuf> {
+    lookup_icon_depth(name, 0)
+}
+
+fn lookup_icon_depth(name: &str, depth: usize) -> Option<PathBuf> {
+    // Desktop files can refer to one another's icon names. Bound fallback
+    // traversal so a cyclic catalog cannot overflow the stack.
+    if depth > 1 {
+        return None;
+    }
     let name = name.trim();
     if name.is_empty() {
         return None;
@@ -38,6 +47,11 @@ pub fn lookup_icon(name: &str) -> Option<PathBuf> {
         && let Some(cached) = cache.get(clean_name)
     {
         return cached.clone();
+    }
+    // Mark this lookup as in progress before consulting desktop-file fallback
+    // hints; icon aliases may form cycles.
+    if let Ok(mut cache) = ICON_CACHE.lock() {
+        cache.insert(clean_name.to_string(), None);
     }
 
     let mut search_names = vec![
@@ -111,7 +125,7 @@ pub fn lookup_icon(name: &str) -> Option<PathBuf> {
                 }
                 if let Some(ref icon) = app.icon
                     && icon.to_lowercase() != search_clean
-                    && let Some(path) = lookup_icon(icon)
+                    && let Some(path) = lookup_icon_depth(icon, depth + 1)
                 {
                     resolved = Some(path);
                     break;
