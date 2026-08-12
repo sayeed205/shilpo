@@ -1593,6 +1593,20 @@ mod tests {
     }
 
     #[test]
+    fn test_current_primary_still_rejects_version_in_fragments() {
+        let dir = temp_dir();
+        let primary = write_file(&dir, "config.toml", "version = 1\n");
+        write_file(&dir, "conf.d/01-bad.toml", "version = 1\n");
+
+        let error = MigrationService::for_primary_path(&primary)
+            .run(MigrationMode::Apply)
+            .unwrap_err();
+        assert!(matches!(error, MigrationError::InvalidSourceVersion { .. }));
+        assert_eq!(fs::read_to_string(&primary).unwrap(), "version = 1\n");
+        assert_no_backup_or_temp(dir.path());
+    }
+
+    #[test]
     fn test_migration_invalid_migrated_candidate_produces_zero_writes() {
         let dir = temp_dir();
         let primary = write_file(
