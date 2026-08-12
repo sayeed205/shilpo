@@ -62,9 +62,34 @@ async fn p2p_introspection_and_status_contract() {
         .await
         .unwrap();
     let xml = introspect.introspect().await.unwrap();
-    assert!(xml.contains("org.shilpo.Shell"));
-    assert!(xml.contains("ConfigReloaded"));
-    assert!(xml.contains("SetDisplayBrightness"));
+    for member in [
+        "org.shilpo.Shell",
+        "ReloadConfig",
+        "ShowBar",
+        "HideBar",
+        "ToggleBar",
+        "ShowOverview",
+        "HideOverview",
+        "ToggleOverview",
+        "FocusWorkspace",
+        "CreateWorkspace",
+        "FocusWindow",
+        "FocusPreviousWindow",
+        "CloseWindow",
+        "MoveWindowToWorkspace",
+        "SetBrightness",
+        "SetDisplayBrightness",
+        "GetStatus",
+        "GetTelemetry",
+        "Capture",
+        "ShellStarted",
+        "ShellStopping",
+        "WorkspaceChanged",
+        "ThemeChanged",
+        "ConfigReloaded",
+    ] {
+        assert!(xml.contains(member), "missing D-Bus member {member}");
+    }
 }
 
 #[tokio::test]
