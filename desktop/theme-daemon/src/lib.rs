@@ -16,12 +16,12 @@ pub use persistence::{
 };
 
 pub async fn run_theme_daemon(options: ThemeDaemonOptions) -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("shilpo_theme_daemon=info".parse().unwrap()),
-        )
-        .init();
+    let _obs_guard = shilpo_observability::init(
+        shilpo_observability::ProcessRole::ThemeDaemon,
+        "info,shilpo_theme_daemon=info",
+    )
+    .map_err(|e| eprintln!("observability warning: {e}"))
+    .ok();
 
     tracing::info!("Starting shilpo theme-daemon session daemon");
     let daemon = ThemeDaemon::with_options(options).await?;

@@ -67,17 +67,26 @@ pub async fn run_device_daemon() -> anyhow::Result<()> {
     use std::sync::Arc;
     use zbus::object_server::SignalEmitter;
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("shilpo_services=info".parse().unwrap()),
-        )
-        .init();
+    let _obs_guard = shilpo_observability::init(
+        shilpo_observability::ProcessRole::DeviceDaemon,
+        "info,shilpo_services=info",
+    )
+    .map_err(|e| eprintln!("observability warning: {e}"))
+    .ok();
 
     let adapter = Arc::new(SystemDeviceAdapter::new());
     let daemon = Arc::new(DeviceDaemonService::new(adapter));
     let mut outcomes = daemon.subscribe_outcomes();
     let connection = zbus::Connection::session().await?;
+    let _dbus_span = tracing::info_span!(
+        target: "shilpo_profile",
+        "dbus_call",
+        bus = "session",
+        destination = "org.shilpo.Device",
+        operation = "register",
+        outcome = "registered",
+    );
+    let _dbus_enter = _dbus_span.enter();
     use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
     let dbus = DBusProxy::new(&connection).await?;
     let reply = dbus

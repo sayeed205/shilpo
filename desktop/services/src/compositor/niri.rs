@@ -50,6 +50,7 @@ impl CompositorSupervisor {
 
     fn begin_start(&mut self) {
         self.state = SupervisorState::Starting;
+        tracing::info!(target: "shilpo_profile", lifecycle = "starting", "compositor supervisor transition");
     }
 
     fn record_failure(&mut self, now_ms: u64) {
@@ -59,18 +60,21 @@ impl CompositorSupervisor {
         self.stable_since_ms = None;
         if self.failures_ms.len() >= QUARANTINE_FAILURES {
             self.state = SupervisorState::Quarantined;
+            tracing::warn!(target: "shilpo_profile", lifecycle = "quarantined", "compositor supervisor transition");
         } else {
             let attempt = self.failures_ms.len() as u32;
             self.state = SupervisorState::Backoff {
                 attempt,
                 retry_at_ms: now_ms.saturating_add(self.backoff_ms),
             };
+            tracing::info!(target: "shilpo_profile", lifecycle = "backoff", attempt, "compositor supervisor transition");
             self.backoff_ms = (self.backoff_ms.saturating_mul(2)).min(MAX_BACKOFF_MS);
         }
     }
 
     fn mark_ready(&mut self, now_ms: u64) {
         self.state = SupervisorState::Running;
+        tracing::info!(target: "shilpo_profile", lifecycle = "ready", "compositor supervisor transition");
         self.stable_since_ms = Some(now_ms);
         self.backoff_ms = INITIAL_BACKOFF_MS;
     }

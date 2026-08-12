@@ -19,6 +19,7 @@ shilpo-services.workspace = true
 shilpo-theme-daemon.workspace = true
 shilpo-ext-api.workspace = true
 shilpo-ext-runtime.workspace = true
+shilpo-observability.workspace = true
 
 clap = { version = "4", features = ["derive", "env"] }
 anyhow.workspace = true

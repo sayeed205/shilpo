@@ -153,7 +153,12 @@ fn test_cli_parser_theme_and_doctor() {
     }
 
     let cli = Cli::try_parse_from(["shilpo", "doctor", "--fix", "--first-login"]).unwrap();
-    if let Some(Commands::Doctor { fix, first_login }) = cli.command {
+    if let Some(Commands::Doctor {
+        fix,
+        first_login,
+        telemetry: _,
+    }) = cli.command
+    {
         assert!(fix);
         assert!(first_login);
     } else {

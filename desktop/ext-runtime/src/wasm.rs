@@ -196,6 +196,16 @@ impl ExtensionRuntime for WasmRuntime {
         module: Self::Module,
         budget: RuntimeBudget,
     ) -> Result<(), RuntimeError> {
+        let span = tracing::info_span!(
+            target: "shilpo_profile",
+            "extension_wasm_call",
+            extension_id = %extension_id,
+            operation = "load",
+            fuel = budget.fuel,
+            memory_limit = budget.max_memory_bytes,
+            outcome = "failure",
+        );
+        let _enter = span.enter();
         if self.instances.contains_key(extension_id) {
             return Err(RuntimeError::with_kind(
                 RuntimeFailureKind::Load,
@@ -205,6 +215,7 @@ impl ExtensionRuntime for WasmRuntime {
 
         let instance = self.instantiate_module(&module, budget)?;
         self.instances.insert(extension_id.clone(), instance);
+        span.record("outcome", "success");
         Ok(())
     }
 
@@ -214,6 +225,16 @@ impl ExtensionRuntime for WasmRuntime {
         module: Self::Module,
         budget: RuntimeBudget,
     ) -> Result<(), RuntimeError> {
+        let span = tracing::info_span!(
+            target: "shilpo_profile",
+            "extension_wasm_call",
+            extension_id = %extension_id,
+            operation = "replace",
+            fuel = budget.fuel,
+            memory_limit = budget.max_memory_bytes,
+            outcome = "failure",
+        );
+        let _enter = span.enter();
         if !self.instances.contains_key(extension_id) {
             return Err(RuntimeError::with_kind(
                 RuntimeFailureKind::Unavailable,
@@ -222,6 +243,7 @@ impl ExtensionRuntime for WasmRuntime {
         }
         let replacement = self.instantiate_module(&module, budget)?;
         self.instances.insert(extension_id.clone(), replacement);
+        span.record("outcome", "success");
         Ok(())
     }
 
@@ -243,6 +265,16 @@ impl ExtensionRuntime for WasmRuntime {
         event: &ExtensionEvent,
         budget: RuntimeBudget,
     ) -> Result<Vec<HostEffect>, RuntimeError> {
+        let span = tracing::info_span!(
+            target: "shilpo_profile",
+            "extension_wasm_call",
+            extension_id = %extension_id,
+            operation = "dispatch",
+            fuel = budget.fuel,
+            memory_limit = budget.max_memory_bytes,
+            outcome = "failure",
+        );
+        let _enter = span.enter();
         let event_json = serde_json::to_string(event).map_err(|error| {
             RuntimeError::with_kind(
                 RuntimeFailureKind::InvalidOutput,
@@ -262,12 +294,16 @@ impl ExtensionRuntime for WasmRuntime {
                 "on-event output exceeds the configured byte limit",
             ));
         }
-        serde_json::from_str(&output).map_err(|error| {
+        let result = serde_json::from_str(&output).map_err(|error| {
             RuntimeError::with_kind(
                 RuntimeFailureKind::InvalidOutput,
                 format!("on-event returned invalid effect JSON: {error}"),
             )
-        })
+        });
+        if result.is_ok() {
+            span.record("outcome", "success");
+        }
+        result
     }
 
     fn view(
@@ -276,6 +312,16 @@ impl ExtensionRuntime for WasmRuntime {
         contribution_id: &str,
         budget: RuntimeBudget,
     ) -> Result<Option<ViewTree>, RuntimeError> {
+        let span = tracing::info_span!(
+            target: "shilpo_profile",
+            "extension_wasm_call",
+            extension_id = %extension_id,
+            operation = "view",
+            fuel = budget.fuel,
+            memory_limit = budget.max_memory_bytes,
+            outcome = "failure",
+        );
+        let _enter = span.enter();
         let instance = self.instance_mut(extension_id)?;
         Self::prepare_call(instance, budget)?;
         let output = instance
@@ -289,12 +335,16 @@ impl ExtensionRuntime for WasmRuntime {
                 "view output exceeds the configured byte limit",
             ));
         }
-        serde_json::from_str(&output).map_err(|error| {
+        let result = serde_json::from_str(&output).map_err(|error| {
             RuntimeError::with_kind(
                 RuntimeFailureKind::InvalidOutput,
                 format!("view returned invalid JSON: {error}"),
             )
-        })
+        });
+        if result.is_ok() {
+            span.record("outcome", "success");
+        }
+        result
     }
 }
 

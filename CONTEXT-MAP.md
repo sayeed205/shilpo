@@ -27,6 +27,7 @@ library at its core.
 - **Services** (`desktop/services`) — Linux system integration services. Device daemon (`DeviceDaemonService`), Wayland/Niri compositor IPC, audio, bluetooth, brightness, caffeine, clipboard, location, media, network, night light, notifications, power profile, screen capture domain (`capture`), tray, upower, app scanning, and LMDB session store.
 - **Extension Runtime** (`desktop/ext-runtime`) — Wasmtime-sandboxed extension runtime. Capability authorization, package catalog/registry index, WASI component-model host, worker process protocol (`shilpo extension-host`).
 - **Theme Daemon** (`desktop/theme-daemon`) — Linux theme system integration. DBus service (`org.shilpo.Theme`), XDG portal appearance sync, wallpaper watching, atomic JSON persistence, theme adapters for third-party tools (GTK, Foot, Alacritty, Kitty, Hyprland).
+- **Observability** (`desktop/observability`) — Internal process observability crate. Standardized subscriber initialization, opt-in Chrome trace generation (`SHILPO_PROFILE`), collision-resistant trace path management, trace discovery/export (`shilpo profile export`), and local telemetry summary inventory (`shilpo doctor --telemetry`).
 
 ### Applications (`apps/`)
 

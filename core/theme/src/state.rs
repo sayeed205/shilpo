@@ -243,6 +243,13 @@ pub fn generate_m3_palettes(
 
     let hct = Hct::from_int(source_argb);
     let variant = resolve_variant(source_argb, variant);
+    let _span = tracing::info_span!(
+        target: "shilpo_profile",
+        "theme_palette_generation",
+        variant = ?variant,
+        outcome = "success"
+    );
+    let _enter = _span.enter();
 
     fn build_palette(scheme: &mcu_material_color::DynamicScheme) -> HashMap<String, String> {
         let mut map = HashMap::new();
