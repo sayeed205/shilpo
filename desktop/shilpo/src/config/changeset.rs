@@ -29,6 +29,21 @@ impl ConfigChangeSet {
             && !self.locale
     }
 
+    pub fn all() -> Self {
+        Self {
+            theme: true,
+            bar: true,
+            desktop: true,
+            extensions: true,
+            outputs: true,
+            startup: true,
+            capture: true,
+            clock_format: true,
+            temperature_unit: true,
+            locale: true,
+        }
+    }
+
     pub fn compute(old: &ShellConfig, new: &ShellConfig) -> Self {
         Self {
             theme: old.theme != new.theme,

@@ -331,7 +331,7 @@ impl BarView {
                 self.media_info = Some(value.clone());
                 changed = true;
             }
-            WorkerUpdate::Config(ConfigUpdate::Loaded(config)) => {
+            WorkerUpdate::Config(ConfigUpdate::Loaded { config, .. }) => {
                 self.config = (**config).clone();
                 self.last_error = None;
                 effects.push(BarViewEffect::ApplyConfigTheme(self.config.clone()));
@@ -1024,9 +1024,10 @@ mod bar_view_tests {
             ..Default::default()
         };
 
-        let result = view.compute_worker_update(&WorkerUpdate::Config(ConfigUpdate::Loaded(
-            Box::new(new_config.clone()),
-        )));
+        let result = view.compute_worker_update(&WorkerUpdate::Config(ConfigUpdate::Loaded {
+            config: Box::new(new_config.clone()),
+            changeset: crate::config::ConfigChangeSet::all(),
+        }));
         assert!(result.changed);
         assert_eq!(view.config.clock_format.as_deref(), Some("%H:%M"));
         assert_eq!(

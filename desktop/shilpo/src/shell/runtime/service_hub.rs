@@ -28,7 +28,6 @@ pub struct ServiceHub {
     notif_rx: Arc<Mutex<tokio::sync::broadcast::Receiver<Notification>>>,
     updates_rx: Arc<Mutex<UpdateReceiver>>,
     _service_task: Option<gpui::Task<()>>,
-    _watcher: Option<notify::RecommendedWatcher>,
     _app_watcher: Option<notify::RecommendedWatcher>,
 }
 
@@ -78,54 +77,6 @@ impl ServiceHub {
             config_path.clone(),
             device_client,
         );
-
-        let config_dir = config_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from(".config/shilpo"));
-        if let Err(error) = std::fs::create_dir_all(&config_dir) {
-            tracing::warn!(error = %error, path = ?config_dir, "config watcher directory unavailable");
-        }
-
-        use notify::Watcher;
-        let watcher_commands = service_commands.clone();
-        let target_file_name = config_path.file_name().map(|n| n.to_os_string());
-        let watcher = if !config_dir.starts_with(std::env::temp_dir()) {
-            match notify::RecommendedWatcher::new(
-                move |res: Result<notify::Event, notify::Error>| {
-                    if let Some(event) = res.ok().filter(|e| e.kind.is_modify())
-                        && (target_file_name.is_none()
-                            || event
-                                .paths
-                                .iter()
-                                .any(|p| p.file_name() == target_file_name.as_deref()))
-                    {
-                        let _ = service_worker::try_send_command(
-                            &watcher_commands,
-                            WorkerCommand::ReloadConfig,
-                        );
-                    }
-                },
-                notify::Config::default(),
-            ) {
-                Ok(mut watcher) => {
-                    match watcher.watch(&config_dir, notify::RecursiveMode::Recursive) {
-                        Ok(()) => Some(watcher),
-                        Err(error) => {
-                            tracing::warn!(error = %error, path = ?config_dir, "config watcher watch failed");
-                            None
-                        }
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(error = %error, "config watcher creation failed");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         Self {
             compositor,
             notification,
@@ -137,7 +88,6 @@ impl ServiceHub {
             notif_rx: Arc::new(Mutex::new(notif_rx)),
             updates_rx: Arc::new(Mutex::new(updates_rx)),
             _service_task: Some(service_task),
-            _watcher: watcher,
             _app_watcher: app_watcher,
         }
     }
@@ -316,7 +266,7 @@ impl ServiceHub {
                 }
                 match upd {
                     crate::bar::service_worker::WorkerUpdate::Config(
-                        crate::bar::service_worker::ConfigUpdate::Loaded(config),
+                        crate::bar::service_worker::ConfigUpdate::Loaded { config, .. },
                     ) => {
                         ShellRuntime::set_active_config(cx, config);
                         ShellSurfaces::request(cx, super::SurfaceRequest::SyncDisplays);
@@ -627,7 +577,6 @@ mod tests {
                 notif_rx: Arc::new(Mutex::new(notif_rx)),
                 updates_rx: Arc::new(Mutex::new(_updates_rx)),
                 _service_task: None,
-                _watcher: None,
                 _app_watcher: None,
             }
         }
