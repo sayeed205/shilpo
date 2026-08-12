@@ -186,11 +186,11 @@ fn scenario_06_exactly_once_dismiss_action_dnd_outcomes() {
     ));
     assert!(matches!(
         t_dismiss.outcome(),
-        Some(NotificationCommandOutcome::Applied { .. })
+        Some(NotificationCommandOutcome::ReconciledApplied { .. })
     ));
     assert!(matches!(
         t_action.outcome(),
-        Some(NotificationCommandOutcome::Applied { .. })
+        Some(NotificationCommandOutcome::ReconciledApplied { .. })
     ));
 }
 
@@ -291,4 +291,19 @@ fn scenario_10_telemetry_counters_and_queue_bounds() {
     assert_eq!(telem.current_queue_depth, 0);
     assert_eq!(telem.overloads, 0);
     assert_eq!(telem.supersessions, 0);
+}
+
+#[test]
+fn scenario_11_idempotent_command_is_reconciled() {
+    let adapter = NotificationDomainState::new_ready(4);
+    let ticket = adapter
+        .submit_command(NotificationCommand::Dismiss(404))
+        .unwrap();
+
+    assert_eq!(
+        ticket.outcome(),
+        Some(NotificationCommandOutcome::ReconciledApplied {
+            version: adapter.snapshot().version,
+        })
+    );
 }

@@ -637,7 +637,7 @@ impl NotificationDomainState {
                 continue;
             }
 
-            match item.command {
+            let changed = match item.command {
                 NotificationCommand::Push(mut notif) => {
                     state.next_notification_id += 1;
                     if notif.id == 0 {
@@ -656,26 +656,43 @@ impl NotificationDomainState {
                         }
                         let _ = event_tx.send(notif);
                     }
+                    true
                 }
                 NotificationCommand::Dismiss(id) | NotificationCommand::Expire(id) => {
+                    let before = state.notifications.len();
                     state.notifications.retain(|n| n.id != id);
+                    state.notifications.len() != before
                 }
                 NotificationCommand::DismissAll => {
+                    let changed = !state.notifications.is_empty();
                     state.notifications.clear();
+                    changed
                 }
                 NotificationCommand::InvokeAction { id, .. } => {
+                    let before = state.notifications.len();
                     state.notifications.retain(|n| n.id != id);
+                    state.notifications.len() != before
                 }
                 NotificationCommand::SetDnd(enabled) => {
+                    let changed = state.dnd_enabled != enabled;
                     state.dnd_enabled = enabled;
+                    changed
                 }
                 NotificationCommand::ClearHistory => {
+                    let changed = !state.history.is_empty();
                     state.history.clear();
+                    changed
                 }
+            };
+            if changed {
+                state.revision += 1;
             }
-            state.revision += 1;
             let version = DomainVersion::new(state.owner_generation, state.revision);
-            item.resolver.resolve(CommandOutcome::Applied { version });
+            item.resolver.resolve(if changed {
+                CommandOutcome::Applied { version }
+            } else {
+                CommandOutcome::ReconciledApplied { version }
+            });
         }
         Self::notify_subscribers(state, watch_tx);
     }
