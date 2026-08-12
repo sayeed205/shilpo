@@ -41,7 +41,7 @@ fn service() -> (ShellDbusService, mpsc::Receiver<super::ShellCommand>) {
     )
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p2p_introspection_and_status_contract() {
     let (service, receiver) = service();
     let (_server, client, _receiver) = test_pair(service, receiver).await;
@@ -61,7 +61,10 @@ async fn p2p_introspection_and_status_contract() {
         .build()
         .await
         .unwrap();
-    let xml = introspect.introspect().await.unwrap();
+    let xml = tokio::time::timeout(std::time::Duration::from_secs(5), introspect.introspect())
+        .await
+        .expect("introspection response timed out")
+        .unwrap();
     for member in [
         "org.shilpo.Shell",
         "ReloadConfig",
@@ -90,9 +93,11 @@ async fn p2p_introspection_and_status_contract() {
     ] {
         assert!(xml.contains(member), "missing D-Bus member {member}");
     }
+
+    drop(_server);
+    p2p_argument_validation_and_mailbox_overflow().await;
 }
 
-#[tokio::test]
 async fn p2p_argument_validation_and_mailbox_overflow() {
     let (service, receiver) = service();
     let (server, client, _receiver) = test_pair(service, receiver).await;

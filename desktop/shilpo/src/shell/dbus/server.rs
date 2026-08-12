@@ -50,7 +50,7 @@ impl ShellDbusService {
     }
 
     fn send_command(&self, cmd: ShellCommand) -> zbus::fdo::Result<()> {
-        match self.mailbox_tx.try_send(cmd) {
+        let result = match self.mailbox_tx.try_send(cmd) {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Full(_)) => Err(zbus::fdo::Error::LimitsExceeded(
                 "command mailbox is full".into(),
@@ -58,7 +58,12 @@ impl ShellDbusService {
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 Err(zbus::fdo::Error::Failed("shell daemon is stopping".into()))
             }
-        }
+        };
+        tracing::Span::current().record(
+            "outcome",
+            if result.is_ok() { "accepted" } else { "failed" },
+        );
+        result
     }
 
     async fn execute_compositor_command(
@@ -81,7 +86,9 @@ impl ShellDbusService {
         .await
         .map_err(|_| zbus::fdo::Error::Failed("compositor command task failed".into()))?;
 
-        Ok(CommandResult::from(outcome))
+        let result = CommandResult::from(outcome);
+        tracing::Span::current().record("outcome", result.outcome.as_str());
+        Ok(result)
     }
 
     pub fn update_status(&self, status: ShellStatus) {
@@ -170,7 +177,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "reload_config",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.send_command(ShellCommand::ReloadConfig)
@@ -182,7 +189,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "show_bar",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.send_command(ShellCommand::ShowBar)
@@ -194,7 +201,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "hide_bar",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.send_command(ShellCommand::HideBar)
@@ -206,7 +213,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "toggle_bar",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.send_command(ShellCommand::ToggleBar)
@@ -218,7 +225,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "show_overview",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.send_command(ShellCommand::ShowOverview)
@@ -230,7 +237,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "hide_overview",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.send_command(ShellCommand::HideOverview)
@@ -242,7 +249,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "toggle_overview",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.send_command(ShellCommand::ToggleOverview)
@@ -254,7 +261,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "focus_workspace",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.execute_compositor_command(shilpo_services::CompositorCommand::FocusWorkspace(
@@ -269,7 +276,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "create_workspace",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.execute_compositor_command(shilpo_services::CompositorCommand::CreateWorkspace)
@@ -282,7 +289,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "focus_window",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.execute_compositor_command(shilpo_services::CompositorCommand::FocusWindow(window_id))
@@ -295,7 +302,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "focus_previous_window",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.execute_compositor_command(shilpo_services::CompositorCommand::FocusPreviousWindow)
@@ -308,7 +315,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "close_window",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.execute_compositor_command(shilpo_services::CompositorCommand::CloseWindow(window_id))
@@ -325,7 +332,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "move_window_to_workspace",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         self.execute_compositor_command(shilpo_services::CompositorCommand::MoveWindowToWorkspace {
@@ -341,10 +348,11 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "set_brightness",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         if percentage > 100 {
+            tracing::Span::current().record("outcome", "invalid_args");
             return Err(zbus::fdo::Error::InvalidArgs(
                 "brightness percentage must be between 0 and 100".into(),
             ));
@@ -362,15 +370,17 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "set_display_brightness",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         if display_id.trim().is_empty() {
+            tracing::Span::current().record("outcome", "invalid_args");
             return Err(zbus::fdo::Error::InvalidArgs(
                 "display_id cannot be empty".into(),
             ));
         }
         if percentage > 100 {
+            tracing::Span::current().record("outcome", "invalid_args");
             return Err(zbus::fdo::Error::InvalidArgs(
                 "brightness percentage must be between 0 and 100".into(),
             ));
@@ -387,10 +397,12 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "get_status",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
-        self.status.load().as_ref().clone()
+        let status = self.status.load().as_ref().clone();
+        tracing::Span::current().record("outcome", "success");
+        status
     }
 
     async fn get_telemetry(&self) -> ShellTelemetry {
@@ -399,10 +411,12 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "get_telemetry",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
-        self.telemetry.load().as_ref().clone()
+        let telemetry = self.telemetry.load().as_ref().clone();
+        tracing::Span::current().record("outcome", "success");
+        telemetry
     }
 
     async fn capture(&self, intent: String) -> zbus::fdo::Result<()> {
@@ -411,7 +425,7 @@ impl ShellDbusService {
             "dbus_call",
             destination = "org.shilpo.Shell",
             operation = "capture",
-            outcome = "success"
+            outcome = tracing::field::Empty
         );
         let _enter = _span.enter();
         let capture_intent = match intent.as_str() {
@@ -420,6 +434,7 @@ impl ShellDbusService {
             "ocr" => shilpo_services::capture::CaptureIntent::Ocr,
             "menu" => shilpo_services::capture::CaptureIntent::Menu,
             _ => {
+                tracing::Span::current().record("outcome", "invalid_args");
                 return Err(zbus::fdo::Error::InvalidArgs(format!(
                     "unknown capture intent '{intent}'"
                 )));
