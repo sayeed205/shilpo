@@ -115,6 +115,11 @@ impl ShellDbusService {
         }
     }
 
+    /// Seeds the deduplication state with the authoritative initial snapshot.
+    pub fn prime_workspace(&self, workspace_id: u64) {
+        *self.last_workspace.lock().unwrap() = Some((workspace_id, 0, 0));
+    }
+
     pub async fn emit_theme_changed_if_needed(
         &self,
         emitter: &SignalEmitter<'_>,

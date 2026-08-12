@@ -3,7 +3,14 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
-async fn test_pair(service: ShellDbusService) -> (zbus::Connection, zbus::Connection) {
+async fn test_pair(
+    service: ShellDbusService,
+    receiver: mpsc::Receiver<super::ShellCommand>,
+) -> (
+    zbus::Connection,
+    zbus::Connection,
+    mpsc::Receiver<super::ShellCommand>,
+) {
     let (server_stream, client_stream) = UnixStream::pair().unwrap();
     let guid = zbus::Guid::generate();
     let server_builder = zbus::connection::Builder::unix_stream(server_stream)
@@ -18,25 +25,26 @@ async fn test_pair(service: ShellDbusService) -> (zbus::Connection, zbus::Connec
         .at("/org/shilpo/Shell", service)
         .await
         .unwrap();
-    (server, client)
+    (server, client, receiver)
 }
 
-fn service() -> ShellDbusService {
+fn service() -> (ShellDbusService, mpsc::Receiver<super::ShellCommand>) {
     let (tx, rx) = mpsc::channel(128);
-    // Keep the receiver alive so this exercises mailbox capacity rather than
-    // the production stopping/closed-mailbox error path.
-    std::mem::forget(rx);
-    ShellDbusService::new(
-        tx,
-        Arc::new(Mutex::new(None)),
-        Arc::new(arc_swap::ArcSwap::from_pointee(ShellStatus::default())),
-        Arc::new(arc_swap::ArcSwap::from_pointee(ShellTelemetry::default())),
+    (
+        ShellDbusService::new(
+            tx,
+            Arc::new(Mutex::new(None)),
+            Arc::new(arc_swap::ArcSwap::from_pointee(ShellStatus::default())),
+            Arc::new(arc_swap::ArcSwap::from_pointee(ShellTelemetry::default())),
+        ),
+        rx,
     )
 }
 
 #[tokio::test]
 async fn p2p_introspection_and_status_contract() {
-    let (_server, client) = test_pair(service()).await;
+    let (service, receiver) = service();
+    let (_server, client, _receiver) = test_pair(service, receiver).await;
     let proxy = ShellProxy::builder(&client)
         .destination("org.shilpo.Shell")
         .unwrap()
@@ -61,7 +69,8 @@ async fn p2p_introspection_and_status_contract() {
 
 #[tokio::test]
 async fn p2p_argument_validation_and_mailbox_overflow() {
-    let (server, client) = test_pair(service()).await;
+    let (service, receiver) = service();
+    let (server, client, _receiver) = test_pair(service, receiver).await;
     let proxy = ShellProxy::builder(&client)
         .destination("org.shilpo.Shell")
         .unwrap()

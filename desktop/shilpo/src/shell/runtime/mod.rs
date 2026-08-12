@@ -98,6 +98,11 @@ impl ShellRuntime {
             _wallpaper_preview_changed: None,
             _drain_task: gpui::Task::ready(()),
         });
+
+        // Initial compositor state is population, not a workspace transition.
+        cx.global::<Self>()
+            .dbus_service
+            .prime_workspace(latest_snapshot.focused_workspace_id.unwrap_or(0));
     }
 
     pub(crate) fn readiness(&self) -> shilpo_services::ReadinessState {
@@ -368,6 +373,7 @@ impl ShellRuntime {
         let Some(conn) = cx.global::<Self>().dbus_connection.clone() else {
             return;
         };
+        let service = cx.global::<Self>().dbus_service.clone();
         cx.spawn(async move |_| {
             if let Ok(iface) = conn
                 .object_server()
@@ -406,13 +412,9 @@ impl ShellRuntime {
                 if changeset.locale {
                     components.push("locale".into());
                 }
-                let _ = ShellDbusService::config_reloaded(
-                    emitter,
-                    success,
-                    components,
-                    diagnostic_count,
-                )
-                .await;
+                service
+                    .emit_config_reloaded(emitter, success, components, diagnostic_count)
+                    .await;
             }
         })
         .detach();
