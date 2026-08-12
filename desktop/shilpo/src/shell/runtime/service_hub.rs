@@ -29,6 +29,8 @@ pub struct ServiceHub {
     updates_rx: Arc<Mutex<UpdateReceiver>>,
     _service_task: Option<gpui::Task<()>>,
     _app_watcher: Option<notify::RecommendedWatcher>,
+    started_at: std::time::Instant,
+    heed_store_available: bool,
 }
 
 impl ServiceHub {
@@ -53,6 +55,7 @@ impl ServiceHub {
         let compositor: Arc<dyn shilpo_services::CompositorAdapter> =
             shilpo_services::NiriCompositorService::new();
         let device_client = shilpo_services::DeviceClient::new();
+        let heed_store_available = session_store.is_some();
         let clipboard = shilpo_services::ClipboardService::with_store(session_store);
         let app_scanner = shilpo_services::AppScanner::new()
             .unwrap_or_else(|_| shilpo_services::AppScanner::new_empty());
@@ -89,6 +92,8 @@ impl ServiceHub {
             updates_rx: Arc::new(Mutex::new(updates_rx)),
             _service_task: Some(service_task),
             _app_watcher: app_watcher,
+            started_at: std::time::Instant::now(),
+            heed_store_available,
         }
     }
 
@@ -114,6 +119,7 @@ impl ServiceHub {
 
     pub(crate) fn health(&self) -> shilpo_services::ServiceHealth {
         let comp_snap = self.compositor.current();
+        let notification = self.notification.snapshot();
         shilpo_services::ServiceHealth {
             compositor_connected: matches!(
                 comp_snap.connection,
@@ -141,17 +147,27 @@ impl ServiceHub {
             network_service_available: self.availability.network_available,
             network_state: self.availability.network_state,
             network_last_error: self.availability.network_last_error.clone(),
-            notification_service_available: true,
-            notification_state: shilpo_services::ServiceLifecycle::Ready,
-            notification_last_error: None,
+            notification_service_available: matches!(
+                notification.lifecycle,
+                shilpo_services::DomainLifecycle::Ready
+            ),
+            notification_state: match notification.lifecycle {
+                shilpo_services::DomainLifecycle::Ready => shilpo_services::ServiceLifecycle::Ready,
+                shilpo_services::DomainLifecycle::Connecting
+                | shilpo_services::DomainLifecycle::Reconnecting => {
+                    shilpo_services::ServiceLifecycle::Connecting { attempt: 0 }
+                }
+                _ => shilpo_services::ServiceLifecycle::Unavailable,
+            },
+            notification_last_error: notification.last_error,
             media_service_available: self.availability.media_available,
             media_state: self.availability.media_state,
             media_last_error: self.availability.media_last_error.clone(),
             brightness_service_available: self.availability.brightness_available,
             brightness_state: self.availability.brightness_state,
             brightness_last_error: self.availability.brightness_last_error.clone(),
-            heed_store_available: true,
-            uptime_seconds: 0,
+            heed_store_available: self.heed_store_available,
+            uptime_seconds: self.started_at.elapsed().as_secs(),
             extension_host: None,
         }
     }
