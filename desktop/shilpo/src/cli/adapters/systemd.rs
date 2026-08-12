@@ -1,11 +1,14 @@
-use shilpo_services::{IpcStatus, ReadinessState, ShellIpcClient};
+//! Systemd adapter for managing `shilpo-shell.service` user unit and polling D-Bus status.
+
+use super::ipc::IpcAdapter;
+use crate::shell::dbus::ShellStatus;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 pub const SERVICE_NAME: &str = "shilpo-shell.service";
 
 pub struct SystemdAdapter {
-    ipc: ShellIpcClient,
+    ipc: IpcAdapter,
 }
 
 impl Default for SystemdAdapter {
@@ -17,7 +20,7 @@ impl Default for SystemdAdapter {
 impl SystemdAdapter {
     pub fn new() -> Self {
         Self {
-            ipc: ShellIpcClient::new(),
+            ipc: IpcAdapter::new(),
         }
     }
 
@@ -44,7 +47,7 @@ impl SystemdAdapter {
         }
     }
 
-    pub fn start(&self, timeout: Duration) -> Result<IpcStatus, (i32, String)> {
+    pub fn start(&self, timeout: Duration) -> Result<ShellStatus, (i32, String)> {
         if !Self::is_unit_installed() {
             return Err((
                 3,
@@ -67,10 +70,7 @@ impl SystemdAdapter {
         let start = Instant::now();
         while start.elapsed() < timeout {
             if let Ok(status) = self.ipc.status()
-                && matches!(
-                    status.readiness,
-                    ReadinessState::Ready | ReadinessState::Degraded
-                )
+                && matches!(status.readiness.as_str(), "ready" | "degraded")
             {
                 return Ok(status);
             }
@@ -100,8 +100,11 @@ impl SystemdAdapter {
         let start = Instant::now();
         while start.elapsed() < timeout {
             let active = Self::is_unit_active();
-            let socket_gone = self.ipc.status().is_err();
-            if !active && socket_gone {
+            let daemon_gone = match self.ipc.status() {
+                Err((code, _)) => code == 3,
+                Ok(_) => false,
+            };
+            if !active && daemon_gone {
                 return Ok(());
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -116,7 +119,7 @@ impl SystemdAdapter {
         ))
     }
 
-    pub fn restart(&self, timeout: Duration) -> Result<IpcStatus, (i32, String)> {
+    pub fn restart(&self, timeout: Duration) -> Result<ShellStatus, (i32, String)> {
         if !Self::is_unit_installed() {
             return Err((
                 3,
@@ -145,10 +148,7 @@ impl SystemdAdapter {
                     Some(old_id) => !status.instance_id.is_empty() && status.instance_id != *old_id,
                     None => true,
                 };
-                let is_ready = matches!(
-                    status.readiness,
-                    ReadinessState::Ready | ReadinessState::Degraded
-                );
+                let is_ready = matches!(status.readiness.as_str(), "ready" | "degraded");
                 if is_new_instance && is_ready {
                     return Ok(status);
                 }

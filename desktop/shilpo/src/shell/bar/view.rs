@@ -1,4 +1,3 @@
-use crate::actions::ActionInvocation;
 use crate::bar::service_worker::{self, ConfigUpdate, WorkerCommand, WorkerUpdate};
 use crate::bar::widgets::clock::{format_clock, format_date};
 use crate::battery::BatteryIndicator;
@@ -158,23 +157,9 @@ impl BarView {
         self.last_service_update.elapsed() > Duration::from_secs(30)
     }
 
-    pub fn enqueue_request(
-        &self,
-        request: shilpo_services::IpcRequest,
-        cx: &mut App,
-    ) -> Result<(), String> {
-        match request {
-            shilpo_services::IpcRequest::Compositor(
-                shilpo_services::CompositorCommand::FocusWorkspace(id),
-            ) => ShellRuntime::dispatch_action(cx, ActionInvocation::FocusWorkspace(id))
-                .map_err(|error| error.to_string()),
-            shilpo_services::IpcRequest::ReloadConfig => service_worker::try_send_command(
-                &self.service_commands,
-                WorkerCommand::ReloadConfig,
-            )
-            .map_err(|e| format!("Failed to send worker command: {}", e)),
-            _ => Err("Unsupported bar command".into()),
-        }
+    pub fn reload_config(&self, _cx: &mut App) -> Result<(), String> {
+        service_worker::try_send_command(&self.service_commands, WorkerCommand::ReloadConfig)
+            .map_err(|e| format!("Failed to send worker command: {}", e))
     }
 
     pub fn new_with_config(

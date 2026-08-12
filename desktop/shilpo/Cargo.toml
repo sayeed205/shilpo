@@ -25,6 +25,7 @@ clap = { version = "4", features = ["derive", "env"] }
 anyhow.workspace = true
 libc.workspace = true
 zbus.workspace = true
+zvariant.workspace = true
 dirs.workspace = true
 futures-lite.workspace = true
 chrono.workspace = true

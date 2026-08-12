@@ -1,6 +1,6 @@
 pub mod action_dispatcher;
+pub mod dbus;
 pub mod extension_host;
-pub mod ipc;
 pub mod service_hub;
 pub mod session;
 pub mod shell_surfaces;
@@ -16,11 +16,17 @@ pub(crate) use wallpaper_preview::{WallpaperPreviewResource, WallpaperPreviewSna
 
 use shell_surfaces::WindowClosedOutcome;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
-use crate::extensions::ExtensionCoordinator;
+use crate::{
+    extensions::ExtensionCoordinator,
+    shell::dbus::{ShellCommand, ShellDbusService, ShellStatus, ShellTelemetry},
+};
 use gpui::{App, AppContext, Entity, Global, Subscription};
-use shilpo_services::{CompositorSnapshot, ShellIpcServer};
+use shilpo_services::{CompositorCommandBroker, CompositorSnapshot};
 
 /// The shell runtime orchestrator: composes the deep service modules, watches
 /// the compositor stream, and routes lifecycle events between them.
@@ -28,8 +34,13 @@ use shilpo_services::{CompositorSnapshot, ShellIpcServer};
 /// Every component is private; the shell reaches them through the narrow
 /// `pub(super)` accessor surface below.
 pub struct ShellRuntime {
-    ipc_server: ShellIpcServer,
-    _shell_bus: Option<zbus::Connection>,
+    dbus_service: Arc<ShellDbusService>,
+    _compositor_broker: Arc<Mutex<Option<Arc<CompositorCommandBroker>>>>,
+    _status: Arc<Mutex<ShellStatus>>,
+    _telemetry: Arc<Mutex<ShellTelemetry>>,
+    mailbox_rx: Arc<Mutex<tokio::sync::mpsc::Receiver<ShellCommand>>>,
+    dbus_connection: Option<zbus::Connection>,
+    instance_id: String,
     active_config: crate::config::ShellConfig,
     shell_surfaces: ShellSurfaces,
     action_dispatcher: ActionDispatcher,
@@ -42,7 +53,7 @@ pub struct ShellRuntime {
     _start_time: std::time::Instant,
     _window_closed: Option<Subscription>,
     _wallpaper_preview_changed: Option<Subscription>,
-    _ipc_task: gpui::Task<()>,
+    _drain_task: gpui::Task<()>,
 }
 
 impl Global for ShellRuntime {}
@@ -50,18 +61,29 @@ impl Global for ShellRuntime {}
 impl ShellRuntime {
     #[cfg(test)]
     pub(crate) fn install_for_test(cx: &mut App) {
-        use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!(
             "shilpo-shell-surface-test-{}",
             uuid::Uuid::new_v4()
         ));
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let ipc = ShellIpcServer::new_at(&root, &root.join("shilpo-shell/ipc.sock")).unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(128);
+        let compositor_broker = Arc::new(Mutex::new(None));
+        let status = Arc::new(Mutex::new(ShellStatus::default()));
+        let telemetry = Arc::new(Mutex::new(ShellTelemetry::default()));
+        let dbus_service = Arc::new(ShellDbusService::new(
+            tx,
+            compositor_broker.clone(),
+            status.clone(),
+            telemetry.clone(),
+        ));
         let wallpaper_preview = cx.new(WallpaperPreviewResource::new);
         cx.set_global(Self {
-            ipc_server: ipc,
-            _shell_bus: None,
+            dbus_service,
+            _compositor_broker: compositor_broker,
+            _status: status,
+            _telemetry: telemetry,
+            mailbox_rx: Arc::new(Mutex::new(rx)),
+            dbus_connection: None,
+            instance_id: uuid::Uuid::new_v4().to_string(),
             active_config: crate::config::ShellConfig::default(),
             shell_surfaces: ShellSurfaces::new(Arc::new(CompositorSnapshot::default())),
             action_dispatcher: ActionDispatcher::new(),
@@ -74,19 +96,11 @@ impl ShellRuntime {
             _start_time: std::time::Instant::now(),
             _window_closed: None,
             _wallpaper_preview_changed: None,
-            _ipc_task: gpui::Task::ready(()),
+            _drain_task: gpui::Task::ready(()),
         });
     }
 
-    pub(crate) fn ipc_server(&self) -> &ShellIpcServer {
-        &self.ipc_server
-    }
-
-    pub(crate) fn ipc_server_mut(&mut self) -> &mut ShellIpcServer {
-        &mut self.ipc_server
-    }
-
-    pub(crate) fn readiness(&self) -> shilpo_services::ipc::ReadinessState {
+    pub(crate) fn readiness(&self) -> shilpo_services::ReadinessState {
         self.shell_surfaces.readiness()
     }
 
@@ -168,14 +182,25 @@ impl ShellRuntime {
         }
     }
 
-    pub fn install(cx: &mut App, ipc_server: ShellIpcServer, shell_bus: zbus::Connection) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn install(
+        cx: &mut App,
+        dbus_service: Arc<ShellDbusService>,
+        compositor_broker: Arc<Mutex<Option<Arc<CompositorCommandBroker>>>>,
+        status: Arc<Mutex<ShellStatus>>,
+        telemetry: Arc<Mutex<ShellTelemetry>>,
+        mailbox_rx: tokio::sync::mpsc::Receiver<ShellCommand>,
+        dbus_connection: zbus::Connection,
+        instance_id: String,
+    ) {
         let initial_wallpaper_path = theme_manager::init(cx);
         let session = session::SessionContext::init();
         let hub = ServiceHub::start(cx.background_executor().clone(), &session);
         let extensions = ExtensionCoordinator::init(cx.background_executor().clone());
 
         let compositor = hub.compositor();
-        let latest_snapshot = shell_surfaces::attach_compositor_stream(&ipc_server, &compositor);
+        let latest_snapshot =
+            shell_surfaces::attach_compositor_stream(&compositor_broker, &compositor);
         let shell_surfaces = ShellSurfaces::new(latest_snapshot.clone());
         let action_dispatcher = ActionDispatcher::new();
         let extension_host = ExtensionHost::new(extensions);
@@ -185,8 +210,13 @@ impl ShellRuntime {
         });
 
         cx.set_global(Self {
-            ipc_server,
-            _shell_bus: Some(shell_bus),
+            dbus_service,
+            _compositor_broker: compositor_broker,
+            _status: status,
+            _telemetry: telemetry,
+            mailbox_rx: Arc::new(Mutex::new(mailbox_rx)),
+            dbus_connection: Some(dbus_connection),
+            instance_id,
             active_config: session.active_config,
             shell_surfaces,
             action_dispatcher,
@@ -199,7 +229,7 @@ impl ShellRuntime {
             _start_time: std::time::Instant::now(),
             _window_closed: None,
             _wallpaper_preview_changed: None,
-            _ipc_task: gpui::Task::ready(()),
+            _drain_task: gpui::Task::ready(()),
         });
 
         let wallpaper_preview_changed = cx.observe(&wallpaper_preview, |_, cx| {
@@ -217,6 +247,23 @@ impl ShellRuntime {
         ExtensionHost::sync_extension_actions(cx);
         Self::spawn_drain_loop(cx);
         Self::publish_status(cx);
+
+        let Some(conn) = cx.global::<Self>().dbus_connection.clone() else {
+            return;
+        };
+        let inst_id = cx.global::<Self>().instance_id.clone();
+        let pid = std::process::id();
+        cx.spawn(async move |_| {
+            if let Ok(iface) = conn
+                .object_server()
+                .interface::<_, ShellDbusService>("/org/shilpo/Shell")
+                .await
+            {
+                let emitter = iface.signal_emitter();
+                let _ = ShellDbusService::shell_started(emitter, &inst_id, pid).await;
+            }
+        })
+        .detach();
     }
 
     fn spawn_window_closed_watch(cx: &mut App) {
@@ -257,10 +304,10 @@ impl ShellRuntime {
                 cx.update(ServiceHub::drain);
                 cx.update(Self::drain_extensions);
                 cx.update(Self::publish_status);
-                cx.update(Self::drain_ipc);
+                cx.update(Self::drain_dbus_commands);
             }
         });
-        cx.global_mut::<Self>()._ipc_task = task;
+        cx.global_mut::<Self>()._drain_task = task;
     }
 
     pub fn on_compositor_snapshot_changed(cx: &mut App, snapshot: Arc<CompositorSnapshot>) {
@@ -286,23 +333,140 @@ impl ShellRuntime {
         if outputs_changed {
             ShellSurfaces::reconcile_bars(cx);
         }
+
+        let Some(conn) = cx.global::<Self>().dbus_connection.clone() else {
+            return;
+        };
+        let service = cx.global::<Self>().dbus_service.clone();
+        let workspace_id = snapshot.focused_workspace_id.unwrap_or(0);
+        let owner_gen = snapshot.version.owner_generation;
+        let rev = snapshot.version.revision;
+        cx.spawn(async move |_| {
+            if let Ok(iface) = conn
+                .object_server()
+                .interface::<_, ShellDbusService>("/org/shilpo/Shell")
+                .await
+            {
+                let emitter = iface.signal_emitter();
+                service
+                    .emit_workspace_changed_if_needed(emitter, workspace_id, owner_gen, rev)
+                    .await;
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn emit_config_signal(
+        cx: &mut App,
+        success: bool,
+        changeset: crate::config::ConfigChangeSet,
+        diagnostic_count: u32,
+    ) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let Some(conn) = cx.global::<Self>().dbus_connection.clone() else {
+            return;
+        };
+        cx.spawn(async move |_| {
+            if let Ok(iface) = conn
+                .object_server()
+                .interface::<_, ShellDbusService>("/org/shilpo/Shell")
+                .await
+            {
+                let emitter = iface.signal_emitter();
+                let mut components = Vec::new();
+                if changeset.theme {
+                    components.push("theme".into());
+                }
+                if changeset.bar {
+                    components.push("bar".into());
+                }
+                if changeset.desktop {
+                    components.push("desktop".into());
+                }
+                if changeset.extensions {
+                    components.push("extensions".into());
+                }
+                if changeset.outputs {
+                    components.push("outputs".into());
+                }
+                if changeset.startup {
+                    components.push("startup".into());
+                }
+                if changeset.capture {
+                    components.push("capture".into());
+                }
+                if changeset.clock_format {
+                    components.push("clock_format".into());
+                }
+                if changeset.temperature_unit {
+                    components.push("temperature_unit".into());
+                }
+                if changeset.locale {
+                    components.push("locale".into());
+                }
+                let _ = ShellDbusService::config_reloaded(
+                    emitter,
+                    success,
+                    components,
+                    diagnostic_count,
+                )
+                .await;
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn emit_theme_signal(cx: &mut App, mode: String, variant: String) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let Some(conn) = cx.global::<Self>().dbus_connection.clone() else {
+            return;
+        };
+        let service = cx.global::<Self>().dbus_service.clone();
+        cx.spawn(async move |_| {
+            if let Ok(iface) = conn
+                .object_server()
+                .interface::<_, ShellDbusService>("/org/shilpo/Shell")
+                .await
+            {
+                let emitter = iface.signal_emitter();
+                service
+                    .emit_theme_changed_if_needed(emitter, &mode, &variant)
+                    .await;
+            }
+        })
+        .detach();
     }
 
     pub fn shutdown(cx: &mut App) {
         if !cx.has_global::<Self>() {
             return;
         }
+        let Some(conn) = cx.global::<Self>().dbus_connection.clone() else {
+            return;
+        };
+        let inst_id = cx.global::<Self>().instance_id.clone();
         let shutdown_task = cx.global::<Self>().extension_host.shutdown_task(
             cx.background_executor().clone(),
             std::time::Duration::from_millis(300),
         );
 
         cx.spawn(async move |cx| {
+            if let Ok(iface) = conn
+                .object_server()
+                .interface::<_, ShellDbusService>("/org/shilpo/Shell")
+                .await
+            {
+                let emitter = iface.signal_emitter();
+                let _ = ShellDbusService::shell_stopping(emitter, &inst_id).await;
+            }
             if let Some(task) = shutdown_task {
                 let _ = task.await;
             }
             cx.update(|cx| {
-                // Dismiss all card channels on shutdown.
                 crate::bar::cards::adapter::CardCoordinator::dispatch(
                     cx,
                     crate::bar::cards::model::CardRequest::Shutdown,

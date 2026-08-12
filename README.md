@@ -89,6 +89,19 @@ shilpo profile export --output trace.json
 Open the exported JSON in Perfetto or Chrome Trace. Active `.json.part` files are incomplete; runtime rotation belongs to
 the later runtime-control work.
 
+### Shell D-Bus control
+
+The running shell owns `org.shilpo.Shell` on the user session bus at `/org/shilpo/Shell`. Inspect the typed interface with:
+
+```bash
+busctl --user introspect org.shilpo.Shell /org/shilpo/Shell
+busctl --user call org.shilpo.Shell /org/shilpo/Shell org.shilpo.Shell GetStatus
+busctl --user call org.shilpo.Shell /org/shilpo/Shell org.shilpo.Shell ToggleBar
+```
+
+The `shilpo shell`, workspace, window, capture, brightness, and config commands use this interface; no shell socket or
+lock file is required.
+
 
 ---
 

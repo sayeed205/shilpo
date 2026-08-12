@@ -3,6 +3,7 @@ pub mod app_icons;
 pub mod bar;
 pub mod battery;
 pub mod capture;
+pub mod dbus;
 pub mod error;
 pub mod extension_http;
 pub mod extension_surface;
@@ -29,10 +30,32 @@ pub use osd::{OsdKind, OsdView};
 pub use overview::WorkspaceOverview;
 pub use runtime::ShellRuntime;
 
+use dbus::{ShellCommand, ShellDbusService, ShellStatus, ShellTelemetry};
+use std::sync::{Arc, Mutex};
+
 pub fn run_daemon() {
     let _obs_guard = init_tracing();
 
-    let shell_bus = futures_lite::future::block_on(async {
+    let (mailbox_tx, mailbox_rx) = tokio::sync::mpsc::channel::<ShellCommand>(128);
+    let compositor_broker = Arc::new(Mutex::new(None));
+    let status = Arc::new(Mutex::new(ShellStatus::default()));
+    let telemetry = Arc::new(Mutex::new(ShellTelemetry::default()));
+
+    let instance_id = uuid::Uuid::new_v4().to_string();
+    {
+        let mut s = status.lock().unwrap();
+        s.instance_id = instance_id.clone();
+        s.pid = std::process::id();
+    }
+
+    let dbus_service = Arc::new(ShellDbusService::new(
+        mailbox_tx,
+        compositor_broker.clone(),
+        status.clone(),
+        telemetry.clone(),
+    ));
+
+    let dbus_conn = futures_lite::future::block_on(async {
         use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
         let conn = zbus::Connection::session().await.unwrap_or_else(|error| {
             eprintln!("failed to connect to the session bus: {error}");
@@ -56,23 +79,20 @@ pub fn run_daemon() {
             eprintln!("org.shilpo.Shell is already owned by another process");
             std::process::exit(1);
         }
+        if let Err(error) = conn
+            .object_server()
+            .at("/org/shilpo/Shell", (*dbus_service).clone())
+            .await
+        {
+            eprintln!("failed to serve org.shilpo.Shell interface: {error}");
+            std::process::exit(1);
+        }
         conn
     });
 
     let app = gpui_platform::application()
         .with_assets(crate::Assets)
         .with_quit_mode(gpui::QuitMode::Explicit);
-    let ipc_server = match shilpo_services::ShellIpcServer::new() {
-        Ok(server) => server,
-        Err(shilpo_services::IpcError::AlreadyRunning) => {
-            eprintln!("shilpo daemon is already running");
-            std::process::exit(2);
-        }
-        Err(error) => {
-            eprintln!("Unable to start secure shell IPC: {error}");
-            std::process::exit(1);
-        }
-    };
 
     app.run(move |cx| {
         shilpo_ui::init(cx);
@@ -90,8 +110,6 @@ pub fn run_daemon() {
                     }
                     Err(error) => {
                         if !config_path.exists() {
-                            // First run: create the canonical default file,
-                            // never overwrite existing user configuration.
                             let default_config = crate::config::ShellConfig::default();
                             match default_config.save(&config_path) {
                                 Ok(()) => default_config,
@@ -114,9 +132,6 @@ pub fn run_daemon() {
                 }
             }
             Err(error) => {
-                // Migration failure is fatal to configuration startup. Log it
-                // clearly and fall back to defaults without rewriting or
-                // downgrading the source document.
                 tracing::error!(
                     error = %error,
                     path = %config_path.display(),
@@ -127,7 +142,16 @@ pub fn run_daemon() {
         };
         bar::view::apply_config_theme(&config, None, cx);
         cx.activate(true);
-        ShellRuntime::install(cx, ipc_server, shell_bus);
+        ShellRuntime::install(
+            cx,
+            dbus_service,
+            compositor_broker,
+            status,
+            telemetry,
+            mailbox_rx,
+            dbus_conn,
+            instance_id,
+        );
         cx.spawn(async move |cx| {
             use tokio::signal::unix::{SignalKind, signal};
             let mut sigint = signal(SignalKind::interrupt()).ok();

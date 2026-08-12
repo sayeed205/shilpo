@@ -1,0 +1,222 @@
+//! D-Bus command drain loop and status publishing for ShellRuntime.
+
+use super::{ShellRuntime, ShellSurfaces};
+use crate::{
+    actions::ActionInvocation,
+    bar::service_worker::{self, WorkerCommand},
+    error::ShellError,
+    shell::dbus::{ShellCommand, ShellStatus, ShellTelemetry},
+};
+use gpui::App;
+
+impl ShellRuntime {
+    pub fn save_audio_preference(cx: &App, device: Option<String>, port: Option<String>) {
+        if cx.has_global::<Self>()
+            && let Some(store) = cx.global::<Self>().heed_store()
+        {
+            let mut pref = store.get_audio_preference().unwrap_or_default();
+            if device.is_some() {
+                pref.default_device = device;
+            }
+            if port.is_some() {
+                pref.default_port = port;
+            }
+            let _ = store.save_audio_preference(&pref);
+        }
+    }
+
+    pub(crate) fn reload_config(cx: &mut App) -> Result<(), ShellError> {
+        let handle = Self::service_commands(cx)
+            .ok_or_else(|| ShellError::ActionFailed("service worker unavailable".into()))?;
+        service_worker::try_send_command(&handle, WorkerCommand::ReloadConfig)
+            .map_err(|error| ShellError::ActionFailed(error.to_string()))?;
+        Ok(())
+    }
+
+    pub fn record_recent_app(cx: &mut App, app_id: &str) {
+        if cx.has_global::<Self>() {
+            let runtime = cx.global_mut::<Self>();
+            runtime.session_state_mut().record_recent_app(app_id);
+            let path = runtime.session_path().clone();
+            let session = runtime.session_state().clone();
+            let _ = session.save_atomic(&path);
+        }
+    }
+
+    pub fn recent_apps(cx: &App) -> Vec<String> {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>().session_state().recent_apps.clone()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn save_output_bar(
+        cx: &mut App,
+        output_name: &str,
+        state: &shilpo_services::OutputBarState,
+    ) {
+        if cx.has_global::<Self>()
+            && let Some(store) = cx.global::<Self>().heed_store()
+        {
+            let _ = store.put_output_bar(output_name, state);
+        }
+    }
+
+    pub fn load_output_bar(cx: &App, output_name: &str) -> Option<shilpo_services::OutputBarState> {
+        if cx.has_global::<Self>()
+            && let Some(store) = cx.global::<Self>().heed_store()
+        {
+            store.get_output_bar(output_name).ok().flatten()
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn drain_dbus_commands(cx: &mut App) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let commands = {
+            let runtime = cx.global::<Self>();
+            let mut rx = runtime.mailbox_rx.lock().unwrap();
+            let mut cmds = Vec::new();
+            while let Ok(cmd) = rx.try_recv() {
+                cmds.push(cmd);
+                if cmds.len() >= 128 {
+                    break;
+                }
+            }
+            cmds
+        };
+
+        for cmd in commands {
+            match cmd {
+                ShellCommand::ShowBar => {
+                    if !ShellSurfaces::has_bars(cx) {
+                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
+                    }
+                }
+                ShellCommand::HideBar => {
+                    if ShellSurfaces::has_bars(cx) {
+                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
+                    }
+                }
+                ShellCommand::ToggleBar => {
+                    let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
+                }
+                ShellCommand::ShowOverview => {
+                    if !ShellSurfaces::is_overview_open(cx) {
+                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
+                    }
+                }
+                ShellCommand::HideOverview => {
+                    if ShellSurfaces::is_overview_open(cx) {
+                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
+                    }
+                }
+                ShellCommand::ToggleOverview => {
+                    let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
+                }
+                ShellCommand::ReloadConfig => {
+                    let _ = Self::dispatch_action(cx, ActionInvocation::ReloadConfig);
+                }
+                ShellCommand::SetBrightness(pct) => {
+                    Self::dispatch_device_command(
+                        cx,
+                        shilpo_services::DeviceCommand::Brightness(
+                            shilpo_services::BrightnessAction::SetBrightness(pct),
+                        ),
+                    );
+                }
+                ShellCommand::SetDisplayBrightness {
+                    display_id,
+                    percentage,
+                } => {
+                    Self::dispatch_device_command(
+                        cx,
+                        shilpo_services::DeviceCommand::Brightness(
+                            shilpo_services::BrightnessAction::SetDisplay {
+                                id: display_id,
+                                percentage,
+                            },
+                        ),
+                    );
+                }
+                ShellCommand::Capture(intent) => {
+                    ShellSurfaces::request(cx, super::SurfaceRequest::OpenCapture(intent));
+                }
+            }
+        }
+        Self::publish_status(cx);
+    }
+
+    pub(super) fn publish_status(cx: &mut App) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let runtime = cx.global::<Self>();
+        let is_running = runtime.readiness() != shilpo_services::ReadinessState::Failed;
+        let readiness_str = runtime.readiness().as_str().to_string();
+        let bar_state_str = if runtime.shell_surfaces.bars_are_open() {
+            "visible".to_string()
+        } else {
+            "hidden".to_string()
+        };
+        let overview_visible = runtime.shell_surfaces.overview_is_open();
+
+        let status = ShellStatus {
+            running: is_running,
+            instance_id: runtime.instance_id.clone(),
+            pid: std::process::id(),
+            readiness: readiness_str,
+            bar_state: bar_state_str,
+            overview_visible,
+        };
+
+        let service_health = runtime
+            .service_hub
+            .as_ref()
+            .map(|h| h.health())
+            .unwrap_or_default();
+
+        let ext_diagnostics_json = runtime
+            .extension_host
+            .diagnostics()
+            .and_then(|d| serde_json::to_string(&d).ok())
+            .unwrap_or_else(|| "null".to_string());
+
+        let telemetry = ShellTelemetry {
+            compositor_connected: service_health.compositor_connected,
+            compositor_state: service_health.compositor_state,
+            compositor_owner_generation: service_health.compositor_owner_generation,
+            compositor_revision: service_health.compositor_revision,
+            compositor_reconnect_attempt: service_health.compositor_reconnect_attempt,
+            compositor_last_error: service_health.compositor_last_error.unwrap_or_default(),
+            battery_service_available: service_health.battery_service_available,
+            battery_state: service_health.battery_state.as_str().to_string(),
+            battery_last_error: service_health.battery_last_error.unwrap_or_default(),
+            audio_service_available: service_health.audio_service_available,
+            audio_state: service_health.audio_state.as_str().to_string(),
+            audio_last_error: service_health.audio_last_error.unwrap_or_default(),
+            network_service_available: service_health.network_service_available,
+            network_state: service_health.network_state.as_str().to_string(),
+            network_last_error: service_health.network_last_error.unwrap_or_default(),
+            notification_service_available: service_health.notification_service_available,
+            notification_state: service_health.notification_state.as_str().to_string(),
+            notification_last_error: service_health.notification_last_error.unwrap_or_default(),
+            media_service_available: service_health.media_service_available,
+            media_state: service_health.media_state.as_str().to_string(),
+            media_last_error: service_health.media_last_error.unwrap_or_default(),
+            brightness_service_available: service_health.brightness_service_available,
+            brightness_state: service_health.brightness_state.as_str().to_string(),
+            brightness_last_error: service_health.brightness_last_error.unwrap_or_default(),
+            heed_store_available: service_health.heed_store_available,
+            uptime_seconds: service_health.uptime_seconds,
+            extension_host_diagnostics_json: ext_diagnostics_json,
+        };
+
+        runtime.dbus_service.update_status(status);
+        runtime.dbus_service.update_telemetry(telemetry);
+    }
+}

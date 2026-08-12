@@ -1002,6 +1002,7 @@ pub enum AudioAction {
 #[serde(rename_all = "snake_case")]
 pub enum BrightnessAction {
     SetBrightness(u8),
+    SetDisplay { id: String, percentage: u8 },
     StepUp,
     StepDown,
 }

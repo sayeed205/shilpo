@@ -152,21 +152,19 @@ async fn main() {
             ShellCommands::Status => {
                 let ipc = IpcAdapter::new();
                 match ipc.status() {
-                    Ok(status)
-                        if matches!(status.readiness, shilpo_services::ReadinessState::Ready) =>
-                    {
+                    Ok(status) if status.readiness == "ready" => {
                         let unit_active = SystemdAdapter::is_unit_active();
                         let data = serde_json::json!({ "unit_active": unit_active, "ipc": status });
                         output.success(
                                 "shell.status", &data,
-                                Some(&format!("Systemd active: {unit_active}\nInstance ID: {}\nPID: {}\nReadiness: {:?}\nBar State: {:?}\nOverview Visible: {}", status.instance_id, status.pid, status.readiness, status.bar, status.overview_visible)),
+                                Some(&format!("Systemd active: {unit_active}\nInstance ID: {}\nPID: {}\nReadiness: {}\nBar State: {}\nOverview Visible: {}", status.instance_id, status.pid, status.readiness, status.bar_state, status.overview_visible)),
                                 Vec::new(),
                             )
                     }
                     Ok(status) => output.error(
                         "shell.status",
                         "shell_degraded",
-                        &format!("Shell readiness is {:?}", status.readiness),
+                        &format!("Shell readiness is {}", status.readiness),
                         Some(serde_json::to_value(&status).unwrap_or_default()),
                         Vec::new(),
                         EXIT_FAILURE,
@@ -184,20 +182,16 @@ async fn main() {
             ShellCommands::Start => {
                 let systemd = SystemdAdapter::new();
                 match systemd.start(timeout) {
-                    Ok(status)
-                        if matches!(status.readiness, shilpo_services::ReadinessState::Ready) =>
-                    {
-                        output.success(
-                            "shell.start",
-                            &status,
-                            Some("Shell daemon started successfully"),
-                            Vec::new(),
-                        )
-                    }
+                    Ok(status) if status.readiness == "ready" => output.success(
+                        "shell.start",
+                        &status,
+                        Some("Shell daemon started successfully"),
+                        Vec::new(),
+                    ),
                     Ok(status) => output.error(
                         "shell.start",
                         "shell_degraded",
-                        &format!("Shell started with readiness {:?}", status.readiness),
+                        &format!("Shell started with readiness {}", status.readiness),
                         Some(serde_json::to_value(&status).unwrap_or_default()),
                         Vec::new(),
                         EXIT_FAILURE,
@@ -224,20 +218,16 @@ async fn main() {
             ShellCommands::Restart => {
                 let systemd = SystemdAdapter::new();
                 match systemd.restart(timeout) {
-                    Ok(status)
-                        if matches!(status.readiness, shilpo_services::ReadinessState::Ready) =>
-                    {
-                        output.success(
-                            "shell.restart",
-                            &status,
-                            Some("Shell daemon restarted successfully"),
-                            Vec::new(),
-                        )
-                    }
+                    Ok(status) if status.readiness == "ready" => output.success(
+                        "shell.restart",
+                        &status,
+                        Some("Shell daemon restarted successfully"),
+                        Vec::new(),
+                    ),
                     Ok(status) => output.error(
                         "shell.restart",
                         "shell_degraded",
-                        &format!("Shell restarted with readiness {:?}", status.readiness),
+                        &format!("Shell restarted with readiness {}", status.readiness),
                         Some(serde_json::to_value(&status).unwrap_or_default()),
                         Vec::new(),
                         EXIT_FAILURE,
@@ -602,15 +592,12 @@ async fn main() {
             }
             BrightnessCommands::Set { display, value } => {
                 let ipc = IpcAdapter::new();
-                let req = if let Some(disp_id) = display {
-                    shilpo_services::IpcRequest::SetDisplayBrightness {
-                        id: disp_id,
-                        percentage: value,
-                    }
+                let res = if let Some(disp_id) = display {
+                    ipc.set_display_brightness(disp_id, value)
                 } else {
-                    shilpo_services::IpcRequest::SetBrightness(value)
+                    ipc.set_brightness(value)
                 };
-                match ipc.request(req) {
+                match res {
                     Ok(_) => output.success(
                         "brightness.set",
                         &serde_json::json!({ "value": value }),
@@ -865,15 +852,14 @@ async fn main() {
                 CaptureAction::Menu => shilpo_services::capture::CaptureIntent::Menu,
             };
             match ipc.capture(intent) {
-                Ok(resp) => {
-                    let text = match &resp.result {
-                        Some(shilpo_services::IpcResult::Accepted) => {
-                            "Capture request accepted by shilpo-shell".into()
-                        }
-                        result => format!("Capture result: {result:?}"),
-                    };
-                    let result_value = serde_json::to_value(&resp.result).unwrap_or_default();
-                    output.success("capture", &result_value, Some(&text), Vec::new())
+                Ok(()) => {
+                    let text = "Capture request accepted by shilpo-shell";
+                    output.success(
+                        "capture",
+                        &serde_json::json!({ "accepted": true }),
+                        Some(text),
+                        Vec::new(),
+                    )
                 }
                 Err((code, msg)) => {
                     output.error("capture", "ipc_failed", &msg, None, Vec::new(), code)

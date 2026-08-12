@@ -112,6 +112,50 @@ impl ServiceHub {
         self.availability.clone()
     }
 
+    pub(crate) fn health(&self) -> shilpo_services::ServiceHealth {
+        let comp_snap = self.compositor.current();
+        shilpo_services::ServiceHealth {
+            compositor_connected: matches!(
+                comp_snap.connection,
+                shilpo_services::CompositorConnection::Ready
+            ),
+            compositor_state: format!("{:?}", comp_snap.connection).to_lowercase(),
+            compositor_owner_generation: comp_snap.version.owner_generation,
+            compositor_revision: comp_snap.version.revision,
+            compositor_reconnect_attempt: if matches!(
+                comp_snap.connection,
+                shilpo_services::CompositorConnection::Reconnecting
+            ) {
+                1
+            } else {
+                0
+            },
+            compositor_last_error: comp_snap.last_error.clone(),
+            compositor_telemetry: Some(self.compositor.command_broker().telemetry()),
+            battery_service_available: self.availability.battery_available,
+            battery_state: self.availability.battery_state,
+            battery_last_error: self.availability.battery_last_error.clone(),
+            audio_service_available: self.availability.audio_available,
+            audio_state: self.availability.audio_state,
+            audio_last_error: self.availability.audio_last_error.clone(),
+            network_service_available: self.availability.network_available,
+            network_state: self.availability.network_state,
+            network_last_error: self.availability.network_last_error.clone(),
+            notification_service_available: true,
+            notification_state: shilpo_services::ServiceLifecycle::Ready,
+            notification_last_error: None,
+            media_service_available: self.availability.media_available,
+            media_state: self.availability.media_state,
+            media_last_error: self.availability.media_last_error.clone(),
+            brightness_service_available: self.availability.brightness_available,
+            brightness_state: self.availability.brightness_state,
+            brightness_last_error: self.availability.brightness_last_error.clone(),
+            heed_store_available: true,
+            uptime_seconds: 0,
+            extension_host: None,
+        }
+    }
+
     pub(crate) fn is_dnd_enabled(&self) -> bool {
         self.notification.snapshot().dnd_enabled
     }
@@ -268,6 +312,7 @@ impl ServiceHub {
                     crate::bar::service_worker::WorkerUpdate::Config(
                         crate::bar::service_worker::ConfigUpdate::Loaded { config, changeset },
                     ) => {
+                        ShellRuntime::emit_config_signal(cx, true, changeset.clone(), 0);
                         ShellRuntime::set_active_config(cx, config);
                         if changeset.outputs || changeset.desktop {
                             ShellSurfaces::request(cx, super::SurfaceRequest::SyncDisplays);
@@ -276,6 +321,9 @@ impl ServiceHub {
                             ShellSurfaces::reconcile_bar_extension_instances(cx);
                         }
                     }
+                    crate::bar::service_worker::WorkerUpdate::Config(
+                        crate::bar::service_worker::ConfigUpdate::Failed { changeset, .. },
+                    ) => ShellRuntime::emit_config_signal(cx, false, changeset.clone(), 1),
                     crate::bar::service_worker::WorkerUpdate::Battery(info) => {
                         if info.available
                             && !info.is_present

@@ -223,7 +223,7 @@ impl ActionDispatcher {
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::ReloadConfig => {
-                ShellRuntime::enqueue_worker(cx, shilpo_services::IpcRequest::ReloadConfig)?;
+                ShellRuntime::reload_config(cx)?;
                 Ok(crate::actions::ActionResult::Immediate)
             }
             ActionInvocation::Quit => {

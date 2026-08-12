@@ -29,6 +29,11 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
             cx.update(|cx: &mut App| {
                 shilpo_ui::Theme::global_mut(cx).apply_state(&state);
                 ShellSurfaces::apply_theme_state(cx, &state);
+                super::ShellRuntime::emit_theme_signal(
+                    cx,
+                    state.resolved_mode.as_str().into(),
+                    format!("{:?}", state.resolved_variant),
+                );
             });
         }
     })

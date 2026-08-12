@@ -1,8 +1,9 @@
-use shilpo_services::{CompositorCommand, IpcRequest, IpcStatus, ServiceHealth, ShellIpcClient};
+//! D-Bus adapter for shell commands and status queries over `org.shilpo.Shell`.
 
-pub struct IpcAdapter {
-    client: ShellIpcClient,
-}
+use crate::shell::dbus::{CommandResult, ShellProxy, ShellStatus, ShellTelemetry};
+use zbus::Connection;
+
+pub struct IpcAdapter;
 
 impl Default for IpcAdapter {
     fn default() -> Self {
@@ -12,135 +13,191 @@ impl Default for IpcAdapter {
 
 impl IpcAdapter {
     pub fn new() -> Self {
-        Self {
-            client: ShellIpcClient::new(),
-        }
+        Self
     }
 
-    pub fn status(&self) -> Result<IpcStatus, (i32, String)> {
-        self.client.status().map_err(map_ipc_error)
+    fn get_proxy() -> Result<(Connection, ShellProxy<'static>), (i32, String)> {
+        futures_lite::future::block_on(async {
+            let conn = Connection::session().await.map_err(map_dbus_error)?;
+            let proxy = ShellProxy::builder(&conn)
+                .build()
+                .await
+                .map_err(map_dbus_error)?;
+            Ok((conn, proxy))
+        })
     }
 
-    pub fn telemetry(&self) -> Result<ServiceHealth, (i32, String)> {
-        self.client.telemetry().map_err(map_ipc_error)
+    pub fn status(&self) -> Result<ShellStatus, (i32, String)> {
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async { proxy.get_status().await.map_err(map_dbus_error) })
     }
 
-    pub fn request(&self, req: IpcRequest) -> Result<(), (i32, String)> {
-        let resp = self.client.send(req).map_err(map_ipc_error)?;
-
-        if !resp.ok {
-            let err = resp.error.unwrap_or(shilpo_services::ipc::IpcErrorBody {
-                code: "operation_failed".into(),
-                message: "IPC operation failed".into(),
-            });
-            let code = match err.code.as_str() {
-                "compositor_timeout" | "apply_timeout" | "timeout" => 4,
-                _ => 1,
-            };
-            return Err((code, format!("{}: {}", err.code, err.message)));
-        }
-
-        Ok(())
+    pub fn telemetry(&self) -> Result<ShellTelemetry, (i32, String)> {
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            proxy.get_telemetry().await.map_err(map_dbus_error)
+        })
     }
 
     pub fn overview_show(&self) -> Result<(), (i32, String)> {
-        self.request(IpcRequest::ShowOverview)
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            proxy.show_overview().await.map_err(map_dbus_error)
+        })
     }
 
     pub fn overview_hide(&self) -> Result<(), (i32, String)> {
-        self.request(IpcRequest::HideOverview)
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            proxy.hide_overview().await.map_err(map_dbus_error)
+        })
     }
 
     pub fn overview_toggle(&self) -> Result<(), (i32, String)> {
-        self.request(IpcRequest::ToggleOverview)
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            proxy.toggle_overview().await.map_err(map_dbus_error)
+        })
     }
 
     pub fn bar_show(&self) -> Result<(), (i32, String)> {
-        self.request(IpcRequest::ShowBar)
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async { proxy.show_bar().await.map_err(map_dbus_error) })
     }
 
     pub fn bar_hide(&self) -> Result<(), (i32, String)> {
-        self.request(IpcRequest::HideBar)
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async { proxy.hide_bar().await.map_err(map_dbus_error) })
     }
 
     pub fn bar_toggle(&self) -> Result<(), (i32, String)> {
-        self.request(IpcRequest::ToggleBar)
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async { proxy.toggle_bar().await.map_err(map_dbus_error) })
     }
 
     pub fn workspace_focus(&self, id: u64) -> Result<(), (i32, String)> {
-        self.request(IpcRequest::Compositor(CompositorCommand::FocusWorkspace(
-            id,
-        )))
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            let res = proxy.focus_workspace(id).await.map_err(map_dbus_error)?;
+            map_command_result(res)
+        })
     }
 
     pub fn workspace_create(&self) -> Result<(), (i32, String)> {
-        self.request(IpcRequest::Compositor(CompositorCommand::CreateWorkspace))
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            let res = proxy.create_workspace().await.map_err(map_dbus_error)?;
+            map_command_result(res)
+        })
     }
 
     pub fn window_focus(&self, id: u64) -> Result<(), (i32, String)> {
-        self.request(IpcRequest::Compositor(CompositorCommand::FocusWindow(id)))
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            let res = proxy.focus_window(id).await.map_err(map_dbus_error)?;
+            map_command_result(res)
+        })
     }
 
     pub fn window_focus_previous(&self) -> Result<(), (i32, String)> {
-        self.request(IpcRequest::Compositor(
-            CompositorCommand::FocusPreviousWindow,
-        ))
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            let res = proxy
+                .focus_previous_window()
+                .await
+                .map_err(map_dbus_error)?;
+            map_command_result(res)
+        })
     }
 
     pub fn window_move(&self, window_id: u64, workspace_id: u64) -> Result<(), (i32, String)> {
-        self.request(IpcRequest::Compositor(
-            CompositorCommand::MoveWindowToWorkspace {
-                window_id,
-                workspace_id,
-            },
-        ))
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            let res = proxy
+                .move_window_to_workspace(window_id, workspace_id)
+                .await
+                .map_err(map_dbus_error)?;
+            map_command_result(res)
+        })
     }
 
     pub fn config_reload(&self) -> Result<(), (i32, String)> {
-        self.request(IpcRequest::ReloadConfig)
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            proxy.reload_config().await.map_err(map_dbus_error)
+        })
+    }
+
+    pub fn set_brightness(&self, percentage: u8) -> Result<(), (i32, String)> {
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            proxy
+                .set_brightness(percentage)
+                .await
+                .map_err(map_dbus_error)
+        })
+    }
+
+    pub fn set_display_brightness(
+        &self,
+        display_id: String,
+        percentage: u8,
+    ) -> Result<(), (i32, String)> {
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            proxy
+                .set_display_brightness(display_id, percentage)
+                .await
+                .map_err(map_dbus_error)
+        })
     }
 
     pub fn capture(
         &self,
         intent: shilpo_services::capture::CaptureIntent,
-    ) -> Result<shilpo_services::IpcResponse, (i32, String)> {
-        self.checked_request(IpcRequest::Capture(intent))
+    ) -> Result<(), (i32, String)> {
+        let (_conn, proxy) = Self::get_proxy()?;
+        let intent_str = match intent {
+            shilpo_services::capture::CaptureIntent::Clipboard => "clipboard",
+            shilpo_services::capture::CaptureIntent::Annotation => "annotation",
+            shilpo_services::capture::CaptureIntent::Ocr => "ocr",
+            shilpo_services::capture::CaptureIntent::Menu => "menu",
+        };
+        futures_lite::future::block_on(async {
+            proxy
+                .capture(intent_str.to_string())
+                .await
+                .map_err(map_dbus_error)
+        })
     }
+}
 
-    fn checked_request(
-        &self,
-        request: IpcRequest,
-    ) -> Result<shilpo_services::IpcResponse, (i32, String)> {
-        let response = self.client.send(request).map_err(map_ipc_error)?;
-        if response.ok {
-            Ok(response)
-        } else {
-            let error = response
-                .error
-                .unwrap_or(shilpo_services::ipc::IpcErrorBody {
-                    code: "operation_failed".into(),
-                    message: "shell rejected the request".into(),
-                });
-            Err((1, format!("{}: {}", error.code, error.message)))
+fn map_command_result(res: CommandResult) -> Result<(), (i32, String)> {
+    if res.is_applied() {
+        Ok(())
+    } else {
+        match res.outcome.as_str() {
+            "rejected" => Err((1, format!("command rejected: {}", res.reason))),
+            "timed_out" => Err((4, "command timed out".to_string())),
+            "cancelled" => Err((1, format!("command cancelled: {}", res.reason))),
+            _ => Err((1, format!("command failed: {}", res.outcome))),
         }
     }
 }
 
-fn map_ipc_error(error: shilpo_services::IpcError) -> (i32, String) {
-    let code = match &error {
-        shilpo_services::IpcError::Code { code, .. }
-            if code.contains("protocol") || code.contains("version") =>
-        {
-            5
-        }
-        shilpo_services::IpcError::Code { code, .. }
-            if code.contains("auth") || code.contains("permission") =>
-        {
-            6
-        }
-        shilpo_services::IpcError::Code { code, .. } if code.contains("timeout") => 4,
-        shilpo_services::IpcError::Io(_) | shilpo_services::IpcError::InvalidPath(_) => 3,
-        _ => 1,
-    };
-    (code, format!("shell IPC error: {error}"))
+pub fn map_dbus_error(err: zbus::Error) -> (i32, String) {
+    match &err {
+        zbus::Error::FDO(fdo_err) => match &**fdo_err {
+            zbus::fdo::Error::UnknownMethod(msg)
+            | zbus::fdo::Error::ServiceUnknown(msg)
+            | zbus::fdo::Error::NameHasNoOwner(msg) => {
+                (3, format!("shell daemon unavailable: {msg}"))
+            }
+            zbus::fdo::Error::InvalidArgs(msg) => (2, format!("invalid arguments: {msg}")),
+            zbus::fdo::Error::LimitsExceeded(msg) => (1, format!("limits exceeded: {msg}")),
+            zbus::fdo::Error::Failed(msg) => (1, format!("operation failed: {msg}")),
+            _ => (1, format!("{fdo_err}")),
+        },
+        _ => (3, format!("shell daemon unavailable: {err}")),
+    }
 }
