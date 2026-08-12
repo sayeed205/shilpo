@@ -646,6 +646,8 @@ mod tests {
                 updates_rx: Arc::new(Mutex::new(_updates_rx)),
                 _service_task: None,
                 _app_watcher: None,
+                started_at: std::time::Instant::now(),
+                heed_store_available: false,
             }
         }
     }
