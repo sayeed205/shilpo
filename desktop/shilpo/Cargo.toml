@@ -43,6 +43,7 @@ resvg.workspace = true
 sysinfo.workspace = true
 fasteval = "0.2"
 toml.workspace = true
+toml_edit = "0.25"
 schemars.workspace = true
 niri-ipc.workspace = true
 
