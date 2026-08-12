@@ -13,9 +13,10 @@ use gpui::{
 };
 use shilpo_ext_api::{CanonicalId, ExtensionId};
 use shilpo_services::{
-    BarState, CompositorAdapter, CompositorOutput, CompositorSnapshot, ShellIpcServer,
+    BarState, CompositorAdapter, CompositorCommandBroker, CompositorOutput, CompositorSnapshot,
 };
 use shilpo_theme_daemon::DaemonState;
+use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
@@ -154,10 +155,10 @@ pub(crate) fn query_awww_wallpaper_path() -> Option<PathBuf> {
 }
 
 pub(super) fn attach_compositor_stream(
-    ipc_server: &ShellIpcServer,
+    compositor_broker_slot: &Arc<Mutex<Option<Arc<CompositorCommandBroker>>>>,
     compositor: &Arc<dyn CompositorAdapter>,
 ) -> Arc<CompositorSnapshot> {
-    ipc_server.attach_broker(compositor.command_broker());
+    *compositor_broker_slot.lock().unwrap() = Some(compositor.command_broker());
     compositor.current()
 }
 
@@ -332,7 +333,7 @@ pub struct SurfaceSnapshot {
     pub overview_open: bool,
     pub overview_lifecycle: OverviewLifecycle,
     pub bars_open: bool,
-    pub readiness: shilpo_services::ipc::ReadinessState,
+    pub readiness: shilpo_services::ReadinessState,
     pub notification_lifecycle: SurfaceLifecycle,
     pub osd_lifecycle: SurfaceLifecycle,
     pub extension_surface_count: usize,
@@ -407,7 +408,7 @@ pub struct ShellSurfaces {
     extension_surfaces: HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
     extension_panel: Option<(WindowHandle<shilpo_ui::Root>, CanonicalId)>,
     extension_output_ids: HashSet<DisplayId>,
-    readiness: shilpo_services::ipc::ReadinessState,
+    readiness: shilpo_services::ReadinessState,
 }
 
 impl ShellSurfaces {
@@ -698,7 +699,7 @@ impl ShellSurfaces {
             extension_surfaces: HashMap::new(),
             extension_panel: None,
             extension_output_ids: HashSet::new(),
-            readiness: shilpo_services::ipc::ReadinessState::Starting,
+            readiness: shilpo_services::ReadinessState::Starting,
         };
         let battery_provider =
             std::sync::Arc::new(crate::bar::cards::battery_card::BatteryCardProvider::new());
@@ -768,7 +769,7 @@ impl ShellSurfaces {
         self.update_readiness();
     }
 
-    pub(crate) fn readiness(&self) -> shilpo_services::ipc::ReadinessState {
+    pub(crate) fn readiness(&self) -> shilpo_services::ReadinessState {
         self.readiness
     }
 
@@ -1974,22 +1975,22 @@ impl ShellSurfaces {
 fn readiness_for(
     connection: &shilpo_services::CompositorConnection,
     bar_state: &BarState,
-) -> shilpo_services::ipc::ReadinessState {
+) -> shilpo_services::ReadinessState {
     match connection {
         shilpo_services::CompositorConnection::Unavailable
         | shilpo_services::CompositorConnection::Connecting => {
-            shilpo_services::ipc::ReadinessState::Starting
+            shilpo_services::ReadinessState::Starting
         }
         shilpo_services::CompositorConnection::Ready => {
             if matches!(bar_state, BarState::Visible | BarState::Hidden) {
-                shilpo_services::ipc::ReadinessState::Ready
+                shilpo_services::ReadinessState::Ready
             } else {
-                shilpo_services::ipc::ReadinessState::Degraded
+                shilpo_services::ReadinessState::Degraded
             }
         }
         shilpo_services::CompositorConnection::Reconnecting
         | shilpo_services::CompositorConnection::Degraded => {
-            shilpo_services::ipc::ReadinessState::Degraded
+            shilpo_services::ReadinessState::Degraded
         }
     }
 }
@@ -2347,14 +2348,14 @@ mod tests {
         let mut harness = ShellSurfacesTestHarness::new_offline();
         assert_eq!(
             harness.manager.readiness(),
-            shilpo_services::ipc::ReadinessState::Starting
+            shilpo_services::ReadinessState::Starting
         );
 
         harness.manager.set_bar_state(BarState::Visible);
         harness.manager.update_readiness();
         assert_eq!(
             harness.manager.readiness(),
-            shilpo_services::ipc::ReadinessState::Starting
+            shilpo_services::ReadinessState::Starting
         );
 
         let ready_snapshot = CompositorSnapshot {
@@ -2367,7 +2368,7 @@ mod tests {
         harness.manager.update_readiness();
         assert_eq!(
             harness.manager.readiness(),
-            shilpo_services::ipc::ReadinessState::Ready
+            shilpo_services::ReadinessState::Ready
         );
 
         assert!(!harness.manager.has_extension_surface("inst-1"));

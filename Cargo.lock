@@ -7843,6 +7843,7 @@ name = "shilpo"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "chrono",
  "clap",
  "dirs 6.0.0",
@@ -7879,6 +7880,7 @@ dependencies = [
  "uuid",
  "zbus",
  "zed-reqwest",
+ "zvariant",
 ]
 
 [[package]]

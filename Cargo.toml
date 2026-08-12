@@ -5,7 +5,6 @@ members = [
     "core/theme",
     "core/macros",
     "core/ext-api",
-
     # Linux desktop shell crates
     "desktop/shilpo",
     "desktop/device",
@@ -13,7 +12,6 @@ members = [
     "desktop/ext-runtime",
     "desktop/theme-daemon",
     "desktop/observability",
-
     # Other
     "apps/storybook",
 ]
@@ -35,6 +33,7 @@ shilpo-ext-runtime = { path = "desktop/ext-runtime" }
 shilpo-theme-daemon = { path = "desktop/theme-daemon" }
 shilpo-observability = { path = "desktop/observability" }
 tracing-chrome = "0.7"
+arc-swap = "1"
 
 niri-ipc = "26"
 zbus = { version = "5", features = ["p2p"] }

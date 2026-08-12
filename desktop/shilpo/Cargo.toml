@@ -25,6 +25,7 @@ clap = { version = "4", features = ["derive", "env"] }
 anyhow.workspace = true
 libc.workspace = true
 zbus.workspace = true
+zvariant.workspace = true
 dirs.workspace = true
 futures-lite.workspace = true
 chrono.workspace = true
@@ -32,6 +33,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "pr
 log.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+arc-swap.workspace = true
 uuid.workspace = true
 notify.workspace = true
 serde = { workspace = true, features = ["derive"] }

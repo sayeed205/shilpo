@@ -165,6 +165,11 @@ impl DeviceAdapter for InMemoryDeviceAdapter {
                             payload.percentage = b;
                         }
                     }
+                    BrightnessAction::SetDisplay { percentage, .. } => {
+                        if let DomainPayload::Brightness(payload) = &mut current.payload {
+                            payload.percentage = percentage;
+                        }
+                    }
                     BrightnessAction::StepUp => {
                         if let DomainPayload::Brightness(payload) = &mut current.payload {
                             payload.percentage = (payload.percentage + 10).min(100);

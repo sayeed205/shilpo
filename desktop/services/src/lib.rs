@@ -12,7 +12,6 @@ pub use shilpo_device as device;
 pub use shilpo_device as device_protocol;
 pub use shilpo_device as device_client;
 pub use shilpo_device::*;
-pub mod ipc;
 pub mod location;
 pub mod media;
 pub mod network;
@@ -21,6 +20,7 @@ pub mod notifications;
 pub mod power_profile;
 pub(crate) mod runtime;
 pub mod session_store;
+pub mod status;
 pub mod tray;
 pub mod upower;
 
@@ -48,10 +48,6 @@ pub use device_daemon::{
     SystemDeviceAdapter,
 };
 pub use error::ServiceError;
-pub use ipc::{
-    BarState, IpcError, IpcRequest, IpcResponse, IpcResult, IpcStatus, ReadinessState,
-    ServiceHealth, ServiceLifecycle, ShellIpcClient, ShellIpcServer,
-};
 pub use location::{LocationInfo, LocationService};
 pub use media::{MediaCommand, MediaInfo, MediaService, PlaybackState};
 pub use network::{NetworkCommand, NetworkInfo, NetworkService, VpnConnection};
@@ -62,6 +58,7 @@ pub use notifications::{
     NotificationSnapshot, NotificationUrgency,
 };
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
+pub use status::{BarState, ReadinessState, ServiceHealth, ServiceLifecycle};
 
 pub async fn run_device_daemon() -> anyhow::Result<()> {
     use std::sync::Arc;

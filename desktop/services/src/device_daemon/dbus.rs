@@ -389,6 +389,24 @@ impl DeviceDbusService {
         )
         .await
     }
+
+    async fn set_display_brightness(
+        &self,
+        id: String,
+        value: u8,
+        version: u32,
+        #[zbus(signal_emitter)] e: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<crate::device_protocol::CommandOutcomeRecord> {
+        self.submit_typed(
+            DeviceCommand::Brightness(crate::device_protocol::BrightnessAction::SetDisplay {
+                id,
+                percentage: value,
+            }),
+            version,
+            &e,
+        )
+        .await
+    }
     async fn step_brightness_up(
         &self,
         version: u32,

@@ -546,6 +546,11 @@ fn command_confirmed(command: &DeviceCommand, before: &DomainState, after: &Doma
             new.percentage == *v
         }
         (
+            DeviceCommand::Brightness(BrightnessAction::SetDisplay { percentage, .. }),
+            _,
+            P::Brightness(new),
+        ) => new.percentage == *percentage,
+        (
             DeviceCommand::Brightness(BrightnessAction::StepUp),
             P::Brightness(old),
             P::Brightness(new),

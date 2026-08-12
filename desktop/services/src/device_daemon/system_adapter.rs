@@ -316,6 +316,10 @@ impl DeviceAdapter for SystemDeviceAdapter {
                         self.brightness.set_brightness(v);
                         Ok(())
                     }
+                    BrightnessAction::SetDisplay { id, percentage } => {
+                        self.brightness.set_display_brightness(&id, percentage);
+                        Ok(())
+                    }
                     BrightnessAction::StepUp => {
                         self.brightness.set_brightness(
                             (self.brightness.brightness_info().percentage + 10).min(100),

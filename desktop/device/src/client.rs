@@ -525,6 +525,11 @@ impl DeviceClient {
             DeviceCommand::Brightness(BrightnessAction::SetBrightness(v)) => {
                 proxy.set_brightness(v, PROTOCOL_VERSION).await
             }
+            DeviceCommand::Brightness(BrightnessAction::SetDisplay { id, percentage }) => {
+                proxy
+                    .set_display_brightness(&id, percentage, PROTOCOL_VERSION)
+                    .await
+            }
             DeviceCommand::Brightness(BrightnessAction::StepUp) => {
                 proxy.step_brightness_up(PROTOCOL_VERSION).await
             }
@@ -731,6 +736,12 @@ trait DeviceDbus {
     ) -> zbus::Result<crate::protocol::CommandOutcomeRecord>;
     fn set_brightness(
         &self,
+        value: u8,
+        version: u32,
+    ) -> zbus::Result<crate::protocol::CommandOutcomeRecord>;
+    fn set_display_brightness(
+        &self,
+        id: &str,
         value: u8,
         version: u32,
     ) -> zbus::Result<crate::protocol::CommandOutcomeRecord>;

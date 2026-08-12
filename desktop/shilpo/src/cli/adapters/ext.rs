@@ -1,13 +1,13 @@
+use super::ipc::IpcAdapter;
 use shilpo_ext_api::ExtensionId;
 use shilpo_ext_runtime::{
     ExtensionCatalog, ExtensionCli, ExtensionCliResult, ReleaseChannel, UpdateState,
     default_extension_state_dir, sign_package,
 };
-use shilpo_services::{IpcRequest, ShellIpcClient};
 use std::path::{Path, PathBuf};
 
 pub struct ExtAdapter {
-    ipc: ShellIpcClient,
+    ipc: IpcAdapter,
     state_dir: PathBuf,
     catalog: ExtensionCatalog,
 }
@@ -29,7 +29,7 @@ impl Default for ExtAdapter {
 impl ExtAdapter {
     pub fn new() -> Self {
         Self {
-            ipc: ShellIpcClient::new(),
+            ipc: IpcAdapter::new(),
             state_dir: default_extension_state_dir(),
             catalog: ExtensionCatalog::open_default(),
         }
@@ -37,73 +37,70 @@ impl ExtAdapter {
 
     fn notify_daemon_if_needed(&self, result: &mut ExtOpResult) {
         if result.success {
-            if ShellIpcClient::is_socket_available() {
-                if let Err(e) = self.ipc.send(IpcRequest::ReloadConfig) {
-                    record_refresh_warning(result, format!("live daemon refresh failed: {e}"));
+            match self.ipc.config_reload() {
+                Ok(()) => {}
+                Err((3, _)) => record_refresh_warning(result, "live shell daemon is not running"),
+                Err((_, e)) => {
+                    record_refresh_warning(result, format!("live daemon refresh failed: {e}"))
                 }
-            } else {
-                record_refresh_warning(result, "live shell daemon is not running");
             }
         }
     }
 
     pub fn status(&self) -> ExtOpResult {
-        if ShellIpcClient::is_socket_available() {
-            match self.ipc.send(IpcRequest::GetTelemetry) {
-                Ok(shilpo_services::IpcResponse {
-                    result: Some(shilpo_services::IpcResult::Telemetry(health)),
-                    ..
-                }) => {
-                    let Some(ext_status) = health.extension_host else {
-                        return ExtOpResult {
-                            success: false,
-                            data: serde_json::Value::Null,
-                            human_message: "Extension host diagnostics are unavailable".into(),
-                            warnings: Vec::new(),
-                            exit_code: 1,
-                        };
-                    };
-                    let state_str = ext_status
-                        .get("lifecycle")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-                    let host_gen = ext_status
-                        .get("host_generation")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    let engine_gen = ext_status
-                        .get("engine_generation")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    let human = format!(
-                        "Extension Host Status:\n  State: {}\n  Host Generation: {}\n  Engine Generation: {}",
-                        state_str, host_gen, engine_gen
-                    );
-                    ExtOpResult {
-                        success: true,
-                        data: ext_status,
-                        human_message: human,
+        match self.ipc.telemetry() {
+            Ok(telemetry) => {
+                let diagnostics = telemetry.extension_host_diagnostics_json;
+                let ext_status: serde_json::Value =
+                    serde_json::from_str(&diagnostics).unwrap_or(serde_json::Value::Null);
+                if ext_status.is_null() {
+                    return ExtOpResult {
+                        success: false,
+                        data: serde_json::Value::Null,
+                        human_message: "Extension host diagnostics are unavailable".into(),
                         warnings: Vec::new(),
-                        exit_code: 0,
-                    }
+                        exit_code: 1,
+                    };
                 }
-                Ok(_) | Err(_) => ExtOpResult {
-                    success: false,
-                    data: serde_json::Value::Null,
-                    human_message: "Failed to query telemetry from daemon".into(),
+                let state_str = ext_status
+                    .get("lifecycle")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let host_gen = ext_status
+                    .get("host_generation")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let engine_gen = ext_status
+                    .get("engine_generation")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let human = format!(
+                    "Extension Host Status:\n  State: {}\n  Host Generation: {}\n  Engine Generation: {}",
+                    state_str, host_gen, engine_gen
+                );
+                ExtOpResult {
+                    success: true,
+                    data: ext_status,
+                    human_message: human,
                     warnings: Vec::new(),
-                    exit_code: 1,
-                },
+                    exit_code: 0,
+                }
             }
-        } else {
-            ExtOpResult {
+            Err((3, _)) => ExtOpResult {
                 success: false,
                 data: serde_json::Value::Null,
                 human_message:
                     "shell daemon is unavailable; cannot query extension host diagnostics".into(),
                 warnings: Vec::new(),
                 exit_code: 3,
-            }
+            },
+            Err((code, msg)) => ExtOpResult {
+                success: false,
+                data: serde_json::Value::Null,
+                human_message: format!("Failed to query telemetry from daemon: {msg}"),
+                warnings: Vec::new(),
+                exit_code: code,
+            },
         }
     }
 

@@ -29,6 +29,8 @@ pub struct ServiceHub {
     updates_rx: Arc<Mutex<UpdateReceiver>>,
     _service_task: Option<gpui::Task<()>>,
     _app_watcher: Option<notify::RecommendedWatcher>,
+    started_at: std::time::Instant,
+    heed_store_available: bool,
 }
 
 impl ServiceHub {
@@ -53,6 +55,7 @@ impl ServiceHub {
         let compositor: Arc<dyn shilpo_services::CompositorAdapter> =
             shilpo_services::NiriCompositorService::new();
         let device_client = shilpo_services::DeviceClient::new();
+        let heed_store_available = session_store.is_some();
         let clipboard = shilpo_services::ClipboardService::with_store(session_store);
         let app_scanner = shilpo_services::AppScanner::new()
             .unwrap_or_else(|_| shilpo_services::AppScanner::new_empty());
@@ -89,6 +92,8 @@ impl ServiceHub {
             updates_rx: Arc::new(Mutex::new(updates_rx)),
             _service_task: Some(service_task),
             _app_watcher: app_watcher,
+            started_at: std::time::Instant::now(),
+            heed_store_available,
         }
     }
 
@@ -110,6 +115,61 @@ impl ServiceHub {
 
     pub(crate) fn service_availability(&self) -> crate::bar::service_worker::ServiceAvailability {
         self.availability.clone()
+    }
+
+    pub(crate) fn health(&self) -> shilpo_services::ServiceHealth {
+        let comp_snap = self.compositor.current();
+        let notification = self.notification.snapshot();
+        shilpo_services::ServiceHealth {
+            compositor_connected: matches!(
+                comp_snap.connection,
+                shilpo_services::CompositorConnection::Ready
+            ),
+            compositor_state: format!("{:?}", comp_snap.connection).to_lowercase(),
+            compositor_owner_generation: comp_snap.version.owner_generation,
+            compositor_revision: comp_snap.version.revision,
+            compositor_reconnect_attempt: if matches!(
+                comp_snap.connection,
+                shilpo_services::CompositorConnection::Reconnecting
+            ) {
+                1
+            } else {
+                0
+            },
+            compositor_last_error: comp_snap.last_error.clone(),
+            compositor_telemetry: Some(self.compositor.command_broker().telemetry()),
+            battery_service_available: self.availability.battery_available,
+            battery_state: self.availability.battery_state,
+            battery_last_error: self.availability.battery_last_error.clone(),
+            audio_service_available: self.availability.audio_available,
+            audio_state: self.availability.audio_state,
+            audio_last_error: self.availability.audio_last_error.clone(),
+            network_service_available: self.availability.network_available,
+            network_state: self.availability.network_state,
+            network_last_error: self.availability.network_last_error.clone(),
+            notification_service_available: matches!(
+                notification.lifecycle,
+                shilpo_services::DomainLifecycle::Ready
+            ),
+            notification_state: match notification.lifecycle {
+                shilpo_services::DomainLifecycle::Ready => shilpo_services::ServiceLifecycle::Ready,
+                shilpo_services::DomainLifecycle::Connecting
+                | shilpo_services::DomainLifecycle::Reconnecting => {
+                    shilpo_services::ServiceLifecycle::Connecting { attempt: 0 }
+                }
+                _ => shilpo_services::ServiceLifecycle::Unavailable,
+            },
+            notification_last_error: notification.last_error,
+            media_service_available: self.availability.media_available,
+            media_state: self.availability.media_state,
+            media_last_error: self.availability.media_last_error.clone(),
+            brightness_service_available: self.availability.brightness_available,
+            brightness_state: self.availability.brightness_state,
+            brightness_last_error: self.availability.brightness_last_error.clone(),
+            heed_store_available: self.heed_store_available,
+            uptime_seconds: self.started_at.elapsed().as_secs(),
+            extension_host: None,
+        }
     }
 
     pub(crate) fn is_dnd_enabled(&self) -> bool {
@@ -268,6 +328,7 @@ impl ServiceHub {
                     crate::bar::service_worker::WorkerUpdate::Config(
                         crate::bar::service_worker::ConfigUpdate::Loaded { config, changeset },
                     ) => {
+                        ShellRuntime::emit_config_signal(cx, true, changeset.clone(), 0);
                         ShellRuntime::set_active_config(cx, config);
                         if changeset.outputs || changeset.desktop {
                             ShellSurfaces::request(cx, super::SurfaceRequest::SyncDisplays);
@@ -276,6 +337,9 @@ impl ServiceHub {
                             ShellSurfaces::reconcile_bar_extension_instances(cx);
                         }
                     }
+                    crate::bar::service_worker::WorkerUpdate::Config(
+                        crate::bar::service_worker::ConfigUpdate::Failed { changeset, .. },
+                    ) => ShellRuntime::emit_config_signal(cx, false, changeset.clone(), 1),
                     crate::bar::service_worker::WorkerUpdate::Battery(info) => {
                         if info.available
                             && !info.is_present
@@ -582,6 +646,8 @@ mod tests {
                 updates_rx: Arc::new(Mutex::new(_updates_rx)),
                 _service_task: None,
                 _app_watcher: None,
+                started_at: std::time::Instant::now(),
+                heed_store_available: false,
             }
         }
     }

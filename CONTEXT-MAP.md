@@ -22,7 +22,7 @@ library at its core.
 
 ### Linux Desktop (`desktop/`)
 
-- **Shilpo** (`desktop/shilpo`) — Consolidated desktop product package. Contains Shell daemon (`shell`), Settings app (`settings`), public CLI dispatch (`cli`), and declarative TOML configuration/validation (`config`). Produces the single installed executable binary target (`shilpo`).
+- **Shilpo** (`desktop/shilpo`) — Consolidated desktop product package. Contains Shell daemon (`shell`), Settings app (`settings`), public CLI dispatch (`cli`), and declarative TOML configuration/validation (`config`). Exposes the `org.shilpo.Shell` D-Bus control plane ([ADR-0014](docs/adr/0014-dbus-shell-control-plane.md)). Produces the single installed executable binary target (`shilpo`).
 - **Device** (`desktop/device`) — Presentation-neutral versioned device domain protocol (`protocol`) and typed DBus client (`client`) with degraded/reconnect projections and client-side debounce.
 - **Services** (`desktop/services`) — Linux system integration services. Device daemon (`DeviceDaemonService`), Wayland/Niri compositor IPC, audio, bluetooth, brightness, caffeine, clipboard, location, media, network, night light, notifications, power profile, screen capture domain (`capture`), tray, upower, app scanning, and LMDB session store.
 - **Extension Runtime** (`desktop/ext-runtime`) — Wasmtime-sandboxed extension runtime. Capability authorization, package catalog/registry index, WASI component-model host, worker process protocol (`shilpo extension-host`).
