@@ -44,6 +44,40 @@ cargo run -p storybook
 
 ---
 
+## Developer Workflows
+
+Shilpo uses [`just`](https://just.systems/) as a command runner for common development, formatting, linting, testing, and static analysis workflows. Development commands require `just` along with Cargo tools (`cargo-nextest` for tests and `cargo-llvm-cov` for coverage).
+
+To discover all available recipes:
+
+```bash
+just --list
+```
+
+Common recipes:
+
+```bash
+# Format Rust files in place
+just fmt
+
+# Run Clippy lints with zero warning tolerance
+just lint
+
+# Run all workspace tests
+just test
+
+# Run tests for a specific crate
+just test shilpo-ui
+
+# Run mutating formatting, linting, and workspace tests in sequence
+just check
+```
+
+> **Note**: `just fmt` (and consequently `just check`) modifies Rust source files in place to enforce workspace formatting rules.
+
+
+---
+
 ## Guidelines for AI Assistants & Contributors
 
 If you are an AI coding assistant or open-source contributor working on this repository, please consult [
