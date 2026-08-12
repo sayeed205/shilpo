@@ -160,7 +160,8 @@ async fn run(
 ) {
     let resolver = crate::config::ConfigResolver::from_primary_path(&config_path);
     let mut committed_snapshot = match resolver.resolve_initial() {
-        Ok((snapshot, _)) => {
+        Ok((snapshot, report)) => {
+            crate::config::unknown_keys::log_unknown_key_warnings(&report.unknown_keys);
             let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Loaded(Box::new(
                 snapshot.config.clone(),
             ))));
@@ -178,6 +179,7 @@ async fn run(
                 WorkerCommand::ReloadConfig => {
                     let (new_snapshot, _changeset, report) =
                         resolver.resolve_reload(&committed_snapshot);
+                    crate::config::unknown_keys::log_unknown_key_warnings(&report.unknown_keys);
                     if report.recovery_scope == Some(crate::config::RecoveryScope::RejectCandidate)
                     {
                         let msg = report

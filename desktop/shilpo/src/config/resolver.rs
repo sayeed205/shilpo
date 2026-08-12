@@ -1,9 +1,10 @@
 use crate::config::{
     changeset::ConfigChangeSet,
-    merge::{initial_merged_document, merge_source},
+    merge::{initial_merged_document, merge_document, read_source_document},
     provenance::ConfigProvenance,
     source::{ConfigSource, discover_sources},
     types::{ConfigDiagnostic, ConfigError, ShellConfig},
+    unknown_keys::{UnknownConfigKey, sanitize_document},
     validation::{RecoveryScope, apply_scoped_recovery},
 };
 use std::path::{Path, PathBuf};
@@ -29,6 +30,7 @@ pub struct ResolutionReport {
     pub diagnostics: Vec<ConfigDiagnostic>,
     pub recovery_scope: Option<RecoveryScope>,
     pub sources_loaded: Vec<ConfigSource>,
+    pub unknown_keys: Vec<UnknownConfigKey>,
 }
 
 #[derive(Clone, Debug)]
@@ -61,13 +63,27 @@ impl ConfigResolver {
 
     fn resolve_candidate(
         &self,
-    ) -> Result<(ShellConfig, ConfigProvenance, Vec<ConfigSource>), ConfigError> {
+    ) -> Result<
+        (
+            ShellConfig,
+            ConfigProvenance,
+            Vec<ConfigSource>,
+            Vec<UnknownConfigKey>,
+        ),
+        ConfigError,
+    > {
         let discovered = discover_sources(&self.config_dir, &self.primary_path);
         let (mut acc_doc, mut provenance) = initial_merged_document();
         let mut sources_loaded = vec![ConfigSource::Defaults];
+        let mut unknown_keys = Vec::new();
 
         for disc in discovered {
-            merge_source(&mut acc_doc, &mut provenance, &disc.source, &disc.path)?;
+            // Parse, scan for unknown keys (warnings only), and merge the
+            // sanitized in-memory document. User files are never rewritten.
+            let (mut doc, text) = read_source_document(&disc.path)?;
+            let mut warnings = sanitize_document(&mut doc, &disc.source, &text);
+            merge_document(&mut acc_doc, &mut provenance, &disc.source, &doc, &text);
+            unknown_keys.append(&mut warnings);
             sources_loaded.push(disc.source);
         }
 
@@ -81,11 +97,12 @@ impl ConfigResolver {
                 },
             })?;
 
-        Ok((candidate, provenance, sources_loaded))
+        Ok((candidate, provenance, sources_loaded, unknown_keys))
     }
 
     pub fn resolve_initial(&self) -> Result<(ConfigSnapshot, ResolutionReport), ConfigError> {
-        let (mut candidate, mut provenance, sources_loaded) = self.resolve_candidate()?;
+        let (mut candidate, mut provenance, sources_loaded, unknown_keys) =
+            self.resolve_candidate()?;
         let default_snapshot = ConfigSnapshot::default();
 
         match candidate.validate() {
@@ -98,6 +115,7 @@ impl ConfigResolver {
                     diagnostics: Vec::new(),
                     recovery_scope: None,
                     sources_loaded,
+                    unknown_keys,
                 },
             )),
             Err(ConfigError::Validation { diagnostics }) => {
@@ -121,6 +139,7 @@ impl ConfigResolver {
                             diagnostics,
                             recovery_scope: Some(recovery_scope),
                             sources_loaded,
+                            unknown_keys,
                         },
                     ))
                 }
@@ -134,7 +153,7 @@ impl ConfigResolver {
         previous: &ConfigSnapshot,
     ) -> (ConfigSnapshot, ConfigChangeSet, ResolutionReport) {
         let candidate_res = self.resolve_candidate();
-        let (mut candidate, mut provenance, sources_loaded) = match candidate_res {
+        let (mut candidate, mut provenance, sources_loaded, unknown_keys) = match candidate_res {
             Ok(tuple) => tuple,
             Err(err) => {
                 let diag = match err {
@@ -151,6 +170,7 @@ impl ConfigResolver {
                         diagnostics: vec![diag],
                         recovery_scope: Some(RecoveryScope::RejectCandidate),
                         sources_loaded: Vec::new(),
+                        unknown_keys: Vec::new(),
                     },
                 );
             }
@@ -170,6 +190,7 @@ impl ConfigResolver {
                         diagnostics: Vec::new(),
                         recovery_scope: None,
                         sources_loaded,
+                        unknown_keys,
                     },
                 )
             }
@@ -190,6 +211,7 @@ impl ConfigResolver {
                             diagnostics,
                             recovery_scope: Some(RecoveryScope::RejectCandidate),
                             sources_loaded,
+                            unknown_keys,
                         },
                     )
                 } else {
@@ -205,6 +227,7 @@ impl ConfigResolver {
                             diagnostics,
                             recovery_scope: Some(recovery_scope),
                             sources_loaded,
+                            unknown_keys,
                         },
                     )
                 }
@@ -219,6 +242,7 @@ impl ConfigResolver {
                     )],
                     recovery_scope: Some(RecoveryScope::RejectCandidate),
                     sources_loaded,
+                    unknown_keys,
                 },
             ),
         }

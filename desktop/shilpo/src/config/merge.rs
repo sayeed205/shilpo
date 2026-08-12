@@ -24,7 +24,7 @@ pub fn line_col_from_offset(text: &str, offset: usize) -> (usize, usize) {
     (line, col)
 }
 
-fn key_offset(text: &str, key: &str) -> Option<usize> {
+pub(crate) fn key_offset(text: &str, key: &str) -> Option<usize> {
     let quoted = format!("\"{key}\"");
     text.lines().enumerate().find_map(|(line, value)| {
         let trimmed = value.trim_start();
@@ -52,12 +52,9 @@ pub fn initial_merged_document() -> (DocumentMut, ConfigProvenance) {
     (doc, provenance)
 }
 
-pub fn merge_source(
-    acc_doc: &mut DocumentMut,
-    provenance: &mut ConfigProvenance,
-    source: &ConfigSource,
-    path: &std::path::Path,
-) -> Result<(), ConfigError> {
+/// Read and parse a file-backed source document, keeping the original text
+/// alongside so span offsets can be converted into 1-based line/column pairs.
+pub fn read_source_document(path: &std::path::Path) -> Result<(DocumentMut, String), ConfigError> {
     let text = fs::read_to_string(path).map_err(|source_err| ConfigError::Io {
         path: path.to_path_buf(),
         source: source_err,
@@ -73,16 +70,37 @@ pub fn merge_source(
             },
         })?;
 
+    Ok((doc, text))
+}
+
+pub fn merge_source(
+    acc_doc: &mut DocumentMut,
+    provenance: &mut ConfigProvenance,
+    source: &ConfigSource,
+    path: &std::path::Path,
+) -> Result<(), ConfigError> {
+    let (doc, text) = read_source_document(path)?;
+    merge_document(acc_doc, provenance, source, &doc, &text);
+    Ok(())
+}
+
+/// Merge an already-parsed source document (e.g. a sanitized in-memory copy)
+/// into the accumulated candidate, recording provenance for every leaf.
+pub fn merge_document(
+    acc_doc: &mut DocumentMut,
+    provenance: &mut ConfigProvenance,
+    source: &ConfigSource,
+    doc: &DocumentMut,
+    text: &str,
+) {
     merge_items(
         acc_doc.as_item_mut(),
         doc.as_item(),
         "",
         source,
-        &text,
+        text,
         provenance,
     );
-
-    Ok(())
 }
 
 fn merge_items(
