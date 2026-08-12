@@ -184,37 +184,28 @@ impl DeviceClient {
     }
 
     pub async fn connect(&self) -> Result<(), String> {
-        let connection =
-            tokio::time::timeout(Duration::from_millis(500), zbus::Connection::session())
-                .await
-                .map_err(|_| "device daemon connect timeout".to_string())?
-                .map_err(|error| format!("device daemon unavailable: {error}"))?;
+        let connection = zbus::Connection::session()
+            .await
+            .map_err(|error| format!("device daemon unavailable: {error}"))?;
         self.connect_on(connection).await
     }
 
     /// Connects through an already-established transport. This is primarily
     /// useful for deterministic peer-to-peer integration tests.
     pub async fn connect_on(&self, connection: zbus::Connection) -> Result<(), String> {
-        let connect_async = async {
-            let proxy = DeviceDbusProxy::builder(&connection)
-                .build()
-                .await
-                .map_err(|error| format!("device daemon proxy unavailable: {error}"))?;
-            let version = proxy
-                .get_protocol_version()
-                .await
-                .map_err(|error| format!("device protocol negotiation failed: {error}"))?;
-            if version != PROTOCOL_VERSION {
-                return Err(format!(
-                    "device protocol mismatch: client {PROTOCOL_VERSION}, daemon {version}; restart or update both components"
-                ));
-            }
-            Ok::<_, String>(proxy)
-        };
-
-        let proxy = tokio::time::timeout(Duration::from_millis(500), connect_async)
+        let proxy = DeviceDbusProxy::builder(&connection)
+            .build()
             .await
-            .map_err(|_| "device daemon connect timeout".to_string())??;
+            .map_err(|error| format!("device daemon proxy unavailable: {error}"))?;
+        let version = proxy
+            .get_protocol_version()
+            .await
+            .map_err(|error| format!("device protocol negotiation failed: {error}"))?;
+        if version != PROTOCOL_VERSION {
+            return Err(format!(
+                "device protocol mismatch: client {PROTOCOL_VERSION}, daemon {version}; restart or update both components"
+            ));
+        }
 
         // Increment installed owner generation on establishing a new owner connection
         let identity = connection.unique_name().map(ToString::to_string);
@@ -399,10 +390,6 @@ impl DeviceClient {
     pub async fn maintain_connection(&self) {
         let mut attempt = 0u32;
         loop {
-            if Arc::strong_count(&self.domains) <= 1 {
-                tracing::debug!("all DeviceClient consumers dropped, stopping maintain_connection");
-                break;
-            }
             if self.is_connected() {
                 tokio::time::sleep(Duration::from_millis(250)).await;
                 continue;
@@ -412,19 +399,9 @@ impl DeviceClient {
                 Ok(()) => attempt = 0,
                 Err(error) => {
                     attempt = attempt.saturating_add(1);
-                    let delay = reconnect_backoff(attempt).min(Duration::from_secs(30));
+                    let delay = reconnect_backoff(attempt);
                     self.mark_connection_lost(&error);
-                    tokio::select! {
-                        _ = tokio::time::sleep(delay) => {},
-                        _ = async {
-                            loop {
-                                tokio::time::sleep(Duration::from_millis(50)).await;
-                                if Arc::strong_count(&self.domains) <= 1 {
-                                    break;
-                                }
-                            }
-                        } => return,
-                    }
+                    tokio::time::sleep(delay.min(Duration::from_secs(30))).await;
                 }
             }
         }

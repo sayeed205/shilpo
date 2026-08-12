@@ -425,9 +425,6 @@ impl AppScanner {
 
     /// Starts watching XDG and Flatpak application directories for .desktop file changes.
     pub fn start_watcher(&self) -> Option<notify::RecommendedWatcher> {
-        if cfg!(test) {
-            return None;
-        }
         use notify::Watcher;
 
         let catalog = self.clone();

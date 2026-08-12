@@ -292,7 +292,7 @@ fn restart_delays_are_exact_and_quarantine_trips_on_third_crash() {
         if supervisor.state() == SupervisorState::Quarantined {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::yield_now();
     }
 
     let state = supervisor.state();

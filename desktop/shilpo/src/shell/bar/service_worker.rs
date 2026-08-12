@@ -145,17 +145,10 @@ pub fn spawn(
     client: DeviceClient,
 ) -> gpui::Task<()> {
     let reconnect_client = client.clone();
-    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
-    tokio::spawn(async move {
-        tokio::select! {
-            _ = reconnect_client.maintain_connection() => {},
-            _ = &mut cancel_rx => {},
-        }
-    });
-    executor.clone().spawn(async move {
-        let _cancel = cancel_tx;
-        run(executor.clone(), updates, commands, config_path, client).await
-    })
+    tokio::spawn(async move { reconnect_client.maintain_connection().await });
+    executor
+        .clone()
+        .spawn(async move { run(executor.clone(), updates, commands, config_path, client).await })
 }
 
 async fn run(
