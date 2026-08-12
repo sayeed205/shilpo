@@ -231,6 +231,16 @@ impl DeviceDaemonService {
         command: DeviceCommand,
     ) -> CommandOutcome {
         let domain = command.domain();
+        let _span = tracing::info_span!(
+            target: "shilpo_profile",
+            "service_command",
+            domain = ?domain,
+            operation = "execute",
+            command_id = ?id,
+            owner_generation = cx.owner_generation,
+            outcome = tracing::field::Empty,
+        );
+        let _enter = _span.enter();
         let before = cx
             .states
             .lock()

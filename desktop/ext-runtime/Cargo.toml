@@ -24,6 +24,7 @@ tar.workspace = true
 toml.workspace = true
 url.workspace = true
 shilpo-ext-api.workspace = true
+shilpo-observability.workspace = true
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 tracing.workspace = true

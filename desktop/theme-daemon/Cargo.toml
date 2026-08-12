@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 shilpo-ui = { workspace = true }
+shilpo-observability = { workspace = true }
 
 zbus = { workspace = true }
 ashpd = { workspace = true }

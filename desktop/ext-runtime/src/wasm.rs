@@ -243,6 +243,16 @@ impl ExtensionRuntime for WasmRuntime {
         event: &ExtensionEvent,
         budget: RuntimeBudget,
     ) -> Result<Vec<HostEffect>, RuntimeError> {
+        let span = tracing::info_span!(
+            target: "shilpo_profile",
+            "extension_wasm_call",
+            extension_id = %extension_id,
+            operation = "dispatch",
+            fuel = budget.fuel,
+            memory_limit = budget.max_memory_bytes,
+            outcome = tracing::field::Empty,
+        );
+        let _enter = span.enter();
         let event_json = serde_json::to_string(event).map_err(|error| {
             RuntimeError::with_kind(
                 RuntimeFailureKind::InvalidOutput,
@@ -262,12 +272,17 @@ impl ExtensionRuntime for WasmRuntime {
                 "on-event output exceeds the configured byte limit",
             ));
         }
-        serde_json::from_str(&output).map_err(|error| {
+        let result = serde_json::from_str(&output).map_err(|error| {
             RuntimeError::with_kind(
                 RuntimeFailureKind::InvalidOutput,
                 format!("on-event returned invalid effect JSON: {error}"),
             )
-        })
+        });
+        span.record(
+            "outcome",
+            if result.is_ok() { "success" } else { "failure" },
+        );
+        result
     }
 
     fn view(
@@ -276,6 +291,16 @@ impl ExtensionRuntime for WasmRuntime {
         contribution_id: &str,
         budget: RuntimeBudget,
     ) -> Result<Option<ViewTree>, RuntimeError> {
+        let span = tracing::info_span!(
+            target: "shilpo_profile",
+            "extension_wasm_call",
+            extension_id = %extension_id,
+            operation = "view",
+            fuel = budget.fuel,
+            memory_limit = budget.max_memory_bytes,
+            outcome = tracing::field::Empty,
+        );
+        let _enter = span.enter();
         let instance = self.instance_mut(extension_id)?;
         Self::prepare_call(instance, budget)?;
         let output = instance
@@ -289,12 +314,17 @@ impl ExtensionRuntime for WasmRuntime {
                 "view output exceeds the configured byte limit",
             ));
         }
-        serde_json::from_str(&output).map_err(|error| {
+        let result = serde_json::from_str(&output).map_err(|error| {
             RuntimeError::with_kind(
                 RuntimeFailureKind::InvalidOutput,
                 format!("view returned invalid JSON: {error}"),
             )
-        })
+        });
+        span.record(
+            "outcome",
+            if result.is_ok() { "success" } else { "failure" },
+        );
+        result
     }
 }
 

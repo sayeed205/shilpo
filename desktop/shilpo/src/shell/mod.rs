@@ -30,7 +30,7 @@ pub use overview::WorkspaceOverview;
 pub use runtime::ShellRuntime;
 
 pub fn run_daemon() {
-    init_tracing();
+    let _obs_guard = init_tracing();
 
     let shell_bus = futures_lite::future::block_on(async {
         use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
@@ -190,17 +190,11 @@ fn schedule_bar_retry(cx: &gpui::App) {
     .detach();
 }
 
-fn init_tracing() {
-    let default_filter = "warn,shilpo_shell=info,shilpo_services=info";
-    let filter = std::env::var("RUST_LOG")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .map(|value| tracing_subscriber::EnvFilter::builder().parse_lossy(value))
-        .unwrap_or_else(|| tracing_subscriber::EnvFilter::builder().parse_lossy(default_filter));
-
-    let _ = tracing_subscriber::fmt()
-        .compact()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .try_init();
+fn init_tracing() -> Option<shilpo_observability::ObservabilityGuard> {
+    shilpo_observability::init(
+        shilpo_observability::ProcessRole::Shell,
+        "warn,shilpo_shell=info,shilpo_services=info",
+    )
+    .map_err(|e| eprintln!("observability warning: {e}"))
+    .ok()
 }

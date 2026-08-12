@@ -4,8 +4,8 @@ use shilpo::cli::adapters::{
 };
 use shilpo::cli::args::{
     BrightnessCommands, CaptureAction, Cli, Commands, ConfigCommands, ExtCommands, ModeValue,
-    ShellCommands, ThemeCommands, ThemeModeAction, ThemeSeedAction, ThemeWallpaperAction,
-    VisibilityAction, WindowCommands, WorkspaceCommands,
+    ProfileCommands, ShellCommands, ThemeCommands, ThemeModeAction, ThemeSeedAction,
+    ThemeWallpaperAction, VisibilityAction, WindowCommands, WorkspaceCommands,
 };
 use shilpo::cli::output::{CliOutput, EXIT_FAILURE, EXIT_INVALID_ARGS, EXIT_SUCCESS};
 use shilpo::cli::parse_duration;
@@ -97,10 +97,22 @@ async fn main() {
             std::process::exit(EXIT_SUCCESS);
         }
         Commands::Settings => {
+            let _obs_guard = shilpo_observability::init(
+                shilpo_observability::ProcessRole::Settings,
+                "warn,shilpo=info",
+            )
+            .map_err(|e| eprintln!("observability warning: {e}"))
+            .ok();
             shilpo::settings::run_settings().await;
             std::process::exit(EXIT_SUCCESS);
         }
         Commands::ExtensionHost => {
+            let _obs_guard = shilpo_observability::init(
+                shilpo_observability::ProcessRole::ExtensionHost,
+                "warn,shilpo_ext_runtime=info",
+            )
+            .map_err(|e| eprintln!("observability warning: {e}"))
+            .ok();
             shilpo_ext_runtime::run_extension_host();
             std::process::exit(EXIT_SUCCESS);
         }
@@ -616,31 +628,137 @@ async fn main() {
                 }
             }
         },
-        Commands::Doctor { fix, first_login } => {
-            let doctor = DoctorChecker::new();
-            let (items, has_fail) = if first_login {
-                doctor.run_first_login_report(fix)
+        Commands::Doctor {
+            fix,
+            first_login,
+            telemetry,
+        } => {
+            if telemetry {
+                if fix || first_login {
+                    let code = output.error(
+                        "doctor.telemetry",
+                        "usage.invalid_arguments",
+                        "cannot combine --telemetry with --fix or --first-login",
+                        None,
+                        Vec::new(),
+                        EXIT_INVALID_ARGS,
+                    );
+                    std::process::exit(code);
+                }
+                let profile_dir = match shilpo_observability::resolve_profile_dir() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let code = output.error(
+                            "doctor.telemetry",
+                            "doctor.telemetry.unavailable",
+                            &e.to_string(),
+                            None,
+                            Vec::new(),
+                            EXIT_FAILURE,
+                        );
+                        std::process::exit(code);
+                    }
+                };
+                match shilpo_observability::summarize_profiles(&profile_dir) {
+                    Ok(summary) => {
+                        let human_msg = format!(
+                            "Profile Directory: {}\nEnabled: {}\nCompleted Traces: {} ({} bytes)\nIncomplete Traces: {} ({} bytes)",
+                            summary.profile_dir.display(),
+                            summary.profile_enabled,
+                            summary.completed_count,
+                            summary.completed_bytes,
+                            summary.incomplete_count,
+                            summary.incomplete_bytes,
+                        );
+                        output.success(
+                            "doctor.telemetry",
+                            &summary,
+                            Some(&human_msg),
+                            summary.warnings.clone(),
+                        )
+                    }
+                    Err(err) => {
+                        let code = output.error(
+                            "doctor.telemetry",
+                            "doctor.telemetry.unavailable",
+                            &err,
+                            None,
+                            Vec::new(),
+                            EXIT_FAILURE,
+                        );
+                        std::process::exit(code);
+                    }
+                }
             } else {
-                let items = doctor.run_diagnostics(fix);
-                let fail = items
-                    .iter()
-                    .any(|i| i.status == adapters::doctor::DiagnosticStatus::Fail);
-                (items, fail)
-            };
-            let report_str = doctor.format_report(&items);
-            if has_fail {
-                output.error(
-                    "doctor",
-                    "diagnostics_failed",
-                    &report_str,
-                    Some(serde_json::to_value(&items).unwrap_or_default()),
-                    Vec::new(),
-                    EXIT_FAILURE,
-                )
-            } else {
-                output.success("doctor", &items, Some(&report_str), Vec::new())
+                let doctor = DoctorChecker::new();
+                let (items, has_fail) = if first_login {
+                    doctor.run_first_login_report(fix)
+                } else {
+                    let items = doctor.run_diagnostics(fix);
+                    let fail = items
+                        .iter()
+                        .any(|i| i.status == adapters::doctor::DiagnosticStatus::Fail);
+                    (items, fail)
+                };
+                let report_str = doctor.format_report(&items);
+                if has_fail {
+                    output.error(
+                        "doctor",
+                        "diagnostics_failed",
+                        &report_str,
+                        Some(serde_json::to_value(&items).unwrap_or_default()),
+                        Vec::new(),
+                        EXIT_FAILURE,
+                    )
+                } else {
+                    output.success("doctor", &items, Some(&report_str), Vec::new())
+                }
             }
         }
+        Commands::Profile { command } => match command {
+            ProfileCommands::Export {
+                output: out_path,
+                source,
+            } => {
+                let profile_dir = match shilpo_observability::resolve_profile_dir() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let code = output.error(
+                            "profile.export",
+                            "profile.export.dir_unavailable",
+                            &e.to_string(),
+                            None,
+                            Vec::new(),
+                            EXIT_FAILURE,
+                        );
+                        std::process::exit(code);
+                    }
+                };
+                match shilpo_observability::export_trace(source.as_deref(), &out_path, &profile_dir)
+                {
+                    Ok(report) => {
+                        let human_msg = format!(
+                            "Exported {} trace ({} bytes) to {}",
+                            report.process_role,
+                            report.bytes,
+                            report.output.display()
+                        );
+                        output.success("profile.export", &report, Some(&human_msg), Vec::new())
+                    }
+                    Err(err) => {
+                        let code = output.error(
+                            "profile.export",
+                            err.stable_code(),
+                            &err.to_string(),
+                            None,
+                            Vec::new(),
+                            EXIT_FAILURE,
+                        );
+                        std::process::exit(code);
+                    }
+                }
+            }
+        },
         Commands::Ext { command } => {
             let ext = ExtAdapter::new();
             let op = match command {

@@ -919,6 +919,15 @@ impl CompositorCommandBroker {
         command: CompositorCommand,
         policy: MailboxPolicy,
     ) -> Result<CommandTicket, CommandOutcome> {
+        let operation = format!("{:?}", std::mem::discriminant(&command));
+        let _span = tracing::info_span!(
+            target: "shilpo_profile",
+            "service_command",
+            domain = "compositor",
+            operation = %operation,
+            outcome = tracing::field::Empty,
+        );
+        let _enter = _span.enter();
         let mut state = self.inner.state.lock().unwrap();
         let current_epoch = self.inner.epoch.load(Ordering::Acquire);
         let current_gen = self.inner.installed_generation.load(Ordering::Acquire);

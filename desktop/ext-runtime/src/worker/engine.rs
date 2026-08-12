@@ -303,6 +303,17 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
     }
 
     pub fn handle_command(&mut self, command: ExtensionCommand) -> Option<ExtensionUpdate> {
+        let command_kind = format!("{:?}", std::mem::discriminant(&command));
+        let _span = tracing::info_span!(
+            target: "shilpo_profile",
+            "extension_command",
+            command = %command_kind,
+            host_generation = tracing::field::Empty,
+            engine_generation = self.generation.0,
+            outcome = tracing::field::Empty,
+        );
+        let _enter = _span.enter();
+        _span.record("outcome", "accepted");
         match command {
             ExtensionCommand::Lifecycle { expected, event } => {
                 if expected != self.generation {

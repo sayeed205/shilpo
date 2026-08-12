@@ -81,6 +81,14 @@ pub enum Commands {
         /// Run as first-login one-shot task: write reports, send desktop notification, mark complete
         #[arg(long)]
         first_login: bool,
+        /// Read-only local profiling summary inventory
+        #[arg(long)]
+        telemetry: bool,
+    },
+    /// Profile trace discovery and export
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommands,
     },
     /// Shell extension development, packaging, and catalog management
     Ext {
@@ -330,4 +338,18 @@ pub enum ExtCommands {
     },
     /// Generate ed25519 signing keypair
     Keygen { output: PathBuf },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ProfileCommands {
+    /// Export a completed profile trace file
+    Export {
+        /// Destination path for exported Chrome Trace JSON
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Optional path to completed trace file (discovers newest completed trace if omitted)
+        #[arg(short, long)]
+        source: Option<PathBuf>,
+    },
 }

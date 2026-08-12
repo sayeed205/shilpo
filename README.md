@@ -75,6 +75,20 @@ just check
 
 > **Note**: `just fmt` (and consequently `just check`) modifies Rust source files in place to enforce workspace formatting rules.
 
+### Opt-in profiling
+
+Profile a durable role locally by setting `SHILPO_PROFILE=1` before starting or restarting it, exercise the workload, then
+stop or restart the role so its completed trace is finalized. Inspect the local inventory and export a trace with:
+
+```bash
+SHILPO_PROFILE=1 shilpo shell restart
+shilpo doctor --telemetry
+shilpo profile export --output trace.json
+```
+
+Open the exported JSON in Perfetto or Chrome Trace. Active `.json.part` files are incomplete; runtime rotation belongs to
+the later runtime-control work.
+
 
 ---
 

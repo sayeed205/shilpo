@@ -146,6 +146,23 @@ pub fn execute_reload_transaction(
     trigger: ReloadTrigger,
 ) {
     let start_time = Instant::now();
+    let (trigger_str, burst_size) = match trigger {
+        ReloadTrigger::Manual => ("manual", 0),
+        ReloadTrigger::Watcher { burst_size } => ("watcher", burst_size),
+    };
+    let reload_span = tracing::info_span!(
+        target: "shilpo_profile",
+        "config_reload",
+        trigger = trigger_str,
+        burst_size,
+        outcome = tracing::field::Empty,
+        diagnostic_count = tracing::field::Empty,
+        theme_changed = tracing::field::Empty,
+        bar_changed = tracing::field::Empty,
+        desktop_changed = tracing::field::Empty,
+        extensions_changed = tracing::field::Empty,
+    );
+    let _enter = reload_span.enter();
 
     // 1. ADR-0010 read-only primary status guard
     let migration = crate::config::MigrationService::for_primary_path(config_path);
@@ -158,6 +175,7 @@ pub fn execute_reload_transaction(
     };
 
     if let Some(reason) = block_reason {
+        reload_span.record("outcome", "migration_blocked");
         tracing::warn!(
             trigger = %trigger,
             error = %reason,
@@ -179,8 +197,15 @@ pub fn execute_reload_transaction(
 
     let elapsed = start_time.elapsed();
 
+    reload_span.record("diagnostic_count", report.diagnostics.len());
+    reload_span.record("theme_changed", changeset.theme);
+    reload_span.record("bar_changed", changeset.bar);
+    reload_span.record("desktop_changed", changeset.desktop);
+    reload_span.record("extensions_changed", changeset.extensions);
+
     // 4. Handle resolution outcome
     if report.recovery_scope == Some(crate::config::RecoveryScope::RejectCandidate) {
+        reload_span.record("outcome", "rejected");
         let msg = if report.diagnostics.is_empty() {
             "Configuration reload rejected".to_string()
         } else {
@@ -206,6 +231,7 @@ pub fn execute_reload_transaction(
             changeset: crate::config::ConfigChangeSet::default(),
         }));
     } else if changeset.is_empty() {
+        reload_span.record("outcome", "no_op");
         // Successful candidate is byte/config equivalent; do not send redundant Loaded update
         tracing::debug!(
             trigger = %trigger,
@@ -215,6 +241,7 @@ pub fn execute_reload_transaction(
             "configuration reload completed with no changes (no-op)"
         );
     } else {
+        reload_span.record("outcome", "applied");
         // Non-empty successful change set
         tracing::info!(
             trigger = %trigger,

@@ -10,6 +10,7 @@ ocr = ["dep:tesseract", "dep:leptonica-sys"]
 
 [dependencies]
 shilpo-device.workspace = true
+shilpo-observability.workspace = true
 gpui.workspace = true
 niri-ipc.workspace = true
 tokio = { workspace = true, features = ["sync"] }
