@@ -4,7 +4,11 @@ use shilpo_services::DeviceClient;
 pub use shilpo_services::DeviceCommand;
 use shilpo_services::{self};
 use shilpo_services::{AudioInfo, BatteryInfo, BrightnessInfo, MediaInfo, NetworkInfo};
-use std::{path::PathBuf, sync::mpsc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::mpsc,
+    time::{Duration, Instant},
+};
 
 pub type UpdateSender = mpsc::SyncSender<WorkerUpdate>;
 pub type UpdateReceiver = mpsc::Receiver<WorkerUpdate>;
@@ -89,8 +93,14 @@ pub enum WorkerCommand {
 
 #[derive(Debug, Clone)]
 pub enum ConfigUpdate {
-    Loaded(Box<ShellConfig>),
-    Failed(String),
+    Loaded {
+        config: Box<ShellConfig>,
+        changeset: crate::config::ConfigChangeSet,
+    },
+    Failed {
+        error: String,
+        changeset: crate::config::ConfigChangeSet,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -111,6 +121,116 @@ pub enum WorkerUpdate {
         reason: String,
     },
     CommandOutcome(shilpo_services::device_protocol::CommandOutcome),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReloadTrigger {
+    Manual,
+    Watcher { burst_size: usize },
+}
+
+impl std::fmt::Display for ReloadTrigger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Manual => write!(f, "manual"),
+            Self::Watcher { burst_size } => write!(f, "watcher (burst_size: {burst_size})"),
+        }
+    }
+}
+
+pub fn execute_reload_transaction(
+    config_path: &Path,
+    resolver: &crate::config::ConfigResolver,
+    committed_snapshot: &mut crate::config::ConfigSnapshot,
+    updates: &UpdateSender,
+    trigger: ReloadTrigger,
+) {
+    let start_time = Instant::now();
+
+    // 1. ADR-0010 read-only primary status guard
+    let migration = crate::config::MigrationService::for_primary_path(config_path);
+    let block_reason = match migration.primary_status() {
+        Ok(status) => crate::config::reload_block_reason(&status, config_path),
+        Err(error) => Some(format!(
+            "{}: {error}; run 'shilpo config migrate'",
+            config_path.display()
+        )),
+    };
+
+    if let Some(reason) = block_reason {
+        tracing::warn!(
+            trigger = %trigger,
+            error = %reason,
+            elapsed = ?start_time.elapsed(),
+            "reload blocked by primary status / migration guard"
+        );
+        let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+            error: reason,
+            changeset: crate::config::ConfigChangeSet::default(),
+        }));
+        return;
+    }
+
+    // 2. Perform resolution
+    let (new_snapshot, changeset, report) = resolver.resolve_reload(committed_snapshot);
+
+    // 3. Log unknown key warnings
+    crate::config::unknown_keys::log_unknown_key_warnings(&report.unknown_keys);
+
+    let elapsed = start_time.elapsed();
+
+    // 4. Handle resolution outcome
+    if report.recovery_scope == Some(crate::config::RecoveryScope::RejectCandidate) {
+        let msg = if report.diagnostics.is_empty() {
+            "Configuration reload rejected".to_string()
+        } else {
+            report
+                .diagnostics
+                .iter()
+                .map(|d| format!("{}: {}", d.path, d.message))
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+
+        tracing::error!(
+            trigger = %trigger,
+            recovery_scope = ?report.recovery_scope,
+            diagnostic_count = report.diagnostics.len(),
+            elapsed = ?elapsed,
+            error = %msg,
+            "configuration reload failed (candidate rejected)"
+        );
+
+        let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+            error: msg,
+            changeset: crate::config::ConfigChangeSet::default(),
+        }));
+    } else if changeset.is_empty() {
+        // Successful candidate is byte/config equivalent; do not send redundant Loaded update
+        tracing::debug!(
+            trigger = %trigger,
+            recovery_scope = ?report.recovery_scope,
+            diagnostic_count = report.diagnostics.len(),
+            elapsed = ?elapsed,
+            "configuration reload completed with no changes (no-op)"
+        );
+    } else {
+        // Non-empty successful change set
+        tracing::info!(
+            trigger = %trigger,
+            changed_components = ?changeset,
+            recovery_scope = ?report.recovery_scope,
+            diagnostic_count = report.diagnostics.len(),
+            elapsed = ?elapsed,
+            "configuration reloaded successfully"
+        );
+
+        *committed_snapshot = new_snapshot;
+        let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Loaded {
+            config: Box::new(committed_snapshot.config.clone()),
+            changeset,
+        }));
+    }
 }
 
 pub fn backoff_delay(attempt: u32) -> Duration {
@@ -162,57 +282,82 @@ async fn run(
     let mut committed_snapshot = match resolver.resolve_initial() {
         Ok((snapshot, report)) => {
             crate::config::unknown_keys::log_unknown_key_warnings(&report.unknown_keys);
-            let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Loaded(Box::new(
-                snapshot.config.clone(),
-            ))));
+            let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Loaded {
+                config: Box::new(snapshot.config.clone()),
+                changeset: crate::config::ConfigChangeSet::all(),
+            }));
             snapshot
         }
         Err(e) => {
-            let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Failed(e.to_string())));
+            let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+                error: e.to_string(),
+                changeset: crate::config::ConfigChangeSet::default(),
+            }));
             crate::config::ConfigSnapshot::default()
         }
     };
+
+    let config_dir = config_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".config/shilpo"));
+
+    let (watch_tx, watch_rx) = mpsc::sync_channel(32);
+    let mut watcher = match crate::config::watcher::ConfigWatcher::new(config_dir.clone(), watch_tx)
+    {
+        Ok(w) => Some(w),
+        Err(err) => {
+            tracing::error!(error = %err, path = ?config_dir, "failed to initialize configuration watcher");
+            let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+                error: format!("Configuration watcher initialization failed: {err}"),
+                changeset: crate::config::ConfigChangeSet::default(),
+            }));
+            None
+        }
+    };
+
+    let mut debounce =
+        crate::config::watcher::DebounceStateMachine::new(Duration::from_millis(100));
     let mut versions = std::collections::HashMap::new();
+
     loop {
+        let now = Instant::now();
+        let mut event_occurred = false;
+        if let Some(w) = watcher.as_mut() {
+            if w.take_pending() {
+                event_occurred = true;
+            }
+            while let Ok(event) = watch_rx.try_recv() {
+                match event {
+                    crate::config::watcher::ConfigWatchEvent::FilesystemChanged { paths } => {
+                        event_occurred = true;
+                        tracing::debug!(?paths, "configuration source changed");
+                    }
+                    crate::config::watcher::ConfigWatchEvent::RuntimeError(error) => {
+                        let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+                            error: format!("Configuration watcher error: {error}"),
+                            changeset: crate::config::ConfigChangeSet::default(),
+                        }));
+                    }
+                }
+            }
+            if event_occurred {
+                w.refresh_watches();
+                debounce.on_event(now);
+            }
+        }
+
         while let Ok(command) = commands.try_recv() {
             match command {
                 WorkerCommand::ReloadConfig => {
-                    // Manual reload is strictly read-only: a primary that
-                    // requires migration (or carries an invalid/future
-                    // version) blocks the reload. The previous committed
-                    // snapshot is retained and the user is directed to
-                    // `shilpo config migrate`.
-                    let migration = crate::config::MigrationService::for_primary_path(&config_path);
-                    let block_reason = match migration.primary_status() {
-                        Ok(status) => crate::config::reload_block_reason(&status, &config_path),
-                        Err(error) => Some(format!(
-                            "{}: {error}; run 'shilpo config migrate'",
-                            config_path.display()
-                        )),
-                    };
-                    if let Some(reason) = block_reason {
-                        let _ =
-                            updates.try_send(WorkerUpdate::Config(ConfigUpdate::Failed(reason)));
-                        continue;
-                    }
-                    let (new_snapshot, _changeset, report) =
-                        resolver.resolve_reload(&committed_snapshot);
-                    crate::config::unknown_keys::log_unknown_key_warnings(&report.unknown_keys);
-                    if report.recovery_scope == Some(crate::config::RecoveryScope::RejectCandidate)
-                    {
-                        let msg = report
-                            .diagnostics
-                            .iter()
-                            .map(|d| format!("{}: {}", d.path, d.message))
-                            .collect::<Vec<_>>()
-                            .join("; ");
-                        let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Failed(msg)));
-                    } else {
-                        committed_snapshot = new_snapshot;
-                        let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Loaded(
-                            Box::new(committed_snapshot.config.clone()),
-                        )));
-                    }
+                    execute_reload_transaction(
+                        &config_path,
+                        &resolver,
+                        &mut committed_snapshot,
+                        &updates,
+                        ReloadTrigger::Manual,
+                    );
+                    debounce.on_reload_complete(Instant::now());
                 }
                 WorkerCommand::Device(command) => {
                     let client = client.clone();
@@ -231,8 +376,23 @@ async fn run(
                 }
             }
         }
+
+        let now = Instant::now();
+        if let crate::config::watcher::DebounceAction::TriggerReload { burst_size } =
+            debounce.tick(now)
+        {
+            execute_reload_transaction(
+                &config_path,
+                &resolver,
+                &mut committed_snapshot,
+                &updates,
+                ReloadTrigger::Watcher { burst_size },
+            );
+            debounce.on_reload_complete(Instant::now());
+        }
+
         emit_client_updates(&updates, &client, &mut versions);
-        executor.timer(Duration::from_millis(100)).await;
+        executor.timer(Duration::from_millis(25)).await;
     }
 }
 
@@ -447,9 +607,12 @@ fn network_info(p: shilpo_services::NetworkPayload) -> NetworkInfo {
         }),
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
     #[test]
     fn device_snapshot_applies_updates_correctly() {
         let mut snapshot = DeviceSnapshot::default();
@@ -481,8 +644,96 @@ mod tests {
         assert!(snapshot.battery.is_present);
         assert!(!snapshot.battery.available);
     }
+
     #[test]
     fn backoff_caps_at_thirty_seconds() {
         assert_eq!(backoff_delay(99), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn reload_transaction_publishes_changeset_and_retains_snapshot_on_failure() {
+        let temp = TempDir::new().unwrap();
+        let primary = temp.path().join("config.toml");
+        std::fs::write(&primary, "version = 1\n[theme]\nfont_family = \"Inter\"\n").unwrap();
+
+        let resolver = crate::config::ConfigResolver::from_primary_path(&primary);
+        let (mut snapshot, _) = resolver.resolve_initial().unwrap();
+        let (updates_tx, updates_rx) = mpsc::sync_channel(16);
+
+        // 1. Successful change
+        std::fs::write(&primary, "version = 1\n[theme]\nfont_family = \"Roboto\"\n").unwrap();
+        execute_reload_transaction(
+            &primary,
+            &resolver,
+            &mut snapshot,
+            &updates_tx,
+            ReloadTrigger::Manual,
+        );
+
+        assert_eq!(snapshot.config.theme.font_family, "Roboto");
+        let update = updates_rx.recv().unwrap();
+        if let WorkerUpdate::Config(ConfigUpdate::Loaded { config, changeset }) = update {
+            assert_eq!(config.theme.font_family, "Roboto");
+            assert!(changeset.theme);
+            assert!(!changeset.bar);
+        } else {
+            panic!("expected ConfigUpdate::Loaded");
+        }
+
+        // 2. Unchanged reload -> produces no Loaded update
+        execute_reload_transaction(
+            &primary,
+            &resolver,
+            &mut snapshot,
+            &updates_tx,
+            ReloadTrigger::Watcher { burst_size: 1 },
+        );
+        assert!(updates_rx.try_recv().is_err());
+
+        // 3. Failed syntax edit -> retains snapshot and emits ConfigUpdate::Failed
+        std::fs::write(&primary, "invalid syntax {{{\n").unwrap();
+        execute_reload_transaction(
+            &primary,
+            &resolver,
+            &mut snapshot,
+            &updates_tx,
+            ReloadTrigger::Watcher { burst_size: 2 },
+        );
+        assert_eq!(snapshot.config.theme.font_family, "Roboto");
+        let update = updates_rx.recv().unwrap();
+        if let WorkerUpdate::Config(ConfigUpdate::Failed {
+            error: msg,
+            changeset,
+        }) = update
+        {
+            assert!(changeset.is_empty());
+            assert!(
+                msg.contains("syntax") || msg.contains("invalid") || msg.contains("config.toml")
+            );
+        } else {
+            panic!("expected ConfigUpdate::Failed");
+        }
+
+        // 4. Old/invalid version -> blocks reload with migrate diagnostic
+        std::fs::write(&primary, "version = 999\n").unwrap();
+        execute_reload_transaction(
+            &primary,
+            &resolver,
+            &mut snapshot,
+            &updates_tx,
+            ReloadTrigger::Manual,
+        );
+        assert_eq!(snapshot.config.theme.font_family, "Roboto");
+        let update = updates_rx.recv().unwrap();
+        if let WorkerUpdate::Config(ConfigUpdate::Failed {
+            error: msg,
+            changeset,
+        }) = update
+        {
+            assert!(changeset.is_empty());
+            assert!(msg.contains("shilpo config migrate"));
+        } else {
+            panic!("expected ConfigUpdate::Failed for version 999");
+        }
     }
 }

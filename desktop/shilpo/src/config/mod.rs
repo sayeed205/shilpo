@@ -8,6 +8,7 @@ pub mod source;
 pub mod types;
 pub mod unknown_keys;
 pub mod validation;
+pub mod watcher;
 
 pub use changeset::ConfigChangeSet;
 pub use migration::{
@@ -22,6 +23,10 @@ pub use source::{ConfigSource, SourceLocation, discover_sources};
 pub use types::*;
 pub use unknown_keys::UnknownConfigKey;
 pub use validation::{RecoveryScope, apply_scoped_recovery, classify_diagnostic};
+pub use watcher::{
+    ClassifiedPath, ConfigWatchError, ConfigWatchEvent, ConfigWatcher, DebounceAction,
+    DebounceState, DebounceStateMachine, classify_path, is_relevant_path,
+};
 
 #[cfg(test)]
 mod tests {
