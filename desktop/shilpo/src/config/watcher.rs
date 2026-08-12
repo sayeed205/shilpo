@@ -72,12 +72,6 @@ fn is_valid_toml_fragment(filename: &str) -> bool {
     if filename.starts_with('.') {
         return false;
     }
-    if filename.contains(".bak") {
-        return false;
-    }
-    if filename.contains(".tmp") {
-        return false;
-    }
     if filename.ends_with('~') || filename.ends_with(".swp") {
         return false;
     }
@@ -186,9 +180,10 @@ impl DebounceStateMachine {
 }
 
 /// Event emitted by the filesystem watcher channel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigWatchEvent {
-    FilesystemChanged,
+    FilesystemChanged { paths: Vec<PathBuf> },
+    RuntimeError(String),
 }
 
 /// Structured error for configuration file watcher operations.
@@ -240,14 +235,16 @@ impl ConfigWatcher {
                         .any(|p| is_relevant_path(&dir_for_callback, p));
                     if is_relevant
                         && event_tx
-                            .try_send(ConfigWatchEvent::FilesystemChanged)
+                            .try_send(ConfigWatchEvent::FilesystemChanged {
+                                paths: event.paths.clone(),
+                            })
                             .is_err()
                     {
                         pending_flag_cb.store(true, Ordering::SeqCst);
                     }
                 }
                 Err(err) => {
-                    tracing::warn!(error = %err, "filesystem watcher reported runtime error");
+                    let _ = event_tx.try_send(ConfigWatchEvent::RuntimeError(err.to_string()));
                 }
             },
             notify::Config::default(),
@@ -266,8 +263,10 @@ impl ConfigWatcher {
             match watcher.watch(&conf_d, RecursiveMode::NonRecursive) {
                 Ok(()) => true,
                 Err(err) => {
-                    tracing::warn!(error = %err, path = ?conf_d, "failed to watch conf.d directory");
-                    false
+                    return Err(ConfigWatchError::WatchPath {
+                        path: conf_d,
+                        source: err,
+                    });
                 }
             }
         } else {
@@ -348,6 +347,10 @@ mod tests {
         assert_eq!(
             classify_path(dir, &dir.join("conf.d/01-bar.toml.bak")),
             ClassifiedPath::Irrelevant
+        );
+        assert_eq!(
+            classify_path(dir, &dir.join("conf.d/foo.bak.toml")),
+            ClassifiedPath::Fragment
         );
 
         // Migration temp files -> Ignored

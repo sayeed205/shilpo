@@ -97,7 +97,10 @@ pub enum ConfigUpdate {
         config: Box<ShellConfig>,
         changeset: crate::config::ConfigChangeSet,
     },
-    Failed(String),
+    Failed {
+        error: String,
+        changeset: crate::config::ConfigChangeSet,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -161,7 +164,10 @@ pub fn execute_reload_transaction(
             elapsed = ?start_time.elapsed(),
             "reload blocked by primary status / migration guard"
         );
-        let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Failed(reason)));
+        let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+            error: reason,
+            changeset: crate::config::ConfigChangeSet::default(),
+        }));
         return;
     }
 
@@ -195,7 +201,10 @@ pub fn execute_reload_transaction(
             "configuration reload failed (candidate rejected)"
         );
 
-        let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Failed(msg)));
+        let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+            error: msg,
+            changeset: crate::config::ConfigChangeSet::default(),
+        }));
     } else if changeset.is_empty() {
         // Successful candidate is byte/config equivalent; do not send redundant Loaded update
         tracing::debug!(
@@ -217,7 +226,7 @@ pub fn execute_reload_transaction(
         );
 
         *committed_snapshot = new_snapshot;
-        let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Loaded {
+        let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Loaded {
             config: Box::new(committed_snapshot.config.clone()),
             changeset,
         }));
@@ -280,7 +289,10 @@ async fn run(
             snapshot
         }
         Err(e) => {
-            let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Failed(e.to_string())));
+            let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+                error: e.to_string(),
+                changeset: crate::config::ConfigChangeSet::default(),
+            }));
             crate::config::ConfigSnapshot::default()
         }
     };
@@ -296,10 +308,10 @@ async fn run(
         Ok(w) => Some(w),
         Err(err) => {
             tracing::error!(error = %err, path = ?config_dir, "failed to initialize configuration watcher");
-            let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Failed(format!(
-                "Configuration watcher initialization failed: {}",
-                err
-            ))));
+            let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+                error: format!("Configuration watcher initialization failed: {err}"),
+                changeset: crate::config::ConfigChangeSet::default(),
+            }));
             None
         }
     };
@@ -315,8 +327,19 @@ async fn run(
             if w.take_pending() {
                 event_occurred = true;
             }
-            while watch_rx.try_recv().is_ok() {
-                event_occurred = true;
+            while let Ok(event) = watch_rx.try_recv() {
+                match event {
+                    crate::config::watcher::ConfigWatchEvent::FilesystemChanged { paths } => {
+                        event_occurred = true;
+                        tracing::debug!(?paths, "configuration source changed");
+                    }
+                    crate::config::watcher::ConfigWatchEvent::RuntimeError(error) => {
+                        let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+                            error: format!("Configuration watcher error: {error}"),
+                            changeset: crate::config::ConfigChangeSet::default(),
+                        }));
+                    }
+                }
             }
             if event_occurred {
                 w.refresh_watches();
@@ -678,7 +701,12 @@ mod tests {
         );
         assert_eq!(snapshot.config.theme.font_family, "Roboto");
         let update = updates_rx.recv().unwrap();
-        if let WorkerUpdate::Config(ConfigUpdate::Failed(msg)) = update {
+        if let WorkerUpdate::Config(ConfigUpdate::Failed {
+            error: msg,
+            changeset,
+        }) = update
+        {
+            assert!(changeset.is_empty());
             assert!(
                 msg.contains("syntax") || msg.contains("invalid") || msg.contains("config.toml")
             );
@@ -697,7 +725,12 @@ mod tests {
         );
         assert_eq!(snapshot.config.theme.font_family, "Roboto");
         let update = updates_rx.recv().unwrap();
-        if let WorkerUpdate::Config(ConfigUpdate::Failed(msg)) = update {
+        if let WorkerUpdate::Config(ConfigUpdate::Failed {
+            error: msg,
+            changeset,
+        }) = update
+        {
+            assert!(changeset.is_empty());
             assert!(msg.contains("shilpo config migrate"));
         } else {
             panic!("expected ConfigUpdate::Failed for version 999");

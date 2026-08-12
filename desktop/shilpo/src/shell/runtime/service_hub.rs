@@ -266,11 +266,15 @@ impl ServiceHub {
                 }
                 match upd {
                     crate::bar::service_worker::WorkerUpdate::Config(
-                        crate::bar::service_worker::ConfigUpdate::Loaded { config, .. },
+                        crate::bar::service_worker::ConfigUpdate::Loaded { config, changeset },
                     ) => {
                         ShellRuntime::set_active_config(cx, config);
-                        ShellSurfaces::request(cx, super::SurfaceRequest::SyncDisplays);
-                        ShellSurfaces::reconcile_bar_extension_instances(cx);
+                        if changeset.outputs || changeset.desktop {
+                            ShellSurfaces::request(cx, super::SurfaceRequest::SyncDisplays);
+                        }
+                        if changeset.extensions {
+                            ShellSurfaces::reconcile_bar_extension_instances(cx);
+                        }
                     }
                     crate::bar::service_worker::WorkerUpdate::Battery(info) => {
                         if info.available

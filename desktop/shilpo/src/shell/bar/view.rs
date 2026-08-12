@@ -331,14 +331,18 @@ impl BarView {
                 self.media_info = Some(value.clone());
                 changed = true;
             }
-            WorkerUpdate::Config(ConfigUpdate::Loaded { config, .. }) => {
+            WorkerUpdate::Config(ConfigUpdate::Loaded { config, changeset }) => {
                 self.config = (**config).clone();
                 self.last_error = None;
-                effects.push(BarViewEffect::ApplyConfigTheme(self.config.clone()));
-                self.update_datetime();
+                if changeset.theme {
+                    effects.push(BarViewEffect::ApplyConfigTheme(self.config.clone()));
+                }
+                if changeset.clock_format || changeset.temperature_unit || changeset.locale {
+                    self.update_datetime();
+                }
                 changed = true;
             }
-            WorkerUpdate::Config(ConfigUpdate::Failed(error)) => {
+            WorkerUpdate::Config(ConfigUpdate::Failed { error, .. }) => {
                 tracing::error!(error = %error, "config reload failed");
                 self.last_error = Some(error.clone());
                 effects.push(BarViewEffect::ShowNotificationToast(Notification::new(
@@ -1041,8 +1045,10 @@ mod bar_view_tests {
         let (mut view, _commands_rx) = test_view(ShellConfig::default());
         let err_msg = "Invalid TOML syntax".to_string();
 
-        let result = view
-            .compute_worker_update(&WorkerUpdate::Config(ConfigUpdate::Failed(err_msg.clone())));
+        let result = view.compute_worker_update(&WorkerUpdate::Config(ConfigUpdate::Failed {
+            error: err_msg.clone(),
+            changeset: crate::config::ConfigChangeSet::default(),
+        }));
         assert!(result.changed);
         assert_eq!(view.last_error, Some(err_msg.clone()));
         assert_eq!(result.effects.len(), 1);
