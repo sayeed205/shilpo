@@ -201,6 +201,31 @@ impl CommandTicket {
     pub fn is_completed(&self) -> bool {
         self.outcome.lock().unwrap().is_some()
     }
+
+    /// Claims a timeout terminal state if the owner has not completed first.
+    /// The resolver's single-assignment guard prevents a later worker result
+    /// from producing a second terminal classification.
+    pub fn wait_timeout(
+        &self,
+        timeout: std::time::Duration,
+        last_observed_version: DomainVersion,
+    ) -> CommandOutcome {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Some(outcome) = self.outcome() {
+                return outcome;
+            }
+            if std::time::Instant::now() >= deadline {
+                let mut guard = self.outcome.lock().unwrap();
+                return guard
+                    .get_or_insert_with(|| CommandOutcome::TimedOut {
+                        last_observed_version,
+                    })
+                    .clone();
+            }
+            std::thread::yield_now();
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
