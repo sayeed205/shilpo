@@ -8,6 +8,15 @@ use crate::config::{
     validation::{RecoveryScope, apply_scoped_recovery},
 };
 use std::path::{Path, PathBuf};
+use toml_edit::DocumentMut;
+
+/// A complete layered candidate: config, provenance, sources, unknown keys.
+type CandidateResult = (
+    ShellConfig,
+    ConfigProvenance,
+    Vec<ConfigSource>,
+    Vec<UnknownConfigKey>,
+);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConfigSnapshot {
@@ -61,23 +70,12 @@ impl ConfigResolver {
         }
     }
 
-    fn resolve_candidate(
-        &self,
-    ) -> Result<
-        (
-            ShellConfig,
-            ConfigProvenance,
-            Vec<ConfigSource>,
-            Vec<UnknownConfigKey>,
-        ),
-        ConfigError,
-    > {
-        let discovered = discover_sources(&self.config_dir, &self.primary_path);
+    fn resolve_candidate(&self) -> Result<CandidateResult, ConfigError> {
         let (mut acc_doc, mut provenance) = initial_merged_document();
         let mut sources_loaded = vec![ConfigSource::Defaults];
         let mut unknown_keys = Vec::new();
 
-        for disc in discovered {
+        for disc in discover_sources(&self.config_dir, &self.primary_path) {
             // Parse, scan for unknown keys (warnings only), and merge the
             // sanitized in-memory document. User files are never rewritten.
             let (mut doc, text) = read_source_document(&disc.path)?;
@@ -87,17 +85,70 @@ impl ConfigResolver {
             sources_loaded.push(disc.source);
         }
 
-        let merged_toml = acc_doc.to_string();
-        let candidate: ShellConfig =
-            toml::from_str(&merged_toml).map_err(|error| ConfigError::Parse {
-                diagnostic: ConfigDiagnostic {
-                    path: self.primary_path.display().to_string(),
-                    message: error.to_string(),
-                    span: error.span(),
-                },
-            })?;
-
+        let candidate = self.parse_merged(&acc_doc)?;
         Ok((candidate, provenance, sources_loaded, unknown_keys))
+    }
+
+    /// Resolve the layered candidate with an in-memory primary document
+    /// instead of the file on disk. Used by schema migration to validate a
+    /// migrated primary together with the current fragments and overrides
+    /// before any filesystem write.
+    pub fn resolve_candidate_with_primary(
+        &self,
+        primary_toml: &str,
+    ) -> Result<CandidateResult, ConfigError> {
+        let (mut acc_doc, mut provenance) = initial_merged_document();
+        let mut sources_loaded = vec![ConfigSource::Defaults];
+        let mut unknown_keys = Vec::new();
+        let primary_source = ConfigSource::Primary {
+            path: self.primary_path.clone(),
+        };
+
+        let mut primary_doc: DocumentMut =
+            primary_toml
+                .parse::<DocumentMut>()
+                .map_err(|error| ConfigError::Parse {
+                    diagnostic: ConfigDiagnostic {
+                        path: self.primary_path.display().to_string(),
+                        message: error.to_string(),
+                        span: error.span(),
+                    },
+                })?;
+        let mut warnings = sanitize_document(&mut primary_doc, &primary_source, primary_toml);
+        merge_document(
+            &mut acc_doc,
+            &mut provenance,
+            &primary_source,
+            &primary_doc,
+            primary_toml,
+        );
+        unknown_keys.append(&mut warnings);
+        sources_loaded.push(primary_source);
+
+        for disc in discover_sources(&self.config_dir, &self.primary_path) {
+            if matches!(disc.source, ConfigSource::Primary { .. }) {
+                continue;
+            }
+            let (mut doc, text) = read_source_document(&disc.path)?;
+            let mut warnings = sanitize_document(&mut doc, &disc.source, &text);
+            merge_document(&mut acc_doc, &mut provenance, &disc.source, &doc, &text);
+            unknown_keys.append(&mut warnings);
+            sources_loaded.push(disc.source);
+        }
+
+        let candidate = self.parse_merged(&acc_doc)?;
+        Ok((candidate, provenance, sources_loaded, unknown_keys))
+    }
+
+    fn parse_merged(&self, acc_doc: &DocumentMut) -> Result<ShellConfig, ConfigError> {
+        let merged_toml = acc_doc.to_string();
+        toml::from_str(&merged_toml).map_err(|error| ConfigError::Parse {
+            diagnostic: ConfigDiagnostic {
+                path: self.primary_path.display().to_string(),
+                message: error.to_string(),
+                span: error.span(),
+            },
+        })
     }
 
     pub fn resolve_initial(&self) -> Result<(ConfigSnapshot, ResolutionReport), ConfigError> {
