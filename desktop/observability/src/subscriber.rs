@@ -61,7 +61,12 @@ impl Drop for ObservabilityGuard {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.take() {
             drop(inner.flush_guard);
-            if let Err(error) = fs::rename(&inner.active_path, &inner.final_path) {
+            if inner.final_path.exists() {
+                eprintln!(
+                    "observability warning: refusing to overwrite existing trace '{}'",
+                    inner.final_path.display()
+                );
+            } else if let Err(error) = fs::rename(&inner.active_path, &inner.final_path) {
                 eprintln!(
                     "observability warning: failed to finalize trace '{}': {error}",
                     inner.active_path.display()
@@ -100,8 +105,15 @@ pub fn init(
         return Ok(ObservabilityGuard::disabled());
     }
 
-    let profile_dir = paths::resolve_profile_dir()?;
+    let profile_dir = match paths::resolve_profile_dir() {
+        Ok(path) => path,
+        Err(error) => {
+            install_fallback_subscriber(default_filter);
+            return Err(error);
+        }
+    };
     if let Err(source) = fs::create_dir_all(&profile_dir) {
+        install_fallback_subscriber(default_filter);
         return Err(ObservabilityError::CreateDirFailed {
             path: profile_dir,
             source,
@@ -121,6 +133,7 @@ pub fn init(
     {
         Ok(file) => file,
         Err(source) => {
+            install_fallback_subscriber(default_filter);
             return Err(ObservabilityError::CreateFileFailed {
                 path: active_path,
                 source,
@@ -157,6 +170,23 @@ pub fn init(
         active_path,
         final_path,
     ))
+}
+
+fn install_fallback_subscriber(default_filter: &str) {
+    let filter = std::env::var("RUST_LOG")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default_filter.to_owned());
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::builder().parse_lossy(filter))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .compact()
+                .with_writer(io::stderr),
+        );
+    if subscriber.try_init().is_ok() {
+        SUBSCRIBER_INITIALIZED.store(true, Ordering::SeqCst);
+    }
 }
 
 /// Reset subscriber initialization state (FOR UNIT TESTS ONLY).

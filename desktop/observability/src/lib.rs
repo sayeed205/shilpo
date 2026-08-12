@@ -18,7 +18,13 @@ pub use subscriber::{ObservabilityError, ObservabilityGuard, init, reset_initial
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
+
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn test_process_role_parse_and_as_str() {
@@ -38,6 +44,7 @@ mod tests {
 
     #[test]
     fn test_enablement_values() {
+        let _guard = env_guard();
         unsafe {
             std::env::set_var("SHILPO_PROFILE", "1");
         }
@@ -76,6 +83,7 @@ mod tests {
 
     #[test]
     fn test_relative_profile_dir_rejected() {
+        let _guard = env_guard();
         unsafe {
             std::env::set_var("SHILPO_PROFILE_DIR", "relative/path");
         }
@@ -123,6 +131,7 @@ mod tests {
         // Valid completed trace
         let valid_path = dir.join("shell-103-20260101T000000Z-uuid4.json");
         std::fs::write(&valid_path, "[]").unwrap();
+        std::fs::write(dir.join("unrelated.json"), "[]").unwrap();
 
         let discovered = discover_newest_completed_trace(dir).unwrap();
         assert_eq!(
@@ -130,6 +139,15 @@ mod tests {
             "shell-103-20260101T000000Z-uuid4.json"
         );
         assert_eq!(discovered.role, Some(ProcessRole::Shell));
+    }
+
+    #[test]
+    fn test_role_inference_requires_filename_delimiter() {
+        assert_eq!(discovery::infer_role_from_filename("shellevil.json"), None);
+        assert_eq!(
+            discovery::infer_role_from_filename("shell-1-trace.json"),
+            Some(ProcessRole::Shell)
+        );
     }
 
     #[test]

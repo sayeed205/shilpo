@@ -196,6 +196,16 @@ impl ExtensionRuntime for WasmRuntime {
         module: Self::Module,
         budget: RuntimeBudget,
     ) -> Result<(), RuntimeError> {
+        let span = tracing::info_span!(
+            target: "shilpo_profile",
+            "extension_wasm_call",
+            extension_id = %extension_id,
+            operation = "load",
+            fuel = budget.fuel,
+            memory_limit = budget.max_memory_bytes,
+            outcome = "failure",
+        );
+        let _enter = span.enter();
         if self.instances.contains_key(extension_id) {
             return Err(RuntimeError::with_kind(
                 RuntimeFailureKind::Load,
@@ -205,6 +215,7 @@ impl ExtensionRuntime for WasmRuntime {
 
         let instance = self.instantiate_module(&module, budget)?;
         self.instances.insert(extension_id.clone(), instance);
+        span.record("outcome", "success");
         Ok(())
     }
 
@@ -214,6 +225,16 @@ impl ExtensionRuntime for WasmRuntime {
         module: Self::Module,
         budget: RuntimeBudget,
     ) -> Result<(), RuntimeError> {
+        let span = tracing::info_span!(
+            target: "shilpo_profile",
+            "extension_wasm_call",
+            extension_id = %extension_id,
+            operation = "replace",
+            fuel = budget.fuel,
+            memory_limit = budget.max_memory_bytes,
+            outcome = "failure",
+        );
+        let _enter = span.enter();
         if !self.instances.contains_key(extension_id) {
             return Err(RuntimeError::with_kind(
                 RuntimeFailureKind::Unavailable,
@@ -222,6 +243,7 @@ impl ExtensionRuntime for WasmRuntime {
         }
         let replacement = self.instantiate_module(&module, budget)?;
         self.instances.insert(extension_id.clone(), replacement);
+        span.record("outcome", "success");
         Ok(())
     }
 
@@ -250,7 +272,7 @@ impl ExtensionRuntime for WasmRuntime {
             operation = "dispatch",
             fuel = budget.fuel,
             memory_limit = budget.max_memory_bytes,
-            outcome = tracing::field::Empty,
+            outcome = "failure",
         );
         let _enter = span.enter();
         let event_json = serde_json::to_string(event).map_err(|error| {
@@ -278,10 +300,9 @@ impl ExtensionRuntime for WasmRuntime {
                 format!("on-event returned invalid effect JSON: {error}"),
             )
         });
-        span.record(
-            "outcome",
-            if result.is_ok() { "success" } else { "failure" },
-        );
+        if result.is_ok() {
+            span.record("outcome", "success");
+        }
         result
     }
 
@@ -298,7 +319,7 @@ impl ExtensionRuntime for WasmRuntime {
             operation = "view",
             fuel = budget.fuel,
             memory_limit = budget.max_memory_bytes,
-            outcome = tracing::field::Empty,
+            outcome = "failure",
         );
         let _enter = span.enter();
         let instance = self.instance_mut(extension_id)?;
@@ -320,10 +341,9 @@ impl ExtensionRuntime for WasmRuntime {
                 format!("view returned invalid JSON: {error}"),
             )
         });
-        span.record(
-            "outcome",
-            if result.is_ok() { "success" } else { "failure" },
-        );
+        if result.is_ok() {
+            span.record("outcome", "success");
+        }
         result
     }
 }

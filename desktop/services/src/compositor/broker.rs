@@ -925,7 +925,7 @@ impl CompositorCommandBroker {
             "service_command",
             domain = "compositor",
             operation = %operation,
-            outcome = tracing::field::Empty,
+            outcome = "submitted",
         );
         let _enter = _span.enter();
         let mut state = self.inner.state.lock().unwrap();

@@ -238,7 +238,7 @@ impl DeviceDaemonService {
             operation = "execute",
             command_id = ?id,
             owner_generation = cx.owner_generation,
-            outcome = tracing::field::Empty,
+            outcome = "started",
         );
         let _enter = _span.enter();
         let before = cx

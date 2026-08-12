@@ -20,6 +20,6 @@ Performance profiling across Shilpo's multi-process architecture (shell daemon, 
 
 ## Consequences
 
-- Zero runtime overhead or I/O when `SHILPO_PROFILE` is disabled.
+- No profiler layer, writer thread, profile directory, or trace-file I/O when `SHILPO_PROFILE` is disabled; normal `tracing` call-site filtering remains in place.
 - Deterministic, collision-free Chrome Trace generation for performance analysis.
 - Clean separation between cross-platform `tracing` emission and Linux process profiling execution.

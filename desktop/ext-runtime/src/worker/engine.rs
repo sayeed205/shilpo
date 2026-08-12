@@ -308,13 +308,12 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
             target: "shilpo_profile",
             "extension_command",
             command = %command_kind,
-            host_generation = tracing::field::Empty,
+            host_generation = 0u64,
             engine_generation = self.generation.0,
-            outcome = tracing::field::Empty,
+            outcome = "failure",
         );
         let _enter = _span.enter();
-        _span.record("outcome", "accepted");
-        match command {
+        let result = match command {
             ExtensionCommand::Lifecycle { expected, event } => {
                 if expected != self.generation {
                     return None;
@@ -433,7 +432,11 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                 })
             }
             ExtensionCommand::Shutdown => None,
+        };
+        if result.is_some() {
+            _span.record("outcome", "success");
         }
+        result
     }
 
     fn reconcile_instances(&mut self, desired: Vec<ContributionInstance>) -> ExtensionChanges {

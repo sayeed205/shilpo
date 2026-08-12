@@ -243,11 +243,10 @@ pub fn generate_m3_palettes(
 
     let hct = Hct::from_int(source_argb);
     let variant = resolve_variant(source_argb, variant);
-    let variant_str = format!("{variant:?}");
     let _span = tracing::info_span!(
         target: "shilpo_profile",
         "theme_palette_generation",
-        variant = %variant_str,
+        variant = ?variant,
         outcome = "success"
     );
     let _enter = _span.enter();

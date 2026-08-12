@@ -84,7 +84,7 @@ pub async fn run_device_daemon() -> anyhow::Result<()> {
         bus = "session",
         destination = "org.shilpo.Device",
         operation = "register",
-        outcome = tracing::field::Empty,
+        outcome = "registered",
     );
     let _dbus_enter = _dbus_span.enter();
     use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
