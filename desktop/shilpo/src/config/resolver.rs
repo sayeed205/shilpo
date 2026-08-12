@@ -140,6 +140,91 @@ impl ConfigResolver {
         Ok((candidate, provenance, sources_loaded, unknown_keys))
     }
 
+    /// Resolve the layered candidate with an in-memory overrides document
+    /// instead of the file on disk. Used by Settings override writes to
+    /// validate an override candidate together with defaults, primary, and fragments
+    /// before any filesystem write.
+    pub fn resolve_candidate_with_overrides(
+        &self,
+        overrides_toml: &str,
+    ) -> Result<CandidateResult, ConfigError> {
+        let (mut acc_doc, mut provenance) = initial_merged_document();
+        let mut sources_loaded = vec![ConfigSource::Defaults];
+        let mut unknown_keys = Vec::new();
+        let overrides_path = self.config_dir.join("overrides.toml");
+        let overrides_source = ConfigSource::Overrides {
+            path: overrides_path.clone(),
+        };
+
+        for disc in discover_sources(&self.config_dir, &self.primary_path) {
+            if matches!(disc.source, ConfigSource::Overrides { .. }) {
+                continue;
+            }
+            let (mut doc, text) = read_source_document(&disc.path)?;
+            if !matches!(disc.source, ConfigSource::Primary { .. }) && doc.contains_key("version") {
+                return Err(ConfigError::Validation {
+                    diagnostics: vec![ConfigDiagnostic::new(
+                        disc.path.display().to_string(),
+                        "'version' belongs only to the primary document",
+                    )],
+                });
+            }
+            let mut warnings = sanitize_document(&mut doc, &disc.source, &text);
+            merge_document(&mut acc_doc, &mut provenance, &disc.source, &doc, &text);
+            unknown_keys.append(&mut warnings);
+            sources_loaded.push(disc.source);
+        }
+
+        if !overrides_toml.trim().is_empty() {
+            let mut overrides_doc: DocumentMut =
+                overrides_toml
+                    .parse::<DocumentMut>()
+                    .map_err(|error| ConfigError::Parse {
+                        diagnostic: ConfigDiagnostic {
+                            path: overrides_path.display().to_string(),
+                            message: error.to_string(),
+                            span: error.span(),
+                        },
+                    })?;
+
+            if overrides_doc.contains_key("version") {
+                let ver_item = &overrides_doc["version"];
+                let found_ver = ver_item.as_integer().map(|v| v as u64);
+                return Err(ConfigError::Validation {
+                    diagnostics: vec![ConfigDiagnostic {
+                        path: overrides_path.display().to_string(),
+                        message: match found_ver {
+                            Some(v) => format!(
+                                "config {}: 'version' belongs only to the primary document (found version {v})",
+                                overrides_path.display()
+                            ),
+                            None => format!(
+                                "config {}: 'version' belongs only to the primary document",
+                                overrides_path.display()
+                            ),
+                        },
+                        span: None,
+                    }],
+                });
+            }
+
+            let mut warnings =
+                sanitize_document(&mut overrides_doc, &overrides_source, overrides_toml);
+            merge_document(
+                &mut acc_doc,
+                &mut provenance,
+                &overrides_source,
+                &overrides_doc,
+                overrides_toml,
+            );
+            unknown_keys.append(&mut warnings);
+            sources_loaded.push(overrides_source);
+        }
+
+        let candidate = self.parse_merged(&acc_doc)?;
+        Ok((candidate, provenance, sources_loaded, unknown_keys))
+    }
+
     fn parse_merged(&self, acc_doc: &DocumentMut) -> Result<ShellConfig, ConfigError> {
         let merged_toml = acc_doc.to_string();
         toml::from_str(&merged_toml).map_err(|error| ConfigError::Parse {
