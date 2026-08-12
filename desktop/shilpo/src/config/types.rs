@@ -10,6 +10,8 @@ use std::{
     str::FromStr,
 };
 
+use super::migration::LATEST_CONFIG_VERSION;
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ShellConfig {
@@ -560,7 +562,7 @@ impl FromStr for BuiltinBarWidget {
 impl Default for ShellConfig {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: LATEST_CONFIG_VERSION,
             theme: ThemeConfig::default(),
             bar: BarConfig::default(),
             desktop: DesktopConfig::default(),
@@ -795,8 +797,11 @@ impl ShellConfig {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         let mut d = Vec::new();
-        if self.version != 1 {
-            d.push(ConfigDiagnostic::new("version", "must be 1"));
+        if self.version != LATEST_CONFIG_VERSION {
+            d.push(ConfigDiagnostic::new(
+                "version",
+                format!("must be {LATEST_CONFIG_VERSION}"),
+            ));
         }
         if self.theme.font_family.trim().is_empty() {
             d.push(ConfigDiagnostic::new(

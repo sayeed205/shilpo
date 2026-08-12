@@ -177,6 +177,24 @@ async fn run(
         while let Ok(command) = commands.try_recv() {
             match command {
                 WorkerCommand::ReloadConfig => {
+                    // Manual reload is strictly read-only: a primary that
+                    // requires migration (or carries an invalid/future
+                    // version) blocks the reload. The previous committed
+                    // snapshot is retained and the user is directed to
+                    // `shilpo config migrate`.
+                    let migration = crate::config::MigrationService::for_primary_path(&config_path);
+                    let block_reason = match migration.primary_status() {
+                        Ok(status) => crate::config::reload_block_reason(&status, &config_path),
+                        Err(error) => Some(format!(
+                            "{}: {error}; run 'shilpo config migrate'",
+                            config_path.display()
+                        )),
+                    };
+                    if let Some(reason) = block_reason {
+                        let _ =
+                            updates.try_send(WorkerUpdate::Config(ConfigUpdate::Failed(reason)));
+                        continue;
+                    }
                     let (new_snapshot, _changeset, report) =
                         resolver.resolve_reload(&committed_snapshot);
                     crate::config::unknown_keys::log_unknown_key_warnings(&report.unknown_keys);

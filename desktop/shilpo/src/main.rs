@@ -404,6 +404,27 @@ async fn main() {
                     }
                 }
             }
+            ConfigCommands::Migrate { dry_run } => {
+                let path = DoctorChecker::default_config_path();
+                let result = adapters::ConfigMigrateAdapter::run(&path, dry_run);
+                if result.success {
+                    output.success(
+                        "config.migrate",
+                        &result.data,
+                        Some(&result.human_message),
+                        result.warnings,
+                    )
+                } else {
+                    output.error(
+                        "config.migrate",
+                        result.error_code,
+                        &result.human_message,
+                        Some(result.data),
+                        result.warnings,
+                        result.exit_code,
+                    )
+                }
+            }
         },
         Commands::Theme { command } => match command {
             ThemeCommands::Mode { action } => match action {

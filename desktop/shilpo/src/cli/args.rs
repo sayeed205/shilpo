@@ -183,7 +183,7 @@ pub enum WindowCommands {
     },
 }
 
-#[derive(Subcommand, Debug, Clone)]
+#[derive(Subcommand, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigCommands {
     /// Print active configuration file path
     Path,
@@ -191,6 +191,12 @@ pub enum ConfigCommands {
     Validate,
     /// Signal running daemon to reload configuration
     Reload,
+    /// Migrate the primary configuration file to the latest schema version
+    Migrate {
+        /// Preview the migration without writing any files
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]

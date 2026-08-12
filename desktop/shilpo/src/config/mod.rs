@@ -1,5 +1,6 @@
 pub mod changeset;
 pub mod merge;
+pub mod migration;
 pub mod provenance;
 pub mod report;
 pub mod resolver;
@@ -9,6 +10,11 @@ pub mod unknown_keys;
 pub mod validation;
 
 pub use changeset::ConfigChangeSet;
+pub use migration::{
+    LATEST_CONFIG_VERSION, Migration, MigrationError, MigrationMode, MigrationOutcome,
+    MigrationRegistry, MigrationService, PrimaryStatus, migrate_primary_for_startup,
+    reload_block_reason,
+};
 pub use provenance::{ConfigProvenance, format_key};
 pub use report::EffectiveWithOriginsReport;
 pub use resolver::{ConfigResolver, ConfigSnapshot, ResolutionReport};

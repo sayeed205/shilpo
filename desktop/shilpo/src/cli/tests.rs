@@ -1,6 +1,9 @@
-use crate::args::{Cli, Commands, ModeValue, ShellCommands, VisibilityAction};
-use crate::output::{CliOutput, EXIT_INVALID_ARGS, JsonEnvelope};
+use crate::adapters::ConfigMigrateAdapter;
+use crate::args::{Cli, Commands, ConfigCommands, ModeValue, ShellCommands, VisibilityAction};
+use crate::output::{CliOutput, EXIT_FAILURE, EXIT_INVALID_ARGS, JsonEnvelope};
 use clap::Parser;
+use std::fs;
+use tempfile::TempDir;
 
 #[test]
 fn test_cli_parser_shell_subcommands() {
@@ -230,4 +233,129 @@ fn test_parse_duration_units() {
         Ok(std::time::Duration::from_secs(10))
     );
     assert!(crate::parse_duration(Some("nope")).is_err());
+}
+
+#[test]
+fn test_cli_parser_config_migrate_and_dry_run() {
+    let cli = Cli::try_parse_from(["shilpo", "config", "migrate"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Config {
+            command: ConfigCommands::Migrate { dry_run: false }
+        })
+    ));
+
+    let cli = Cli::try_parse_from(["shilpo", "config", "migrate", "--dry-run"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Config {
+            command: ConfigCommands::Migrate { dry_run: true }
+        })
+    ));
+
+    assert!(Cli::try_parse_from(["shilpo", "config", "migrate", "--bogus"]).is_err());
+    assert!(Cli::try_parse_from(["shilpo", "config", "migrate", "extra"]).is_err());
+    assert!(Cli::try_parse_from(["shilpo", "config", "migrate", "--json"]).is_ok());
+}
+
+fn cli_tmp_primary(content: &str) -> (TempDir, std::path::PathBuf) {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+    fs::write(&path, content).unwrap();
+    (dir, path)
+}
+
+#[test]
+fn test_cli_config_migrate_current_contract() {
+    let (_dir, path) = cli_tmp_primary("version = 1\n\n[bar]\nheight = 48\n");
+    let result = ConfigMigrateAdapter::run(&path, false);
+    assert!(result.success);
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        result
+            .human_message
+            .contains("already at the latest schema version 1")
+    );
+    assert!(result.warnings.is_empty());
+
+    let data = result.data.as_object().unwrap();
+    assert_eq!(data["mode"], "apply");
+    assert_eq!(data["changed"], false);
+    assert_eq!(data["path"], path.display().to_string());
+    assert_eq!(data["from_version"], 1);
+    assert_eq!(data["to_version"], 1);
+    assert!(data["steps"].as_array().unwrap().is_empty());
+    assert!(data["backup_path"].is_null());
+    assert!(data["migrated_toml"].is_null());
+}
+
+#[test]
+fn test_cli_config_migrate_preview_contract() {
+    let (_dir, path) = cli_tmp_primary("[bar]\nheight = 48\n");
+    let result = ConfigMigrateAdapter::run(&path, true);
+    assert!(result.success);
+    assert!(result.human_message.contains("schema 0 -> 1"));
+    assert!(result.human_message.contains("v0 -> v1"));
+    assert!(
+        result
+            .human_message
+            .contains("--- migrated config.toml ---")
+    );
+    assert!(
+        result
+            .human_message
+            .contains("--- end migrated config.toml ---")
+    );
+    assert!(result.human_message.contains("version = 1"));
+
+    let data = result.data.as_object().unwrap();
+    assert_eq!(data["mode"], "preview");
+    assert_eq!(data["changed"], true);
+    assert_eq!(data["from_version"], 0);
+    assert_eq!(data["to_version"], 1);
+    assert_eq!(data["steps"], serde_json::json!(["v0 -> v1"]));
+    assert!(data["backup_path"].is_null());
+    let migrated = data["migrated_toml"].as_str().unwrap();
+    assert!(migrated.starts_with("version = 1"));
+
+    // Dry-run is byte-for-byte read-only.
+    assert_eq!(fs::read_to_string(&path).unwrap(), "[bar]\nheight = 48\n");
+    let names: Vec<String> = fs::read_dir(_dir.path())
+        .unwrap()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    assert_eq!(names, vec!["config.toml"]);
+}
+
+#[test]
+fn test_cli_config_migrate_applied_contract() {
+    let (_dir, path) = cli_tmp_primary("[bar]\nheight = 48\n");
+    let result = ConfigMigrateAdapter::run(&path, false);
+    assert!(result.success);
+    assert!(result.human_message.contains("Migrated"));
+    assert!(result.human_message.contains("backup:"));
+
+    let data = result.data.as_object().unwrap();
+    assert_eq!(data["mode"], "apply");
+    assert_eq!(data["changed"], true);
+    assert!(data["backup_path"].as_str().unwrap().contains(".bak."));
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .starts_with("version = 1")
+    );
+}
+
+#[test]
+fn test_cli_config_migrate_failure_contract() {
+    let (_dir, path) = cli_tmp_primary("version = 9999\n");
+    let result = ConfigMigrateAdapter::run(&path, false);
+    assert!(!result.success);
+    assert_eq!(result.exit_code, EXIT_FAILURE);
+    assert_eq!(result.error_code, "config.migration.future_version");
+    assert!(result.human_message.contains("config migration failed"));
+    assert_eq!(result.data["path"], path.display().to_string());
+    // Failure never writes: the future-version file is untouched.
+    assert_eq!(fs::read_to_string(&path).unwrap(), "version = 9999\n");
 }

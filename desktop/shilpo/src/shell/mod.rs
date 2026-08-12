@@ -80,30 +80,49 @@ pub fn run_daemon() {
             .map(|home| std::path::PathBuf::from(home).join(".config/shilpo/config.toml"))
             .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));
         let resolver = crate::config::ConfigResolver::from_primary_path(&config_path);
-        let config = match resolver.resolve_initial() {
-            Ok((snapshot, report)) => {
-                crate::config::unknown_keys::log_unknown_key_warnings(&report.unknown_keys);
-                snapshot.config
-            }
-            Err(error) => {
-                if !config_path.exists() {
-                    // First run: create the canonical default file, never
-                    // overwrite existing user configuration.
-                    let default_config = crate::config::ShellConfig::default();
-                    match default_config.save(&config_path) {
-                        Ok(()) => default_config,
-                        Err(save_error) => {
+        let config = match crate::config::migrate_primary_for_startup(&config_path) {
+            Ok(outcome) => {
+                crate::config::unknown_keys::log_unknown_key_warnings(&outcome.warnings);
+                match resolver.resolve_initial() {
+                    Ok((snapshot, report)) => {
+                        crate::config::unknown_keys::log_unknown_key_warnings(&report.unknown_keys);
+                        snapshot.config
+                    }
+                    Err(error) => {
+                        if !config_path.exists() {
+                            // First run: create the canonical default file,
+                            // never overwrite existing user configuration.
+                            let default_config = crate::config::ShellConfig::default();
+                            match default_config.save(&config_path) {
+                                Ok(()) => default_config,
+                                Err(save_error) => {
+                                    tracing::error!(
+                                        error = %save_error,
+                                        "failed to write default config; using defaults"
+                                    );
+                                    crate::config::ShellConfig::default()
+                                }
+                            }
+                        } else {
                             tracing::error!(
-                                error = %save_error,
-                                "failed to write default config; using defaults"
+                                error = %error,
+                                "failed to load shell config; using defaults"
                             );
                             crate::config::ShellConfig::default()
                         }
                     }
-                } else {
-                    tracing::error!(error = %error, "failed to load shell config; using defaults");
-                    crate::config::ShellConfig::default()
                 }
+            }
+            Err(error) => {
+                // Migration failure is fatal to configuration startup. Log it
+                // clearly and fall back to defaults without rewriting or
+                // downgrading the source document.
+                tracing::error!(
+                    error = %error,
+                    path = %config_path.display(),
+                    "config migration failed; using defaults without rewriting the source",
+                );
+                crate::config::ShellConfig::default()
             }
         };
         bar::view::apply_config_theme(&config, None, cx);
