@@ -837,8 +837,8 @@ impl NotificationSignalSink for DbusNotificationSignalSink {
 /// Dynamic Notification Daemon Service implementing org.freedesktop.Notifications and NotificationPort.
 pub struct NotificationService {
     adapter: Arc<TestNotificationAdapter>,
-    _connection: Option<Connection>,
-    signal_sink: Option<Arc<dyn NotificationSignalSink>>,
+    connection: Arc<Mutex<Option<Connection>>>,
+    signal_sink: Arc<Mutex<Option<Arc<dyn NotificationSignalSink>>>>,
 }
 
 impl NotificationService {
@@ -871,8 +871,8 @@ impl NotificationService {
         let adapter = Arc::new(TestNotificationAdapter::new_ready(32));
         Self {
             adapter,
-            _connection: None,
-            signal_sink: None,
+            connection: Arc::new(Mutex::new(None)),
+            signal_sink: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -881,8 +881,8 @@ impl NotificationService {
         let adapter = Arc::new(TestNotificationAdapter::new(32));
         Self {
             adapter,
-            _connection: None,
-            signal_sink: None,
+            connection: Arc::new(Mutex::new(None)),
+            signal_sink: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -904,48 +904,96 @@ impl NotificationService {
             .request_name("org.freedesktop.Notifications")
             .await?;
 
+        let signal_emitter =
+            SignalEmitter::new(&connection, NOTIFICATION_OBJECT_PATH)?.into_owned();
         adapter.mark_ready();
+        let service = Self {
+            adapter,
+            connection: Arc::new(Mutex::new(Some(connection.clone()))),
+            signal_sink: Arc::new(Mutex::new(Some(Arc::new(DbusNotificationSignalSink {
+                emitter: signal_emitter,
+            })))),
+        };
+        service.spawn_supervisor(connection);
+        Ok(service)
+    }
 
-        // Keep the authoritative lifecycle aligned with the transport. A closed
-        // session bus must never leave the published snapshot in Ready.
-        let monitor_connection = connection.clone();
-        let monitor_adapter = adapter.clone();
-        connection
+    fn spawn_supervisor(&self, initial_connection: Connection) {
+        let adapter = self.adapter.clone();
+        let connection_slot = self.connection.clone();
+        let signal_slot = self.signal_sink.clone();
+        initial_connection
+            .clone()
             .executor()
             .spawn(
                 async move {
+                    let mut connection = initial_connection;
                     loop {
-                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                        if monitor_connection.is_closed() {
-                            monitor_adapter.report_owner_failure(
-                                "notification DBus connection closed".to_string(),
-                            );
+                        while !connection.is_closed() {
+                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        }
+                        adapter.report_owner_failure("notification DBus connection closed".into());
+                        if matches!(adapter.supervisor_state(), SupervisorState::Quarantined) {
+                            *connection_slot.lock().unwrap() = None;
+                            *signal_slot.lock().unwrap() = None;
                             break;
                         }
+                        *connection_slot.lock().unwrap() = None;
+                        *signal_slot.lock().unwrap() = None;
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        let Ok(next) = Connection::session().await else {
+                            adapter
+                                .report_owner_failure("notification DBus reconnect failed".into());
+                            continue;
+                        };
+                        let server = NotificationServer {
+                            adapter: adapter.clone(),
+                            next_id: Arc::new(Mutex::new(0)),
+                        };
+                        if next
+                            .object_server()
+                            .at(NOTIFICATION_OBJECT_PATH, server)
+                            .await
+                            .is_err()
+                            || next
+                                .request_name("org.freedesktop.Notifications")
+                                .await
+                                .is_err()
+                        {
+                            adapter.report_owner_failure(
+                                "notification DBus owner registration failed".into(),
+                            );
+                            continue;
+                        }
+                        let Ok(emitter) = SignalEmitter::new(&next, NOTIFICATION_OBJECT_PATH)
+                            .map(SignalEmitter::into_owned)
+                        else {
+                            adapter.report_owner_failure(
+                                "notification DBus signal setup failed".into(),
+                            );
+                            continue;
+                        };
+                        adapter.begin_start();
+                        adapter.mark_ready();
+                        *connection_slot.lock().unwrap() = Some(next.clone());
+                        *signal_slot.lock().unwrap() =
+                            Some(Arc::new(DbusNotificationSignalSink { emitter }));
+                        connection = next;
                     }
                 },
-                "notification-owner-monitor",
+                "notification-owner-supervisor",
             )
             .detach();
-
-        let signal_emitter =
-            SignalEmitter::new(&connection, NOTIFICATION_OBJECT_PATH)?.into_owned();
-
-        Ok(Self {
-            adapter,
-            _connection: Some(connection),
-            signal_sink: Some(Arc::new(DbusNotificationSignalSink {
-                emitter: signal_emitter,
-            })),
-        })
     }
 
     pub fn is_dbus_connected(&self) -> bool {
-        self._connection.is_some()
+        self.connection.lock().unwrap().is_some()
     }
 
     pub fn is_healthy(&self) -> bool {
-        self._connection
+        self.connection
+            .lock()
+            .unwrap()
             .as_ref()
             .is_some_and(|connection| !connection.is_closed())
     }
@@ -994,13 +1042,13 @@ impl NotificationService {
     }
 
     fn emit_action_invoked(&self, id: u32, action_key: String) {
-        if let Some(sink) = &self.signal_sink {
+        if let Some(sink) = self.signal_sink.lock().unwrap().as_ref() {
             sink.action_invoked(id, action_key);
         }
     }
 
     fn emit_closed(&self, id: u32, reason: NotificationCloseReason) {
-        if let Some(sink) = &self.signal_sink {
+        if let Some(sink) = self.signal_sink.lock().unwrap().as_ref() {
             sink.notification_closed(id, reason);
         }
     }
