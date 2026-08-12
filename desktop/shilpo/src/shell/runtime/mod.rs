@@ -98,11 +98,6 @@ impl ShellRuntime {
             _wallpaper_preview_changed: None,
             _drain_task: gpui::Task::ready(()),
         });
-
-        // Initial compositor state is population, not a workspace transition.
-        cx.global::<Self>()
-            .dbus_service
-            .prime_workspace(latest_snapshot.focused_workspace_id.unwrap_or(0));
     }
 
     pub(crate) fn readiness(&self) -> shilpo_services::ReadinessState {
@@ -244,6 +239,11 @@ impl ShellRuntime {
             );
         });
         cx.global_mut::<Self>()._wallpaper_preview_changed = Some(wallpaper_preview_changed);
+
+        // Initial compositor state is population, not a workspace transition.
+        cx.global::<Self>()
+            .dbus_service
+            .prime_workspace(latest_snapshot.focused_workspace_id.unwrap_or(0));
 
         shell_surfaces::spawn_compositor_stream_loop(cx, &compositor);
         theme_manager::sync_wallpaper(cx, initial_wallpaper_path);
