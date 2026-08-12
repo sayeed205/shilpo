@@ -26,8 +26,8 @@ pub enum ShellCommand {
 pub struct ShellDbusService {
     mailbox_tx: mpsc::Sender<ShellCommand>,
     compositor_broker: Arc<Mutex<Option<Arc<CompositorCommandBroker>>>>,
-    status: Arc<Mutex<ShellStatus>>,
-    telemetry: Arc<Mutex<ShellTelemetry>>,
+    status: Arc<arc_swap::ArcSwap<ShellStatus>>,
+    telemetry: Arc<arc_swap::ArcSwap<ShellTelemetry>>,
     last_workspace: Arc<Mutex<Option<(u64, u64, u64)>>>,
     last_theme: Arc<Mutex<Option<(String, String)>>>,
 }
@@ -36,8 +36,8 @@ impl ShellDbusService {
     pub fn new(
         mailbox_tx: mpsc::Sender<ShellCommand>,
         compositor_broker: Arc<Mutex<Option<Arc<CompositorCommandBroker>>>>,
-        status: Arc<Mutex<ShellStatus>>,
-        telemetry: Arc<Mutex<ShellTelemetry>>,
+        status: Arc<arc_swap::ArcSwap<ShellStatus>>,
+        telemetry: Arc<arc_swap::ArcSwap<ShellTelemetry>>,
     ) -> Self {
         Self {
             mailbox_tx,
@@ -61,7 +61,7 @@ impl ShellDbusService {
         }
     }
 
-    fn execute_compositor_command(
+    async fn execute_compositor_command(
         &self,
         cmd: shilpo_services::CompositorCommand,
     ) -> zbus::fdo::Result<CommandResult> {
@@ -74,20 +74,22 @@ impl ShellDbusService {
                 zbus::fdo::Error::Failed("compositor command broker is unavailable".into())
             })?;
 
-        let outcome = match broker.submit(cmd) {
+        let outcome = tokio::task::spawn_blocking(move || match broker.submit(cmd) {
             Ok(ticket) => ticket.wait_timeout(std::time::Duration::from_secs(2)),
             Err(outcome) => outcome,
-        };
+        })
+        .await
+        .map_err(|_| zbus::fdo::Error::Failed("compositor command task failed".into()))?;
 
         Ok(CommandResult::from(outcome))
     }
 
     pub fn update_status(&self, status: ShellStatus) {
-        *self.status.lock().unwrap() = status;
+        self.status.store(Arc::new(status));
     }
 
     pub fn update_telemetry(&self, telemetry: ShellTelemetry) {
-        *self.telemetry.lock().unwrap() = telemetry;
+        self.telemetry.store(Arc::new(telemetry));
     }
 
     pub async fn emit_workspace_changed_if_needed(
@@ -253,6 +255,7 @@ impl ShellDbusService {
         self.execute_compositor_command(shilpo_services::CompositorCommand::FocusWorkspace(
             workspace_id,
         ))
+        .await
     }
 
     async fn create_workspace(&self) -> zbus::fdo::Result<CommandResult> {
@@ -265,6 +268,7 @@ impl ShellDbusService {
         );
         let _enter = _span.enter();
         self.execute_compositor_command(shilpo_services::CompositorCommand::CreateWorkspace)
+            .await
     }
 
     async fn focus_window(&self, window_id: u64) -> zbus::fdo::Result<CommandResult> {
@@ -277,6 +281,7 @@ impl ShellDbusService {
         );
         let _enter = _span.enter();
         self.execute_compositor_command(shilpo_services::CompositorCommand::FocusWindow(window_id))
+            .await
     }
 
     async fn focus_previous_window(&self) -> zbus::fdo::Result<CommandResult> {
@@ -289,6 +294,7 @@ impl ShellDbusService {
         );
         let _enter = _span.enter();
         self.execute_compositor_command(shilpo_services::CompositorCommand::FocusPreviousWindow)
+            .await
     }
 
     async fn close_window(&self, window_id: u64) -> zbus::fdo::Result<CommandResult> {
@@ -301,6 +307,7 @@ impl ShellDbusService {
         );
         let _enter = _span.enter();
         self.execute_compositor_command(shilpo_services::CompositorCommand::CloseWindow(window_id))
+            .await
     }
 
     async fn move_window_to_workspace(
@@ -320,6 +327,7 @@ impl ShellDbusService {
             window_id,
             workspace_id,
         })
+        .await
     }
 
     async fn set_brightness(&self, percentage: u8) -> zbus::fdo::Result<()> {
@@ -377,7 +385,7 @@ impl ShellDbusService {
             outcome = "success"
         );
         let _enter = _span.enter();
-        self.status.lock().unwrap().clone()
+        self.status.load().as_ref().clone()
     }
 
     async fn get_telemetry(&self) -> ShellTelemetry {
@@ -389,7 +397,7 @@ impl ShellDbusService {
             outcome = "success"
         );
         let _enter = _span.enter();
-        self.telemetry.lock().unwrap().clone()
+        self.telemetry.load().as_ref().clone()
     }
 
     async fn capture(&self, intent: String) -> zbus::fdo::Result<()> {

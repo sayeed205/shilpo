@@ -33,6 +33,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "pr
 log.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+arc-swap.workspace = true
 uuid.workspace = true
 notify.workspace = true
 serde = { workspace = true, features = ["derive"] }

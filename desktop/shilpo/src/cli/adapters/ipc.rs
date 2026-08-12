@@ -1,6 +1,7 @@
 //! D-Bus adapter for shell commands and status queries over `org.shilpo.Shell`.
 
 use crate::shell::dbus::{CommandResult, ShellProxy, ShellStatus, ShellTelemetry};
+use std::sync::{Mutex, OnceLock};
 use zbus::Connection;
 
 pub struct IpcAdapter;
@@ -17,8 +18,17 @@ impl IpcAdapter {
     }
 
     fn get_proxy() -> Result<(Connection, ShellProxy<'static>), (i32, String)> {
+        static SESSION: OnceLock<Mutex<Option<Connection>>> = OnceLock::new();
+        let session = SESSION.get_or_init(|| Mutex::new(None));
         futures_lite::future::block_on(async {
-            let conn = Connection::session().await.map_err(map_dbus_error)?;
+            let conn = session.lock().unwrap().clone();
+            let conn = if let Some(conn) = conn {
+                conn
+            } else {
+                let conn = Connection::session().await.map_err(map_dbus_error)?;
+                *session.lock().unwrap() = Some(conn.clone());
+                conn
+            };
             let proxy = ShellProxy::builder(&conn)
                 .build()
                 .await

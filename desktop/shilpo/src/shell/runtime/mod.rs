@@ -36,8 +36,8 @@ use shilpo_services::{CompositorCommandBroker, CompositorSnapshot};
 pub struct ShellRuntime {
     dbus_service: Arc<ShellDbusService>,
     _compositor_broker: Arc<Mutex<Option<Arc<CompositorCommandBroker>>>>,
-    _status: Arc<Mutex<ShellStatus>>,
-    _telemetry: Arc<Mutex<ShellTelemetry>>,
+    _status: Arc<arc_swap::ArcSwap<ShellStatus>>,
+    _telemetry: Arc<arc_swap::ArcSwap<ShellTelemetry>>,
     mailbox_rx: Arc<Mutex<tokio::sync::mpsc::Receiver<ShellCommand>>>,
     dbus_connection: Option<zbus::Connection>,
     instance_id: String,
@@ -67,8 +67,8 @@ impl ShellRuntime {
         ));
         let (tx, rx) = tokio::sync::mpsc::channel(128);
         let compositor_broker = Arc::new(Mutex::new(None));
-        let status = Arc::new(Mutex::new(ShellStatus::default()));
-        let telemetry = Arc::new(Mutex::new(ShellTelemetry::default()));
+        let status = Arc::new(arc_swap::ArcSwap::from_pointee(ShellStatus::default()));
+        let telemetry = Arc::new(arc_swap::ArcSwap::from_pointee(ShellTelemetry::default()));
         let dbus_service = Arc::new(ShellDbusService::new(
             tx,
             compositor_broker.clone(),
@@ -187,8 +187,8 @@ impl ShellRuntime {
         cx: &mut App,
         dbus_service: Arc<ShellDbusService>,
         compositor_broker: Arc<Mutex<Option<Arc<CompositorCommandBroker>>>>,
-        status: Arc<Mutex<ShellStatus>>,
-        telemetry: Arc<Mutex<ShellTelemetry>>,
+        status: Arc<arc_swap::ArcSwap<ShellStatus>>,
+        telemetry: Arc<arc_swap::ArcSwap<ShellTelemetry>>,
         mailbox_rx: tokio::sync::mpsc::Receiver<ShellCommand>,
         dbus_connection: zbus::Connection,
         instance_id: String,

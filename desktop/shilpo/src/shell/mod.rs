@@ -38,15 +38,16 @@ pub fn run_daemon() {
 
     let (mailbox_tx, mailbox_rx) = tokio::sync::mpsc::channel::<ShellCommand>(128);
     let compositor_broker = Arc::new(Mutex::new(None));
-    let status = Arc::new(Mutex::new(ShellStatus::default()));
-    let telemetry = Arc::new(Mutex::new(ShellTelemetry::default()));
+    let status = Arc::new(arc_swap::ArcSwap::from_pointee(ShellStatus::default()));
+    let telemetry = Arc::new(arc_swap::ArcSwap::from_pointee(ShellTelemetry::default()));
 
     let instance_id = uuid::Uuid::new_v4().to_string();
-    {
-        let mut s = status.lock().unwrap();
-        s.instance_id = instance_id.clone();
-        s.pid = std::process::id();
-    }
+    status.rcu(|s| {
+        let mut next = (**s).clone();
+        next.instance_id = instance_id.clone();
+        next.pid = std::process::id();
+        Arc::new(next)
+    });
 
     let dbus_service = Arc::new(ShellDbusService::new(
         mailbox_tx,
