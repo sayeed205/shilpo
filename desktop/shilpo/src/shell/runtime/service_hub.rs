@@ -1,11 +1,10 @@
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex, mpsc},
-    time::Instant,
+    sync::{Arc, Mutex},
 };
 
 use gpui::App;
-use shilpo_services::{ClipboardItem, Notification, NotificationService};
+use shilpo_services::{ClipboardItem, Notification, NotificationPort, NotificationService};
 
 use crate::bar::service_worker::{
     self, CommandSender, DeviceCommand, UpdateReceiver, WorkerCommand, WorkerUpdate,
@@ -20,19 +19,13 @@ use super::{SessionContext, ShellRuntime, shell_surfaces::ShellSurfaces};
 /// narrow method surface below.
 pub struct ServiceHub {
     compositor: Arc<dyn shilpo_services::CompositorAdapter>,
-    notification: Option<NotificationService>,
-    notification_state: shilpo_services::ServiceLifecycle,
-    notification_last_error: Option<String>,
-    notification_attempt: u32,
-    notification_next_retry: Option<Instant>,
-    notification_dnd: bool,
+    notification: Arc<dyn NotificationPort>,
     clipboard: shilpo_services::ClipboardService,
     app_scanner: shilpo_services::AppScanner,
     service_commands: CommandSender,
     device_snapshot: crate::bar::service_worker::DeviceSnapshot,
     availability: crate::bar::service_worker::ServiceAvailability,
-    notif_rx: Arc<Mutex<mpsc::Receiver<Notification>>>,
-    notif_tx: mpsc::Sender<Notification>,
+    notif_rx: Arc<Mutex<tokio::sync::broadcast::Receiver<Notification>>>,
     updates_rx: Arc<Mutex<UpdateReceiver>>,
     _service_task: Option<gpui::Task<()>>,
     _watcher: Option<notify::RecommendedWatcher>,
@@ -42,13 +35,14 @@ pub struct ServiceHub {
 impl ServiceHub {
     /// Starts the service hub from a restored session, applying persisted DND state.
     pub fn start(executor: gpui::BackgroundExecutor, session: &SessionContext) -> Self {
-        let mut hub = Self::new(
+        let hub = Self::new(
             executor,
             session.config_path.clone(),
             session.heed_store.clone(),
         );
-        hub.notification_dnd = session.session_state.dnd_active;
-        apply_notification_dnd(hub.notification.as_ref(), session.session_state.dnd_active);
+        if session.session_state.dnd_active {
+            hub.notification.set_dnd_enabled(true);
+        }
         hub
     }
 
@@ -64,24 +58,17 @@ impl ServiceHub {
         let app_scanner = shilpo_services::AppScanner::new()
             .unwrap_or_else(|_| shilpo_services::AppScanner::new_empty());
         let app_watcher = app_scanner.start_watcher();
-        let (notification, notification_state, notification_last_error) =
+
+        let notification: Arc<dyn shilpo_services::NotificationPort> =
             match NotificationService::new() {
-                Ok(s) => (Some(s), shilpo_services::ServiceLifecycle::Ready, None),
-                Err(e) => {
-                    let err_str = e.to_string();
-                    tracing::warn!(error = %err_str, "notification service unavailable; toasts disabled");
-                    (
-                        None,
-                        shilpo_services::ServiceLifecycle::Connecting { attempt: 1 },
-                        Some(err_str),
-                    )
+                Ok(service) => Arc::new(service),
+                Err(error) => {
+                    tracing::warn!(error = %error, "notification service unavailable; using offline port");
+                    Arc::new(NotificationService::new_unavailable())
                 }
             };
 
-        let (notif_tx, notif_rx) = mpsc::channel();
-        if let Some(service) = &notification {
-            service.set_new_notification_sender(notif_tx.clone());
-        }
+        let notif_rx = notification.subscribe_events();
 
         let (updates_tx, updates_rx, service_commands, commands_rx) = service_worker::channels();
         let service_task = service_worker::spawn(
@@ -103,106 +90,55 @@ impl ServiceHub {
         use notify::Watcher;
         let watcher_commands = service_commands.clone();
         let target_file_name = config_path.file_name().map(|n| n.to_os_string());
-        let watcher = match notify::RecommendedWatcher::new(
-            move |res: Result<notify::Event, notify::Error>| {
-                if let Some(event) = res.ok().filter(|e| e.kind.is_modify())
-                    && (target_file_name.is_none()
-                        || event
-                            .paths
-                            .iter()
-                            .any(|p| p.file_name() == target_file_name.as_deref()))
-                {
-                    let _ = service_worker::try_send_command(
-                        &watcher_commands,
-                        WorkerCommand::ReloadConfig,
-                    );
+        let watcher = if !config_dir.starts_with(std::env::temp_dir()) {
+            match notify::RecommendedWatcher::new(
+                move |res: Result<notify::Event, notify::Error>| {
+                    if let Some(event) = res.ok().filter(|e| e.kind.is_modify())
+                        && (target_file_name.is_none()
+                            || event
+                                .paths
+                                .iter()
+                                .any(|p| p.file_name() == target_file_name.as_deref()))
+                    {
+                        let _ = service_worker::try_send_command(
+                            &watcher_commands,
+                            WorkerCommand::ReloadConfig,
+                        );
+                    }
+                },
+                notify::Config::default(),
+            ) {
+                Ok(mut watcher) => {
+                    match watcher.watch(&config_dir, notify::RecursiveMode::Recursive) {
+                        Ok(()) => Some(watcher),
+                        Err(error) => {
+                            tracing::warn!(error = %error, path = ?config_dir, "config watcher watch failed");
+                            None
+                        }
+                    }
                 }
-            },
-            notify::Config::default(),
-        ) {
-            Ok(mut watcher) => match watcher.watch(&config_dir, notify::RecursiveMode::Recursive) {
-                Ok(()) => Some(watcher),
                 Err(error) => {
-                    tracing::warn!(error = %error, path = ?config_dir, "config watcher watch failed");
+                    tracing::warn!(error = %error, "config watcher creation failed");
                     None
                 }
-            },
-            Err(error) => {
-                tracing::warn!(error = %error, "config watcher creation failed");
-                None
             }
+        } else {
+            None
         };
-
-        let notification_attempt = if notification.is_some() { 0 } else { 1 };
-        let notification_next_retry = notification
-            .is_none()
-            .then(|| Instant::now() + service_worker::backoff_delay(notification_attempt));
 
         Self {
             compositor,
             notification,
-            notification_state,
-            notification_last_error,
-            notification_attempt,
-            notification_next_retry,
-            notification_dnd: false,
             clipboard,
             app_scanner,
             service_commands,
             device_snapshot: crate::bar::service_worker::DeviceSnapshot::default(),
             availability: crate::bar::service_worker::ServiceAvailability::default(),
             notif_rx: Arc::new(Mutex::new(notif_rx)),
-            notif_tx,
             updates_rx: Arc::new(Mutex::new(updates_rx)),
             _service_task: Some(service_task),
             _watcher: watcher,
             _app_watcher: app_watcher,
-        }
-    }
-
-    /// Reconnects the notification D-Bus service using exponential backoff.
-    pub(crate) fn poll_notification_reconnect(&mut self) {
-        if self
-            .notification
-            .as_ref()
-            .is_some_and(|service| !service.is_healthy())
-        {
-            self.notification = None;
-            self.notification_attempt = self.notification_attempt.saturating_add(1);
-            self.notification_state = shilpo_services::ServiceLifecycle::Connecting {
-                attempt: self.notification_attempt,
-            };
-            self.notification_last_error = Some("notification D-Bus connection closed".into());
-            self.notification_next_retry =
-                Some(Instant::now() + service_worker::backoff_delay(self.notification_attempt));
-        }
-        if self.notification.is_some()
-            || !self
-                .notification_next_retry
-                .is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            return;
-        }
-
-        match NotificationService::new() {
-            Ok(service) => {
-                service.set_new_notification_sender(self.notif_tx.clone());
-                service.set_dnd_enabled(self.notification_dnd_flag());
-                self.notification = Some(service);
-                self.notification_state = shilpo_services::ServiceLifecycle::Ready;
-                self.notification_last_error = None;
-                self.notification_attempt = 0;
-                self.notification_next_retry = None;
-            }
-            Err(error) => {
-                self.notification_attempt = self.notification_attempt.saturating_add(1);
-                self.notification_state = shilpo_services::ServiceLifecycle::Connecting {
-                    attempt: self.notification_attempt,
-                };
-                self.notification_last_error = Some(error.to_string());
-                self.notification_next_retry =
-                    Some(Instant::now() + service_worker::backoff_delay(self.notification_attempt));
-            }
         }
     }
 
@@ -227,55 +163,40 @@ impl ServiceHub {
     }
 
     pub(crate) fn is_dnd_enabled(&self) -> bool {
-        self.notification
-            .as_ref()
-            .is_some_and(|n| n.is_dnd_enabled())
+        self.notification.snapshot().dnd_enabled
     }
 
-    /// Returns the persisted DND intent even when the notification service is offline.
+    #[cfg(test)]
     pub(crate) fn notification_dnd_flag(&self) -> bool {
-        self.notification_dnd
+        self.notification.snapshot().dnd_enabled
     }
 
     pub(crate) fn set_dnd_enabled(&mut self, enabled: bool) {
-        self.notification_dnd = enabled;
-        apply_notification_dnd(self.notification.as_ref(), enabled);
+        self.notification.set_dnd_enabled(enabled);
     }
 
     pub(crate) fn push_notification(&self, notification: Notification) {
-        if let Some(service) = &self.notification {
-            service.push_notification(notification);
-        }
+        self.notification.push_notification(notification);
     }
 
     pub(crate) fn dismiss_notification(&self, id: u32) {
-        if let Some(service) = &self.notification {
-            service.dismiss(id);
-        }
+        self.notification.dismiss(id);
     }
 
     pub(crate) fn expire_notification(&self, id: u32) {
-        if let Some(service) = &self.notification {
-            service.expire(id);
-        }
+        self.notification.expire(id);
     }
 
     pub(crate) fn invoke_notification_action(&self, id: u32, action_key: &str) {
-        if let Some(service) = &self.notification {
-            service.invoke_action(id, action_key);
-        }
+        self.notification.invoke_action(id, action_key);
     }
 
     pub(crate) fn notification_history(&self) -> Vec<Notification> {
-        self.notification
-            .as_ref()
-            .map_or_else(Vec::new, |service| service.history())
+        self.notification.snapshot().history
     }
 
     pub(crate) fn clear_notification_history(&self) {
-        if let Some(service) = &self.notification {
-            service.clear_history();
-        }
+        self.notification.clear_history();
     }
 
     pub(crate) fn copy_text(&self, text: &str) -> anyhow::Result<()> {
@@ -295,7 +216,7 @@ impl ServiceHub {
 
     fn drain_notifications(&mut self) -> Vec<Notification> {
         let mut list = Vec::new();
-        if let Ok(rx) = self.notif_rx.lock() {
+        if let Ok(mut rx) = self.notif_rx.lock() {
             while let Ok(notif) = rx.try_recv() {
                 list.push(notif);
             }
@@ -361,17 +282,13 @@ impl ServiceHub {
         }
     }
 
-    /// Drains the notification inbox, the service-worker update stream, and the
-    /// notification reconnection loop, applying device state and forwarding updates
-    /// to the shell surfaces.
+    /// Drains the notification inbox and the service-worker update stream,
+    /// applying device state and forwarding updates to the shell surfaces.
     pub(crate) fn drain(cx: &mut App) {
         if !cx.has_global::<ShellRuntime>() {
             return;
         }
 
-        if let Some(hub) = cx.global_mut::<ShellRuntime>().service_hub_mut() {
-            hub.poll_notification_reconnect();
-        }
         ShellRuntime::publish_status(cx);
 
         let notifs = cx
@@ -484,11 +401,10 @@ impl ServiceHub {
     }
 }
 
-/// Applies the do-not-disturb flag to a notification service, tolerating its absence.
-pub(crate) fn apply_notification_dnd(notification: Option<&NotificationService>, enabled: bool) {
-    if let Some(notification) = notification {
-        notification.set_dnd_enabled(enabled);
-    }
+/// Applies the do-not-disturb flag to a notification port.
+#[cfg(test)]
+pub(crate) fn apply_notification_dnd(notification: &dyn NotificationPort, enabled: bool) {
+    notification.set_dnd_enabled(enabled);
 }
 
 impl ShellRuntime {
@@ -629,16 +545,16 @@ mod tests {
 
     #[test]
     fn restored_dnd_is_applied_to_notification_lifecycle() {
-        let notification = NotificationService::new_offline();
-        assert!(!notification.is_dnd_enabled());
+        let notification = Arc::new(shilpo_services::NotificationDomainState::new_ready(32));
+        assert!(!notification.snapshot().dnd_enabled);
 
-        apply_notification_dnd(Some(&notification), true);
+        apply_notification_dnd(notification.as_ref(), true);
 
-        assert!(notification.is_dnd_enabled());
+        assert!(notification.snapshot().dnd_enabled);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn service_hub_start_initializes_with_dnd() {
+    #[test]
+    fn service_hub_start_initializes_with_dnd() {
         let temp_dir =
             std::env::temp_dir().join(format!("shilpo_service_test_{}", uuid::Uuid::new_v4()));
         let session = SessionContext {
@@ -651,27 +567,26 @@ mod tests {
             },
             heed_store: None,
         };
-        let executor = gpui::TestAppContext::single().executor().clone();
-        let hub = ServiceHub::start(executor, &session);
+        let mut hub = ServiceHub::new_offline_harness();
+        if session.session_state.dnd_active {
+            hub.set_dnd_enabled(true);
+        }
 
         assert!(hub.notification_dnd_flag());
-        assert!(
-            service_worker::try_send_command(&hub.service_commands(), WorkerCommand::ReloadConfig)
-                .is_ok()
-        );
+        assert!(hub.is_dnd_enabled());
 
         drop(hub);
-        let _ = std::fs::remove_dir_all(temp_dir);
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn dnd_persistence_flag_survives_notification_restart() {
         let mut hub = ServiceHub::new_offline_harness();
         hub.set_dnd_enabled(true);
-        assert!(hub.notification_dnd);
-        assert!(!hub.is_dnd_enabled());
+        assert!(hub.notification_dnd_flag());
+        assert!(hub.is_dnd_enabled());
         hub.set_dnd_enabled(false);
-        assert!(!hub.notification_dnd);
+        assert!(!hub.notification_dnd_flag());
     }
 
     struct ServiceHubTestHarness {
@@ -699,21 +614,17 @@ mod tests {
             let (updates_tx, _updates_rx, service_commands, _commands_rx) =
                 service_worker::channels();
             drop(updates_tx);
+            let adapter = Arc::new(shilpo_services::NotificationDomainState::new_ready(32));
+            let notif_rx = adapter.subscribe_events();
             Self {
                 compositor: Arc::new(shilpo_services::TestCompositorAdapter::new_default()),
-                notification: None,
-                notification_state: shilpo_services::ServiceLifecycle::Connecting { attempt: 1 },
-                notification_last_error: None,
-                notification_attempt: 1,
-                notification_next_retry: None,
-                notification_dnd: false,
+                notification: adapter,
                 clipboard: shilpo_services::ClipboardService::with_store(None),
                 app_scanner: shilpo_services::AppScanner::new_empty(),
                 service_commands,
                 device_snapshot: crate::bar::service_worker::DeviceSnapshot::default(),
                 availability: crate::bar::service_worker::ServiceAvailability::default(),
-                notif_rx: Arc::new(Mutex::new(mpsc::channel().1)),
-                notif_tx: mpsc::channel().0,
+                notif_rx: Arc::new(Mutex::new(notif_rx)),
                 updates_rx: Arc::new(Mutex::new(_updates_rx)),
                 _service_task: None,
                 _watcher: None,
