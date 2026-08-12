@@ -1,12 +1,12 @@
 use shilpo_services::{
     CancellationReason, DomainLifecycle, DomainVersion, Notification, NotificationCommand,
-    NotificationCommandOutcome, NotificationPort, NotificationRejectionReason, StaleUpdateError,
-    SupervisorState, TestNotificationAdapter,
+    NotificationCommandOutcome, NotificationDomainState, NotificationPort,
+    NotificationRejectionReason, StaleUpdateError, SupervisorState,
 };
 
 #[test]
 fn scenario_01_unavailable_connecting_ready() {
-    let adapter = TestNotificationAdapter::new(10);
+    let adapter = NotificationDomainState::new(10);
     let snap = adapter.snapshot();
     assert_eq!(snap.lifecycle, DomainLifecycle::Unavailable);
     assert_eq!(snap.version, DomainVersion::ZERO);
@@ -25,7 +25,7 @@ fn scenario_01_unavailable_connecting_ready() {
 
 #[test]
 fn scenario_02_reconnect_retains_history_dnd_and_records_last_error() {
-    let adapter = TestNotificationAdapter::new(10);
+    let adapter = NotificationDomainState::new(10);
     adapter.begin_start();
     adapter.mark_ready();
 
@@ -43,7 +43,7 @@ fn scenario_02_reconnect_retains_history_dnd_and_records_last_error() {
 
 #[test]
 fn scenario_03_generation_revision_freshness_and_conflict_rejection() {
-    let adapter = TestNotificationAdapter::new(10);
+    let adapter = NotificationDomainState::new(10);
     adapter.begin_start();
     adapter.mark_ready();
 
@@ -101,7 +101,7 @@ fn scenario_03_generation_revision_freshness_and_conflict_rejection() {
 
 #[test]
 fn scenario_04_bounded_lossless_overflow() {
-    let adapter = TestNotificationAdapter::new(2);
+    let adapter = NotificationDomainState::new(2);
     adapter.set_auto_converge(false);
     adapter.begin_start();
     adapter.mark_ready();
@@ -131,7 +131,7 @@ fn scenario_04_bounded_lossless_overflow() {
 
 #[test]
 fn scenario_05_replace_latest_dnd_supersession() {
-    let adapter = TestNotificationAdapter::new(10);
+    let adapter = NotificationDomainState::new(10);
     adapter.set_auto_converge(false);
     adapter.begin_start();
     adapter.mark_ready();
@@ -160,7 +160,7 @@ fn scenario_05_replace_latest_dnd_supersession() {
 
 #[test]
 fn scenario_06_exactly_once_dismiss_action_dnd_outcomes() {
-    let adapter = TestNotificationAdapter::new(10);
+    let adapter = NotificationDomainState::new(10);
     adapter.set_auto_converge(false);
     adapter.begin_start();
     adapter.mark_ready();
@@ -196,7 +196,7 @@ fn scenario_06_exactly_once_dismiss_action_dnd_outcomes() {
 
 #[test]
 fn scenario_07_owner_replacement_cancellation() {
-    let adapter = TestNotificationAdapter::new(10);
+    let adapter = NotificationDomainState::new(10);
     adapter.set_auto_converge(false);
     adapter.begin_start();
     adapter.mark_ready();
@@ -218,7 +218,7 @@ fn scenario_07_owner_replacement_cancellation() {
 
 #[test]
 fn scenario_08_backoff_quarantine_stable_reset_explicit_reset() {
-    let adapter = TestNotificationAdapter::new(10);
+    let adapter = NotificationDomainState::new(10);
     adapter.begin_start();
     adapter.mark_ready();
 
@@ -261,7 +261,7 @@ fn scenario_08_backoff_quarantine_stable_reset_explicit_reset() {
 
 #[test]
 fn scenario_09_slow_subscriber_latest_snapshot_convergence() {
-    let adapter = TestNotificationAdapter::new(10);
+    let adapter = NotificationDomainState::new(10);
     adapter.set_auto_converge(false);
     adapter.begin_start();
     adapter.mark_ready();
@@ -281,7 +281,7 @@ fn scenario_09_slow_subscriber_latest_snapshot_convergence() {
 
 #[test]
 fn scenario_10_telemetry_counters_and_queue_bounds() {
-    let adapter = TestNotificationAdapter::new(3);
+    let adapter = NotificationDomainState::new(3);
     adapter.begin_start();
     adapter.mark_ready();
 

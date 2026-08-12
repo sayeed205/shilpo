@@ -259,11 +259,11 @@ pub trait NotificationPort: Send + Sync {
 
 /// Controllable manual clock for deterministic time advancement in tests.
 #[derive(Debug, Clone, Default)]
-pub struct ManualClock {
+pub struct NotificationClock {
     now_ms: Arc<AtomicU64>,
 }
 
-impl ManualClock {
+impl NotificationClock {
     pub fn new() -> Self {
         Self {
             now_ms: Arc::new(AtomicU64::new(0)),
@@ -289,7 +289,7 @@ struct PendingCommandItem {
     resolver: CommandResolver,
 }
 
-struct TestAdapterState {
+struct NotificationState {
     supervisor_state: SupervisorState,
     lifecycle: DomainLifecycle,
     owner_generation: u64,
@@ -315,24 +315,24 @@ struct TestAdapterState {
 ///
 /// It is deliberately kept behind the concrete notification service; callers use
 /// `NotificationPort` and cannot select this state machine as a runtime owner.
-pub struct TestNotificationAdapter {
-    clock: ManualClock,
+pub struct NotificationDomainState {
+    clock: NotificationClock,
     capacity: usize,
-    state: Mutex<TestAdapterState>,
+    state: Mutex<NotificationState>,
     watch_tx: watch::Sender<NotificationSnapshot>,
     event_tx: broadcast::Sender<Notification>,
 }
 
-impl TestNotificationAdapter {
+impl NotificationDomainState {
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "mailbox capacity must be positive");
         let initial_snapshot = NotificationSnapshot::default();
         let (watch_tx, _) = watch::channel(initial_snapshot.clone());
         let (event_tx, _) = broadcast::channel(64);
         Self {
-            clock: ManualClock::new(),
+            clock: NotificationClock::new(),
             capacity,
-            state: Mutex::new(TestAdapterState {
+            state: Mutex::new(NotificationState {
                 supervisor_state: SupervisorState::Starting,
                 lifecycle: DomainLifecycle::Unavailable,
                 owner_generation: 0,
@@ -365,7 +365,7 @@ impl TestNotificationAdapter {
         adapter
     }
 
-    pub fn clock(&self) -> &ManualClock {
+    pub fn clock(&self) -> &NotificationClock {
         &self.clock
     }
 
@@ -379,7 +379,7 @@ impl TestNotificationAdapter {
         self.advance_clock_ms(secs * 1000);
     }
 
-    fn snapshot_from_state(state: &TestAdapterState) -> NotificationSnapshot {
+    fn snapshot_from_state(state: &NotificationState) -> NotificationSnapshot {
         NotificationSnapshot {
             version: DomainVersion::new(state.owner_generation, state.revision),
             lifecycle: state.lifecycle,
@@ -391,14 +391,14 @@ impl TestNotificationAdapter {
     }
 
     fn notify_subscribers(
-        state: &TestAdapterState,
+        state: &NotificationState,
         watch_tx: &watch::Sender<NotificationSnapshot>,
     ) {
         let snapshot = Self::snapshot_from_state(state);
         let _ = watch_tx.send(snapshot);
     }
 
-    fn cancel_queue(state: &mut TestAdapterState, reason: CancellationReason) {
+    fn cancel_queue(state: &mut NotificationState, reason: CancellationReason) {
         for item in std::mem::take(&mut state.queue) {
             item.resolver.resolve(CommandOutcome::Cancelled { reason });
         }
@@ -410,7 +410,7 @@ impl TestNotificationAdapter {
     }
 
     fn check_clock_state(
-        state: &mut TestAdapterState,
+        state: &mut NotificationState,
         now_ms: u64,
         watch_tx: &watch::Sender<NotificationSnapshot>,
     ) {
@@ -543,7 +543,7 @@ impl TestNotificationAdapter {
 
     #[allow(clippy::too_many_arguments)]
     fn apply_update(
-        state: &mut TestAdapterState,
+        state: &mut NotificationState,
         version: DomainVersion,
         lifecycle: DomainLifecycle,
         notifications: Vec<Notification>,
@@ -599,7 +599,7 @@ impl TestNotificationAdapter {
     }
 
     fn process_queue_locked(
-        state: &mut TestAdapterState,
+        state: &mut NotificationState,
         watch_tx: &watch::Sender<NotificationSnapshot>,
         event_tx: &broadcast::Sender<Notification>,
     ) {
@@ -662,7 +662,7 @@ impl TestNotificationAdapter {
     }
 }
 
-impl NotificationPort for TestNotificationAdapter {
+impl NotificationPort for NotificationDomainState {
     fn snapshot(&self) -> NotificationSnapshot {
         let mut state = self.state.lock().unwrap();
         Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
@@ -836,7 +836,7 @@ impl NotificationSignalSink for DbusNotificationSignalSink {
 
 /// Dynamic Notification Daemon Service implementing org.freedesktop.Notifications and NotificationPort.
 pub struct NotificationService {
-    adapter: Arc<TestNotificationAdapter>,
+    adapter: Arc<NotificationDomainState>,
     connection: Arc<Mutex<Option<Connection>>>,
     signal_sink: Arc<Mutex<Option<Arc<dyn NotificationSignalSink>>>>,
 }
@@ -868,7 +868,7 @@ impl NotificationService {
     }
 
     pub fn new_offline() -> Self {
-        let adapter = Arc::new(TestNotificationAdapter::new_ready(32));
+        let adapter = Arc::new(NotificationDomainState::new_ready(32));
         Self {
             adapter,
             connection: Arc::new(Mutex::new(None)),
@@ -878,7 +878,7 @@ impl NotificationService {
 
     /// Constructs an offline service without claiming the freedesktop owner name.
     pub fn new_unavailable() -> Self {
-        let adapter = Arc::new(TestNotificationAdapter::new(32));
+        let adapter = Arc::new(NotificationDomainState::new(32));
         Self {
             adapter,
             connection: Arc::new(Mutex::new(None)),
@@ -887,7 +887,7 @@ impl NotificationService {
     }
 
     pub async fn new_with_connection(connection: Connection) -> Result<Self> {
-        let adapter = Arc::new(TestNotificationAdapter::new(32));
+        let adapter = Arc::new(NotificationDomainState::new(32));
         adapter.begin_start();
 
         let server = NotificationServer {
@@ -1110,7 +1110,7 @@ impl NotificationPort for NotificationService {
 }
 
 struct NotificationServer {
-    adapter: Arc<TestNotificationAdapter>,
+    adapter: Arc<NotificationDomainState>,
     next_id: Arc<Mutex<u32>>,
 }
 
@@ -1290,7 +1290,7 @@ mod tests {
 
     #[test]
     fn test_notification_urgency_and_action_parsing() {
-        let adapter = Arc::new(TestNotificationAdapter::new(32));
+        let adapter = Arc::new(NotificationDomainState::new(32));
         adapter.begin_start();
         adapter.mark_ready();
 

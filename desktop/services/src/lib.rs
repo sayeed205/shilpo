@@ -58,8 +58,8 @@ pub use network::{NetworkCommand, NetworkInfo, NetworkService, VpnConnection};
 pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_use_dark_mode};
 pub use notifications::{
     Notification, NotificationCloseReason, NotificationCommand, NotificationCommandOutcome,
-    NotificationPort, NotificationRejectionReason, NotificationService, NotificationSnapshot,
-    NotificationUrgency, TestNotificationAdapter,
+    NotificationDomainState, NotificationPort, NotificationRejectionReason, NotificationService,
+    NotificationSnapshot, NotificationUrgency,
 };
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
 

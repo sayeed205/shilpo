@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn restored_dnd_is_applied_to_notification_lifecycle() {
-        let notification = Arc::new(shilpo_services::TestNotificationAdapter::new_ready(32));
+        let notification = Arc::new(shilpo_services::NotificationDomainState::new_ready(32));
         assert!(!notification.snapshot().dnd_enabled);
 
         apply_notification_dnd(notification.as_ref(), true);
@@ -614,7 +614,7 @@ mod tests {
             let (updates_tx, _updates_rx, service_commands, _commands_rx) =
                 service_worker::channels();
             drop(updates_tx);
-            let adapter = Arc::new(shilpo_services::TestNotificationAdapter::new_ready(32));
+            let adapter = Arc::new(shilpo_services::NotificationDomainState::new_ready(32));
             let notif_rx = adapter.subscribe_events();
             Self {
                 compositor: Arc::new(shilpo_services::TestCompositorAdapter::new_default()),
