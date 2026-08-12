@@ -311,7 +311,10 @@ struct TestAdapterState {
     auto_converge: bool,
 }
 
-/// Hermetic in-memory implementation of NotificationPort for contract testing and offline operation.
+/// In-memory notification domain state used by the port and deterministic tests.
+///
+/// It is deliberately kept behind the concrete notification service; callers use
+/// `NotificationPort` and cannot select this state machine as a runtime owner.
 pub struct TestNotificationAdapter {
     clock: ManualClock,
     capacity: usize,
@@ -873,6 +876,16 @@ impl NotificationService {
         }
     }
 
+    /// Constructs an offline service without claiming the freedesktop owner name.
+    pub fn new_unavailable() -> Self {
+        let adapter = Arc::new(TestNotificationAdapter::new(32));
+        Self {
+            adapter,
+            _connection: None,
+            signal_sink: None,
+        }
+    }
+
     pub async fn new_with_connection(connection: Connection) -> Result<Self> {
         let adapter = Arc::new(TestNotificationAdapter::new(32));
         adapter.begin_start();
@@ -892,6 +905,28 @@ impl NotificationService {
             .await?;
 
         adapter.mark_ready();
+
+        // Keep the authoritative lifecycle aligned with the transport. A closed
+        // session bus must never leave the published snapshot in Ready.
+        let monitor_connection = connection.clone();
+        let monitor_adapter = adapter.clone();
+        connection
+            .executor()
+            .spawn(
+                async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        if monitor_connection.is_closed() {
+                            monitor_adapter.report_owner_failure(
+                                "notification DBus connection closed".to_string(),
+                            );
+                            break;
+                        }
+                    }
+                },
+                "notification-owner-monitor",
+            )
+            .detach();
 
         let signal_emitter =
             SignalEmitter::new(&connection, NOTIFICATION_OBJECT_PATH)?.into_owned();

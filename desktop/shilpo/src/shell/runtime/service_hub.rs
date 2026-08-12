@@ -64,7 +64,7 @@ impl ServiceHub {
                 Ok(service) => Arc::new(service),
                 Err(error) => {
                     tracing::warn!(error = %error, "notification service unavailable; using offline port");
-                    Arc::new(shilpo_services::TestNotificationAdapter::new_ready(32))
+                    Arc::new(NotificationService::new_unavailable())
                 }
             };
 
