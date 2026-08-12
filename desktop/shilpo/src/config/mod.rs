@@ -1,6 +1,7 @@
 pub mod changeset;
 pub mod merge;
 pub mod migration;
+pub mod overrides;
 pub mod provenance;
 pub mod report;
 pub mod resolver;
@@ -15,6 +16,9 @@ pub use migration::{
     LATEST_CONFIG_VERSION, Migration, MigrationError, MigrationMode, MigrationOutcome,
     MigrationRegistry, MigrationService, PrimaryStatus, migrate_primary_for_startup,
     reload_block_reason,
+};
+pub use overrides::{
+    ConfigOverrideService, OverrideEdit, OverrideError, OverrideFs, OverrideOutcome, StdOverrideFs,
 };
 pub use provenance::{ConfigProvenance, format_key};
 pub use report::EffectiveWithOriginsReport;
