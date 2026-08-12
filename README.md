@@ -19,18 +19,18 @@ featuring Material Design 3 (M3) & Material Expressive design inspirations.
 
 ## Workspace Crates
 
-| Crate | Description | Directory |
-|:---|:---|:---|
-| **`shilpo-ui`** | Core desktop UI component library for GPUI applications | [`core/ui`](core/ui) |
-| **`shilpo-theme`** | M3 color math & data types (*cross-platform core*) | [`core/theme`](core/theme) |
-| **`shilpo-macros`** | Procedural macros for icon generation and plot traits | [`core/macros`](core/macros) |
-| **`shilpo-ext-api`** | Cross-platform extension contract | [`core/ext-api`](core/ext-api) |
-| **`shilpo`** | Consolidated desktop product (Shell, Settings, CLI, Config) | [`desktop/shilpo`](desktop/shilpo) |
-| **`shilpo-device`** | Presentation-neutral device domain protocol & typed DBus client | [`desktop/device`](desktop/device) |
-| **`shilpo-services`** | Linux system service integrations & capture domain | [`desktop/services`](desktop/services) |
-| **`shilpo-ext-runtime`** | Wasmtime extension runtime | [`desktop/ext-runtime`](desktop/ext-runtime) |
-| **`shilpo-theme-daemon`** | Theme DBus daemon & system sync | [`desktop/theme-daemon`](desktop/theme-daemon) |
-| **`storybook`** | Interactive component gallery application | [`apps/storybook`](apps/storybook) |
+| Crate                     | Description                                                     | Directory                                      |
+|:--------------------------|:----------------------------------------------------------------|:-----------------------------------------------|
+| **`shilpo-ui`**           | Core desktop UI component library for GPUI applications         | [`core/ui`](core/ui)                           |
+| **`shilpo-theme`**        | M3 color math & data types (*cross-platform core*)              | [`core/theme`](core/theme)                     |
+| **`shilpo-macros`**       | Procedural macros for icon generation and plot traits           | [`core/macros`](core/macros)                   |
+| **`shilpo-ext-api`**      | Cross-platform extension contract                               | [`core/ext-api`](core/ext-api)                 |
+| **`shilpo`**              | Consolidated desktop product (Shell, Settings, CLI, Config)     | [`desktop/shilpo`](desktop/shilpo)             |
+| **`shilpo-device`**       | Presentation-neutral device domain protocol & typed DBus client | [`desktop/device`](desktop/device)             |
+| **`shilpo-services`**     | Linux system service integrations & capture domain              | [`desktop/services`](desktop/services)         |
+| **`shilpo-ext-runtime`**  | Wasmtime extension runtime                                      | [`desktop/ext-runtime`](desktop/ext-runtime)   |
+| **`shilpo-theme-daemon`** | Theme DBus daemon & system sync                                 | [`desktop/theme-daemon`](desktop/theme-daemon) |
+| **`storybook`**           | Interactive component gallery application                       | [`apps/storybook`](apps/storybook)             |
 
 ---
 
