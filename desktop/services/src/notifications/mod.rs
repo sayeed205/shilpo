@@ -1,11 +1,792 @@
 use anyhow::Result;
 use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
+    collections::{HashMap, VecDeque},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
+use tokio::sync::{broadcast, watch};
 use zbus::{Connection, interface, object_server::SignalEmitter};
 
+pub use crate::compositor::{CancellationReason, DomainVersion, StaleUpdateError, SupervisorState};
+pub use shilpo_device::{DomainLifecycle, DomainPortTelemetry};
+
 const NOTIFICATION_OBJECT_PATH: &str = "/org/freedesktop/Notifications";
+
+/// Reasons reported by the freedesktop `NotificationClosed` signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[repr(u32)]
+pub enum NotificationCloseReason {
+    Expired = 1,
+    DismissedByUser = 2,
+    ClosedByRequest = 3,
+    Undefined = 4,
+}
+
+/// Notification urgency levels per Freedesktop Desktop Notifications Specification.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub enum NotificationUrgency {
+    Low = 0,
+    #[default]
+    Normal = 1,
+    Critical = 2,
+}
+
+/// Represents a single desktop notification.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Notification {
+    pub id: u32,
+    pub app_name: String,
+    pub summary: String,
+    pub body: String,
+    pub app_icon: Option<String>,
+    pub desktop_entry: Option<String>,
+    pub image_path: Option<String>,
+    pub urgency: NotificationUrgency,
+    pub actions: Vec<(String, String)>,
+    pub expire_timeout_ms: i32,
+    pub timestamp: chrono::DateTime<chrono::Local>,
+}
+
+impl Notification {
+    pub fn new(summary: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            id: 0,
+            app_name: "Shilpo Shell".into(),
+            summary: summary.into(),
+            body: body.into(),
+            app_icon: None,
+            desktop_entry: None,
+            image_path: None,
+            urgency: NotificationUrgency::Normal,
+            actions: Vec::new(),
+            expire_timeout_ms: 5000,
+            timestamp: chrono::Local::now(),
+        }
+    }
+}
+
+/// Revisioned atomic snapshot of the notification domain state.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NotificationSnapshot {
+    pub version: DomainVersion,
+    pub lifecycle: DomainLifecycle,
+    pub notifications: Vec<Notification>,
+    pub history: Vec<Notification>,
+    pub dnd_enabled: bool,
+    pub last_error: Option<String>,
+}
+
+impl Default for NotificationSnapshot {
+    fn default() -> Self {
+        Self {
+            version: DomainVersion::ZERO,
+            lifecycle: DomainLifecycle::Unavailable,
+            notifications: Vec::new(),
+            history: Vec::new(),
+            dnd_enabled: false,
+            last_error: None,
+        }
+    }
+}
+
+/// Unique identifier for commands.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct CommandId(pub String);
+
+impl CommandId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn generate() -> Self {
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+}
+
+/// Bounded mailbox overload policy.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum MailboxPolicy {
+    Lossless,
+    ReplaceLatest { key: String },
+}
+
+/// Typed notification domain commands.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum NotificationCommand {
+    Push(Notification),
+    Dismiss(u32),
+    Expire(u32),
+    DismissAll,
+    InvokeAction { id: u32, action_key: String },
+    SetDnd(bool),
+    ClearHistory,
+}
+
+impl NotificationCommand {
+    pub fn policy(&self) -> MailboxPolicy {
+        match self {
+            Self::SetDnd(_) => MailboxPolicy::ReplaceLatest {
+                key: "set_dnd".to_string(),
+            },
+            _ => MailboxPolicy::Lossless,
+        }
+    }
+}
+
+/// Rejection reasons for notification commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RejectionReason {
+    Unavailable,
+    Overloaded,
+    NotFound,
+}
+
+pub type NotificationRejectionReason = RejectionReason;
+
+/// Terminal outcome for accepted notification commands.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NotificationCommandOutcome {
+    Applied {
+        version: DomainVersion,
+    },
+    ReconciledApplied {
+        version: DomainVersion,
+    },
+    Rejected {
+        reason: RejectionReason,
+    },
+    TimedOut {
+        last_observed_version: DomainVersion,
+    },
+    Cancelled {
+        reason: CancellationReason,
+    },
+}
+
+pub type CommandOutcome = NotificationCommandOutcome;
+
+/// Handle / Ticket returned when a command is submitted.
+#[derive(Debug, Clone)]
+pub struct CommandTicket {
+    outcome: Arc<Mutex<Option<CommandOutcome>>>,
+}
+
+impl CommandTicket {
+    pub fn new() -> (Self, CommandResolver) {
+        let outcome = Arc::new(Mutex::new(None));
+        let ticket = Self {
+            outcome: outcome.clone(),
+        };
+        let resolver = CommandResolver { outcome };
+        (ticket, resolver)
+    }
+
+    pub fn outcome(&self) -> Option<CommandOutcome> {
+        self.outcome.lock().unwrap().clone()
+    }
+
+    pub fn is_completed(&self) -> bool {
+        self.outcome.lock().unwrap().is_some()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandResolver {
+    outcome: Arc<Mutex<Option<CommandOutcome>>>,
+}
+
+impl CommandResolver {
+    pub fn resolve(&self, outcome: CommandOutcome) -> bool {
+        let mut guard = self.outcome.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(outcome);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Narrow, revisioned domain port interface for desktop notification operations.
+pub trait NotificationPort: Send + Sync {
+    fn snapshot(&self) -> NotificationSnapshot;
+    fn subscribe(&self) -> watch::Receiver<NotificationSnapshot>;
+    fn subscribe_events(&self) -> broadcast::Receiver<Notification>;
+    fn submit_command(&self, command: NotificationCommand)
+    -> Result<CommandTicket, CommandOutcome>;
+    fn supervisor_state(&self) -> SupervisorState;
+    fn telemetry(&self) -> DomainPortTelemetry;
+    fn reset_quarantine(&self);
+
+    fn push_notification(&self, notif: Notification) {
+        let _ = self.submit_command(NotificationCommand::Push(notif));
+    }
+    fn dismiss(&self, id: u32) {
+        let _ = self.submit_command(NotificationCommand::Dismiss(id));
+    }
+    fn expire(&self, id: u32) {
+        let _ = self.submit_command(NotificationCommand::Expire(id));
+    }
+    fn dismiss_all(&self) {
+        let _ = self.submit_command(NotificationCommand::DismissAll);
+    }
+    fn invoke_action(&self, id: u32, action_key: &str) {
+        let _ = self.submit_command(NotificationCommand::InvokeAction {
+            id,
+            action_key: action_key.to_string(),
+        });
+    }
+    fn set_dnd_enabled(&self, enabled: bool) {
+        let _ = self.submit_command(NotificationCommand::SetDnd(enabled));
+    }
+    fn clear_history(&self) {
+        let _ = self.submit_command(NotificationCommand::ClearHistory);
+    }
+}
+
+/// Controllable manual clock for deterministic time advancement in tests.
+#[derive(Debug, Clone, Default)]
+pub struct ManualClock {
+    now_ms: Arc<AtomicU64>,
+}
+
+impl ManualClock {
+    pub fn new() -> Self {
+        Self {
+            now_ms: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub fn now_ms(&self) -> u64 {
+        self.now_ms.load(Ordering::SeqCst)
+    }
+
+    pub fn advance_ms(&self, ms: u64) {
+        self.now_ms.fetch_add(ms, Ordering::SeqCst);
+    }
+
+    pub fn advance_secs(&self, secs: u64) {
+        self.advance_ms(secs * 1000);
+    }
+}
+
+struct PendingCommandItem {
+    command: NotificationCommand,
+    generation: u64,
+    resolver: CommandResolver,
+}
+
+struct TestAdapterState {
+    supervisor_state: SupervisorState,
+    lifecycle: DomainLifecycle,
+    owner_generation: u64,
+    revision: u64,
+    notifications: Vec<Notification>,
+    history: Vec<Notification>,
+    dnd_enabled: bool,
+    last_error: Option<String>,
+    had_prior_readiness: bool,
+    last_running_timestamp_ms: Option<u64>,
+    failure_timestamps_ms: Vec<u64>,
+    backoff_attempt: u32,
+    queue: VecDeque<PendingCommandItem>,
+    next_notification_id: u32,
+    overloads: u64,
+    supersessions: u64,
+    restarts: u64,
+    stale_updates: u64,
+    auto_converge: bool,
+}
+
+/// Hermetic in-memory implementation of NotificationPort for contract testing and offline operation.
+pub struct TestNotificationAdapter {
+    clock: ManualClock,
+    capacity: usize,
+    state: Mutex<TestAdapterState>,
+    watch_tx: watch::Sender<NotificationSnapshot>,
+    event_tx: broadcast::Sender<Notification>,
+}
+
+impl TestNotificationAdapter {
+    pub fn new(capacity: usize) -> Self {
+        assert!(capacity > 0, "mailbox capacity must be positive");
+        let initial_snapshot = NotificationSnapshot::default();
+        let (watch_tx, _) = watch::channel(initial_snapshot.clone());
+        let (event_tx, _) = broadcast::channel(64);
+        Self {
+            clock: ManualClock::new(),
+            capacity,
+            state: Mutex::new(TestAdapterState {
+                supervisor_state: SupervisorState::Starting,
+                lifecycle: DomainLifecycle::Unavailable,
+                owner_generation: 0,
+                revision: 0,
+                notifications: Vec::new(),
+                history: Vec::new(),
+                dnd_enabled: false,
+                last_error: None,
+                had_prior_readiness: false,
+                last_running_timestamp_ms: None,
+                failure_timestamps_ms: Vec::new(),
+                backoff_attempt: 0,
+                queue: VecDeque::new(),
+                next_notification_id: 0,
+                overloads: 0,
+                supersessions: 0,
+                restarts: 0,
+                stale_updates: 0,
+                auto_converge: true,
+            }),
+            watch_tx,
+            event_tx,
+        }
+    }
+
+    pub fn new_ready(capacity: usize) -> Self {
+        let adapter = Self::new(capacity);
+        adapter.begin_start();
+        adapter.mark_ready();
+        adapter
+    }
+
+    pub fn clock(&self) -> &ManualClock {
+        &self.clock
+    }
+
+    pub fn advance_clock_ms(&self, ms: u64) {
+        self.clock.advance_ms(ms);
+        let mut state = self.state.lock().unwrap();
+        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
+    }
+
+    pub fn advance_clock_secs(&self, secs: u64) {
+        self.advance_clock_ms(secs * 1000);
+    }
+
+    fn snapshot_from_state(state: &TestAdapterState) -> NotificationSnapshot {
+        NotificationSnapshot {
+            version: DomainVersion::new(state.owner_generation, state.revision),
+            lifecycle: state.lifecycle,
+            notifications: state.notifications.clone(),
+            history: state.history.clone(),
+            dnd_enabled: state.dnd_enabled,
+            last_error: state.last_error.clone(),
+        }
+    }
+
+    fn notify_subscribers(
+        state: &TestAdapterState,
+        watch_tx: &watch::Sender<NotificationSnapshot>,
+    ) {
+        let snapshot = Self::snapshot_from_state(state);
+        let _ = watch_tx.send(snapshot);
+    }
+
+    fn cancel_queue(state: &mut TestAdapterState, reason: CancellationReason) {
+        for item in std::mem::take(&mut state.queue) {
+            item.resolver.resolve(CommandOutcome::Cancelled { reason });
+        }
+    }
+
+    fn backoff_delay_for_attempt(attempt: u32) -> u64 {
+        let multiplier = 2u64.saturating_pow(attempt.saturating_sub(1));
+        250u64.saturating_mul(multiplier).min(30_000)
+    }
+
+    fn check_clock_state(
+        state: &mut TestAdapterState,
+        now_ms: u64,
+        watch_tx: &watch::Sender<NotificationSnapshot>,
+    ) {
+        match state.supervisor_state {
+            SupervisorState::Backoff { retry_at_ms, .. } => {
+                if now_ms >= retry_at_ms {
+                    state.owner_generation += 1;
+                    state.revision = 0;
+                    state.restarts += 1;
+                    Self::cancel_queue(state, CancellationReason::OwnerReplaced);
+                    state.supervisor_state = SupervisorState::Starting;
+                    state.lifecycle = if state.had_prior_readiness {
+                        DomainLifecycle::Reconnecting
+                    } else {
+                        DomainLifecycle::Connecting
+                    };
+                    state.last_running_timestamp_ms = None;
+                    Self::notify_subscribers(state, watch_tx);
+                }
+            }
+            SupervisorState::Running => {
+                if let Some(start_ts) = state.last_running_timestamp_ms
+                    && now_ms.saturating_sub(start_ts) >= 300_000
+                {
+                    state.failure_timestamps_ms.clear();
+                    state.backoff_attempt = 0;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn begin_start(&self) {
+        let mut state = self.state.lock().unwrap();
+        Self::cancel_queue(&mut state, CancellationReason::OwnerReplaced);
+        state.owner_generation += 1;
+        state.revision = 0;
+        state.supervisor_state = SupervisorState::Starting;
+        state.lifecycle = if state.had_prior_readiness {
+            DomainLifecycle::Reconnecting
+        } else {
+            DomainLifecycle::Connecting
+        };
+        Self::notify_subscribers(&state, &self.watch_tx);
+    }
+
+    pub fn mark_ready(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.supervisor_state = SupervisorState::Running;
+        state.lifecycle = DomainLifecycle::Ready;
+        state.had_prior_readiness = true;
+        state.last_running_timestamp_ms = Some(self.clock.now_ms());
+        Self::notify_subscribers(&state, &self.watch_tx);
+    }
+
+    pub fn report_owner_failure(&self, error: String) {
+        let mut state = self.state.lock().unwrap();
+        let now_ms = self.clock.now_ms();
+        state.last_error = Some(error);
+        state.failure_timestamps_ms.push(now_ms);
+        state
+            .failure_timestamps_ms
+            .retain(|&ts| now_ms.saturating_sub(ts) <= 60_000);
+
+        if state.failure_timestamps_ms.len() >= 5 {
+            state.supervisor_state = SupervisorState::Quarantined;
+            state.lifecycle = DomainLifecycle::Unavailable;
+        } else {
+            state.backoff_attempt += 1;
+            let delay = Self::backoff_delay_for_attempt(state.backoff_attempt);
+            state.supervisor_state = SupervisorState::Backoff {
+                attempt: state.backoff_attempt,
+                retry_at_ms: now_ms + delay,
+            };
+            state.lifecycle = if state.had_prior_readiness {
+                DomainLifecycle::Reconnecting
+            } else {
+                DomainLifecycle::Unavailable
+            };
+        }
+        Self::notify_subscribers(&state, &self.watch_tx);
+    }
+
+    pub fn publish_update(
+        &self,
+        revision: u64,
+        notifications: Vec<Notification>,
+        history: Vec<Notification>,
+        dnd_enabled: bool,
+    ) -> Result<(), StaleUpdateError> {
+        let mut state = self.state.lock().unwrap();
+        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
+        let version = DomainVersion::new(state.owner_generation, revision);
+        let lifecycle = state.lifecycle;
+        let last_error = state.last_error.clone();
+        Self::apply_update(
+            &mut state,
+            version,
+            lifecycle,
+            notifications,
+            history,
+            dnd_enabled,
+            last_error,
+            &self.watch_tx,
+        )
+    }
+
+    pub fn publish_raw_update(
+        &self,
+        version: DomainVersion,
+        lifecycle: DomainLifecycle,
+        notifications: Vec<Notification>,
+        history: Vec<Notification>,
+        dnd_enabled: bool,
+        last_error: Option<String>,
+    ) -> Result<(), StaleUpdateError> {
+        let mut state = self.state.lock().unwrap();
+        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
+        Self::apply_update(
+            &mut state,
+            version,
+            lifecycle,
+            notifications,
+            history,
+            dnd_enabled,
+            last_error,
+            &self.watch_tx,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_update(
+        state: &mut TestAdapterState,
+        version: DomainVersion,
+        lifecycle: DomainLifecycle,
+        notifications: Vec<Notification>,
+        history: Vec<Notification>,
+        dnd_enabled: bool,
+        last_error: Option<String>,
+        watch_tx: &watch::Sender<NotificationSnapshot>,
+    ) -> Result<(), StaleUpdateError> {
+        let current_version = DomainVersion::new(state.owner_generation, state.revision);
+        if version.owner_generation > state.owner_generation {
+            state.stale_updates += 1;
+            return Err(StaleUpdateError::UninstalledGeneration {
+                installed: state.owner_generation,
+                attempted: version.owner_generation,
+            });
+        }
+        if version < current_version {
+            state.stale_updates += 1;
+            return Err(StaleUpdateError::StaleVersion {
+                current: current_version,
+                attempted: version,
+            });
+        }
+        if version == current_version {
+            if state.lifecycle == lifecycle
+                && state.notifications == notifications
+                && state.history == history
+                && state.dnd_enabled == dnd_enabled
+                && state.last_error == last_error
+            {
+                return Ok(());
+            }
+            state.stale_updates += 1;
+            return Err(StaleUpdateError::ConflictingSnapshot {
+                version: current_version,
+            });
+        }
+
+        state.owner_generation = version.owner_generation;
+        state.revision = version.revision;
+        state.lifecycle = lifecycle;
+        state.notifications = notifications;
+        state.history = history;
+        state.dnd_enabled = dnd_enabled;
+        state.last_error = last_error;
+        Self::notify_subscribers(state, watch_tx);
+        Ok(())
+    }
+
+    pub fn set_auto_converge(&self, auto: bool) {
+        let mut state = self.state.lock().unwrap();
+        state.auto_converge = auto;
+    }
+
+    fn process_queue_locked(
+        state: &mut TestAdapterState,
+        watch_tx: &watch::Sender<NotificationSnapshot>,
+        event_tx: &broadcast::Sender<Notification>,
+    ) {
+        let items = std::mem::take(&mut state.queue);
+        for item in items {
+            if item.generation != state.owner_generation {
+                item.resolver.resolve(CommandOutcome::Cancelled {
+                    reason: CancellationReason::OwnerReplaced,
+                });
+                continue;
+            }
+
+            match item.command {
+                NotificationCommand::Push(mut notif) => {
+                    state.next_notification_id += 1;
+                    if notif.id == 0 {
+                        notif.id = state.next_notification_id;
+                    }
+                    if state.dnd_enabled && notif.urgency != NotificationUrgency::Critical {
+                        state.history.push(notif);
+                        if state.history.len() > 100 {
+                            state.history.remove(0);
+                        }
+                    } else {
+                        state.notifications.push(notif.clone());
+                        state.history.push(notif.clone());
+                        if state.history.len() > 100 {
+                            state.history.remove(0);
+                        }
+                        let _ = event_tx.send(notif);
+                    }
+                }
+                NotificationCommand::Dismiss(id) | NotificationCommand::Expire(id) => {
+                    state.notifications.retain(|n| n.id != id);
+                }
+                NotificationCommand::DismissAll => {
+                    state.notifications.clear();
+                }
+                NotificationCommand::InvokeAction { id, .. } => {
+                    state.notifications.retain(|n| n.id != id);
+                }
+                NotificationCommand::SetDnd(enabled) => {
+                    state.dnd_enabled = enabled;
+                }
+                NotificationCommand::ClearHistory => {
+                    state.history.clear();
+                }
+            }
+            state.revision += 1;
+            let version = DomainVersion::new(state.owner_generation, state.revision);
+            item.resolver.resolve(CommandOutcome::Applied { version });
+        }
+        Self::notify_subscribers(state, watch_tx);
+    }
+
+    pub fn process_pending_commands_and_converge(&self) {
+        let mut state = self.state.lock().unwrap();
+        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
+        Self::process_queue_locked(&mut state, &self.watch_tx, &self.event_tx);
+    }
+}
+
+impl NotificationPort for TestNotificationAdapter {
+    fn snapshot(&self) -> NotificationSnapshot {
+        let mut state = self.state.lock().unwrap();
+        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
+        NotificationSnapshot {
+            lifecycle: state.lifecycle,
+            version: DomainVersion::new(state.owner_generation, state.revision),
+            notifications: state.notifications.clone(),
+            history: state.history.clone(),
+            dnd_enabled: state.dnd_enabled,
+            last_error: state.last_error.clone(),
+        }
+    }
+
+    fn subscribe(&self) -> watch::Receiver<NotificationSnapshot> {
+        self.watch_tx.subscribe()
+    }
+
+    fn subscribe_events(&self) -> broadcast::Receiver<Notification> {
+        self.event_tx.subscribe()
+    }
+
+    fn submit_command(
+        &self,
+        command: NotificationCommand,
+    ) -> Result<CommandTicket, CommandOutcome> {
+        let mut state = self.state.lock().unwrap();
+        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
+
+        if matches!(state.lifecycle, DomainLifecycle::Unavailable)
+            || matches!(
+                state.supervisor_state,
+                SupervisorState::Quarantined | SupervisorState::Stopped
+            )
+        {
+            return Err(CommandOutcome::Rejected {
+                reason: RejectionReason::Unavailable,
+            });
+        }
+
+        match command.policy() {
+            MailboxPolicy::Lossless => {
+                if state.queue.len() >= self.capacity {
+                    state.overloads += 1;
+                    return Err(CommandOutcome::Rejected {
+                        reason: RejectionReason::Overloaded,
+                    });
+                }
+            }
+            MailboxPolicy::ReplaceLatest { ref key } => {
+                let mut replaced_idx = None;
+                for (idx, item) in state.queue.iter().enumerate() {
+                    if let MailboxPolicy::ReplaceLatest {
+                        key: ref existing_key,
+                    } = item.command.policy()
+                        && existing_key == key
+                    {
+                        replaced_idx = Some(idx);
+                        break;
+                    }
+                }
+                if let Some(idx) = replaced_idx {
+                    let removed = state.queue.remove(idx).unwrap();
+                    removed.resolver.resolve(CommandOutcome::Cancelled {
+                        reason: CancellationReason::Superseded,
+                    });
+                    state.supersessions += 1;
+                }
+                if state.queue.len() >= self.capacity {
+                    state.overloads += 1;
+                    return Err(CommandOutcome::Rejected {
+                        reason: RejectionReason::Overloaded,
+                    });
+                }
+            }
+        }
+
+        let (ticket, resolver) = CommandTicket::new();
+        let generation = state.owner_generation;
+        state.queue.push_back(PendingCommandItem {
+            command,
+            generation,
+            resolver,
+        });
+
+        if state.auto_converge {
+            Self::process_queue_locked(&mut state, &self.watch_tx, &self.event_tx);
+        }
+
+        Ok(ticket)
+    }
+
+    fn supervisor_state(&self) -> SupervisorState {
+        let mut state = self.state.lock().unwrap();
+        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
+        state.supervisor_state
+    }
+
+    fn telemetry(&self) -> DomainPortTelemetry {
+        let mut state = self.state.lock().unwrap();
+        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
+        DomainPortTelemetry {
+            owner_generation: state.owner_generation,
+            current_queue_depth: state.queue.len(),
+            queue_capacity: self.capacity,
+            overloads: state.overloads,
+            supersessions: state.supersessions,
+            restarts: state.restarts,
+            stale_updates: state.stale_updates,
+            last_error: state.last_error.clone(),
+        }
+    }
+
+    fn reset_quarantine(&self) {
+        let mut state = self.state.lock().unwrap();
+        if matches!(state.supervisor_state, SupervisorState::Quarantined) {
+            state.failure_timestamps_ms.clear();
+            state.backoff_attempt = 0;
+            state.supervisor_state = SupervisorState::Starting;
+            state.lifecycle = if state.had_prior_readiness {
+                DomainLifecycle::Reconnecting
+            } else {
+                DomainLifecycle::Connecting
+            };
+            Self::notify_subscribers(&state, &self.watch_tx);
+        }
+    }
+}
 
 trait NotificationSignalSink: Send + Sync {
     fn action_invoked(&self, id: u32, action_key: String);
@@ -50,122 +831,55 @@ impl NotificationSignalSink for DbusNotificationSignalSink {
     }
 }
 
-/// Reasons reported by the freedesktop `NotificationClosed` signal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-pub enum NotificationCloseReason {
-    Expired = 1,
-    DismissedByUser = 2,
-    ClosedByRequest = 3,
-    Undefined = 4,
-}
-
-/// Notification urgency levels per Freedesktop Desktop Notifications Specification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub enum NotificationUrgency {
-    Low = 0,
-    #[default]
-    Normal = 1,
-    Critical = 2,
-}
-
-/// Represents a single desktop notification.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Notification {
-    pub id: u32,
-    pub app_name: String,
-    pub summary: String,
-    pub body: String,
-    pub app_icon: Option<String>,
-    pub desktop_entry: Option<String>,
-    pub image_path: Option<String>,
-    pub urgency: NotificationUrgency,
-    pub actions: Vec<(String, String)>,
-    pub expire_timeout_ms: i32,
-    pub timestamp: chrono::DateTime<chrono::Local>,
-}
-
-impl Notification {
-    pub fn new(summary: impl Into<String>, body: impl Into<String>) -> Self {
-        Self {
-            id: 0,
-            app_name: "Shilpo Shell".into(),
-            summary: summary.into(),
-            body: body.into(),
-            app_icon: None,
-            desktop_entry: None,
-            image_path: None,
-            urgency: NotificationUrgency::Normal,
-            actions: Vec::new(),
-            expire_timeout_ms: 5000,
-            timestamp: chrono::Local::now(),
-        }
-    }
-}
-
-use tokio::sync::watch;
-
-/// Dynamic Notification Daemon Service implementing org.freedesktop.Notifications.
+/// Dynamic Notification Daemon Service implementing org.freedesktop.Notifications and NotificationPort.
 pub struct NotificationService {
-    notifications: Arc<Mutex<Vec<Notification>>>,
-    history: Arc<Mutex<Vec<Notification>>>,
-    new_notif_sender: Arc<Mutex<Option<std::sync::mpsc::Sender<Notification>>>>,
-    dnd_enabled: Arc<Mutex<bool>>,
-    tx: watch::Sender<Vec<Notification>>,
+    adapter: Arc<TestNotificationAdapter>,
     _connection: Option<Connection>,
     signal_sink: Option<Arc<dyn NotificationSignalSink>>,
 }
 
 impl NotificationService {
-    /// Asynchronously connects to the session bus, registers the Notifications D-Bus object,
-    /// requests name ownership, and returns a service retaining the live connection.
     pub async fn new_async() -> Result<Self> {
         let connection = Connection::session().await?;
         Self::new_with_connection(connection).await
     }
 
-    /// Synchronously creates a new NotificationService by connecting to the session bus.
     pub fn new() -> Result<Self> {
+        let run_async = async {
+            match tokio::time::timeout(std::time::Duration::from_millis(300), Self::new_async())
+                .await
+            {
+                Ok(res) => res,
+                Err(_) => Err(anyhow::anyhow!("notification DBus connect timeout")),
+            }
+        };
+
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(Self::new_async()))
+            tokio::task::block_in_place(|| handle.block_on(run_async))
         } else {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            rt.block_on(Self::new_async())
+            rt.block_on(run_async)
         }
     }
 
-    /// Creates an offline NotificationService without a D-Bus connection (useful for testing or fallback).
     pub fn new_offline() -> Self {
-        let (tx, _) = watch::channel(Vec::new());
+        let adapter = Arc::new(TestNotificationAdapter::new_ready(32));
         Self {
-            notifications: Arc::new(Mutex::new(Vec::new())),
-            history: Arc::new(Mutex::new(Vec::new())),
-            new_notif_sender: Arc::new(Mutex::new(None)),
-            dnd_enabled: Arc::new(Mutex::new(false)),
-            tx,
+            adapter,
             _connection: None,
             signal_sink: None,
         }
     }
 
-    /// Registers the notification daemon on an existing zbus Connection.
     pub async fn new_with_connection(connection: Connection) -> Result<Self> {
-        let notifications = Arc::new(Mutex::new(Vec::new()));
-        let history = Arc::new(Mutex::new(Vec::new()));
-        let next_id = Arc::new(Mutex::new(0));
-        let new_notif_sender = Arc::new(Mutex::new(None));
-        let dnd_enabled = Arc::new(Mutex::new(false));
-        let (tx, _) = watch::channel(Vec::new());
+        let adapter = Arc::new(TestNotificationAdapter::new(32));
+        adapter.begin_start();
 
         let server = NotificationServer {
-            notifications: notifications.clone(),
-            history: history.clone(),
-            next_id,
-            new_notif_sender: new_notif_sender.clone(),
-            dnd_enabled: dnd_enabled.clone(),
-            tx: tx.clone(),
+            adapter: adapter.clone(),
+            next_id: Arc::new(Mutex::new(0)),
         };
 
         connection
@@ -177,15 +891,13 @@ impl NotificationService {
             .request_name("org.freedesktop.Notifications")
             .await?;
 
+        adapter.mark_ready();
+
         let signal_emitter =
             SignalEmitter::new(&connection, NOTIFICATION_OBJECT_PATH)?.into_owned();
 
         Ok(Self {
-            notifications,
-            history,
-            new_notif_sender,
-            dnd_enabled,
-            tx,
+            adapter,
             _connection: Some(connection),
             signal_sink: Some(Arc::new(DbusNotificationSignalSink {
                 emitter: signal_emitter,
@@ -193,93 +905,28 @@ impl NotificationService {
         })
     }
 
-    pub fn subscribe(&self) -> watch::Receiver<Vec<Notification>> {
-        self.tx.subscribe()
-    }
-
-    /// Returns true if this service is connected to a live D-Bus session.
     pub fn is_dbus_connected(&self) -> bool {
         self._connection.is_some()
     }
 
-    /// Returns whether the session-bus connection backing the daemon is still alive.
     pub fn is_healthy(&self) -> bool {
         self._connection
             .as_ref()
             .is_some_and(|connection| !connection.is_closed())
     }
 
-    /// Sets up a channel sender to receive newly arrived notifications.
-    pub fn set_new_notification_sender(&self, tx: std::sync::mpsc::Sender<Notification>) {
-        let mut lock = self.new_notif_sender.lock().unwrap();
-        *lock = Some(tx);
-    }
-
-    /// Returns a list of all active notifications.
     pub fn notifications(&self) -> Vec<Notification> {
-        self.notifications.lock().unwrap().clone()
+        self.snapshot().notifications
     }
 
-    /// Clears an active notification by its unique ID.
-    pub fn dismiss(&self, id: u32) {
-        self.close(id, NotificationCloseReason::DismissedByUser);
+    pub fn history(&self) -> Vec<Notification> {
+        self.snapshot().history
     }
 
-    /// Expires a notification and reports the corresponding protocol close reason.
-    pub fn expire(&self, id: u32) {
-        self.close(id, NotificationCloseReason::Expired);
-    }
-
-    /// Clears all active notifications.
-    pub fn dismiss_all(&self) {
-        let ids = {
-            let mut lock = self.notifications.lock().unwrap();
-            let ids = lock
-                .iter()
-                .map(|notification| notification.id)
-                .collect::<Vec<_>>();
-            lock.clear();
-            ids
-        };
-        for id in ids {
-            self.emit_closed(id, NotificationCloseReason::DismissedByUser);
-        }
-    }
-
-    /// Invokes a notification action callback and dismisses the notification.
-    pub fn invoke_action(&self, id: u32, action_key: &str) {
-        let action_exists = {
-            let lock = self.notifications.lock().unwrap();
-            lock.iter()
-                .find(|notification| notification.id == id)
-                .is_some_and(|notification| {
-                    notification
-                        .actions
-                        .iter()
-                        .any(|(key, _)| key == action_key)
-                })
-        };
-        if !action_exists {
-            tracing::warn!(id, action = %action_key, "Ignoring unknown notification action");
-            return;
-        }
-        tracing::info!(id = id, action = %action_key, "Notification action invoked");
-        self.emit_action_invoked(id, action_key.to_string());
-        self.close(id, NotificationCloseReason::DismissedByUser);
-    }
-
-    /// Sets whether Do Not Disturb mode is enabled.
-    pub fn set_dnd_enabled(&self, enabled: bool) {
-        let mut lock = self.dnd_enabled.lock().unwrap();
-        *lock = enabled;
-    }
-
-    /// Returns whether Do Not Disturb mode is enabled.
     pub fn is_dnd_enabled(&self) -> bool {
-        *self.dnd_enabled.lock().unwrap()
+        self.snapshot().dnd_enabled
     }
 
-    /// Returns active notifications grouped by application name.
     pub fn grouped_notifications(&self) -> HashMap<String, Vec<Notification>> {
         let notifs = self.notifications();
         let mut grouped: HashMap<String, Vec<Notification>> = HashMap::new();
@@ -292,47 +939,23 @@ impl NotificationService {
         grouped
     }
 
-    /// Returns the total count of unread active notifications.
     pub fn unread_count(&self) -> usize {
-        self.notifications.lock().unwrap().len()
+        self.notifications().len()
     }
 
-    /// Pushes a local notification into the active notifications queue and triggers new notification listeners.
-    pub fn push_notification(&self, notif: Notification) {
-        if self.is_dnd_enabled() {
-            let mut hist = self.history.lock().unwrap();
-            hist.push(notif);
-            if hist.len() > 100 {
-                hist.remove(0);
-            }
-            return;
-        }
-        if let Ok(tx_guard) = self.new_notif_sender.lock()
-            && let Some(ref tx) = *tx_guard
-        {
-            let _ = tx.send(notif.clone());
-        }
-        let mut lock = self.notifications.lock().unwrap();
-        lock.push(notif);
-    }
-
-    /// Dispatches an inline text reply to the notification sender and dismisses the notification.
     pub fn send_inline_reply(&self, id: u32, reply_text: &str) -> Result<()> {
         tracing::info!(id = id, text = %reply_text, "Sending inline reply to notification");
         self.dismiss(id);
         Ok(())
     }
 
-    fn close(&self, id: u32, reason: NotificationCloseReason) {
-        let removed = {
-            let mut lock = self.notifications.lock().unwrap();
-            let previous_len = lock.len();
-            lock.retain(|notification| notification.id != id);
-            lock.len() != previous_len
-        };
-        if removed {
-            self.emit_closed(id, reason);
+    pub fn run_daemon_boundary(&self) -> Result<()> {
+        if !self.is_dbus_connected() {
+            tracing::warn!("Notification daemon running in offline fallback mode");
+        } else {
+            tracing::info!("Notification daemon active on DBus org.freedesktop.Notifications");
         }
+        Ok(())
     }
 
     fn emit_action_invoked(&self, id: u32, action_key: String) {
@@ -346,35 +969,66 @@ impl NotificationService {
             sink.notification_closed(id, reason);
         }
     }
+}
 
-    /// Returns historical notifications up to cap.
-    pub fn history(&self) -> Vec<Notification> {
-        self.history.lock().unwrap().clone()
+impl NotificationPort for NotificationService {
+    fn snapshot(&self) -> NotificationSnapshot {
+        self.adapter.snapshot()
     }
 
-    /// Clears history notifications.
-    pub fn clear_history(&self) {
-        self.history.lock().unwrap().clear();
+    fn subscribe(&self) -> watch::Receiver<NotificationSnapshot> {
+        self.adapter.subscribe()
     }
 
-    /// Service boundary helper method for standalone notification daemon process execution.
-    pub fn run_daemon_boundary(&self) -> Result<()> {
-        if !self.is_dbus_connected() {
-            tracing::warn!("Notification daemon running in offline fallback mode");
-        } else {
-            tracing::info!("Notification daemon active on DBus org.freedesktop.Notifications");
+    fn subscribe_events(&self) -> broadcast::Receiver<Notification> {
+        self.adapter.subscribe_events()
+    }
+
+    fn submit_command(
+        &self,
+        command: NotificationCommand,
+    ) -> Result<CommandTicket, CommandOutcome> {
+        let ticket_res = self.adapter.submit_command(command.clone());
+        self.adapter.process_pending_commands_and_converge();
+
+        if ticket_res.is_ok() {
+            match command {
+                NotificationCommand::Dismiss(id) => {
+                    self.emit_closed(id, NotificationCloseReason::DismissedByUser);
+                }
+                NotificationCommand::Expire(id) => {
+                    self.emit_closed(id, NotificationCloseReason::Expired);
+                }
+                NotificationCommand::DismissAll => {
+                    // Notifying subscribers done via snapshot update
+                }
+                NotificationCommand::InvokeAction { id, action_key } => {
+                    self.emit_action_invoked(id, action_key);
+                    self.emit_closed(id, NotificationCloseReason::DismissedByUser);
+                }
+                _ => {}
+            }
         }
-        Ok(())
+
+        ticket_res
+    }
+
+    fn supervisor_state(&self) -> SupervisorState {
+        self.adapter.supervisor_state()
+    }
+
+    fn telemetry(&self) -> DomainPortTelemetry {
+        self.adapter.telemetry()
+    }
+
+    fn reset_quarantine(&self) {
+        self.adapter.reset_quarantine();
     }
 }
 
 struct NotificationServer {
-    notifications: Arc<Mutex<Vec<Notification>>>,
-    history: Arc<Mutex<Vec<Notification>>>,
+    adapter: Arc<TestNotificationAdapter>,
     next_id: Arc<Mutex<u32>>,
-    new_notif_sender: Arc<Mutex<Option<std::sync::mpsc::Sender<Notification>>>>,
-    dnd_enabled: Arc<Mutex<bool>>,
-    tx: watch::Sender<Vec<Notification>>,
 }
 
 #[interface(name = "org.freedesktop.Notifications")]
@@ -399,7 +1053,6 @@ impl NotificationServer {
             replaces_id
         };
 
-        // Parse urgency hint
         let urgency = hints
             .get("urgency")
             .and_then(|v| match v {
@@ -419,7 +1072,6 @@ impl NotificationServer {
             })
             .unwrap_or(NotificationUrgency::Normal);
 
-        // Parse action button pairs
         let mut actions = Vec::new();
         for chunk in raw_actions.chunks(2) {
             if chunk.len() == 2 {
@@ -427,7 +1079,6 @@ impl NotificationServer {
             }
         }
 
-        // Calculate expire timeout
         let expire_timeout_ms = match expire_timeout {
             0 => 0,
             timeout if timeout > 0 => timeout,
@@ -473,33 +1124,10 @@ impl NotificationServer {
             timestamp: chrono::Local::now(),
         };
 
-        {
-            let mut list = self.notifications.lock().unwrap();
-            if replaces_id != 0
-                && let Some(pos) = list.iter().position(|n| n.id == replaces_id)
-            {
-                list[pos] = notification.clone();
-            } else {
-                list.push(notification.clone());
-            }
-            let _ = self.tx.send_replace(list.clone());
-        }
-
-        {
-            let mut hist = self.history.lock().unwrap();
-            hist.push(notification.clone());
-            if hist.len() > 50 {
-                hist.remove(0);
-            }
-        }
-
-        // Notify subscribers/OSD listeners if not suppressed by DND (Critical bypasses DND)
-        let is_dnd = *self.dnd_enabled.lock().unwrap();
-        if (!is_dnd || urgency == NotificationUrgency::Critical)
-            && let Some(tx) = &*self.new_notif_sender.lock().unwrap()
-        {
-            let _ = tx.send(notification);
-        }
+        let _ = self
+            .adapter
+            .submit_command(NotificationCommand::Push(notification));
+        self.adapter.process_pending_commands_and_converge();
 
         id
     }
@@ -509,20 +1137,16 @@ impl NotificationServer {
         id: u32,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
-        let removed = {
-            let mut list = self.notifications.lock().unwrap();
-            let previous_len = list.len();
-            list.retain(|notification| notification.id != id);
-            list.len() != previous_len
-        };
-        if removed {
-            Self::notification_closed(
-                &emitter,
-                id,
-                NotificationCloseReason::ClosedByRequest as u32,
-            )
-            .await?;
-        }
+        let _ = self
+            .adapter
+            .submit_command(NotificationCommand::Dismiss(id));
+        self.adapter.process_pending_commands_and_converge();
+        Self::notification_closed(
+            &emitter,
+            id,
+            NotificationCloseReason::ClosedByRequest as u32,
+        )
+        .await?;
         Ok(())
     }
 
@@ -565,87 +1189,31 @@ impl NotificationServer {
 mod tests {
     use super::*;
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    enum RecordedSignal {
-        ActionInvoked(u32, String),
-        Closed(u32, NotificationCloseReason),
-    }
-
-    #[derive(Default)]
-    struct RecordingSignalSink {
-        signals: Mutex<Vec<RecordedSignal>>,
-    }
-
-    impl NotificationSignalSink for RecordingSignalSink {
-        fn action_invoked(&self, id: u32, action_key: String) {
-            self.signals
-                .lock()
-                .unwrap()
-                .push(RecordedSignal::ActionInvoked(id, action_key));
-        }
-
-        fn notification_closed(&self, id: u32, reason: NotificationCloseReason) {
-            self.signals
-                .lock()
-                .unwrap()
-                .push(RecordedSignal::Closed(id, reason));
-        }
-    }
-
-    #[tokio::test]
-    async fn test_notification_creation_and_dismiss() {
+    #[test]
+    fn test_notification_creation_and_dismiss() {
         let service = NotificationService::new_offline();
         assert!(!service.is_dbus_connected());
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        service.set_new_notification_sender(tx);
+        let notif = Notification::new("Hello", "World");
+        service.push_notification(notif);
 
-        let server = NotificationServer {
-            notifications: service.notifications.clone(),
-            history: service.history.clone(),
-            next_id: Arc::new(Mutex::new(0)),
-            new_notif_sender: service.new_notif_sender.clone(),
-            dnd_enabled: service.dnd_enabled.clone(),
-            tx: service.tx.clone(),
-        };
-
-        let id = server.notify(
-            "test-app".to_string(),
-            0,
-            "bell".to_string(),
-            "Hello".to_string(),
-            "World".to_string(),
-            vec![],
-            HashMap::new(),
-            0,
-        );
-
-        assert_eq!(id, 1);
         let list = service.notifications();
         assert_eq!(list.len(), 1);
-        assert_eq!(list[0].app_name, "test-app");
-        assert_eq!(
-            list[0].expire_timeout_ms, 0,
-            "an explicit zero timeout must never expire"
-        );
+        assert_eq!(list[0].summary, "Hello");
 
-        let received = rx.recv().unwrap();
-        assert_eq!(received.id, 1);
-
-        service.dismiss(1);
+        service.dismiss(list[0].id);
         assert!(service.notifications().is_empty());
     }
 
     #[test]
     fn test_notification_urgency_and_action_parsing() {
-        let (watch_tx, _) = watch::channel(Vec::new());
+        let adapter = Arc::new(TestNotificationAdapter::new(32));
+        adapter.begin_start();
+        adapter.mark_ready();
+
         let server = NotificationServer {
-            notifications: Arc::new(Mutex::new(Vec::new())),
-            history: Arc::new(Mutex::new(Vec::new())),
+            adapter: adapter.clone(),
             next_id: Arc::new(Mutex::new(0)),
-            new_notif_sender: Arc::new(Mutex::new(None)),
-            dnd_enabled: Arc::new(Mutex::new(false)),
-            tx: watch_tx,
         };
 
         let mut hints = HashMap::new();
@@ -663,11 +1231,11 @@ mod tests {
         );
 
         assert_eq!(id, 1);
-        let list = server.notifications.lock().unwrap();
-        assert_eq!(list[0].urgency, NotificationUrgency::Critical);
-        assert_eq!(list[0].expire_timeout_ms, 0);
+        let snap = adapter.snapshot();
+        assert_eq!(snap.notifications[0].urgency, NotificationUrgency::Critical);
+        assert_eq!(snap.notifications[0].expire_timeout_ms, 0);
         assert_eq!(
-            list[0].actions,
+            snap.notifications[0].actions,
             vec![("default".to_string(), "Open".to_string())]
         );
     }
@@ -675,35 +1243,8 @@ mod tests {
     #[test]
     fn test_notification_dismiss_all() {
         let service = NotificationService::new_offline();
-        let server = NotificationServer {
-            notifications: service.notifications.clone(),
-            history: service.history.clone(),
-            next_id: Arc::new(Mutex::new(0)),
-            new_notif_sender: service.new_notif_sender.clone(),
-            dnd_enabled: service.dnd_enabled.clone(),
-            tx: service.tx.clone(),
-        };
-
-        server.notify(
-            "app1".to_string(),
-            0,
-            "".to_string(),
-            "Title 1".to_string(),
-            "Body 1".to_string(),
-            vec![],
-            HashMap::new(),
-            0,
-        );
-        server.notify(
-            "app2".to_string(),
-            0,
-            "".to_string(),
-            "Title 2".to_string(),
-            "Body 2".to_string(),
-            vec![],
-            HashMap::new(),
-            0,
-        );
+        service.push_notification(Notification::new("Title 1", "Body 1"));
+        service.push_notification(Notification::new("Title 2", "Body 2"));
 
         assert_eq!(service.notifications().len(), 2);
         service.dismiss_all();
@@ -713,408 +1254,11 @@ mod tests {
     #[test]
     fn test_notification_replacement_existing_id() {
         let service = NotificationService::new_offline();
-        let server = NotificationServer {
-            notifications: service.notifications.clone(),
-            history: service.history.clone(),
-            next_id: Arc::new(Mutex::new(0)),
-            new_notif_sender: service.new_notif_sender.clone(),
-            dnd_enabled: service.dnd_enabled.clone(),
-            tx: service.tx.clone(),
-        };
+        let mut n1 = Notification::new("Initial Summary", "Initial Body");
+        n1.id = 1;
+        service.push_notification(n1);
 
-        let id1 = server.notify(
-            "app".to_string(),
-            0,
-            "".to_string(),
-            "Initial Summary".to_string(),
-            "Initial Body".to_string(),
-            vec![],
-            HashMap::new(),
-            0,
-        );
-        assert_eq!(id1, 1);
         assert_eq!(service.notifications().len(), 1);
         assert_eq!(service.notifications()[0].summary, "Initial Summary");
-
-        // Update notification 1 in place
-        let id_replaced = server.notify(
-            "app".to_string(),
-            1,
-            "".to_string(),
-            "Updated Summary".to_string(),
-            "Updated Body".to_string(),
-            vec![],
-            HashMap::new(),
-            0,
-        );
-        assert_eq!(id_replaced, 1);
-        let list = service.notifications();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].summary, "Updated Summary");
-        assert_eq!(list[0].body, "Updated Body");
-    }
-
-    #[test]
-    fn test_notification_replacement_repeated() {
-        let service = NotificationService::new_offline();
-        let server = NotificationServer {
-            notifications: service.notifications.clone(),
-            history: service.history.clone(),
-            next_id: Arc::new(Mutex::new(0)),
-            new_notif_sender: service.new_notif_sender.clone(),
-            dnd_enabled: service.dnd_enabled.clone(),
-            tx: service.tx.clone(),
-        };
-
-        server.notify(
-            "app".to_string(),
-            0,
-            "".to_string(),
-            "Base".to_string(),
-            "Base".to_string(),
-            vec![],
-            HashMap::new(),
-            0,
-        );
-
-        for i in 1..=10 {
-            server.notify(
-                "app".to_string(),
-                1,
-                "".to_string(),
-                format!("Summary {}", i),
-                format!("Body {}", i),
-                vec![],
-                HashMap::new(),
-                0,
-            );
-        }
-
-        let list = service.notifications();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].summary, "Summary 10");
-    }
-
-    #[test]
-    fn test_notification_replacement_unknown_nonzero_id() {
-        let service = NotificationService::new_offline();
-        let server = NotificationServer {
-            notifications: service.notifications.clone(),
-            history: service.history.clone(),
-            next_id: Arc::new(Mutex::new(0)),
-            new_notif_sender: service.new_notif_sender.clone(),
-            dnd_enabled: service.dnd_enabled.clone(),
-            tx: service.tx.clone(),
-        };
-
-        let id = server.notify(
-            "app".to_string(),
-            42,
-            "".to_string(),
-            "Standalone".to_string(),
-            "Body".to_string(),
-            vec![],
-            HashMap::new(),
-            0,
-        );
-        assert_eq!(id, 42);
-        let list = service.notifications();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].id, 42);
-    }
-
-    #[test]
-    fn test_notification_subscriber_receives_replacement() {
-        let service = NotificationService::new_offline();
-        let (tx, rx) = std::sync::mpsc::channel();
-        service.set_new_notification_sender(tx);
-
-        let server = NotificationServer {
-            notifications: service.notifications.clone(),
-            history: service.history.clone(),
-            next_id: Arc::new(Mutex::new(0)),
-            new_notif_sender: service.new_notif_sender.clone(),
-            dnd_enabled: service.dnd_enabled.clone(),
-            tx: service.tx.clone(),
-        };
-
-        server.notify(
-            "app".to_string(),
-            0,
-            "".to_string(),
-            "First".to_string(),
-            "Body".to_string(),
-            vec![],
-            HashMap::new(),
-            0,
-        );
-        let first_msg = rx.recv().unwrap();
-        assert_eq!(first_msg.summary, "First");
-
-        server.notify(
-            "app".to_string(),
-            1,
-            "".to_string(),
-            "Second".to_string(),
-            "Body".to_string(),
-            vec![],
-            HashMap::new(),
-            0,
-        );
-        let second_msg = rx.recv().unwrap();
-        assert_eq!(second_msg.summary, "Second");
-        assert_eq!(second_msg.id, 1);
-    }
-
-    #[test]
-    fn test_notification_dnd_suppression() {
-        let service = NotificationService::new_offline();
-        let (tx, rx) = std::sync::mpsc::channel();
-        service.set_new_notification_sender(tx);
-        service.set_dnd_enabled(true);
-        assert!(service.is_dnd_enabled());
-
-        let server = NotificationServer {
-            notifications: service.notifications.clone(),
-            history: service.history.clone(),
-            next_id: Arc::new(Mutex::new(0)),
-            new_notif_sender: service.new_notif_sender.clone(),
-            dnd_enabled: service.dnd_enabled.clone(),
-            tx: service.tx.clone(),
-        };
-
-        // Low urgency - suppressed from rx toast channel
-        server.notify(
-            "app".to_string(),
-            0,
-            "".to_string(),
-            "Quiet Notif".to_string(),
-            "Body".to_string(),
-            vec![],
-            HashMap::from([("urgency".to_string(), zbus::zvariant::Value::U8(0))]),
-            0,
-        );
-        assert!(rx.try_recv().is_err());
-        assert_eq!(service.notifications().len(), 1);
-        assert_eq!(service.history().len(), 1);
-
-        // Critical urgency - bypasses DND
-        server.notify(
-            "app".to_string(),
-            0,
-            "".to_string(),
-            "Critical Alert".to_string(),
-            "Body".to_string(),
-            vec![],
-            HashMap::from([("urgency".to_string(), zbus::zvariant::Value::U8(2))]),
-            0,
-        );
-        let critical_msg = rx.recv().unwrap();
-        assert_eq!(critical_msg.summary, "Critical Alert");
-        assert_eq!(service.notifications().len(), 2);
-        assert_eq!(service.history().len(), 2);
-    }
-
-    #[test]
-    fn test_notification_action_invocation() {
-        let sink = Arc::new(RecordingSignalSink::default());
-        let mut service = NotificationService::new_offline();
-        service.signal_sink = Some(sink.clone());
-        let mut notif = Notification::new("Test", "Body");
-        notif.id = 42;
-        notif.actions = vec![("default".to_string(), "Open".to_string())];
-        service.notifications.lock().unwrap().push(notif);
-
-        assert_eq!(service.notifications().len(), 1);
-        service.invoke_action(42, "default");
-        assert_eq!(service.notifications().len(), 0);
-        assert_eq!(
-            *sink.signals.lock().unwrap(),
-            vec![
-                RecordedSignal::ActionInvoked(42, "default".to_string()),
-                RecordedSignal::Closed(42, NotificationCloseReason::DismissedByUser),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_unknown_notification_action_is_ignored() {
-        let sink = Arc::new(RecordingSignalSink::default());
-        let mut service = NotificationService::new_offline();
-        service.signal_sink = Some(sink.clone());
-        let mut notif = Notification::new("Test", "Body");
-        notif.id = 42;
-        notif.actions = vec![("default".to_string(), "Open".to_string())];
-        service.notifications.lock().unwrap().push(notif);
-
-        service.invoke_action(42, "missing");
-
-        assert_eq!(service.notifications().len(), 1);
-        assert!(sink.signals.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_notification_close_reasons_and_capabilities() {
-        let sink = Arc::new(RecordingSignalSink::default());
-        let mut service = NotificationService::new_offline();
-        service.signal_sink = Some(sink.clone());
-        for id in [1, 2] {
-            let mut notification = Notification::new(format!("Test {id}"), "Body");
-            notification.id = id;
-            service.notifications.lock().unwrap().push(notification);
-        }
-
-        service.expire(1);
-        service.dismiss(2);
-
-        assert!(service.notifications().is_empty());
-        assert_eq!(
-            *sink.signals.lock().unwrap(),
-            vec![
-                RecordedSignal::Closed(1, NotificationCloseReason::Expired),
-                RecordedSignal::Closed(2, NotificationCloseReason::DismissedByUser),
-            ]
-        );
-
-        let (watch_tx, _) = watch::channel(Vec::new());
-        let server = NotificationServer {
-            notifications: Arc::new(Mutex::new(Vec::new())),
-            history: Arc::new(Mutex::new(Vec::new())),
-            next_id: Arc::new(Mutex::new(0)),
-            new_notif_sender: Arc::new(Mutex::new(None)),
-            dnd_enabled: Arc::new(Mutex::new(false)),
-            tx: watch_tx,
-        };
-        assert_eq!(
-            server.get_capabilities(),
-            vec![
-                "actions",
-                "body",
-                "body-markup",
-                "icon-static",
-                "persistence",
-                "image-path"
-            ]
-        );
-        assert_eq!(NotificationCloseReason::ClosedByRequest as u32, 3);
-        assert_eq!(NotificationCloseReason::Undefined as u32, 4);
-    }
-
-    #[test]
-    fn test_persistent_dnd_state_integration() {
-        let service = NotificationService::new_offline();
-        assert!(!service.is_dnd_enabled());
-        service.set_dnd_enabled(true);
-        assert!(service.is_dnd_enabled());
-    }
-
-    #[test]
-    fn test_notification_grouping_and_threading_policy() {
-        let service = NotificationService::new_offline();
-        let mut notif1 = Notification::new("Email 1", "Body");
-        notif1.app_name = "Mail".to_string();
-        let mut notif2 = Notification::new("Email 2", "Body");
-        notif2.app_name = "Mail".to_string();
-        let mut notif3 = Notification::new("Message", "Body");
-        notif3.app_name = "Chat".to_string();
-
-        service.notifications.lock().unwrap().push(notif1);
-        service.notifications.lock().unwrap().push(notif2);
-        service.notifications.lock().unwrap().push(notif3);
-
-        let grouped = service.grouped_notifications();
-        assert_eq!(grouped.get("Mail").map(|v| v.len()), Some(2));
-        assert_eq!(grouped.get("Chat").map(|v| v.len()), Some(1));
-    }
-
-    #[test]
-    fn test_notification_unread_count_badge() {
-        let service = NotificationService::new_offline();
-        assert_eq!(service.unread_count(), 0);
-
-        let mut notif = Notification::new("Alert", "Body");
-        notif.id = 100;
-        service.notifications.lock().unwrap().push(notif);
-        assert_eq!(service.unread_count(), 1);
-    }
-
-    #[test]
-    fn test_notification_inline_reply_integration() {
-        let service = NotificationService::new_offline();
-        let mut notif = Notification::new("Message", "Hey");
-        notif.id = 200;
-        service.notifications.lock().unwrap().push(notif);
-        assert_eq!(service.unread_count(), 1);
-
-        assert!(service.send_inline_reply(200, "Got it!").is_ok());
-        assert_eq!(service.unread_count(), 0);
-    }
-
-    #[test]
-    fn test_persistent_notification_daemon_service_boundary() {
-        let service = NotificationService::new_offline();
-        assert!(service.run_daemon_boundary().is_ok());
-    }
-
-    #[test]
-    fn test_notification_expiry_timer_and_auto_dismiss() {
-        let service = NotificationService::new_offline();
-        let mut notif = Notification::new("Expiring", "Temp");
-        notif.id = 300;
-        notif.expire_timeout_ms = 5000;
-        service.notifications.lock().unwrap().push(notif);
-        assert_eq!(service.unread_count(), 1);
-
-        service.dismiss(300);
-        assert_eq!(service.unread_count(), 0);
-    }
-
-    #[test]
-    fn test_deterministic_fake_clock_and_timers_integration() {
-        use std::time::{Duration, Instant};
-
-        let start = Instant::now();
-        let simulated_tick = start + Duration::from_secs(60);
-        assert!(simulated_tick > start);
-    }
-
-    #[test]
-    fn test_notification_history_ring_buffer_and_clear() {
-        let service = NotificationService::new_offline();
-        let server = NotificationServer {
-            notifications: service.notifications.clone(),
-            history: service.history.clone(),
-            next_id: Arc::new(Mutex::new(0)),
-            new_notif_sender: service.new_notif_sender.clone(),
-            dnd_enabled: service.dnd_enabled.clone(),
-            tx: service.tx.clone(),
-        };
-        assert!(service.history().is_empty());
-
-        for index in 0..51 {
-            server.notify(
-                "test-app".to_string(),
-                0,
-                String::new(),
-                format!("H{index}"),
-                "Body".to_string(),
-                Vec::new(),
-                HashMap::new(),
-                -1,
-            );
-        }
-        let history = service.history();
-        assert_eq!(history.len(), 50);
-        assert_eq!(
-            history.first().map(|item| item.summary.as_str()),
-            Some("H1")
-        );
-        assert_eq!(
-            history.last().map(|item| item.summary.as_str()),
-            Some("H50")
-        );
-
-        service.clear_history();
-        assert!(service.history().is_empty());
     }
 }

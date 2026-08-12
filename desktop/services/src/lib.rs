@@ -56,7 +56,11 @@ pub use location::{LocationInfo, LocationService};
 pub use media::{MediaCommand, MediaInfo, MediaService, PlaybackState};
 pub use network::{NetworkCommand, NetworkInfo, NetworkService, VpnConnection};
 pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_use_dark_mode};
-pub use notifications::{Notification, NotificationService, NotificationUrgency};
+pub use notifications::{
+    Notification, NotificationCloseReason, NotificationCommand, NotificationCommandOutcome,
+    NotificationPort, NotificationRejectionReason, NotificationService, NotificationSnapshot,
+    NotificationUrgency, TestNotificationAdapter,
+};
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
 
 pub async fn run_device_daemon() -> anyhow::Result<()> {
@@ -203,7 +207,7 @@ mod tests {
         assert!(tray.subscribe().borrow().is_empty());
 
         let notif = NotificationService::new_offline();
-        assert!(notif.subscribe().borrow().is_empty());
+        assert!(notif.subscribe().borrow().notifications.is_empty());
 
         let clipboard = ClipboardService::with_custom_store(None);
         assert!(clipboard.subscribe().borrow().is_empty());

@@ -23,6 +23,13 @@ pub fn clear_icon_cache() {
 /// XDG data paths, hicolor fallback, and pixmaps fallback are delegated to
 /// `freedesktop-icons`, matching the behavior used by desktop environments.
 pub fn lookup_icon(name: &str) -> Option<PathBuf> {
+    lookup_icon_internal(name, 0)
+}
+
+fn lookup_icon_internal(name: &str, depth: usize) -> Option<PathBuf> {
+    if depth > 4 {
+        return None;
+    }
     let name = name.trim();
     if name.is_empty() {
         return None;
@@ -34,10 +41,12 @@ pub fn lookup_icon(name: &str) -> Option<PathBuf> {
         return path.exists().then(|| path.to_path_buf());
     }
 
-    if let Ok(cache) = ICON_CACHE.lock()
-        && let Some(cached) = cache.get(clean_name)
-    {
-        return cached.clone();
+    if let Ok(mut cache) = ICON_CACHE.lock() {
+        if let Some(cached) = cache.get(clean_name) {
+            return cached.clone();
+        }
+        // Insert transient entry to break recursion cycles
+        cache.insert(clean_name.to_string(), None);
     }
 
     let mut search_names = vec![
@@ -89,6 +98,7 @@ pub fn lookup_icon(name: &str) -> Option<PathBuf> {
     }
 
     if resolved.is_none()
+        && depth == 0
         && let Ok(apps) = super::list_applications()
     {
         let search_clean = clean_name.to_lowercase().replace(' ', "-");
@@ -111,7 +121,7 @@ pub fn lookup_icon(name: &str) -> Option<PathBuf> {
                 }
                 if let Some(ref icon) = app.icon
                     && icon.to_lowercase() != search_clean
-                    && let Some(path) = lookup_icon(icon)
+                    && let Some(path) = lookup_icon_internal(icon, depth + 1)
                 {
                     resolved = Some(path);
                     break;
