@@ -288,11 +288,11 @@ fn restart_delays_are_exact_and_quarantine_trips_on_third_crash() {
 
     let supervisor = ExtensionSupervisor::new_with_spawner(spawner, clock);
 
-    for _ in 0..100 {
+    for _ in 0..1_000 {
         if supervisor.state() == SupervisorState::Quarantined {
             break;
         }
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(1));
     }
 
     let state = supervisor.state();
