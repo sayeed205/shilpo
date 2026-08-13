@@ -65,6 +65,7 @@ pub struct WasmState {
     pub watch_registry: Arc<Mutex<HashMap<ExtensionId, HashMap<u64, WatchEntry>>>>,
     pub pending_state_events: Arc<Mutex<HashMap<ExtensionId, VecDeque<PendingStateEvent>>>>,
     pub next_watch_id: Arc<AtomicU64>,
+    pub state_operation_lock: Arc<Mutex<()>>,
     pub hostcall_bytes: usize,
     pub max_hostcall_bytes: usize,
     pub secret_deadline: Instant,
@@ -302,6 +303,10 @@ impl shilpo::extension::state::Host for WasmState {
         key: String,
     ) -> Result<self::shilpo::extension::state::StateSnapshot, shilpo::extension::types::Error>
     {
+        let operation_lock = self.state_operation_lock.clone();
+        let _operation = operation_lock
+            .lock()
+            .expect("state operation lock poisoned");
         self.charge_hostcall_bytes(key.len())?;
         let snapshot = self
             .state_store
@@ -319,6 +324,10 @@ impl shilpo::extension::state::Host for WasmState {
         value: shilpo::extension::types::DataValue,
     ) -> Result<self::shilpo::extension::state::StateMutation, shilpo::extension::types::Error>
     {
+        let operation_lock = self.state_operation_lock.clone();
+        let _operation = operation_lock
+            .lock()
+            .expect("state operation lock poisoned");
         if matches!(value, shilpo::extension::types::DataValue::SecretRef(_)) {
             return Err(shilpo::extension::types::Error {
                 kind: shilpo::extension::types::ErrorKind::InvalidArgument,
@@ -346,6 +355,10 @@ impl shilpo::extension::state::Host for WasmState {
         key: String,
     ) -> Result<self::shilpo::extension::state::StateMutation, shilpo::extension::types::Error>
     {
+        let operation_lock = self.state_operation_lock.clone();
+        let _operation = operation_lock
+            .lock()
+            .expect("state operation lock poisoned");
         self.charge_hostcall_bytes(key.len())?;
         let mutation = self
             .state_store
@@ -365,6 +378,10 @@ impl shilpo::extension::state::Host for WasmState {
         key: String,
     ) -> Result<self::shilpo::extension::state::WatchRegistration, shilpo::extension::types::Error>
     {
+        let operation_lock = self.state_operation_lock.clone();
+        let _operation = operation_lock
+            .lock()
+            .expect("state operation lock poisoned");
         self.charge_hostcall_bytes(key.len())?;
         let snapshot = self
             .state_store
@@ -387,6 +404,10 @@ impl shilpo::extension::state::Host for WasmState {
     }
 
     fn unwatch(&mut self, watch_id: u64) -> Result<(), shilpo::extension::types::Error> {
+        let operation_lock = self.state_operation_lock.clone();
+        let _operation = operation_lock
+            .lock()
+            .expect("state operation lock poisoned");
         self.charge_hostcall_bytes(8)?;
         self.watch_registry
             .lock()
@@ -703,12 +724,17 @@ pub struct WasmRuntime {
     watch_registry: Arc<Mutex<HashMap<ExtensionId, HashMap<u64, WatchEntry>>>>,
     pending_state_events: Arc<Mutex<HashMap<ExtensionId, VecDeque<PendingStateEvent>>>>,
     next_watch_id: Arc<AtomicU64>,
+    state_operation_lock: Arc<Mutex<()>>,
     ticker_stop: Arc<AtomicBool>,
     ticker: Option<thread::JoinHandle<()>>,
 }
 
 impl WasmRuntime {
     pub fn new() -> Result<Self, RuntimeError> {
+        Self::new_with_paths(&crate::catalog::CatalogPaths::platform_default())
+    }
+
+    pub fn new_with_paths(paths: &crate::catalog::CatalogPaths) -> Result<Self, RuntimeError> {
         let broker: Arc<dyn crate::secrets::SecretBroker> =
             Arc::new(crate::secrets::Oo7SecretBroker::new().map_err(|error| {
                 RuntimeError::with_kind(
@@ -716,16 +742,13 @@ impl WasmRuntime {
                     format!("failed to initialize Secret Service: {error}"),
                 )
             })?);
-        let state_dir = crate::catalog::CatalogPaths::platform_default()
-            .data_dir
-            .join("extensions")
-            .join("state.lmdb");
-        let state_store = crate::state::HeedStateStore::open(&state_dir).map_err(|error| {
-            RuntimeError::with_kind(
-                RuntimeFailureKind::Unavailable,
-                format!("failed to open extension state store: {error}"),
-            )
-        })?;
+        let state_store =
+            crate::state::HeedStateStore::open(&paths.state_store_dir()).map_err(|error| {
+                RuntimeError::with_kind(
+                    RuntimeFailureKind::Unavailable,
+                    format!("failed to open extension state store: {error}"),
+                )
+            })?;
         Self::with_broker_and_state_store(broker, Arc::new(state_store))
     }
 
@@ -786,6 +809,7 @@ impl WasmRuntime {
             watch_registry: Arc::new(Mutex::new(HashMap::new())),
             pending_state_events: Arc::new(Mutex::new(HashMap::new())),
             next_watch_id: Arc::new(AtomicU64::new(1)),
+            state_operation_lock: Arc::new(Mutex::new(())),
             ticker_stop,
             ticker: Some(ticker),
         })
@@ -937,6 +961,7 @@ impl WasmRuntime {
             watch_registry: self.watch_registry.clone(),
             pending_state_events: self.pending_state_events.clone(),
             next_watch_id: self.next_watch_id.clone(),
+            state_operation_lock: self.state_operation_lock.clone(),
             hostcall_bytes: 0,
             max_hostcall_bytes: budget.max_hostcall_bytes,
             secret_deadline: Instant::now() + budget.deadline,
@@ -1407,6 +1432,7 @@ mod state_seam_tests {
             watch_registry: Arc::new(Mutex::new(HashMap::new())),
             pending_state_events: Arc::new(Mutex::new(HashMap::new())),
             next_watch_id: Arc::new(AtomicU64::new(1)),
+            state_operation_lock: Arc::new(Mutex::new(())),
             hostcall_bytes: 0,
             max_hostcall_bytes: 1024 * 1024,
             secret_deadline: Instant::now() + Duration::from_secs(5),
@@ -1609,6 +1635,7 @@ mod state_seam_tests {
             watch_registry: runtime.watch_registry.clone(),
             pending_state_events: runtime.pending_state_events.clone(),
             next_watch_id: runtime.next_watch_id.clone(),
+            state_operation_lock: runtime.state_operation_lock.clone(),
             hostcall_bytes: 0,
             max_hostcall_bytes: 1024 * 1024,
             secret_deadline: Instant::now() + Duration::from_secs(5),
@@ -1706,6 +1733,7 @@ mod secret_host_tests {
             watch_registry: Arc::new(Mutex::new(HashMap::new())),
             pending_state_events: Arc::new(Mutex::new(HashMap::new())),
             next_watch_id: Arc::new(AtomicU64::new(1)),
+            state_operation_lock: Arc::new(Mutex::new(())),
             hostcall_bytes: 0,
             max_hostcall_bytes: 1024 * 1024,
             secret_deadline: Instant::now() + Duration::from_secs(5),

@@ -215,14 +215,14 @@ pub fn recv_worker_message_nonblocking<R: Read>(
 /// and writes framed `WorkerMessage`s to `stdout`.
 pub fn run_extension_host() {
     tracing::info!("shilpo extension-host role started");
-    let runtime = match WasmRuntime::new() {
+    let paths = CatalogPaths::platform_default();
+    let runtime = match WasmRuntime::new_with_paths(&paths) {
         Ok(rt) => rt,
         Err(error) => {
             eprintln!("failed to initialize Wasmtime runtime: {error}");
             std::process::exit(1);
         }
     };
-    let paths = CatalogPaths::platform_default();
     let mut engine = match super::engine::ExtensionEngine::new(runtime, paths) {
         Ok(eng) => eng,
         Err(error) => {

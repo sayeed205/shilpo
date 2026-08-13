@@ -542,9 +542,24 @@ impl ExtAdapter {
         let broker = shilpo_ext_runtime::Oo7SecretBroker::new().ok().map(|b| {
             std::sync::Arc::new(b) as std::sync::Arc<dyn shilpo_ext_runtime::SecretBroker>
         });
-        let store = shilpo_ext_runtime::HeedStateStore::open(&self.catalog.paths().data_dir)
-            .ok()
-            .map(|s| std::sync::Arc::new(s) as std::sync::Arc<dyn shilpo_ext_runtime::StateStore>);
+        let store = if state_policy == shilpo_ext_runtime::StatePolicy::Delete {
+            match shilpo_ext_runtime::HeedStateStore::open(&self.catalog.paths().state_store_dir())
+            {
+                Ok(store) => Some(std::sync::Arc::new(store)
+                    as std::sync::Arc<dyn shilpo_ext_runtime::StateStore>),
+                Err(error) => {
+                    return ExtOpResult {
+                        success: false,
+                        data: serde_json::Value::Null,
+                        human_message: format!("failed to open extension state store: {error}"),
+                        warnings: Vec::new(),
+                        exit_code: 1,
+                    };
+                }
+            }
+        } else {
+            None
+        };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
 
         let cli_res = ExtensionCli::uninstall_with_policies(

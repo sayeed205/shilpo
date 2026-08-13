@@ -51,6 +51,11 @@ impl CatalogPaths {
         Self::new(default_extension_data_dir(), default_extension_config_dir())
     }
 
+    /// Directory containing the dedicated extension-scoped operational state store.
+    pub fn state_store_dir(&self) -> PathBuf {
+        self.data_dir.join("extensions").join("state.lmdb")
+    }
+
     fn extensions_data(&self) -> PathBuf {
         self.data_dir.join("extensions")
     }
@@ -675,13 +680,11 @@ impl ExtensionCatalog {
         }
 
         if let (SecretPolicy::Delete, Some(broker)) = (secret_policy, broker) {
-            broker
-                .delete_all(extension_id, deadline)
-                .map_err(|error| {
-                    CatalogError::Io(format!(
-                        "failed to delete extension secrets for {extension_id}: {error}"
-                    ))
-                })?;
+            broker.delete_all(extension_id, deadline).map_err(|error| {
+                CatalogError::Io(format!(
+                    "failed to delete extension secrets for {extension_id}: {error}"
+                ))
+            })?;
         }
 
         let package_dir = self.extension_dir(extension_id);
@@ -698,7 +701,8 @@ impl ExtensionCatalog {
         let staged_grants = trash_dir.join("grants.toml");
 
         if package_dir.exists() {
-            fs::rename(&package_dir, &staged_package).map_err(|error| io_error(&package_dir, error))?;
+            fs::rename(&package_dir, &staged_package)
+                .map_err(|error| io_error(&package_dir, error))?;
         }
         if receipt_path.exists() {
             let res = fs::rename(&receipt_path, &staged_receipt);
@@ -718,7 +722,9 @@ impl ExtensionCatalog {
         if should_delete_state {
             let state_result = match state_store {
                 Some(store) => store.delete_all(extension_id),
-                None => Ok(()),
+                None => Err(crate::state::StateStoreError::BackendUnavailable(
+                    "extension state store is unavailable; refusing destructive uninstall".into(),
+                )),
             };
             if let Err(error) = state_result {
                 if staged_package.exists() {

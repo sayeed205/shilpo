@@ -574,9 +574,19 @@ fn run_cli(args: &[String]) -> i32 {
             let broker = crate::secrets::Oo7SecretBroker::new().ok().map(|b| {
                 std::sync::Arc::new(b) as std::sync::Arc<dyn crate::secrets::SecretBroker>
             });
-            let store = crate::state::HeedStateStore::open(&catalog.paths().data_dir)
-                .ok()
-                .map(|s| std::sync::Arc::new(s) as std::sync::Arc<dyn crate::state::StateStore>);
+            let store =
+                if state_policy == crate::state::StatePolicy::Delete {
+                    match crate::state::HeedStateStore::open(&catalog.paths().state_store_dir()) {
+                        Ok(store) => Some(std::sync::Arc::new(store)
+                            as std::sync::Arc<dyn crate::state::StateStore>),
+                        Err(error) => {
+                            eprintln!("error[uninstall.state_store]: {error}");
+                            return 1;
+                        }
+                    }
+                } else {
+                    None
+                };
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
 
             ExtensionCli::uninstall_with_policies(
