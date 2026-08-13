@@ -1039,4 +1039,59 @@ mod tests {
         assert_eq!(menu_desc.default_size, None);
         assert_eq!(menu_desc.minimum_size, None);
     }
+
+    #[test]
+    fn bar_menu_events_refresh_only_the_target_extension() {
+        fn manifest(id: &str) -> ExtensionManifest {
+            ExtensionManifest::from_toml(&format!(
+                r#"
+                id = "{id}"
+                name = "Weather"
+                version = "1.0.0"
+                schema_version = 1
+                api_version = "0.1.0"
+                min_shilpo_version = "0.1.0"
+
+                [[contributions.bar_widgets]]
+                id = "weather"
+                name = "Weather Widget"
+
+                [[contributions.bar_menus]]
+                id = "weather-menu"
+                name = "Weather Details Menu"
+                bar_widget = "weather"
+                "#
+            ))
+            .unwrap()
+        }
+
+        let mut session = ExtensionSession::new(InMemoryRuntime::new());
+        let first = manifest("io.github.test.first");
+        let second = manifest("io.github.test.second");
+        session
+            .register(
+                first.clone(),
+                Box::new(MenuGuest),
+                first.capabilities.clone(),
+            )
+            .unwrap();
+        session
+            .register(
+                second.clone(),
+                Box::new(MenuGuest),
+                second.capabilities.clone(),
+            )
+            .unwrap();
+
+        let target = CanonicalId::new(
+            first.id,
+            shilpo_ext_api::ContributionId::new("weather-menu").unwrap(),
+        );
+        let changes = session.dispatch(&ExtensionEvent::BarMenuOpened {
+            contribution_id: target.to_string(),
+            instance_id: "bar:display-1:weather".into(),
+        });
+
+        assert_eq!(changes.invalidated_views, vec![target]);
+    }
 }

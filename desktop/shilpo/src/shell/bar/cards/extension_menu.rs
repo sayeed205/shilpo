@@ -87,8 +87,15 @@ impl CardProvider for ExtensionMenuCardProvider {
             cx,
         );
 
-        let max_width = (window.bounds().size.width - px(32.0)).max(px(1.0));
-        let max_height = (window.bounds().size.height - px(32.0)).max(px(1.0));
+        // The card-band window is only the edge strip, not the monitor. Use the
+        // associated display bounds for host constraints so a small previous
+        // placement cannot recursively shrink the next measurement.
+        let display_bounds = window
+            .display(cx)
+            .map(|display| display.bounds())
+            .unwrap_or_else(|| window.bounds());
+        let max_width = (display_bounds.size.width - px(32.0)).max(px(1.0));
+        let max_height = (display_bounds.size.height - px(32.0)).max(px(1.0));
         let mut measure_element = deferred(
             div()
                 .p_4()

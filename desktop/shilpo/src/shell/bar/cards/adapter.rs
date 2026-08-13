@@ -60,6 +60,24 @@ pub struct CardCoordinator {
     prior_focused_window: Option<u64>,
 }
 
+fn map_bar_menu_close_reason(reason: &CardDismissReason) -> shilpo_ext_api::BarMenuCloseReason {
+    match reason {
+        CardDismissReason::SourceToggle => shilpo_ext_api::BarMenuCloseReason::SourceToggle,
+        CardDismissReason::Escape => shilpo_ext_api::BarMenuCloseReason::Escape,
+        CardDismissReason::FocusLost => shilpo_ext_api::BarMenuCloseReason::FocusLost,
+        CardDismissReason::OutsideClick => shilpo_ext_api::BarMenuCloseReason::OutsideClick,
+        CardDismissReason::OverviewOpened => shilpo_ext_api::BarMenuCloseReason::OverviewOpened,
+        CardDismissReason::BarClosed | CardDismissReason::Shutdown => {
+            shilpo_ext_api::BarMenuCloseReason::BarClosed
+        }
+        CardDismissReason::DisplayRemoved => shilpo_ext_api::BarMenuCloseReason::DisplayRemoved,
+        CardDismissReason::OwnerRemoved => shilpo_ext_api::BarMenuCloseReason::OwnerRemoved,
+        CardDismissReason::SourceDisappeared | CardDismissReason::Explicit => {
+            shilpo_ext_api::BarMenuCloseReason::SourceUnavailable
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum PositionMode {
     Show,
@@ -441,36 +459,7 @@ impl CardCoordinator {
                 if channel == CardChannel::Persistent
                     && let Some(src) = source
                 {
-                    let mapped_reason = match reason {
-                        CardDismissReason::SourceToggle => {
-                            shilpo_ext_api::BarMenuCloseReason::SourceToggle
-                        }
-                        CardDismissReason::Escape => shilpo_ext_api::BarMenuCloseReason::Escape,
-                        CardDismissReason::FocusLost => {
-                            shilpo_ext_api::BarMenuCloseReason::FocusLost
-                        }
-                        CardDismissReason::OutsideClick => {
-                            shilpo_ext_api::BarMenuCloseReason::OutsideClick
-                        }
-                        CardDismissReason::OverviewOpened => {
-                            shilpo_ext_api::BarMenuCloseReason::OverviewOpened
-                        }
-                        CardDismissReason::BarClosed | CardDismissReason::Shutdown => {
-                            shilpo_ext_api::BarMenuCloseReason::BarClosed
-                        }
-                        CardDismissReason::DisplayRemoved => {
-                            shilpo_ext_api::BarMenuCloseReason::DisplayRemoved
-                        }
-                        CardDismissReason::OwnerRemoved => {
-                            shilpo_ext_api::BarMenuCloseReason::OwnerRemoved
-                        }
-                        CardDismissReason::SourceDisappeared => {
-                            shilpo_ext_api::BarMenuCloseReason::SourceUnavailable
-                        }
-                        CardDismissReason::Explicit => {
-                            shilpo_ext_api::BarMenuCloseReason::SourceUnavailable
-                        }
-                    };
+                    let mapped_reason = map_bar_menu_close_reason(&reason);
                     Self::dispatch_menu_event(cx, &src, false, Some(mapped_reason));
                 }
                 Self::close_channel(cx, channel, display_id, reason);
@@ -1169,6 +1158,32 @@ mod tests {
     use super::*;
     use crate::runtime::shell_surfaces::SurfaceLifecycle;
     use gpui::{Size, TestAppContext, size};
+
+    #[test]
+    fn bar_menu_close_reason_mapping_is_exhaustive() {
+        use shilpo_ext_api::BarMenuCloseReason as ApiReason;
+
+        let cases = [
+            (CardDismissReason::SourceToggle, ApiReason::SourceToggle),
+            (CardDismissReason::Escape, ApiReason::Escape),
+            (CardDismissReason::FocusLost, ApiReason::FocusLost),
+            (CardDismissReason::OutsideClick, ApiReason::OutsideClick),
+            (CardDismissReason::OverviewOpened, ApiReason::OverviewOpened),
+            (CardDismissReason::BarClosed, ApiReason::BarClosed),
+            (CardDismissReason::Shutdown, ApiReason::BarClosed),
+            (CardDismissReason::DisplayRemoved, ApiReason::DisplayRemoved),
+            (CardDismissReason::OwnerRemoved, ApiReason::OwnerRemoved),
+            (
+                CardDismissReason::SourceDisappeared,
+                ApiReason::SourceUnavailable,
+            ),
+            (CardDismissReason::Explicit, ApiReason::SourceUnavailable),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(map_bar_menu_close_reason(&input), expected);
+        }
+    }
 
     fn test_source(owner_id: &str) -> CardSourceId {
         CardSourceId::singleton(owner_id)
