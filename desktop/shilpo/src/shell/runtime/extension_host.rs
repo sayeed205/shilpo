@@ -22,6 +22,8 @@ pub struct ExtensionHost {
     extensions: Option<crate::extensions::ExtensionCoordinator>,
     extension_tasks: HashMap<(ExtensionGeneration, ExtensionId, String), gpui::Task<()>>,
     extension_location_service: shilpo_services::LocationService,
+    #[cfg(test)]
+    test_inputs: std::sync::Arc<std::sync::Mutex<Vec<ExtensionCommand>>>,
 }
 
 impl ExtensionHost {
@@ -30,7 +32,14 @@ impl ExtensionHost {
             extensions,
             extension_tasks: HashMap::new(),
             extension_location_service: shilpo_services::LocationService::new(),
+            #[cfg(test)]
+            test_inputs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_inputs(&self) -> std::sync::Arc<std::sync::Mutex<Vec<ExtensionCommand>>> {
+        self.test_inputs.clone()
     }
 
     pub(crate) fn is_loaded(&self) -> bool {
@@ -81,12 +90,25 @@ impl ExtensionHost {
         event_id: impl Into<String>,
         value: Option<serde_json::Value>,
     ) {
+        let event_id = event_id.into();
+        #[cfg(test)]
+        self.test_inputs
+            .lock()
+            .expect("test input recorder is not poisoned")
+            .push(ExtensionCommand::Input {
+                expected: self.generation().unwrap_or_default(),
+                contribution: contribution.clone(),
+                instance_id: instance_id.map(ToString::to_string),
+                event_id: event_id.clone(),
+                value: value.clone(),
+            });
+
         if let Some(ext) = &self.extensions
             && let Err(error) = ext.send_command(ExtensionCommand::Input {
                 expected: ext.generation(),
                 contribution: contribution.clone(),
                 instance_id: instance_id.map(ToString::to_string),
-                event_id: event_id.into(),
+                event_id,
                 value,
             })
         {

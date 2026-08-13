@@ -165,10 +165,32 @@ interface events {
 
 /// Declarative ViewTree UI component family produced by extensions for rendering.
 interface view {
-    enum container-direction {
+    variant container-direction {
         row,
         column,
         stack,
+        grid(u16),
+    }
+
+    enum alignment {
+        start,
+        center,
+        end,
+        stretch,
+    }
+
+    enum justification {
+        start,
+        center,
+        end,
+        space-between,
+        space-around,
+    }
+
+    enum overflow {
+        visible,
+        hidden,
+        scroll,
     }
 
     enum semantic-color-token {
@@ -193,6 +215,13 @@ interface view {
         color: option<semantic-color-token>,
         background: option<semantic-color-token>,
         flex-grow: option<f32>,
+        border-width: option<f32>,
+        border-color: option<semantic-color-token>,
+        min-width: option<f32>,
+        max-width: option<f32>,
+        min-height: option<f32>,
+        max-height: option<f32>,
+        overflow: option<overflow>,
     }
 
     variant view-node {
@@ -218,6 +247,10 @@ interface view {
         children: list<u32>,
         style: option<view-style>,
         gap: option<f32>,
+        align-items: option<alignment>,
+        justify-content: option<justification>,
+        wrap: bool,
+        event-id: option<string>,
     }
 
     record text-node {

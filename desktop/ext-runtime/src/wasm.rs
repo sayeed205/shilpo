@@ -1202,7 +1202,10 @@ impl ExtensionRuntime for WasmRuntime {
         let outcome = match result {
             Ok(tree) => {
                 span.record("outcome", "success");
-                tree.map(convert_view_tree_from_wit)
+                match tree {
+                    Some(t) => Some(convert_view_tree_from_wit(t)?),
+                    None => None,
+                }
             }
             Err(err) => {
                 span.record("outcome", "failure");
@@ -1973,31 +1976,56 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
     }
 }
 
-fn convert_view_tree_from_wit(tree: self::shilpo::extension::view::ViewTree) -> ApiViewTree {
+fn convert_view_tree_from_wit(
+    tree: self::shilpo::extension::view::ViewTree,
+) -> Result<ApiViewTree, RuntimeError> {
     fn decode_node(
         idx: usize,
         nodes: &[self::shilpo::extension::view::ViewNode],
-    ) -> Option<shilpo_ext_api::ViewNode> {
+    ) -> Result<shilpo_ext_api::ViewNode, RuntimeError> {
         use self::shilpo::extension::view as wit_view;
         use shilpo_ext_api as api;
         if idx >= nodes.len() {
-            return None;
+            return Err(RuntimeError::with_kind(
+                RuntimeFailureKind::InvalidOutput,
+                format!("invalid node index {idx} in view tree"),
+            ));
         }
         let node = match &nodes[idx] {
-            wit_view::ViewNode::Container(c) => api::ViewNode::Container(api::ContainerNode {
-                direction: match c.direction {
-                    wit_view::ContainerDirection::Row => api::ContainerDirection::Row,
-                    wit_view::ContainerDirection::Column => api::ContainerDirection::Column,
-                    wit_view::ContainerDirection::Stack => api::ContainerDirection::Stack,
-                },
-                children: c
-                    .children
-                    .iter()
-                    .filter_map(|&child_idx| decode_node(child_idx as usize, nodes))
-                    .collect(),
-                style: c.style.as_ref().map(decode_style),
-                gap: c.gap,
-            }),
+            wit_view::ViewNode::Container(c) => {
+                let mut children = Vec::with_capacity(c.children.len());
+                for &child_idx in &c.children {
+                    children.push(decode_node(child_idx as usize, nodes)?);
+                }
+                api::ViewNode::Container(api::ContainerNode {
+                    direction: match &c.direction {
+                        wit_view::ContainerDirection::Row => api::ContainerDirection::Row,
+                        wit_view::ContainerDirection::Column => api::ContainerDirection::Column,
+                        wit_view::ContainerDirection::Stack => api::ContainerDirection::Stack,
+                        wit_view::ContainerDirection::Grid(cols) => {
+                            api::ContainerDirection::Grid { columns: *cols }
+                        }
+                    },
+                    children,
+                    style: c.style.as_ref().map(decode_style),
+                    gap: c.gap,
+                    align_items: c.align_items.map(|a| match a {
+                        wit_view::Alignment::Start => api::Alignment::Start,
+                        wit_view::Alignment::Center => api::Alignment::Center,
+                        wit_view::Alignment::End => api::Alignment::End,
+                        wit_view::Alignment::Stretch => api::Alignment::Stretch,
+                    }),
+                    justify_content: c.justify_content.map(|j| match j {
+                        wit_view::Justification::Start => api::Justification::Start,
+                        wit_view::Justification::Center => api::Justification::Center,
+                        wit_view::Justification::End => api::Justification::End,
+                        wit_view::Justification::SpaceBetween => api::Justification::SpaceBetween,
+                        wit_view::Justification::SpaceAround => api::Justification::SpaceAround,
+                    }),
+                    wrap: c.wrap,
+                    event_id: c.event_id.clone(),
+                })
+            }
             wit_view::ViewNode::Text(t) => api::ViewNode::Text(api::TextNode {
                 content: t.content.clone(),
                 font_size: t.font_size,
@@ -2043,14 +2071,16 @@ fn convert_view_tree_from_wit(tree: self::shilpo::extension::view::ViewTree) -> 
                 event_id: ti.event_id.clone(),
                 style: ti.style.as_ref().map(decode_style),
             }),
-            wit_view::ViewNode::List(l) => api::ViewNode::List(api::ListNode {
-                items: l
-                    .items
-                    .iter()
-                    .filter_map(|&item_idx| decode_node(item_idx as usize, nodes))
-                    .collect(),
-                style: l.style.as_ref().map(decode_style),
-            }),
+            wit_view::ViewNode::List(l) => {
+                let mut items = Vec::with_capacity(l.items.len());
+                for &item_idx in &l.items {
+                    items.push(decode_node(item_idx as usize, nodes)?);
+                }
+                api::ViewNode::List(api::ListNode {
+                    items,
+                    style: l.style.as_ref().map(decode_style),
+                })
+            }
             wit_view::ViewNode::Spacer(sp) => {
                 api::ViewNode::Spacer(api::SpacerNode { size: sp.size })
             }
@@ -2071,10 +2101,12 @@ fn convert_view_tree_from_wit(tree: self::shilpo::extension::view::ViewTree) -> 
                 })
             }
         };
-        Some(node)
+        Ok(node)
     }
 
     fn decode_style(s: &self::shilpo::extension::view::ViewStyle) -> shilpo_ext_api::ViewStyle {
+        use self::shilpo::extension::view as wit_view;
+        use shilpo_ext_api as api;
         shilpo_ext_api::ViewStyle {
             padding: s.padding,
             margin: s.margin,
@@ -2085,6 +2117,17 @@ fn convert_view_tree_from_wit(tree: self::shilpo::extension::view::ViewTree) -> 
             color: s.color.map(decode_color),
             background: s.background.map(decode_color),
             flex_grow: s.flex_grow,
+            border_width: s.border_width,
+            border_color: s.border_color.map(decode_color),
+            min_width: s.min_width,
+            max_width: s.max_width,
+            min_height: s.min_height,
+            max_height: s.max_height,
+            overflow: s.overflow.map(|o| match o {
+                wit_view::Overflow::Visible => api::Overflow::Visible,
+                wit_view::Overflow::Hidden => api::Overflow::Hidden,
+                wit_view::Overflow::Scroll => api::Overflow::Scroll,
+            }),
         }
     }
 
@@ -2110,7 +2153,169 @@ fn convert_view_tree_from_wit(tree: self::shilpo::extension::view::ViewTree) -> 
         }
     }
 
-    let root =
-        decode_node(tree.root as usize, &tree.nodes).unwrap_or(shilpo_ext_api::ViewNode::Divider);
-    ApiViewTree::new(root)
+    let root = decode_node(tree.root as usize, &tree.nodes)?;
+    Ok(ApiViewTree::new(root))
+}
+
+#[cfg(test)]
+mod wit_conversion_tests {
+    use self::shilpo::extension::view as wit_view;
+    use super::*;
+
+    #[test]
+    fn convert_view_tree_preserves_grid_alignment_style_and_container_event_id() {
+        let wit_tree = wit_view::ViewTree {
+            nodes: vec![wit_view::ViewNode::Container(wit_view::ContainerNode {
+                direction: wit_view::ContainerDirection::Grid(4),
+                children: vec![],
+                style: Some(wit_view::ViewStyle {
+                    padding: Some(10.0),
+                    margin: None,
+                    width: None,
+                    height: None,
+                    corner_radius: None,
+                    opacity: Some(0.8),
+                    color: Some(wit_view::SemanticColorToken::Primary),
+                    background: Some(wit_view::SemanticColorToken::SurfaceContainer),
+                    flex_grow: None,
+                    border_width: Some(2.0),
+                    border_color: Some(wit_view::SemanticColorToken::Outline),
+                    min_width: Some(100.0),
+                    max_width: Some(500.0),
+                    min_height: Some(50.0),
+                    max_height: Some(200.0),
+                    overflow: Some(wit_view::Overflow::Scroll),
+                }),
+                gap: Some(8.0),
+                align_items: Some(wit_view::Alignment::Center),
+                justify_content: Some(wit_view::Justification::SpaceBetween),
+                wrap: false,
+                event_id: Some("grid_card".into()),
+            })],
+            root: 0,
+        };
+
+        let converted = convert_view_tree_from_wit(wit_tree).expect("conversion should succeed");
+        let shilpo_ext_api::ViewNode::Container(container) = converted.root else {
+            panic!("root must be container");
+        };
+
+        assert_eq!(
+            container.direction,
+            shilpo_ext_api::ContainerDirection::Grid { columns: 4 }
+        );
+        assert_eq!(container.gap, Some(8.0));
+        assert_eq!(
+            container.align_items,
+            Some(shilpo_ext_api::Alignment::Center)
+        );
+        assert_eq!(
+            container.justify_content,
+            Some(shilpo_ext_api::Justification::SpaceBetween)
+        );
+        assert_eq!(container.event_id, Some("grid_card".into()));
+
+        let style = container.style.expect("style present");
+        assert_eq!(style.border_width, Some(2.0));
+        assert_eq!(
+            style.border_color,
+            Some(shilpo_ext_api::SemanticColorToken::Outline)
+        );
+        assert_eq!(style.min_width, Some(100.0));
+        assert_eq!(style.max_width, Some(500.0));
+        assert_eq!(style.min_height, Some(50.0));
+        assert_eq!(style.max_height, Some(200.0));
+        assert_eq!(style.overflow, Some(shilpo_ext_api::Overflow::Scroll));
+    }
+
+    #[test]
+    fn convert_view_tree_preserves_all_directions_and_grid_boundaries() {
+        let directions = [
+            (
+                wit_view::ContainerDirection::Row,
+                shilpo_ext_api::ContainerDirection::Row,
+            ),
+            (
+                wit_view::ContainerDirection::Column,
+                shilpo_ext_api::ContainerDirection::Column,
+            ),
+            (
+                wit_view::ContainerDirection::Stack,
+                shilpo_ext_api::ContainerDirection::Stack,
+            ),
+        ];
+        for (wit_direction, api_direction) in directions {
+            let tree = wit_view::ViewTree {
+                nodes: vec![wit_view::ViewNode::Container(wit_view::ContainerNode {
+                    direction: wit_direction,
+                    children: vec![],
+                    style: None,
+                    gap: None,
+                    align_items: None,
+                    justify_content: None,
+                    wrap: false,
+                    event_id: None,
+                })],
+                root: 0,
+            };
+            let converted = convert_view_tree_from_wit(tree).unwrap();
+            let shilpo_ext_api::ViewNode::Container(container) = converted.root else {
+                panic!("root must be container");
+            };
+            assert_eq!(container.direction, api_direction);
+        }
+
+        for columns in [1, 64] {
+            let tree = wit_view::ViewTree {
+                nodes: vec![wit_view::ViewNode::Container(wit_view::ContainerNode {
+                    direction: wit_view::ContainerDirection::Grid(columns),
+                    children: vec![],
+                    style: None,
+                    gap: None,
+                    align_items: None,
+                    justify_content: None,
+                    wrap: false,
+                    event_id: None,
+                })],
+                root: 0,
+            };
+            let converted = convert_view_tree_from_wit(tree).unwrap();
+            let shilpo_ext_api::ViewNode::Container(container) = converted.root else {
+                panic!("root must be container");
+            };
+            assert_eq!(
+                container.direction,
+                shilpo_ext_api::ContainerDirection::Grid { columns }
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_root_index_fails_closed() {
+        let wit_tree = wit_view::ViewTree {
+            nodes: vec![],
+            root: 0,
+        };
+        let res = convert_view_tree_from_wit(wit_tree);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn invalid_child_index_fails_closed() {
+        let wit_tree = wit_view::ViewTree {
+            nodes: vec![wit_view::ViewNode::Container(wit_view::ContainerNode {
+                direction: wit_view::ContainerDirection::Row,
+                children: vec![99],
+                style: None,
+                gap: None,
+                align_items: None,
+                justify_content: None,
+                wrap: false,
+                event_id: None,
+            })],
+            root: 0,
+        };
+        let res = convert_view_tree_from_wit(wit_tree);
+        assert!(res.is_err());
+    }
 }

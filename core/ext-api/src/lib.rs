@@ -23,10 +23,10 @@ pub use manifest::{
     SidePanelContribution, Subscription, valid_virtual_path_pattern, wildcard_matches,
 };
 pub use view::{
-    BadgeNode, ButtonNode, ContainerDirection, ContainerNode, IconButtonNode, IconNode, ImageNode,
-    ListNode, LoadingIndicatorNode, ProgressNode, SemanticColorToken, SliderNode, SpacerNode,
-    TextInputNode, TextNode, ToggleNode, ViewLimits, ViewNode, ViewStyle, ViewTree,
-    ViewValidationError,
+    Alignment, BadgeNode, ButtonNode, ContainerDirection, ContainerNode, IconButtonNode, IconNode,
+    ImageNode, Justification, ListNode, LoadingIndicatorNode, Overflow, ProgressNode,
+    SemanticColorToken, SliderNode, SpacerNode, TextInputNode, TextNode, ToggleNode, ViewLimits,
+    ViewNode, ViewStyle, ViewTree, ViewValidationError,
 };
 
 #[cfg(test)]
@@ -83,6 +83,10 @@ mod contract_tests {
                 children: vec![child],
                 style: None,
                 gap: None,
+                align_items: None,
+                justify_content: None,
+                wrap: false,
+                event_id: None,
             })
         });
         assert!(
