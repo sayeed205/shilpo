@@ -13,11 +13,11 @@ pub mod bindings {
 }
 
 pub use effects::{HostOperation, WallpaperSource};
-pub use events::{EventKind, ExtensionEvent};
+pub use events::{BarMenuCloseReason, EventKind, ExtensionEvent};
 pub use id::{CanonicalId, ContributionId, ExtensionId, IdError};
 pub use manifest::{
-    ActionContribution, BackgroundTaskContribution, BarWidgetContribution, Capability,
-    CapabilityKind, Contributions, DesktopWidgetContribution, ExtensionManifest,
+    ActionContribution, BackgroundTaskContribution, BarMenuContribution, BarWidgetContribution,
+    Capability, CapabilityKind, Contributions, DesktopWidgetContribution, ExtensionManifest,
     LauncherProviderContribution, LibraryConfig, ManifestError, SUPPORTED_API_VERSION,
     SUPPORTED_SCHEMA_VERSION, SecretPurpose, SecretRef, SettingsPageContribution,
     SidePanelContribution, Subscription, valid_virtual_path_pattern, wildcard_matches,

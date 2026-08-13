@@ -16,6 +16,22 @@ pub enum EventKind {
     TimerFired,
 }
 
+#[derive(
+    Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BarMenuCloseReason {
+    SourceToggle,
+    Escape,
+    FocusLost,
+    OutsideClick,
+    OverviewOpened,
+    BarClosed,
+    DisplayRemoved,
+    OwnerRemoved,
+    SourceUnavailable,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ExtensionEvent {
@@ -71,6 +87,15 @@ pub enum ExtensionEvent {
         instance_id: Option<String>,
         settings: serde_json::Value,
     },
+    BarMenuOpened {
+        contribution_id: String,
+        instance_id: String,
+    },
+    BarMenuClosed {
+        contribution_id: String,
+        instance_id: String,
+        reason: BarMenuCloseReason,
+    },
     Input {
         contribution_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,6 +136,8 @@ impl ExtensionEvent {
             | Self::ContributionUnmounted { .. }
             | Self::ContributionResized { .. }
             | Self::ContributionSettingsChanged { .. }
+            | Self::BarMenuOpened { .. }
+            | Self::BarMenuClosed { .. }
             | Self::Input { .. }
             | Self::StateValue { .. }
             | Self::HttpResponse { .. }

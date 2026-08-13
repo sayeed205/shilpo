@@ -20,6 +20,27 @@ An extension may contribute one or more:
 - shell actions;
 - background tasks that react to typed shell events.
 
+### Bar menus
+
+A bar menu is a single typed `ViewTree` surface linked to one bar widget in the same manifest:
+
+```toml
+[[contributions.bar_widgets]]
+id = "weather"
+name = "Weather"
+
+[[contributions.bar_menus]]
+id = "weather-menu"
+name = "Weather details"
+bar_widget = "weather"
+```
+
+The host measures the rendered tree intrinsically, adds Shell-owned card chrome, and bounds it to the available
+monitor work area. Extensions do not provide width, height, size tiers, placement, focus, or surface handles. Content
+that exceeds the bounded result scrolls on the overflowing axis. `BarMenuOpened` and `BarMenuClosed` are typed host
+lifecycle events; closing reports the source toggle, Escape, focus loss, outside click, Overview, bar close, display
+removal, owner removal, or source-unavailable reason.
+
 Extensions can react to events such as palette generation, theme changes, wallpaper changes, output changes, network
 state, or timers. Operations that affect the system—such as changing wallpaper, running a command, reading files,
 reading system location (`location:read`), or using the network—require an explicit capability declaration and user

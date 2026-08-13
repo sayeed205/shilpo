@@ -600,6 +600,7 @@ mod tests {
             settings_schema: None,
             default_size: None,
             minimum_size: None,
+            bar_widget: None,
         }]);
 
         let ids = dispatcher
