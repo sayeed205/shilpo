@@ -1,16 +1,19 @@
 use crate::adapter::{
     ExtensionRuntime, GrantChecker, RuntimeBudget, RuntimeError, RuntimeFailureKind,
 };
+use crate::state::{
+    MAX_PENDING_STATE_EVENTS, StateStore, StateStoreError, StateValue as StoredValue,
+};
 use shilpo_ext_api::{
     Capability, ExtensionEvent as ApiEvent, ExtensionId, HostOperation, ViewTree as ApiViewTree,
     wildcard_matches,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
 use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread;
 use std::time::Duration;
@@ -58,10 +61,30 @@ pub struct WasmState {
     pub table: ResourceTable,
     pub wasi: WasiCtx,
     pub operations: Vec<HostOperation>,
-    pub state_store: HashMap<String, String>,
+    pub state_store: Arc<dyn StateStore>,
+    pub watch_registry: Arc<Mutex<HashMap<ExtensionId, HashMap<u64, WatchEntry>>>>,
+    pub pending_state_events: Arc<Mutex<HashMap<ExtensionId, VecDeque<PendingStateEvent>>>>,
+    pub next_watch_id: Arc<AtomicU64>,
+    pub state_operation_lock: Arc<Mutex<()>>,
     pub hostcall_bytes: usize,
     pub max_hostcall_bytes: usize,
     pub secret_deadline: Instant,
+}
+
+/// A live watch registration held by the runtime on behalf of a guest instance.
+#[derive(Clone, Debug)]
+pub struct WatchEntry {
+    key: String,
+}
+
+/// A state-change event queued for delivery to a guest after the initiating host
+/// call returns. Values are never logged or exported from the worker process.
+#[derive(Clone, Debug)]
+pub struct PendingStateEvent {
+    watch_id: u64,
+    key: String,
+    value: Option<serde_json::Value>,
+    revision: u64,
 }
 
 impl WasiView for WasmState {
@@ -278,24 +301,171 @@ impl shilpo::extension::state::Host for WasmState {
     fn read(
         &mut self,
         key: String,
-    ) -> Result<Option<shilpo::extension::types::DataValue>, shilpo::extension::types::Error> {
+    ) -> Result<self::shilpo::extension::state::StateSnapshot, shilpo::extension::types::Error>
+    {
+        let operation_lock = self.state_operation_lock.clone();
+        let _operation = operation_lock
+            .lock()
+            .expect("state operation lock poisoned");
         self.charge_hostcall_bytes(key.len())?;
-        Ok(self.state_store.get(&key).map(|value| {
-            serde_json::from_str(value)
-                .map(|value| data_value_from_json(&value))
-                .unwrap_or_else(|_| shilpo::extension::types::DataValue::TextValue(value.clone()))
-        }))
+        let snapshot = self
+            .state_store
+            .read(&self.extension_id, &key)
+            .map_err(map_state_error)?;
+        Ok(self::shilpo::extension::state::StateSnapshot {
+            value: snapshot.value.as_ref().map(data_value_from_stored),
+            revision: snapshot.revision,
+        })
     }
 
     fn write(
         &mut self,
         key: String,
         value: shilpo::extension::types::DataValue,
-    ) -> Result<(), shilpo::extension::types::Error> {
-        let value_json = data_value_to_json(&value).to_string();
-        self.charge_hostcall_bytes(key.len() + value_json.len())?;
-        self.state_store.insert(key, value_json);
+    ) -> Result<self::shilpo::extension::state::StateMutation, shilpo::extension::types::Error>
+    {
+        let operation_lock = self.state_operation_lock.clone();
+        let _operation = operation_lock
+            .lock()
+            .expect("state operation lock poisoned");
+        if matches!(value, shilpo::extension::types::DataValue::SecretRef(_)) {
+            return Err(shilpo::extension::types::Error {
+                kind: shilpo::extension::types::ErrorKind::InvalidArgument,
+                message: "secret references cannot be stored in extension state".into(),
+            });
+        }
+        let stored = stored_value_from_data_value(&value)?;
+        let encoded_len = crate::state::encoded_len(&stored);
+        self.charge_hostcall_bytes(key.len() + encoded_len)?;
+        let mutation = self
+            .state_store
+            .write(&self.extension_id, &key, stored.clone())
+            .map_err(map_state_error)?;
+        if mutation.changed {
+            self.queue_state_events(&key, Some(stored), mutation.revision);
+        }
+        Ok(self::shilpo::extension::state::StateMutation {
+            changed: mutation.changed,
+            revision: mutation.revision,
+        })
+    }
+
+    fn delete(
+        &mut self,
+        key: String,
+    ) -> Result<self::shilpo::extension::state::StateMutation, shilpo::extension::types::Error>
+    {
+        let operation_lock = self.state_operation_lock.clone();
+        let _operation = operation_lock
+            .lock()
+            .expect("state operation lock poisoned");
+        self.charge_hostcall_bytes(key.len())?;
+        let mutation = self
+            .state_store
+            .delete(&self.extension_id, &key)
+            .map_err(map_state_error)?;
+        if mutation.changed {
+            self.queue_state_events(&key, None, mutation.revision);
+        }
+        Ok(self::shilpo::extension::state::StateMutation {
+            changed: mutation.changed,
+            revision: mutation.revision,
+        })
+    }
+
+    fn watch(
+        &mut self,
+        key: String,
+    ) -> Result<self::shilpo::extension::state::WatchRegistration, shilpo::extension::types::Error>
+    {
+        let operation_lock = self.state_operation_lock.clone();
+        let _operation = operation_lock
+            .lock()
+            .expect("state operation lock poisoned");
+        self.charge_hostcall_bytes(key.len())?;
+        let snapshot = self
+            .state_store
+            .read(&self.extension_id, &key)
+            .map_err(map_state_error)?;
+        let watch_id = self.next_watch_id.fetch_add(1, Ordering::Relaxed);
+        self.watch_registry
+            .lock()
+            .expect("watch registry poisoned")
+            .entry(self.extension_id.clone())
+            .or_default()
+            .insert(watch_id, WatchEntry { key: key.clone() });
+        Ok(self::shilpo::extension::state::WatchRegistration {
+            watch_id,
+            snapshot: self::shilpo::extension::state::StateSnapshot {
+                value: snapshot.value.as_ref().map(data_value_from_stored),
+                revision: snapshot.revision,
+            },
+        })
+    }
+
+    fn unwatch(&mut self, watch_id: u64) -> Result<(), shilpo::extension::types::Error> {
+        let operation_lock = self.state_operation_lock.clone();
+        let _operation = operation_lock
+            .lock()
+            .expect("state operation lock poisoned");
+        self.charge_hostcall_bytes(8)?;
+        self.watch_registry
+            .lock()
+            .expect("watch registry poisoned")
+            .get_mut(&self.extension_id)
+            .map(|registrations| registrations.remove(&watch_id));
         Ok(())
+    }
+}
+
+impl WasmState {
+    /// Queues one state-change event per live watch on `key`, coalescing to the
+    /// latest revision per watch when the pending queue exceeds its bound.
+    fn queue_state_events(&mut self, key: &str, value: Option<StoredValue>, revision: u64) {
+        let registrations: Vec<u64> = self
+            .watch_registry
+            .lock()
+            .expect("watch registry poisoned")
+            .get(&self.extension_id)
+            .map(|registrations| {
+                registrations
+                    .iter()
+                    .filter(|(_, entry)| entry.key == key)
+                    .map(|(watch_id, _)| *watch_id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if registrations.is_empty() {
+            return;
+        }
+        let value_json = value.as_ref().map(stored_value_to_json);
+        let mut pending = self
+            .pending_state_events
+            .lock()
+            .expect("pending state events poisoned");
+        let queue = pending.entry(self.extension_id.clone()).or_default();
+        for watch_id in registrations {
+            queue.push_back(PendingStateEvent {
+                watch_id,
+                key: key.to_owned(),
+                value: value_json.clone(),
+                revision,
+            });
+        }
+        while queue.len() > MAX_PENDING_STATE_EVENTS {
+            let watch_ids: Vec<u64> = queue.iter().map(|event| event.watch_id).collect();
+            let mut coalesced = false;
+            for (index, watch_id) in watch_ids.iter().enumerate() {
+                if watch_ids[index + 1..].contains(watch_id) {
+                    queue.remove(index);
+                    coalesced = true;
+                    break;
+                }
+            }
+            if !coalesced {
+                queue.pop_front();
+            }
+        }
     }
 }
 
@@ -550,12 +720,21 @@ pub struct WasmRuntime {
     instances: HashMap<ExtensionId, WasmInstance>,
     pub secret_broker: Arc<dyn crate::secrets::SecretBroker>,
     pub grant_checker: Option<GrantChecker>,
+    state_store: Arc<dyn StateStore>,
+    watch_registry: Arc<Mutex<HashMap<ExtensionId, HashMap<u64, WatchEntry>>>>,
+    pending_state_events: Arc<Mutex<HashMap<ExtensionId, VecDeque<PendingStateEvent>>>>,
+    next_watch_id: Arc<AtomicU64>,
+    state_operation_lock: Arc<Mutex<()>>,
     ticker_stop: Arc<AtomicBool>,
     ticker: Option<thread::JoinHandle<()>>,
 }
 
 impl WasmRuntime {
     pub fn new() -> Result<Self, RuntimeError> {
+        Self::new_with_paths(&crate::catalog::CatalogPaths::platform_default())
+    }
+
+    pub fn new_with_paths(paths: &crate::catalog::CatalogPaths) -> Result<Self, RuntimeError> {
         let broker: Arc<dyn crate::secrets::SecretBroker> =
             Arc::new(crate::secrets::Oo7SecretBroker::new().map_err(|error| {
                 RuntimeError::with_kind(
@@ -563,7 +742,14 @@ impl WasmRuntime {
                     format!("failed to initialize Secret Service: {error}"),
                 )
             })?);
-        Self::with_broker(broker)
+        let state_store =
+            crate::state::HeedStateStore::open(&paths.state_store_dir()).map_err(|error| {
+                RuntimeError::with_kind(
+                    RuntimeFailureKind::Unavailable,
+                    format!("failed to open extension state store: {error}"),
+                )
+            })?;
+        Self::with_broker_and_state_store(broker, Arc::new(state_store))
     }
 
     pub fn with_broker(
@@ -575,6 +761,25 @@ impl WasmRuntime {
     pub fn with_broker_and_grant_checker(
         secret_broker: Arc<dyn crate::secrets::SecretBroker>,
         grant_checker: Option<GrantChecker>,
+    ) -> Result<Self, RuntimeError> {
+        Self::with_broker_and_grant_checker_and_state_store(
+            secret_broker,
+            grant_checker,
+            Arc::new(crate::state::FakeStateStore::default()),
+        )
+    }
+
+    pub fn with_broker_and_state_store(
+        secret_broker: Arc<dyn crate::secrets::SecretBroker>,
+        state_store: Arc<dyn StateStore>,
+    ) -> Result<Self, RuntimeError> {
+        Self::with_broker_and_grant_checker_and_state_store(secret_broker, None, state_store)
+    }
+
+    pub fn with_broker_and_grant_checker_and_state_store(
+        secret_broker: Arc<dyn crate::secrets::SecretBroker>,
+        grant_checker: Option<GrantChecker>,
+        state_store: Arc<dyn StateStore>,
     ) -> Result<Self, RuntimeError> {
         let engine = configured_engine()?;
         let ticker_stop = Arc::new(AtomicBool::new(false));
@@ -600,6 +805,11 @@ impl WasmRuntime {
             instances: HashMap::new(),
             secret_broker,
             grant_checker,
+            state_store,
+            watch_registry: Arc::new(Mutex::new(HashMap::new())),
+            pending_state_events: Arc::new(Mutex::new(HashMap::new())),
+            next_watch_id: Arc::new(AtomicU64::new(1)),
+            state_operation_lock: Arc::new(Mutex::new(())),
             ticker_stop,
             ticker: Some(ticker),
         })
@@ -609,6 +819,81 @@ impl WasmRuntime {
         let engine = configured_engine()?;
         let component = compile_component(&engine, bytes)?;
         validate_component_type(&engine, &component)
+    }
+
+    /// Drops all watch registrations and undelivered state events for an
+    /// extension whose instance is being replaced or unloaded.
+    fn drop_watch_state(&self, extension_id: &ExtensionId) {
+        self.watch_registry
+            .lock()
+            .expect("watch registry poisoned")
+            .remove(extension_id);
+        self.pending_state_events
+            .lock()
+            .expect("pending state events poisoned")
+            .remove(extension_id);
+    }
+
+    /// Delivers queued state-change events to the guest after the initiating host
+    /// call returns, in revision order per watch. A failed delivery stops further
+    /// delivery for this batch; values are never logged.
+    fn deliver_pending_state_events(
+        &mut self,
+        extension_id: &ExtensionId,
+        ops: &mut Vec<HostOperation>,
+    ) {
+        let events: Vec<ApiEvent> = {
+            let mut pending = self
+                .pending_state_events
+                .lock()
+                .expect("pending state events poisoned");
+            pending
+                .remove(extension_id)
+                .map(|queue| {
+                    queue
+                        .into_iter()
+                        .map(|event| ApiEvent::StateValue {
+                            watch_id: event.watch_id,
+                            key: event.key,
+                            value: event.value,
+                            revision: event.revision,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        for event in events {
+            let instance = match self.instances.get_mut(extension_id) {
+                Some(instance) => instance,
+                None => return,
+            };
+            let wit_event = convert_event_to_wit(&event);
+            match instance
+                .extension
+                .call_on_event(&mut instance.store, &wit_event)
+            {
+                Ok(Ok(())) => {
+                    ops.append(&mut instance.store.data_mut().operations);
+                }
+                Ok(Err(err)) => {
+                    tracing::warn!(
+                        target: "shilpo_profile",
+                        extension_id = %extension_id,
+                        "state event delivery rejected by guest: {}",
+                        err.message,
+                    );
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "shilpo_profile",
+                        extension_id = %extension_id,
+                        "state event delivery failed: {error}",
+                    );
+                    return;
+                }
+            }
+        }
     }
 
     fn prepare_call(
@@ -672,7 +957,11 @@ impl WasmRuntime {
             table: ResourceTable::new(),
             wasi: WasiCtxBuilder::new().build(),
             operations: Vec::new(),
-            state_store: HashMap::new(),
+            state_store: self.state_store.clone(),
+            watch_registry: self.watch_registry.clone(),
+            pending_state_events: self.pending_state_events.clone(),
+            next_watch_id: self.next_watch_id.clone(),
+            state_operation_lock: self.state_operation_lock.clone(),
             hostcall_bytes: 0,
             max_hostcall_bytes: budget.max_hostcall_bytes,
             secret_deadline: Instant::now() + budget.deadline,
@@ -776,6 +1065,7 @@ impl ExtensionRuntime for WasmRuntime {
             declared_capabilities,
             granted_capabilities,
         )?;
+        self.drop_watch_state(extension_id);
         self.instances.insert(extension_id.clone(), replacement);
         Ok(())
     }
@@ -826,12 +1116,14 @@ impl ExtensionRuntime for WasmRuntime {
             })?;
         let replacement =
             self.instantiate_module(extension_id, &module, budget, declared, granted)?;
+        self.drop_watch_state(extension_id);
         self.instances.insert(extension_id.clone(), replacement);
         span.record("outcome", "success");
         Ok(())
     }
 
     fn unload(&mut self, extension_id: &ExtensionId) -> Result<(), RuntimeError> {
+        self.drop_watch_state(extension_id);
         self.instances
             .remove(extension_id)
             .map(|_| ())
@@ -867,17 +1159,21 @@ impl ExtensionRuntime for WasmRuntime {
             .extension
             .call_on_event(&mut instance.store, &wit_event)
             .map_err(|error| classify_wasmtime_error("on-event call failed", error))?;
+        let mut ops = Vec::new();
         match result {
-            Ok(()) => {
-                let ops = instance.store.data_mut().operations.drain(..).collect();
-                span.record("outcome", "success");
-                Ok(ops)
+            Ok(()) => ops.append(&mut instance.store.data_mut().operations),
+            Err(err) => {
+                self.deliver_pending_state_events(extension_id, &mut ops);
+                span.record("outcome", "failure");
+                return Err(RuntimeError::with_kind(
+                    RuntimeFailureKind::InvalidOutput,
+                    format!("on-event failed: {}", err.message),
+                ));
             }
-            Err(err) => Err(RuntimeError::with_kind(
-                RuntimeFailureKind::InvalidOutput,
-                format!("on-event failed: {}", err.message),
-            )),
         }
+        self.deliver_pending_state_events(extension_id, &mut ops);
+        span.record("outcome", "success");
+        Ok(ops)
     }
 
     fn view(
@@ -902,20 +1198,22 @@ impl ExtensionRuntime for WasmRuntime {
             .extension
             .call_view(&mut instance.store, contribution_id)
             .map_err(|error| classify_wasmtime_error("view call failed", error))?;
-        match result {
-            Ok(Some(tree)) => {
+        let mut ops = Vec::new();
+        let outcome = match result {
+            Ok(tree) => {
                 span.record("outcome", "success");
-                Ok(Some(convert_view_tree_from_wit(tree)))
+                tree.map(convert_view_tree_from_wit)
             }
-            Ok(None) => {
-                span.record("outcome", "success");
-                Ok(None)
+            Err(err) => {
+                span.record("outcome", "failure");
+                return Err(RuntimeError::with_kind(
+                    RuntimeFailureKind::InvalidOutput,
+                    format!("view failed: {}", err.message),
+                ));
             }
-            Err(err) => Err(RuntimeError::with_kind(
-                RuntimeFailureKind::InvalidOutput,
-                format!("view failed: {}", err.message),
-            )),
-        }
+        };
+        self.deliver_pending_state_events(extension_id, &mut ops);
+        Ok(outcome)
     }
 }
 
@@ -1035,6 +1333,374 @@ fn data_value_to_json(value: &self::shilpo::extension::types::DataValue) -> serd
     }
 }
 
+/// Maps a store error to the WIT error vocabulary. Messages never include stored
+/// values or bytes.
+fn map_state_error(error: StateStoreError) -> shilpo::extension::types::Error {
+    use self::shilpo::extension::types::ErrorKind;
+    let (kind, message) = match error {
+        StateStoreError::InvalidKey(message) | StateStoreError::InvalidValue(message) => {
+            (ErrorKind::InvalidArgument, message)
+        }
+        StateStoreError::KeyCountLimit
+        | StateStoreError::ValueSizeLimit { .. }
+        | StateStoreError::ByteBudgetExceeded { .. } => (ErrorKind::RateLimited, error.to_string()),
+        StateStoreError::RevisionOverflow => (ErrorKind::Internal, error.to_string()),
+        StateStoreError::Corrupt(message) | StateStoreError::Internal(message) => {
+            (ErrorKind::Internal, message)
+        }
+        StateStoreError::BackendUnavailable(message) => (ErrorKind::BackendUnavailable, message),
+    };
+    shilpo::extension::types::Error { kind, message }
+}
+
+/// Converts a guest data value into a storable value, rejecting non-finite floats
+/// (the persisted encoding cannot represent them).
+fn stored_value_from_data_value(
+    value: &self::shilpo::extension::types::DataValue,
+) -> Result<StoredValue, shilpo::extension::types::Error> {
+    use self::shilpo::extension::types::DataValue;
+    match value {
+        DataValue::None => Ok(StoredValue::None),
+        DataValue::BoolValue(value) => Ok(StoredValue::Bool(*value)),
+        DataValue::IntValue(value) => Ok(StoredValue::Int(*value)),
+        DataValue::FloatValue(value) if value.is_finite() => Ok(StoredValue::Float(*value)),
+        DataValue::FloatValue(_) => Err(shilpo::extension::types::Error {
+            kind: shilpo::extension::types::ErrorKind::InvalidArgument,
+            message: "non-finite floats cannot be stored in extension state".into(),
+        }),
+        DataValue::TextValue(value) => Ok(StoredValue::Text(value.clone())),
+        DataValue::BytesValue(value) => Ok(StoredValue::Bytes(value.clone())),
+        DataValue::SecretRef(_) => Err(shilpo::extension::types::Error {
+            kind: shilpo::extension::types::ErrorKind::InvalidArgument,
+            message: "secret references cannot be stored in extension state".into(),
+        }),
+    }
+}
+
+/// Converts a stored value back into a guest data value. Stored values never
+/// contain secret references.
+/// Serializes a stored value to the JSON representation used for queued state
+/// events. Mirrors `data_value_to_json` for stored variants.
+fn stored_value_to_json(value: &StoredValue) -> serde_json::Value {
+    match value {
+        StoredValue::None => serde_json::Value::Null,
+        StoredValue::Bool(value) => serde_json::Value::Bool(*value),
+        StoredValue::Int(value) => serde_json::json!(*value),
+        StoredValue::Float(value) => serde_json::json!(*value),
+        StoredValue::Text(value) => serde_json::Value::String(value.clone()),
+        StoredValue::Bytes(value) => serde_json::Value::Array(
+            value
+                .iter()
+                .map(|value| serde_json::json!(*value))
+                .collect(),
+        ),
+    }
+}
+
+fn data_value_from_stored(value: &StoredValue) -> self::shilpo::extension::types::DataValue {
+    use self::shilpo::extension::types::DataValue;
+    match value {
+        StoredValue::None => DataValue::None,
+        StoredValue::Bool(value) => DataValue::BoolValue(*value),
+        StoredValue::Int(value) => DataValue::IntValue(*value),
+        StoredValue::Float(value) => DataValue::FloatValue(*value),
+        StoredValue::Text(value) => DataValue::TextValue(value.clone()),
+        StoredValue::Bytes(value) => DataValue::BytesValue(value.clone()),
+    }
+}
+
+#[cfg(test)]
+mod state_seam_tests {
+    use super::*;
+    use crate::secrets::FakeSecretBroker;
+    use shilpo_ext_api::ExtensionId;
+    use std::time::Duration;
+
+    fn state() -> WasmState {
+        let extension_id = ExtensionId::new("io.github.test.state-seam").unwrap();
+        WasmState {
+            extension_id,
+            declared_capabilities: Vec::new(),
+            granted_capabilities: Vec::new(),
+            secret_broker: Arc::new(FakeSecretBroker::new()),
+            grant_checker: None,
+            limits: StoreLimitsBuilder::new().build(),
+            table: ResourceTable::new(),
+            wasi: WasiCtxBuilder::new().build(),
+            operations: Vec::new(),
+            state_store: Arc::new(crate::state::FakeStateStore::default()),
+            watch_registry: Arc::new(Mutex::new(HashMap::new())),
+            pending_state_events: Arc::new(Mutex::new(HashMap::new())),
+            next_watch_id: Arc::new(AtomicU64::new(1)),
+            state_operation_lock: Arc::new(Mutex::new(())),
+            hostcall_bytes: 0,
+            max_hostcall_bytes: 1024 * 1024,
+            secret_deadline: Instant::now() + Duration::from_secs(5),
+        }
+    }
+
+    #[test]
+    fn current_seam_round_trips_json_values_in_memory() {
+        let mut state = state();
+        let mutation = <WasmState as shilpo::extension::state::Host>::write(
+            &mut state,
+            "greeting".into(),
+            shilpo::extension::types::DataValue::TextValue("hello".into()),
+        )
+        .unwrap();
+        assert!(mutation.changed);
+        assert_eq!(mutation.revision, 1);
+        let stored =
+            <WasmState as shilpo::extension::state::Host>::read(&mut state, "greeting".into())
+                .unwrap();
+        assert!(matches!(
+            stored.value,
+            Some(shilpo::extension::types::DataValue::TextValue(text)) if text == "hello"
+        ));
+        assert_eq!(stored.revision, 1);
+        let missing =
+            <WasmState as shilpo::extension::state::Host>::read(&mut state, "absent".into())
+                .unwrap();
+        assert!(missing.value.is_none());
+    }
+
+    #[test]
+    fn current_seam_forgets_values_across_instances() {
+        let mut first = state();
+        <WasmState as shilpo::extension::state::Host>::write(
+            &mut first,
+            "transient".into(),
+            shilpo::extension::types::DataValue::IntValue(7),
+        )
+        .unwrap();
+        let mut second = state();
+        let value =
+            <WasmState as shilpo::extension::state::Host>::read(&mut second, "transient".into())
+                .unwrap();
+        assert!(
+            value.value.is_none(),
+            "characterizes the durability gap: fresh instances lose state"
+        );
+    }
+
+    fn pending_for(state: &WasmState) -> Vec<PendingStateEvent> {
+        state
+            .pending_state_events
+            .lock()
+            .unwrap()
+            .get(&state.extension_id)
+            .cloned()
+            .map(|queue| queue.into_iter().collect())
+            .unwrap_or_default()
+    }
+
+    fn write_text(state: &mut WasmState, key: &str, text: &str) {
+        <WasmState as shilpo::extension::state::Host>::write(
+            state,
+            key.into(),
+            shilpo::extension::types::DataValue::TextValue(text.into()),
+        )
+        .unwrap();
+    }
+
+    fn watch_key(state: &mut WasmState, key: &str) -> u64 {
+        <WasmState as shilpo::extension::state::Host>::watch(state, key.into())
+            .unwrap()
+            .watch_id
+    }
+
+    #[test]
+    fn watch_registration_snapshots_atomically() {
+        let mut state = state();
+        write_text(&mut state, "greeting", "hello");
+        let registration =
+            <WasmState as shilpo::extension::state::Host>::watch(&mut state, "greeting".into())
+                .unwrap();
+        assert_eq!(registration.watch_id, 1);
+        assert_eq!(registration.snapshot.revision, 1);
+        assert!(matches!(
+            registration.snapshot.value,
+            Some(shilpo::extension::types::DataValue::TextValue(text)) if text == "hello"
+        ));
+
+        let missing =
+            <WasmState as shilpo::extension::state::Host>::watch(&mut state, "absent".into())
+                .unwrap();
+        assert_eq!(missing.snapshot.revision, 1);
+        assert!(missing.snapshot.value.is_none());
+    }
+
+    #[test]
+    fn changed_write_queues_one_event_per_live_watch() {
+        let mut state = state();
+        let first = watch_key(&mut state, "greeting");
+        let second = watch_key(&mut state, "greeting");
+        write_text(&mut state, "greeting", "updated");
+        let pending = pending_for(&state);
+        assert_eq!(pending.len(), 2);
+        assert!(
+            pending
+                .iter()
+                .any(|event| event.watch_id == first && event.revision == 1)
+        );
+        assert!(
+            pending
+                .iter()
+                .any(|event| event.watch_id == second && event.revision == 1)
+        );
+        assert!(pending.iter().all(|event| event.key == "greeting"));
+        assert!(pending.iter().all(|event| {
+            matches!(&event.value, Some(serde_json::Value::String(text)) if text == "updated")
+        }));
+    }
+
+    #[test]
+    fn unwatch_stops_delivery() {
+        let mut state = state();
+        let watch_id = watch_key(&mut state, "greeting");
+        <WasmState as shilpo::extension::state::Host>::unwatch(&mut state, watch_id).unwrap();
+        write_text(&mut state, "greeting", "updated");
+        assert!(pending_for(&state).is_empty());
+    }
+
+    #[test]
+    fn delete_queues_none_value_event() {
+        let mut state = state();
+        write_text(&mut state, "greeting", "hello");
+        let watch_id = watch_key(&mut state, "greeting");
+        let mutation =
+            <WasmState as shilpo::extension::state::Host>::delete(&mut state, "greeting".into())
+                .unwrap();
+        assert!(mutation.changed);
+        let pending = pending_for(&state);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].watch_id, watch_id);
+        assert_eq!(pending[0].revision, 2);
+        assert!(pending[0].value.is_none());
+    }
+
+    #[test]
+    fn idempotent_and_unrelated_mutations_do_not_queue() {
+        let mut state = state();
+        write_text(&mut state, "greeting", "hello");
+        let _ = watch_key(&mut state, "greeting");
+        // Idempotent rewrite: same bytes, changed = false.
+        let mutation = <WasmState as shilpo::extension::state::Host>::write(
+            &mut state,
+            "greeting".into(),
+            shilpo::extension::types::DataValue::TextValue("hello".into()),
+        )
+        .unwrap();
+        assert!(!mutation.changed);
+        // Unrelated key.
+        write_text(&mut state, "other", "value");
+        // Delete of a missing key.
+        let deleted =
+            <WasmState as shilpo::extension::state::Host>::delete(&mut state, "absent".into())
+                .unwrap();
+        assert!(!deleted.changed);
+        assert!(pending_for(&state).is_empty());
+    }
+
+    #[test]
+    fn pending_queue_coalesces_to_latest_revision_per_watch() {
+        let mut state = state();
+        let watch_id = watch_key(&mut state, "greeting");
+        let mutations = crate::state::MAX_PENDING_STATE_EVENTS + 20;
+        for index in 0..mutations {
+            write_text(&mut state, "greeting", &format!("value-{index}"));
+        }
+        let pending = pending_for(&state);
+        assert_eq!(pending.len(), crate::state::MAX_PENDING_STATE_EVENTS);
+        let latest = pending.last().expect("watch event survives coalescing");
+        assert_eq!(latest.watch_id, watch_id);
+        assert_eq!(latest.revision, mutations as u64);
+    }
+
+    #[test]
+    fn drop_watch_state_clears_registrations_and_pending() {
+        let runtime = WasmRuntime::with_broker(Arc::new(FakeSecretBroker::new())).unwrap();
+        let extension_id = ExtensionId::new("io.github.test.state-seam").unwrap();
+        let mut state = WasmState {
+            extension_id: extension_id.clone(),
+            declared_capabilities: Vec::new(),
+            granted_capabilities: Vec::new(),
+            secret_broker: runtime.secret_broker.clone(),
+            grant_checker: None,
+            limits: StoreLimitsBuilder::new().build(),
+            table: ResourceTable::new(),
+            wasi: WasiCtxBuilder::new().build(),
+            operations: Vec::new(),
+            state_store: runtime.state_store.clone(),
+            watch_registry: runtime.watch_registry.clone(),
+            pending_state_events: runtime.pending_state_events.clone(),
+            next_watch_id: runtime.next_watch_id.clone(),
+            state_operation_lock: runtime.state_operation_lock.clone(),
+            hostcall_bytes: 0,
+            max_hostcall_bytes: 1024 * 1024,
+            secret_deadline: Instant::now() + Duration::from_secs(5),
+        };
+        let _ = watch_key(&mut state, "greeting");
+        write_text(&mut state, "greeting", "updated");
+        assert!(!pending_for(&state).is_empty());
+        runtime.drop_watch_state(&extension_id);
+        assert!(runtime.watch_registry.lock().unwrap().is_empty());
+        assert!(runtime.pending_state_events.lock().unwrap().is_empty());
+        assert!(!runtime.instances.contains_key(&extension_id));
+    }
+
+    #[test]
+    fn secret_refs_are_rejected_by_state_write() {
+        let mut state = state();
+        let error = <WasmState as shilpo::extension::state::Host>::write(
+            &mut state,
+            "credential".into(),
+            shilpo::extension::types::DataValue::SecretRef(shilpo::extension::types::SecretRef {
+                handle: "opaque-handle".into(),
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.kind,
+            shilpo::extension::types::ErrorKind::InvalidArgument
+        );
+        assert!(pending_for(&state).is_empty());
+    }
+
+    #[test]
+    fn oversized_key_and_value_errors_are_mapped() {
+        let mut state = state();
+        let long_key = "k".repeat(crate::state::MAX_KEY_BYTES + 1);
+        let error =
+            <WasmState as shilpo::extension::state::Host>::read(&mut state, long_key.clone())
+                .unwrap_err();
+        assert_eq!(
+            error.kind,
+            shilpo::extension::types::ErrorKind::InvalidArgument
+        );
+        let error = <WasmState as shilpo::extension::state::Host>::write(
+            &mut state,
+            long_key,
+            shilpo::extension::types::DataValue::TextValue("x".into()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.kind,
+            shilpo::extension::types::ErrorKind::InvalidArgument
+        );
+        let oversized = <WasmState as shilpo::extension::state::Host>::write(
+            &mut state,
+            "big".into(),
+            shilpo::extension::types::DataValue::BytesValue(vec![0; crate::state::MAX_VALUE_BYTES]),
+        )
+        .unwrap_err();
+        assert_eq!(
+            oversized.kind,
+            shilpo::extension::types::ErrorKind::RateLimited
+        );
+    }
+}
+
 #[cfg(test)]
 mod secret_host_tests {
     use super::*;
@@ -1063,7 +1729,11 @@ mod secret_host_tests {
             table: ResourceTable::new(),
             wasi: WasiCtxBuilder::new().build(),
             operations: Vec::new(),
-            state_store: HashMap::new(),
+            state_store: Arc::new(crate::state::FakeStateStore::default()),
+            watch_registry: Arc::new(Mutex::new(HashMap::new())),
+            pending_state_events: Arc::new(Mutex::new(HashMap::new())),
+            next_watch_id: Arc::new(AtomicU64::new(1)),
+            state_operation_lock: Arc::new(Mutex::new(())),
             hostcall_bytes: 0,
             max_hostcall_bytes: 1024 * 1024,
             secret_deadline: Instant::now() + Duration::from_secs(5),
@@ -1142,7 +1812,7 @@ mod secret_host_tests {
     }
 
     #[test]
-    fn secret_ref_state_round_trip_stays_typed_and_opaque() {
+    fn secret_refs_cannot_enter_the_state_store() {
         let reference = shilpo::extension::types::SecretRef {
             handle: "opaque-handle".into(),
         };
@@ -1155,20 +1825,23 @@ mod secret_host_tests {
         ));
 
         let mut state = state(true, None);
-        <WasmState as shilpo::extension::state::Host>::write(
+        let error = <WasmState as shilpo::extension::state::Host>::write(
             &mut state,
             "credential".into(),
             value,
         )
-        .unwrap();
+        .unwrap_err();
+        assert_eq!(
+            error.kind,
+            shilpo::extension::types::ErrorKind::InvalidArgument
+        );
         let stored =
             <WasmState as shilpo::extension::state::Host>::read(&mut state, "credential".into())
                 .unwrap();
-        assert!(matches!(
-            stored,
-            Some(shilpo::extension::types::DataValue::SecretRef(value))
-                if value.handle == "opaque-handle"
-        ));
+        assert!(
+            stored.value.is_none(),
+            "extension state must never become a credential store"
+        );
     }
 }
 
@@ -1264,12 +1937,17 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
             event_id: event_id.clone(),
             value: value.as_ref().map(data_value_from_json),
         }),
-        ApiEvent::StateValue { key, value } => {
-            wit_events::ExtensionEvent::StateValue(wit_events::StateEvent {
-                key: key.clone(),
-                value: value.as_ref().map(data_value_from_json),
-            })
-        }
+        ApiEvent::StateValue {
+            watch_id,
+            key,
+            value,
+            revision,
+        } => wit_events::ExtensionEvent::StateValue(wit_events::StateEvent {
+            watch_id: *watch_id,
+            key: key.clone(),
+            value: value.as_ref().map(data_value_from_json),
+            revision: *revision,
+        }),
         ApiEvent::HttpResponse {
             request_id,
             status,

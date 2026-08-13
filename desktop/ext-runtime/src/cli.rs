@@ -346,7 +346,34 @@ impl ExtensionCli {
     }
 
     pub fn uninstall(id: &ExtensionId, catalog: &ExtensionCatalog) -> ExtensionCliResult {
-        match catalog.uninstall(id) {
+        Self::uninstall_with_policies(
+            id,
+            catalog,
+            crate::catalog::SecretPolicy::Retain,
+            None,
+            crate::state::StatePolicy::Retain,
+            None,
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+        )
+    }
+
+    pub fn uninstall_with_policies(
+        id: &ExtensionId,
+        catalog: &ExtensionCatalog,
+        secret_policy: crate::catalog::SecretPolicy,
+        broker: Option<&dyn crate::secrets::SecretBroker>,
+        state_policy: crate::state::StatePolicy,
+        state_store: Option<&dyn crate::state::StateStore>,
+        deadline: std::time::Instant,
+    ) -> ExtensionCliResult {
+        match catalog.uninstall_with_policies(
+            id,
+            secret_policy,
+            broker,
+            state_policy,
+            state_store,
+            deadline,
+        ) {
             Ok(()) => ExtensionCliResult {
                 success: true,
                 extension_id: Some(id.to_string()),
@@ -528,7 +555,49 @@ fn run_cli(args: &[String]) -> i32 {
             let Some(id) = parse_id(args.get(1)) else {
                 return 2;
             };
-            ExtensionCli::uninstall(&id, &catalog)
+            let delete_secrets = args
+                .iter()
+                .any(|arg| arg == "--delete-secrets" || arg == "--purge-secrets");
+            let delete_state = args
+                .iter()
+                .any(|arg| arg == "--delete-state" || arg == "--purge-state");
+            let secret_policy = if delete_secrets {
+                crate::catalog::SecretPolicy::Delete
+            } else {
+                crate::catalog::SecretPolicy::Retain
+            };
+            let state_policy = if delete_state {
+                crate::state::StatePolicy::Delete
+            } else {
+                crate::state::StatePolicy::Retain
+            };
+            let broker = crate::secrets::Oo7SecretBroker::new().ok().map(|b| {
+                std::sync::Arc::new(b) as std::sync::Arc<dyn crate::secrets::SecretBroker>
+            });
+            let store =
+                if state_policy == crate::state::StatePolicy::Delete {
+                    match crate::state::HeedStateStore::open(&catalog.paths().state_store_dir()) {
+                        Ok(store) => Some(std::sync::Arc::new(store)
+                            as std::sync::Arc<dyn crate::state::StateStore>),
+                        Err(error) => {
+                            eprintln!("error[uninstall.state_store]: {error}");
+                            return 1;
+                        }
+                    }
+                } else {
+                    None
+                };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+
+            ExtensionCli::uninstall_with_policies(
+                &id,
+                &catalog,
+                secret_policy,
+                broker.as_deref(),
+                state_policy,
+                store.as_deref(),
+                deadline,
+            )
         }
         "rollback" => {
             let Some(id) = parse_id(args.get(1)) else {

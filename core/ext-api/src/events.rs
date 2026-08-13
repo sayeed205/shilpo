@@ -79,8 +79,10 @@ pub enum ExtensionEvent {
         value: Option<serde_json::Value>,
     },
     StateValue {
+        watch_id: u64,
         key: String,
         value: Option<serde_json::Value>,
+        revision: u64,
     },
     HttpResponse {
         request_id: String,

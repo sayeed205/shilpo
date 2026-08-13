@@ -323,7 +323,13 @@ pub enum ExtCommands {
     /// Rollback extension to previous version
     Rollback { id: String },
     /// Uninstall extension
-    Uninstall { id: String },
+    Uninstall {
+        id: String,
+        #[arg(long, default_value_t = false)]
+        delete_secrets: bool,
+        #[arg(long, default_value_t = false)]
+        delete_state: bool,
+    },
     /// Check for catalog extension updates
     CheckUpdates,
     /// Manage extension release channel

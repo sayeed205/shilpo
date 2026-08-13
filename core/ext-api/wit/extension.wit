@@ -156,7 +156,9 @@ interface events {
     record resized-event { contribution-id: string, instance-id: option<string>, width: f32, height: f32 }
     record settings-event { contribution-id: string, instance-id: option<string>, settings: data-value }
     record input-event { contribution-id: string, instance-id: option<string>, event-id: string, value: option<data-value> }
-    record state-event { key: string, value: option<data-value> }
+    /// State-change event queued for a live watch after a changed mutation commits.
+    /// `value` is `none` for deletions. Events for one watch preserve revision order.
+    record state-event { watch-id: u64, key: string, value: option<data-value>, revision: u64 }
     record http-response-event { request-id: string, status: option<u16>, body: string, error: option<string> }
     record location-response-event { latitude: option<f64>, longitude: option<f64>, accuracy-meters: option<f64>, error: option<string> }
 }
@@ -381,15 +383,56 @@ interface notifications {
     show: func(req: notification-request) -> result<_, error>;
 }
 
-/// Host import for extension-scoped key-value state (seam for #78).
+/// Host import for extension-scoped key-value state.
+///
+/// State is namespaced by the validated extension ID and a UTF-8 key, persisted in a
+/// durable per-extension store with a monotonic revision. Keys must be non-empty and
+/// at most 256 UTF-8 bytes; each extension is bounded to 256 keys and 4 MiB of
+/// encoded data, with each encoded value at most 64 KiB. State requires no manifest
+/// capability because an extension can access only its own bounded namespace.
+///
+/// `watch` atomically registers a watch and returns the current snapshot, closing
+/// the read-then-watch race. Watch IDs are runtime-local opaque IDs and do not
+/// persist across unload/restart. Changed mutations queue one `events.state-value`
+/// event per matching live watch, delivered after the initiating host call returns.
 interface state {
     use types.{error, data-value};
 
-    /// Reads stored value for key.
-    read: func(key: string) -> result<option<data-value>, error>;
+    /// Value and durable per-extension revision at read/watch time.
+    record state-snapshot {
+        value: option<data-value>,
+        revision: u64,
+    }
 
-    /// Writes value for key.
-    write: func(key: string, value: data-value) -> result<_, error>;
+    /// Outcome of a state mutation.
+    record state-mutation {
+        changed: bool,
+        revision: u64,
+    }
+
+    /// Watch registration with the atomic snapshot taken at registration time.
+    record watch-registration {
+        watch-id: u64,
+        snapshot: state-snapshot,
+    }
+
+    /// Reads the stored value and current revision for `key`. A missing key yields
+    /// `state-snapshot { value: none, revision: current-extension-revision }`.
+    read: func(key: string) -> result<state-snapshot, error>;
+
+    /// Writes `value` for `key`. A byte-for-byte equivalent value is an idempotent
+    /// no-op (`changed = false`, revision unchanged). `secret-ref` values are
+    /// rejected with `invalid-argument`.
+    write: func(key: string, value: data-value) -> result<state-mutation, error>;
+
+    /// Deletes `key`. Deleting a missing key is an idempotent no-op.
+    delete: func(key: string) -> result<state-mutation, error>;
+
+    /// Atomically registers a watch on `key` and returns the current snapshot.
+    watch: func(key: string) -> result<watch-registration, error>;
+
+    /// Removes a watch registration by runtime-local ID (idempotent).
+    unwatch: func(watch-id: u64) -> result<_, error>;
 }
 
 /// Host import for encrypted secret storage backed by Secret Service.
