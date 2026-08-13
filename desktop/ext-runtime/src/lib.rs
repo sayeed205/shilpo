@@ -31,6 +31,10 @@ pub use effects::{
     AuthorizedHostOperation, AuthorizedHostOperationKind, AuthorizedHttpRequest,
     CanonicalHttpTarget, capability_allows_http_target, capability_allows_operation,
 };
+pub use state::{
+    FakeStateStore, HeedStateStore, StateMutation, StatePolicy, StateSnapshot, StateStore,
+    StateStoreError, StateValue,
+};
 pub use wasm::{WasmModule, WasmRuntime};
 pub use worker::{
     ActiveSource, ContributionDescriptor, ContributionInstance, ContributionSurface,
@@ -40,10 +44,6 @@ pub use worker::{
     WorkerPayload, read_frame, recv_host_message, recv_worker_message,
     recv_worker_message_nonblocking, run_extension_host, send_host_message, send_worker_message,
     write_frame,
-};
-pub use state::{
-    FakeStateStore, HeedStateStore, StateMutation, StatePolicy, StateSnapshot, StateStore,
-    StateStoreError, StateValue,
 };
 
 #[cfg(test)]

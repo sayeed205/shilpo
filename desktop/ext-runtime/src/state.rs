@@ -240,7 +240,13 @@ pub(crate) fn decode_value(bytes: &[u8]) -> Result<StateValue, StateStoreError> 
         .ok_or_else(|| StateStoreError::Corrupt("empty state record".into()))?;
     match *tag {
         TAG_NONE if rest.is_empty() => Ok(StateValue::None),
-        TAG_BOOL if rest.len() == 1 => Ok(StateValue::Bool(rest[0] != 0)),
+        TAG_BOOL if rest.len() == 1 => match rest[0] {
+            0 => Ok(StateValue::Bool(false)),
+            1 => Ok(StateValue::Bool(true)),
+            _ => Err(StateStoreError::Corrupt(
+                "boolean record contains an invalid value".into(),
+            )),
+        },
         TAG_INT if rest.len() == 8 => Ok(StateValue::Int(i64::from_le_bytes(
             rest.try_into().expect("length checked"),
         ))),
@@ -262,6 +268,11 @@ pub(crate) fn decode_value(bytes: &[u8]) -> Result<StateValue, StateStoreError> 
                 .ok_or_else(|| StateStoreError::Corrupt("truncated text record".into()))?;
             let text = std::str::from_utf8(text)
                 .map_err(|_| StateStoreError::Corrupt("text record is not UTF-8".into()))?;
+            if rest.len() != 4 + length as usize {
+                return Err(StateStoreError::Corrupt(
+                    "text record contains trailing bytes".into(),
+                ));
+            }
             Ok(StateValue::Text(text.to_owned()))
         }
         TAG_BYTES => {
@@ -269,6 +280,11 @@ pub(crate) fn decode_value(bytes: &[u8]) -> Result<StateValue, StateStoreError> 
             let bytes = rest
                 .get(4..4 + length as usize)
                 .ok_or_else(|| StateStoreError::Corrupt("truncated bytes record".into()))?;
+            if rest.len() != 4 + length as usize {
+                return Err(StateStoreError::Corrupt(
+                    "bytes record contains trailing bytes".into(),
+                ));
+            }
             Ok(StateValue::Bytes(bytes.to_vec()))
         }
         tag => Err(StateStoreError::Corrupt(format!(
@@ -1087,12 +1103,51 @@ mod contract_tests {
         );
         assert_eq!(b1.revision, 1);
     }
+
+    pub(crate) fn concurrent_writes_preserve_committed_revisions(store: Arc<dyn StateStore>) {
+        let id = ExtensionId::new("io.github.test.concurrent").unwrap();
+        let workers = 8;
+        let barrier = Arc::new(std::sync::Barrier::new(workers));
+        let mut handles = Vec::new();
+        for worker in 0..workers {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            let id = id.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                store
+                    .write(
+                        &id,
+                        &format!("key-{worker}"),
+                        StateValue::Int(worker as i64),
+                    )
+                    .expect("concurrent state write must commit")
+            }));
+        }
+        let mutations: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("writer thread must not panic"))
+            .collect();
+        assert!(mutations.iter().all(|mutation| mutation.changed));
+        assert_eq!(
+            store.read(&id, "key-0").unwrap().revision,
+            workers as u64,
+            "all committed writes must be reflected in the durable revision"
+        );
+        for worker in 0..workers {
+            assert_eq!(
+                store.read(&id, &format!("key-{worker}")).unwrap().value,
+                Some(StateValue::Int(worker as i64))
+            );
+        }
+    }
 }
 
 #[cfg(test)]
 mod fake_contract_tests {
     use super::contract_tests as contract;
     use super::*;
+    use std::sync::Arc;
 
     fn corrupt_injector(store: &FakeStateStore) -> impl Fn(&ExtensionId) {
         move |extension_id| {
@@ -1156,12 +1211,18 @@ mod fake_contract_tests {
         let store = FakeStateStore::new();
         contract::delete_all_is_namespace_exact_and_resets_revision(&store);
     }
+
+    #[test]
+    fn concurrent_writes_preserve_committed_revisions() {
+        contract::concurrent_writes_preserve_committed_revisions(Arc::new(FakeStateStore::new()));
+    }
 }
 
 #[cfg(test)]
 mod heed_contract_tests {
     use super::contract_tests as contract;
     use super::*;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     fn open_store() -> (TempDir, HeedStateStore) {
@@ -1224,6 +1285,12 @@ mod heed_contract_tests {
     fn delete_all_is_namespace_exact_and_resets_revision() {
         let (_dir, store) = open_store();
         contract::delete_all_is_namespace_exact_and_resets_revision(&store);
+    }
+
+    #[test]
+    fn concurrent_writes_preserve_committed_revisions() {
+        let (_dir, store) = open_store();
+        contract::concurrent_writes_preserve_committed_revisions(Arc::new(store));
     }
 
     #[test]
