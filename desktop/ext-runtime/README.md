@@ -92,7 +92,7 @@ extension scaffolding command.
 ```toml
 id = "io.github.alice.world-clock"
 name = "World Clock"
-version = "1.0.0"
+version = "0.1.0"
 schema_version = 1
 api_version = "0.2.0"
 min_shilpo_version = "0.1.0"
@@ -184,7 +184,7 @@ The current low-level Rust guest interface uses `wit-bindgen` and compiles to a 
 ```toml
 [package]
 name = "world-clock"
-version = "1.0.0"
+version = "0.1.0"
 edition = "2024"
 
 [lib]
@@ -192,23 +192,25 @@ crate-type = ["cdylib"]
 
 [dependencies]
 serde_json = "1"
-wit-bindgen = "0.57"
+wit-bindgen = "0.60"
 ```
 
-The provisional versioned contract lives in [`core/ext-api/wit/extension.wit`](../../core/ext-api/wit/extension.wit):
+The canonical typed contract lives in [`core/ext-api/wit/extension.wit`](../../core/ext-api/wit/extension.wit):
 
 ```wit
 package shilpo:extension@0.1.0;
 
 world extension {
-    export on-event: func(event-json: string) -> string;
-    export view: func(contribution-id: string) -> string;
+    export activate: func(act: activation) -> result<_, error>;
+    export deactivate: func(reason: deactivate-reason) -> result<_, error>;
+    export on-event: func(event: extension-event) -> result<_, error>;
+    export view: func(contribution-id: string) -> result<option<view-tree>, error>;
 }
 ```
 
-The JSON strings carry the crate's typed `ExtensionEvent`, `Vec<HostEffect>`, and `Option<ViewTree>` wire formats. This
-keeps the Component Model ABI versioned while allowing a higher-level guest SDK to wrap it later. Guest code never
-receives GPUI contexts, shell runtime handles, or concrete service objects.
+Events, results, and ViewTree values cross the Component Model boundary as typed WIT values. The private shell ↔
+extension-host worker protocol remains framed JSON, but is not the guest ABI. Guest code never receives GPUI contexts,
+shell runtime handles, or concrete service objects.
 
 The runtime supplies a closed WASI context only for the standard Rust component adapter. It inherits no files,
 environment variables, arguments, terminal streams, or network access. Privileged work still goes through host effects
@@ -233,9 +235,8 @@ hosts = ["api.example.com"]
 paths = ["/v1/**"]
 
 [[capabilities]]
-kind = "process:exec"
-command = "playerctl"
-args = ["status"]
+kind = "filesystem:read"
+paths = ["assets/**"]
 ```
 
 There is no ambient filesystem, environment, network, or process access. Shilpo checks the manifest declaration and the

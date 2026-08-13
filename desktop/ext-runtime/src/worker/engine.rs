@@ -4,12 +4,12 @@ use super::protocol::{
     ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, ReplaceableEvent,
 };
 use crate::{
-    AuthorizedHostEffectKind, CURRENT_SHILPO_VERSION, CatalogPaths, ExtensionCatalog,
-    ExtensionHost, ExtensionRuntime,
+    CURRENT_SHILPO_VERSION, CatalogPaths, ExtensionCatalog, ExtensionHost, ExtensionRuntime,
 };
 use semver::Version;
 use shilpo_ext_api::{
-    CanonicalId, Capability, ExtensionEvent, ExtensionId, ExtensionManifest, HostEffect, ViewTree,
+    CanonicalId, Capability, ExtensionEvent, ExtensionId, ExtensionManifest, HostOperation,
+    ViewTree,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -197,57 +197,28 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
     fn apply_effect(
         &mut self,
         extension_id: &ExtensionId,
-        effect_kind: &AuthorizedHostEffectKind,
+        effect_kind: &crate::AuthorizedHostOperationKind,
         changes: &mut ExtensionChanges,
     ) {
         match effect_kind {
-            AuthorizedHostEffectKind::NonHttp(effect) => match effect {
-                HostEffect::InvalidateView { contribution_id } => {
-                    if let Ok(canonical) = contribution_id.parse::<CanonicalId>()
-                        && canonical.extension_id == *extension_id
-                        && let Ok(Some(view)) = self.host.render_view(&canonical)
+            crate::AuthorizedHostOperationKind::NonHttp(effect) => match effect {
+                HostOperation::ShowNotification { .. }
+                | HostOperation::InvokeAction { .. }
+                | HostOperation::SetWallpaper { .. }
+                | HostOperation::SetThemeSource { .. }
+                | HostOperation::ClipboardWrite { .. }
+                | HostOperation::LocationRead => {
+                    if let Ok(authorized) = crate::AuthorizedHostOperation::non_http(effect.clone())
                     {
-                        self.views.insert(canonical.clone(), view);
-                        changes.invalidated_views.push(canonical);
-                    }
-                }
-                HostEffect::StateRead { key } => {
-                    let value = self
-                        .state
-                        .get(&(extension_id.clone(), key.clone()))
-                        .cloned();
-                    let reply_event = ExtensionEvent::StateValue {
-                        key: key.clone(),
-                        value,
-                    };
-                    changes.merge(self.dispatch_to_extension(extension_id, &reply_event));
-                }
-                HostEffect::StateWrite { key, value } => {
-                    self.state
-                        .insert((extension_id.clone(), key.clone()), value.clone());
-                }
-                HostEffect::ShowNotification { .. }
-                | HostEffect::InvokeAction { .. }
-                | HostEffect::SetWallpaper { .. }
-                | HostEffect::WallpaperMetadataRead
-                | HostEffect::ThemeRead
-                | HostEffect::SetThemeSource { .. }
-                | HostEffect::ClipboardRead
-                | HostEffect::ClipboardWrite { .. }
-                | HostEffect::ExecProcess { .. }
-                | HostEffect::ReadFile { .. }
-                | HostEffect::WriteFile { .. }
-                | HostEffect::LocationRead => {
-                    if let Ok(authorized) = crate::AuthorizedHostEffect::non_http(effect.clone()) {
                         changes.effects.push((extension_id.clone(), authorized));
                     }
                 }
-                HostEffect::HttpRequest { .. } => {}
+                HostOperation::HttpRequest { .. } => {}
             },
-            AuthorizedHostEffectKind::HttpRequest(request) => {
+            crate::AuthorizedHostOperationKind::HttpRequest(request) => {
                 changes.effects.push((
                     extension_id.clone(),
-                    crate::AuthorizedHostEffect::http_request(
+                    crate::AuthorizedHostOperation::http_request(
                         request.request_id().to_owned(),
                         crate::CanonicalHttpTarget::parse(request.url().as_str(), "GET")
                             .expect("AuthorizedHttpRequest contains a valid target"),
@@ -823,13 +794,13 @@ fn compute_fingerprint(root: &Path, manifest: &ExtensionManifest) -> u64 {
 mod tests {
     use super::*;
     use crate::{GuestExtension, InMemoryRuntime};
-    use shilpo_ext_api::HostEffect;
+    use shilpo_ext_api::HostOperation;
 
     struct TestGuest;
     impl GuestExtension for TestGuest {
-        fn on_event(&mut self, event: &ExtensionEvent) -> Vec<HostEffect> {
+        fn on_event(&mut self, event: &ExtensionEvent) -> Vec<HostOperation> {
             match event {
-                ExtensionEvent::ShellStarted => vec![HostEffect::ShowNotification {
+                ExtensionEvent::ShellStarted => vec![HostOperation::ShowNotification {
                     title: "Hello".into(),
                     body: "World".into(),
                     icon: None,
@@ -852,8 +823,8 @@ mod tests {
             name = "Sample"
             version = "1.0.0"
             schema_version = 1
-            api_version = "0.2.0"
-            min_shilpo_version = "0.2.0"
+            api_version = "0.1.0"
+            min_shilpo_version = "0.1.0"
 
             [[capabilities]]
             kind = "notifications:show"

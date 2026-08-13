@@ -186,30 +186,6 @@
         {
           "type": "object",
           "properties": {
-            "args": {
-              "type": "array",
-              "default": [],
-              "items": {
-                "type": "string"
-              }
-            },
-            "command": {
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "process:exec"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "command"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
             "kind": {
               "type": "string",
               "const": "filesystem:read"
@@ -274,6 +250,10 @@
         "power_changed",
         "timer_fired"
       ]
+    },
+    "ExtensionId": {
+      "description": "The package identity of an extension (reverse-domain notation, e.g. `io.github.alice`).",
+      "type": "string"
     },
     "KeyRotationDelegation": {
       "type": "object",
@@ -358,7 +338,7 @@
           ]
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/ExtensionId"
         },
         "key_rotation": {
           "anyOf": [

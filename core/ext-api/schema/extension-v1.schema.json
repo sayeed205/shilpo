@@ -5,7 +5,7 @@
   "properties": {
     "api_version": {
       "type": "string",
-      "default": "0.2.0"
+      "default": "0.1.0"
     },
     "authors": {
       "type": "array",
@@ -63,7 +63,7 @@
     },
     "min_shilpo_version": {
       "type": "string",
-      "default": "0.2.0"
+      "default": "0.1.0"
     },
     "name": {
       "type": "string"
@@ -318,30 +318,6 @@
           "required": [
             "kind",
             "hosts"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "args": {
-              "type": "array",
-              "default": [],
-              "items": {
-                "type": "string"
-              }
-            },
-            "command": {
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "process:exec"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "command"
           ]
         },
         {

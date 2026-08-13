@@ -1,5 +1,5 @@
-use shilpo_ext_api::{CanonicalId, ExtensionEvent, ExtensionId, HostEffect, ViewTree};
-use shilpo_ext_runtime::{AuthorizedHostEffect, AuthorizedHostEffectKind};
+use shilpo_ext_api::{CanonicalId, ExtensionEvent, ExtensionId, HostOperation, ViewTree};
+use shilpo_ext_runtime::{AuthorizedHostOperation, AuthorizedHostOperationKind};
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
@@ -334,14 +334,22 @@ impl ExtensionHost {
         cx: &mut App,
         extension_id: &ExtensionId,
         generation: ExtensionGeneration,
-        effect: AuthorizedHostEffect,
+        effect: AuthorizedHostOperation,
     ) {
         match effect.into_kind() {
-            AuthorizedHostEffectKind::NonHttp(HostEffect::InvokeAction { action_id, payload }) => {
+            AuthorizedHostOperationKind::NonHttp(HostOperation::InvokeAction {
+                action_id,
+                payload_json,
+            }) => {
                 let invocation = action_id
                     .parse::<ActionId>()
                     .map_err(|err| err.to_string())
-                    .and_then(|id| ActionInvocation::from_id_and_payload(id, payload));
+                    .and_then(|id| {
+                        ActionInvocation::from_id_and_payload(
+                            id,
+                            payload_json.and_then(|s| serde_json::from_str(&s).ok()),
+                        )
+                    });
                 match invocation {
                     Ok(inv) => {
                         if let Err(error) = ShellRuntime::dispatch_action(cx, inv) {
@@ -359,7 +367,7 @@ impl ExtensionHost {
                     ),
                 }
             }
-            AuthorizedHostEffectKind::NonHttp(HostEffect::ShowNotification {
+            AuthorizedHostOperationKind::NonHttp(HostOperation::ShowNotification {
                 title,
                 body,
                 icon,
@@ -372,7 +380,7 @@ impl ExtensionHost {
                     super::SurfaceRequest::ShowNotification(notification),
                 );
             }
-            AuthorizedHostEffectKind::NonHttp(HostEffect::SetThemeSource { color }) => {
+            AuthorizedHostOperationKind::NonHttp(HostOperation::SetThemeSource { color }) => {
                 let argb = crate::bar::view::parse_hex_color(&color).unwrap_or(0xFF006C4C);
                 shilpo_theme_daemon::ThemeClient::spawn_task(async move {
                     let client = shilpo_theme_daemon::ThemeClient::new().await;
@@ -382,13 +390,13 @@ impl ExtensionHost {
                         .await;
                 });
             }
-            AuthorizedHostEffectKind::NonHttp(HostEffect::SetWallpaper { path, .. }) => {
+            AuthorizedHostOperationKind::NonHttp(HostOperation::SetWallpaper { path, .. }) => {
                 shilpo_theme_daemon::ThemeClient::spawn_task(async move {
                     let client = shilpo_theme_daemon::ThemeClient::new().await;
                     let _ = client.set_wallpaper(&path).await;
                 });
             }
-            AuthorizedHostEffectKind::NonHttp(HostEffect::ClipboardWrite { text }) => {
+            AuthorizedHostOperationKind::NonHttp(HostOperation::ClipboardWrite { text }) => {
                 let result = cx
                     .global::<ShellRuntime>()
                     .service_hub
@@ -402,7 +410,7 @@ impl ExtensionHost {
                     );
                 }
             }
-            AuthorizedHostEffectKind::HttpRequest(request) => {
+            AuthorizedHostOperationKind::HttpRequest(request) => {
                 let request_id = request.request_id().to_string();
                 let key = (generation, extension_id.clone(), request_id.clone());
                 let accepted = {
@@ -448,7 +456,7 @@ impl ExtensionHost {
                     .extension_host_mut()
                     .insert_task(key, task);
             }
-            AuthorizedHostEffectKind::NonHttp(HostEffect::LocationRead) => {
+            AuthorizedHostOperationKind::NonHttp(HostOperation::LocationRead) => {
                 let location_service = cx
                     .global::<ShellRuntime>()
                     .extension_host()
@@ -486,11 +494,13 @@ impl ExtensionHost {
                     .extension_host_mut()
                     .insert_task(key, task);
             }
-            AuthorizedHostEffectKind::NonHttp(effect) => tracing::debug!(
-                extension = %extension_id,
-                ?effect,
-                "accepted extension effect has no shell service adapter yet"
-            ),
+            AuthorizedHostOperationKind::NonHttp(op) => {
+                tracing::debug!(
+                    extension = %extension_id,
+                    operation = ?op,
+                    "unhandled host operation"
+                );
+            }
         }
     }
 }

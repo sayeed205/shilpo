@@ -4,7 +4,15 @@ pub mod id;
 pub mod manifest;
 pub mod view;
 
-pub use effects::{HostEffect, WallpaperSource};
+#[allow(clippy::too_many_arguments)]
+pub mod bindings {
+    wit_bindgen::generate!({
+        path: "wit",
+        world: "extension",
+    });
+}
+
+pub use effects::{HostOperation, WallpaperSource};
 pub use events::{EventKind, ExtensionEvent};
 pub use id::{CanonicalId, ContributionId, ExtensionId, IdError};
 pub use manifest::{
@@ -12,7 +20,7 @@ pub use manifest::{
     CapabilityKind, Contributions, DesktopWidgetContribution, ExtensionManifest,
     LauncherProviderContribution, LibraryConfig, ManifestError, SUPPORTED_API_VERSION,
     SUPPORTED_SCHEMA_VERSION, SettingsPageContribution, SidePanelContribution, Subscription,
-    arguments_match, valid_virtual_path_pattern, wildcard_matches,
+    valid_virtual_path_pattern, wildcard_matches,
 };
 pub use view::{
     BadgeNode, ButtonNode, ContainerDirection, ContainerNode, IconButtonNode, IconNode, ImageNode,
@@ -29,6 +37,8 @@ mod contract_tests {
         id = "io.github.alice.world-clock"
         name = "World Clock"
         version = "1.0.0"
+        schema_version = 1
+        api_version = "0.1.0"
 
         [[contributions.bar_widgets]]
         id = "bar"
@@ -96,5 +106,21 @@ mod contract_tests {
         ))
         .expect("checked-in schema should be valid JSON");
         assert_eq!(schema, fixture);
+    }
+
+    #[test]
+    fn wit_package_resolves_without_errors() {
+        let mut resolve = wit_parser::Resolve::default();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("wit");
+        let (pkg_id, _) = resolve
+            .push_dir(&path)
+            .expect("WIT package directory must resolve");
+        let pkg = &resolve.packages[pkg_id];
+        assert_eq!(pkg.name.namespace, "shilpo");
+        assert_eq!(pkg.name.name, "extension");
+        assert_eq!(
+            pkg.name.version,
+            Some(semver::Version::parse("0.1.0").unwrap())
+        );
     }
 }

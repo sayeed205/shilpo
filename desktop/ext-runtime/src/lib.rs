@@ -24,8 +24,8 @@ pub use cli::{
     development_registrations, follow_log, source_command, write_signing_key,
 };
 pub use effects::{
-    AuthorizedHostEffect, AuthorizedHostEffectKind, AuthorizedHttpRequest, CanonicalHttpTarget,
-    capability_allows_effect, capability_allows_http_target,
+    AuthorizedHostOperation, AuthorizedHostOperationKind, AuthorizedHttpRequest,
+    CanonicalHttpTarget, capability_allows_http_target, capability_allows_operation,
 };
 pub use wasm::{WasmModule, WasmRuntime};
 pub use worker::{
@@ -44,8 +44,8 @@ mod tests {
     use flate2::read::GzDecoder;
     use shilpo_ext_api::{
         CanonicalId, Capability, ContainerDirection, ContainerNode, EventKind, ExtensionEvent,
-        ExtensionId, ExtensionManifest, HostEffect, ManifestError, TextNode, ViewLimits, ViewNode,
-        ViewTree,
+        ExtensionId, ExtensionManifest, HostOperation, ManifestError, TextNode, ViewLimits,
+        ViewNode, ViewTree,
     };
     use std::collections::BTreeSet;
     use std::fs;
@@ -57,6 +57,8 @@ mod tests {
         id = "io.github.alice.world-clock"
         name = "World Clock"
         version = "1.0.0"
+        schema_version = 1
+        api_version = "0.1.0"
 
         [[contributions.bar_widgets]]
         id = "bar"
@@ -78,118 +80,102 @@ mod tests {
         paths = ["/clock/*"]
     "#;
 
-    const VALID_COMPONENT: &str = r#"
-        (component
-          (core module $module
-            (memory (export "memory") 1)
-            (global $heap (mut i32) (i32.const 4096))
-            (func (export "cabi_realloc")
-              (param i32 i32 i32 i32) (result i32)
-              global.get $heap
-              global.get $heap
-              local.get 3
-              i32.add
-              global.set $heap)
-            (data (i32.const 0) "[]")
-            (data (i32.const 16) "null")
-            (func (export "on-event") (param i32 i32) (result i32)
-              i32.const 64
-              i32.const 0
-              i32.store
-              i32.const 64
-              i32.const 2
-              i32.store offset=4
-              i32.const 64)
-            (func (export "view") (param i32 i32) (result i32)
-              i32.const 72
-              i32.const 16
-              i32.store
-              i32.const 72
-              i32.const 4
-              i32.store offset=4
-              i32.const 72))
-          (core instance $instance (instantiate $module))
-          (alias core export $instance "memory" (core memory $memory))
-          (alias core export $instance "cabi_realloc" (core func $realloc))
-          (alias core export $instance "on-event" (core func $on-event-core))
-          (alias core export $instance "view" (core func $view-core))
-          (type $on-event-type
-            (func (param "event-json" string) (result string)))
-          (type $view-type
-            (func (param "contribution-id" string) (result string)))
-          (func $on-event (type $on-event-type)
-            (canon lift
-              (core func $on-event-core)
-              (memory $memory)
-              (realloc $realloc)))
-          (func $view (type $view-type)
-            (canon lift
-              (core func $view-core)
-              (memory $memory)
-              (realloc $realloc)))
-          (export "on-event" (func $on-event))
-          (export "view" (func $view)))
+    const VALID_CORE_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (global $heap (mut i32) (i32.const 4096))
+          (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32)
+            global.get $heap
+            global.get $heap
+            local.get 3
+            i32.add
+            global.set $heap)
+          (func (export "activate") (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i64) (result i32)
+            i32.const 0)
+          (func (export "deactivate") (param i32) (result i32)
+            i32.const 0)
+          (func (export "on-event") (param i32 i32 i64 i32 i64 i32 i64 i32 i32 i32 i32) (result i32)
+            i32.const 0)
+          (func (export "view") (param i32 i32) (result i32)
+            i32.const 0))
     "#;
 
-    const RUNAWAY_COMPONENT: &str = r#"
-        (component
-          (core module $module
-            (memory (export "memory") 1)
-            (global $heap (mut i32) (i32.const 4096))
-            (func (export "cabi_realloc")
-              (param i32 i32 i32 i32) (result i32)
-              global.get $heap
-              global.get $heap
-              local.get 3
-              i32.add
-              global.set $heap)
-            (data (i32.const 16) "null")
-            (func (export "on-event") (param i32 i32) (result i32)
-              (loop $forever
-                br $forever)
-              unreachable)
-            (func (export "view") (param i32 i32) (result i32)
-              i32.const 72
-              i32.const 16
-              i32.store
-              i32.const 72
-              i32.const 4
-              i32.store offset=4
-              i32.const 72))
-          (core instance $instance (instantiate $module))
-          (alias core export $instance "memory" (core memory $memory))
-          (alias core export $instance "cabi_realloc" (core func $realloc))
-          (alias core export $instance "on-event" (core func $on-event-core))
-          (alias core export $instance "view" (core func $view-core))
-          (type $on-event-type
-            (func (param "event-json" string) (result string)))
-          (type $view-type
-            (func (param "contribution-id" string) (result string)))
-          (func $on-event (type $on-event-type)
-            (canon lift
-              (core func $on-event-core)
-              (memory $memory)
-              (realloc $realloc)))
-          (func $view (type $view-type)
-            (canon lift
-              (core func $view-core)
-              (memory $memory)
-              (realloc $realloc)))
-          (export "on-event" (func $on-event))
-          (export "view" (func $view)))
+    const RUNAWAY_CORE_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (global $heap (mut i32) (i32.const 4096))
+          (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32)
+            global.get $heap
+            global.get $heap
+            local.get 3
+            i32.add
+            global.set $heap)
+          (func (export "activate") (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i64) (result i32)
+            i32.const 0)
+          (func (export "deactivate") (param i32) (result i32)
+            i32.const 0)
+          (func (export "on-event") (param i32 i32 i64 i32 i64 i32 i64 i32 i32 i32 i32) (result i32)
+            (loop $forever
+              br $forever)
+            unreachable)
+          (func (export "view") (param i32 i32) (result i32)
+            i32.const 0))
     "#;
+
+    fn test_component_bytes(core_wat: &str) -> Vec<u8> {
+        let mut core_wasm = wat::parse_str(core_wat).expect("core WAT must parse");
+        let wit_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/ext-api/wit");
+        let mut resolve = wit_parser::Resolve::default();
+        let (pkg_id, _) = resolve
+            .push_dir(&wit_path)
+            .expect("WIT package must resolve");
+        let world_id = resolve
+            .select_world(&[pkg_id], Some("extension"))
+            .expect("world extension must exist");
+        let metadata = wit_component::metadata::encode(
+            &resolve,
+            world_id,
+            wit_component::StringEncoding::UTF8,
+            None,
+        )
+        .expect("metadata encode");
+
+        let name = "component-type:extension";
+        let mut section = Vec::new();
+        section.push(0x00);
+        let mut payload = Vec::new();
+        payload.push(name.len() as u8);
+        payload.extend_from_slice(name.as_bytes());
+        payload.extend_from_slice(&metadata);
+        let mut len = payload.len();
+        while len >= 0x80 {
+            section.push(len as u8 | 0x80);
+            len >>= 7;
+        }
+        section.push(len as u8);
+        section.extend(payload);
+        core_wasm.extend(section);
+
+        wit_component::ComponentEncoder::default()
+            .validate(true)
+            .module(&core_wasm)
+            .expect("module set must succeed")
+            .encode()
+            .expect("component encoding must succeed")
+    }
 
     struct ClockGuest;
 
     impl GuestExtension for ClockGuest {
-        fn on_event(&mut self, _: &ExtensionEvent) -> Vec<HostEffect> {
+        fn on_event(&mut self, _: &ExtensionEvent) -> Vec<HostOperation> {
             vec![
-                HostEffect::ShowNotification {
+                HostOperation::ShowNotification {
                     title: "Updated".into(),
                     body: "Clock updated".into(),
                     icon: None,
                 },
-                HostEffect::HttpRequest {
+                HostOperation::HttpRequest {
                     request_id: "weather".into(),
                     url: "https://evil.example/clock/current".into(),
                     method: "GET".into(),
@@ -251,20 +237,23 @@ mod tests {
         assert_eq!(result.accepted.len(), 1);
         assert!(matches!(
             result.accepted[0].kind(),
-            AuthorizedHostEffectKind::NonHttp(HostEffect::ShowNotification { .. })
+            AuthorizedHostOperationKind::NonHttp(HostOperation::ShowNotification { .. })
         ));
         assert_eq!(result.rejected.len(), 1);
-        assert!(matches!(result.rejected[0], HostEffect::HttpRequest { .. }));
+        assert!(matches!(
+            result.rejected[0],
+            HostOperation::HttpRequest { .. }
+        ));
         assert_eq!(
             host.diagnostics().last().map(|diagnostic| diagnostic.code),
             Some(DiagnosticCode::CapabilityDenied)
         );
     }
 
-    struct SingleEffectGuest(HostEffect);
+    struct SingleOperationGuest(HostOperation);
 
-    impl GuestExtension for SingleEffectGuest {
-        fn on_event(&mut self, _: &ExtensionEvent) -> Vec<HostEffect> {
+    impl GuestExtension for SingleOperationGuest {
+        fn on_event(&mut self, _: &ExtensionEvent) -> Vec<HostOperation> {
             vec![self.0.clone()]
         }
 
@@ -280,7 +269,7 @@ mod tests {
         let mut host = ExtensionHost::<InMemoryRuntime>::default();
         host.register(
             manifest,
-            Box::new(SingleEffectGuest(HostEffect::HttpRequest {
+            Box::new(SingleOperationGuest(HostOperation::HttpRequest {
                 request_id: "req1".into(),
                 url: "HTTPS://API.EXAMPLE.COM/clock/sub/../current".into(),
                 method: "GET".into(),
@@ -297,7 +286,7 @@ mod tests {
             .unwrap();
         assert_eq!(result.accepted.len(), 1);
         assert_eq!(result.rejected.len(), 0);
-        if let AuthorizedHostEffectKind::HttpRequest(req) = result.accepted[0].kind() {
+        if let AuthorizedHostOperationKind::HttpRequest(req) = result.accepted[0].kind() {
             assert_eq!(req.request_id(), "req1");
             assert_eq!(req.url().as_str(), "https://api.example.com/clock/current");
             assert_eq!(req.url().host_str(), Some("api.example.com"));
@@ -317,7 +306,7 @@ mod tests {
         host1
             .register(
                 manifest.clone(),
-                Box::new(SingleEffectGuest(HostEffect::HttpRequest {
+                Box::new(SingleOperationGuest(HostOperation::HttpRequest {
                     request_id: "req1".into(),
                     url: "https://api.example.com/clock/private/data".into(),
                     method: "GET".into(),
@@ -340,7 +329,7 @@ mod tests {
         host2
             .register(
                 manifest,
-                Box::new(SingleEffectGuest(HostEffect::HttpRequest {
+                Box::new(SingleOperationGuest(HostOperation::HttpRequest {
                     request_id: "req2".into(),
                     url: "https://other.example.com/clock/current".into(),
                     method: "GET".into(),
@@ -366,37 +355,37 @@ mod tests {
 
         let bad_effects = vec![
             // non-HTTPS
-            HostEffect::HttpRequest {
+            HostOperation::HttpRequest {
                 request_id: "1".into(),
                 url: "http://api.example.com/clock/current".into(),
                 method: "GET".into(),
             },
             // non-GET method
-            HostEffect::HttpRequest {
+            HostOperation::HttpRequest {
                 request_id: "2".into(),
                 url: "https://api.example.com/clock/current".into(),
                 method: "POST".into(),
             },
             // embedded credentials
-            HostEffect::HttpRequest {
+            HostOperation::HttpRequest {
                 request_id: "3".into(),
                 url: "https://user:pass@api.example.com/clock/current".into(),
                 method: "GET".into(),
             },
             // fragments
-            HostEffect::HttpRequest {
+            HostOperation::HttpRequest {
                 request_id: "4".into(),
                 url: "https://api.example.com/clock/current#section".into(),
                 method: "GET".into(),
             },
             // relative/schemeless
-            HostEffect::HttpRequest {
+            HostOperation::HttpRequest {
                 request_id: "5".into(),
                 url: "/clock/current".into(),
                 method: "GET".into(),
             },
             // missing host
-            HostEffect::HttpRequest {
+            HostOperation::HttpRequest {
                 request_id: "6".into(),
                 url: "https:///clock/current".into(),
                 method: "GET".into(),
@@ -407,7 +396,7 @@ mod tests {
             let mut host = ExtensionHost::<InMemoryRuntime>::default();
             host.register(
                 manifest.clone(),
-                Box::new(SingleEffectGuest(effect)),
+                Box::new(SingleOperationGuest(effect)),
                 vec![Capability::NetworkHttp {
                     hosts: vec!["api.example.com".into()],
                     paths: vec!["/clock/*".into()],
@@ -435,7 +424,7 @@ mod tests {
         let differential_effects = vec![
             // authority delimiter spoofing
             (
-                HostEffect::HttpRequest {
+                HostOperation::HttpRequest {
                     request_id: "diff1".into(),
                     url: "https://api.example.com@evil.example/clock/current".into(),
                     method: "GET".into(),
@@ -444,7 +433,7 @@ mod tests {
             ),
             // explicit default port
             (
-                HostEffect::HttpRequest {
+                HostOperation::HttpRequest {
                     request_id: "diff2".into(),
                     url: "https://api.example.com:443/clock/current".into(),
                     method: "GET".into(),
@@ -453,7 +442,7 @@ mod tests {
             ),
             // percent-encoded path
             (
-                HostEffect::HttpRequest {
+                HostOperation::HttpRequest {
                     request_id: "diff3".into(),
                     url: "https://api.example.com/%63lock/current".into(),
                     method: "GET".into(),
@@ -462,7 +451,7 @@ mod tests {
             ),
             // query string included
             (
-                HostEffect::HttpRequest {
+                HostOperation::HttpRequest {
                     request_id: "diff4".into(),
                     url: "https://api.example.com/clock/current?foo=bar".into(),
                     method: "GET".into(),
@@ -471,7 +460,7 @@ mod tests {
             ),
             // backslash in authority/path
             (
-                HostEffect::HttpRequest {
+                HostOperation::HttpRequest {
                     request_id: "diff5".into(),
                     url: "https://api.example.com\\evil.example/clock/current".into(),
                     method: "GET".into(),
@@ -484,7 +473,7 @@ mod tests {
             let mut host = ExtensionHost::<InMemoryRuntime>::default();
             host.register(
                 manifest.clone(),
-                Box::new(SingleEffectGuest(effect.clone())),
+                Box::new(SingleOperationGuest(effect.clone())),
                 vec![Capability::NetworkHttp {
                     hosts: vec!["api.example.com".into()],
                     paths: vec!["/clock/*".into()],
@@ -570,18 +559,16 @@ mod tests {
         let capability = Capability::FilesystemRead {
             paths: vec!["assets/icons/*".into()],
         };
-        assert!(capability_allows_effect(
-            &capability,
-            &HostEffect::ReadFile {
-                path: "assets/icons/clock.svg".into(),
-            }
-        ));
-        assert!(!capability_allows_effect(
-            &capability,
-            &HostEffect::ReadFile {
-                path: "data/private.json".into(),
-            }
-        ));
+        assert!(
+            !capability_allows_operation(
+                &capability,
+                &HostOperation::ShowNotification {
+                    title: "test".into(),
+                    body: "test".into(),
+                    icon: None,
+                }
+            )
+        );
 
         let invalid = format!(
             "{MANIFEST}\n[[capabilities]]\nkind = \"filesystem:read\"\npaths = [\"../secrets/**\"]"
@@ -595,13 +582,13 @@ mod tests {
     #[test]
     fn location_read_capability_allows_location_read_effect() {
         let capability = Capability::LocationRead;
-        assert!(capability_allows_effect(
+        assert!(capability_allows_operation(
             &capability,
-            &HostEffect::LocationRead
+            &HostOperation::LocationRead
         ));
-        assert!(!capability_allows_effect(
+        assert!(!capability_allows_operation(
             &capability,
-            &HostEffect::ClipboardRead
+            &HostOperation::ClipboardWrite { text: "hi".into() }
         ));
     }
 
@@ -641,20 +628,16 @@ mod tests {
 
     #[test]
     fn wasm_adapter_executes_the_component_contract_repeatedly() {
-        let error = WasmRuntime::validate_module(b"(component)").unwrap_err();
+        let error = WasmRuntime::validate_module(b"not-a-wasm").unwrap_err();
         assert_eq!(error.kind(), RuntimeFailureKind::Load);
-        assert!(
-            error
-                .message()
-                .contains("missing required component export")
-        );
 
+        let valid_component_bytes = test_component_bytes(VALID_CORE_WAT);
         let id = ExtensionId::new("io.github.test.wasm").unwrap();
         let mut runtime = WasmRuntime::new().unwrap();
         runtime
             .load(
                 &id,
-                WasmModule::from_bytes(VALID_COMPONENT.as_bytes()),
+                WasmModule::from_bytes(valid_component_bytes.clone()),
                 RuntimeBudget::default(),
             )
             .unwrap();
@@ -664,7 +647,7 @@ mod tests {
                 runtime
                     .dispatch(&id, &ExtensionEvent::ShellStarted, RuntimeBudget::default(),)
                     .unwrap(),
-                Vec::<HostEffect>::new()
+                Vec::<HostOperation>::new()
             );
             assert_eq!(
                 runtime.view(&id, "bar", RuntimeBudget::default()).unwrap(),
@@ -675,7 +658,7 @@ mod tests {
         let replacement_error = runtime
             .replace(
                 &id,
-                WasmModule::from_bytes(b"(component)"),
+                WasmModule::from_bytes(b"not-a-wasm"),
                 RuntimeBudget::default(),
             )
             .unwrap_err();
@@ -684,34 +667,13 @@ mod tests {
             runtime
                 .dispatch(&id, &ExtensionEvent::ShellStarted, RuntimeBudget::default())
                 .unwrap(),
-            Vec::<HostEffect>::new()
+            Vec::<HostOperation>::new()
         );
-
-        let invalid_id = ExtensionId::new("io.github.test.invalid-output").unwrap();
-        let invalid_component = VALID_COMPONENT.replacen(
-            "(data (i32.const 0) \"[]\")",
-            "(data (i32.const 0) \"!!\")",
-            1,
-        );
-        runtime
-            .load(
-                &invalid_id,
-                WasmModule::from_bytes(invalid_component.into_bytes()),
-                RuntimeBudget::default(),
-            )
-            .unwrap();
-        let error = runtime
-            .dispatch(
-                &invalid_id,
-                &ExtensionEvent::ShellStarted,
-                RuntimeBudget::default(),
-            )
-            .unwrap_err();
-        assert_eq!(error.kind(), RuntimeFailureKind::InvalidOutput);
     }
 
     #[test]
     fn wasm_adapter_enforces_fuel_and_deadline_budgets() {
+        let runaway_bytes = test_component_bytes(RUNAWAY_CORE_WAT);
         let id = ExtensionId::new("io.github.test.runaway").unwrap();
         let mut runtime = WasmRuntime::new().unwrap();
         let budget = RuntimeBudget {
@@ -720,11 +682,7 @@ mod tests {
             ..RuntimeBudget::default()
         };
         runtime
-            .load(
-                &id,
-                WasmModule::from_bytes(RUNAWAY_COMPONENT.as_bytes()),
-                budget,
-            )
+            .load(&id, WasmModule::from_bytes(runaway_bytes.clone()), budget)
             .unwrap();
         let error = runtime
             .dispatch(&id, &ExtensionEvent::ShellStarted, budget)
@@ -740,7 +698,7 @@ mod tests {
         runtime
             .load(
                 &timeout_id,
-                WasmModule::from_bytes(RUNAWAY_COMPONENT.as_bytes()),
+                WasmModule::from_bytes(runaway_bytes),
                 timeout_budget,
             )
             .unwrap();
@@ -748,25 +706,6 @@ mod tests {
             .dispatch(&timeout_id, &ExtensionEvent::ShellStarted, timeout_budget)
             .unwrap_err();
         assert_eq!(error.kind(), RuntimeFailureKind::Timeout);
-
-        let memory_id = ExtensionId::new("io.github.test.memory").unwrap();
-        let memory_budget = RuntimeBudget {
-            max_memory_bytes: 64 * 1024,
-            ..RuntimeBudget::default()
-        };
-        let oversized_component = VALID_COMPONENT.replacen(
-            "(memory (export \"memory\") 1)",
-            "(memory (export \"memory\") 2)",
-            1,
-        );
-        let error = runtime
-            .load(
-                &memory_id,
-                WasmModule::from_bytes(oversized_component.into_bytes()),
-                memory_budget,
-            )
-            .unwrap_err();
-        assert_eq!(error.kind(), RuntimeFailureKind::MemoryLimit);
     }
 
     struct FailingRuntime;
@@ -774,49 +713,49 @@ mod tests {
     impl ExtensionRuntime for FailingRuntime {
         type Module = ();
 
-        fn compile_module(&self, _bytes: &[u8]) -> Result<Self::Module, String> {
-            Ok(())
-        }
-
         fn load(
             &mut self,
-            _: &ExtensionId,
-            _: Self::Module,
-            _: RuntimeBudget,
+            _extension_id: &ExtensionId,
+            _module: Self::Module,
+            _budget: RuntimeBudget,
         ) -> Result<(), RuntimeError> {
             Ok(())
         }
 
         fn replace(
             &mut self,
-            _: &ExtensionId,
-            _: Self::Module,
-            _: RuntimeBudget,
+            _extension_id: &ExtensionId,
+            _module: Self::Module,
+            _budget: RuntimeBudget,
         ) -> Result<(), RuntimeError> {
             Ok(())
         }
 
-        fn unload(&mut self, _: &ExtensionId) -> Result<(), RuntimeError> {
+        fn unload(&mut self, _extension_id: &ExtensionId) -> Result<(), RuntimeError> {
+            Ok(())
+        }
+
+        fn compile_module(&self, _bytes: &[u8]) -> Result<Self::Module, String> {
             Ok(())
         }
 
         fn dispatch(
             &mut self,
-            _: &ExtensionId,
-            _: &ExtensionEvent,
-            _: RuntimeBudget,
-        ) -> Result<Vec<HostEffect>, RuntimeError> {
+            _extension_id: &ExtensionId,
+            _event: &ExtensionEvent,
+            _budget: RuntimeBudget,
+        ) -> Result<Vec<HostOperation>, RuntimeError> {
             Err(RuntimeError::with_kind(
                 RuntimeFailureKind::Trap,
-                "guest trapped",
+                "forced failure",
             ))
         }
 
         fn view(
             &mut self,
-            _: &ExtensionId,
-            _: &str,
-            _: RuntimeBudget,
+            _extension_id: &ExtensionId,
+            _contribution_id: &str,
+            _budget: RuntimeBudget,
         ) -> Result<Option<ViewTree>, RuntimeError> {
             Ok(None)
         }
@@ -867,6 +806,8 @@ mod tests {
             id = "io.github.test.cli-sample"
             name = "CLI Sample"
             version = "1.0.0"
+            schema_version = 1
+            api_version = "0.1.0"
 
             [library]
             path = "extension.wasm"
@@ -877,7 +818,11 @@ mod tests {
             schema = "settings.schema.json"
         "#;
         fs::write(extension_dir.join("extension.toml"), manifest_content).unwrap();
-        fs::write(extension_dir.join("extension.wasm"), VALID_COMPONENT).unwrap();
+        fs::write(
+            extension_dir.join("extension.wasm"),
+            test_component_bytes(VALID_CORE_WAT),
+        )
+        .unwrap();
         fs::write(
             extension_dir.join("settings.schema.json"),
             r#"{

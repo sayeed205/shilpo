@@ -30,11 +30,20 @@ fn ext_status_json_preserves_error_envelope_when_daemon_is_unavailable() {
 
 #[test]
 fn real_extension_host_publishes_snapshot_and_acknowledges_shutdown() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("shilpo-ext-host-test-{}", std::process::id()));
+    let data_dir = temp_dir.join("data");
+    let config_dir = temp_dir.join("config");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+
     let mut child = Command::new(env!("CARGO_BIN_EXE_shilpo"))
         .arg("extension-host")
+        .env("XDG_DATA_HOME", &data_dir)
+        .env("XDG_CONFIG_HOME", &config_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("unified shilpo binary should spawn extension-host");
 
@@ -79,5 +88,6 @@ fn real_extension_host_publishes_snapshot_and_acknowledges_shutdown() {
     assert!(matches!(shutdown.payload, WorkerPayload::ShutdownAck));
 
     let status = child.wait().expect("extension-host should exit cleanly");
+    let _ = std::fs::remove_dir_all(&temp_dir);
     assert!(status.success(), "extension-host exited with {status}");
 }

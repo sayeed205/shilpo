@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use shilpo_ext_api::{Capability, HostEffect, arguments_match, wildcard_matches};
+use shilpo_ext_api::{Capability, HostOperation, wildcard_matches};
 
 /// Crate-private parsed and normalized HTTP target.
 #[derive(Clone, Debug)]
@@ -62,25 +62,25 @@ impl AuthorizedHttpRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum AuthorizedHostEffectKind {
-    NonHttp(HostEffect),
+pub enum AuthorizedHostOperationKind {
+    NonHttp(HostOperation),
     HttpRequest(AuthorizedHttpRequest),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AuthorizedHostEffect(pub(crate) AuthorizedHostEffectKind);
+pub struct AuthorizedHostOperation(pub(crate) AuthorizedHostOperationKind);
 
-impl AuthorizedHostEffect {
-    pub fn non_http(effect: HostEffect) -> Result<Self, HostEffect> {
-        if matches!(effect, HostEffect::HttpRequest { .. }) {
-            Err(effect)
+impl AuthorizedHostOperation {
+    pub fn non_http(op: HostOperation) -> Result<Self, HostOperation> {
+        if matches!(op, HostOperation::HttpRequest { .. }) {
+            Err(op)
         } else {
-            Ok(Self(AuthorizedHostEffectKind::NonHttp(effect)))
+            Ok(Self(AuthorizedHostOperationKind::NonHttp(op)))
         }
     }
 
     pub fn http_request(request_id: String, target: CanonicalHttpTarget) -> Self {
-        Self(AuthorizedHostEffectKind::HttpRequest(
+        Self(AuthorizedHostOperationKind::HttpRequest(
             AuthorizedHttpRequest {
                 request_id,
                 url: target.into_url(),
@@ -88,52 +88,33 @@ impl AuthorizedHostEffect {
         ))
     }
 
-    pub fn into_kind(self) -> AuthorizedHostEffectKind {
+    pub fn into_kind(self) -> AuthorizedHostOperationKind {
         self.0
     }
 
-    pub fn kind(&self) -> &AuthorizedHostEffectKind {
+    pub fn kind(&self) -> &AuthorizedHostOperationKind {
         &self.0
     }
 }
 
-pub fn capability_allows_effect(capability: &Capability, effect: &HostEffect) -> bool {
-    match (capability, effect) {
-        (Capability::NotificationsShow, HostEffect::ShowNotification { .. }) => true,
-        (Capability::WallpaperRead, HostEffect::WallpaperMetadataRead) => true,
-        (Capability::ThemeRead, HostEffect::ThemeRead) => true,
-        (Capability::ThemeSetSource, HostEffect::SetThemeSource { .. }) => true,
-        (Capability::ClipboardRead, HostEffect::ClipboardRead) => true,
-        (Capability::ClipboardWrite, HostEffect::ClipboardWrite { .. }) => true,
-        (Capability::WallpaperSet { sources }, HostEffect::SetWallpaper { source, .. }) => {
+pub fn capability_allows_operation(capability: &Capability, operation: &HostOperation) -> bool {
+    match (capability, operation) {
+        (Capability::NotificationsShow, HostOperation::ShowNotification { .. }) => true,
+        (Capability::ThemeSetSource, HostOperation::SetThemeSource { .. }) => true,
+        (Capability::ClipboardWrite, HostOperation::ClipboardWrite { .. }) => true,
+        (Capability::WallpaperSet { sources }, HostOperation::SetWallpaper { source, .. }) => {
             sources.contains(source)
         }
-        (Capability::ActionsInvoke { actions }, HostEffect::InvokeAction { action_id, .. }) => {
+        (Capability::ActionsInvoke { actions }, HostOperation::InvokeAction { action_id, .. }) => {
             actions
                 .iter()
                 .any(|pattern| wildcard_matches(pattern, action_id))
         }
-        (Capability::NetworkHttp { .. }, HostEffect::HttpRequest { url, method, .. }) => {
+        (Capability::NetworkHttp { .. }, HostOperation::HttpRequest { url, method, .. }) => {
             CanonicalHttpTarget::parse(url, method)
                 .is_some_and(|target| capability_allows_http_target(capability, &target))
         }
-        (
-            Capability::ProcessExec {
-                command,
-                args: patterns,
-            },
-            HostEffect::ExecProcess {
-                command: actual,
-                args,
-            },
-        ) => wildcard_matches(command, actual) && arguments_match(patterns, args),
-        (Capability::FilesystemRead { paths }, HostEffect::ReadFile { path }) => {
-            paths.iter().any(|pattern| wildcard_matches(pattern, path))
-        }
-        (Capability::FilesystemWrite { paths }, HostEffect::WriteFile { path, .. }) => {
-            paths.iter().any(|pattern| wildcard_matches(pattern, path))
-        }
-        (Capability::LocationRead, HostEffect::LocationRead) => true,
+        (Capability::LocationRead, HostOperation::LocationRead) => true,
         _ => false,
     }
 }

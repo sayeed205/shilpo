@@ -113,6 +113,10 @@ wasmtime = { version = "47", default-features = false, features = [
     "std",
     "wat",
 ] }
+wit-bindgen = "0.60"
+wit-parser = "0.256"
+wit-component = "0.256"
+wat = "1"
 wasmtime-wasi = { version = "47", default-features = false, features = ["p2"] }
 libpulse-binding = "2"
 ddc = "0.2"
