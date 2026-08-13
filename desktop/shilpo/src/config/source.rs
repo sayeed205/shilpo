@@ -45,14 +45,28 @@ pub struct DiscoveredSource {
     pub path: PathBuf,
 }
 
-pub fn discover_sources(config_dir: &Path, primary_path: &Path) -> Vec<DiscoveredSource> {
+/// Discover all config sources while preserving filesystem errors for callers
+/// that need strict, user-facing diagnostics. Empty files are omitted; callers
+/// that need to distinguish whitespace-only files can inspect the source text.
+pub fn try_discover_sources(
+    config_dir: &Path,
+    primary_path: &Path,
+) -> Result<Vec<DiscoveredSource>, crate::config::types::ConfigError> {
     let mut sources = Vec::new();
 
-    // 1. Primary file (config.toml)
-    if primary_path.exists()
-        && fs::metadata(primary_path)
-            .map(|m| m.is_file() && m.len() > 0)
-            .unwrap_or(false)
+    let metadata = match fs::metadata(primary_path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(crate::config::types::ConfigError::Io {
+                path: primary_path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if let Some(metadata) = metadata
+        && metadata.is_file()
+        && metadata.len() > 0
     {
         sources.push(DiscoveredSource {
             source: ConfigSource::Primary {
@@ -62,36 +76,58 @@ pub fn discover_sources(config_dir: &Path, primary_path: &Path) -> Vec<Discovere
         });
     }
 
-    // 2. conf.d/*.toml fragments
     let conf_d = config_dir.join("conf.d");
-    if let Ok(entries) = fs::read_dir(&conf_d) {
+    let entries = match fs::read_dir(&conf_d) {
+        Ok(entries) => Some(entries),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(crate::config::types::ConfigError::Io {
+                path: conf_d,
+                source,
+            });
+        }
+    };
+    if let Some(entries) = entries {
         let mut fragment_paths = Vec::new();
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry.map_err(|source| crate::config::types::ConfigError::Io {
+                path: config_dir.join("conf.d"),
+                source,
+            })?;
             let path = entry.path();
-            if path.is_file()
+            let metadata =
+                fs::metadata(&path).map_err(|source| crate::config::types::ConfigError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+            if metadata.is_file()
                 && path.extension().and_then(|s| s.to_str()) == Some("toml")
-                && fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false)
+                && metadata.len() > 0
             {
                 fragment_paths.push(path);
             }
         }
-        // Sort by file_name deterministically
         fragment_paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
-
-        for path in fragment_paths {
-            sources.push(DiscoveredSource {
-                source: ConfigSource::Fragment { path: path.clone() },
-                path,
-            });
-        }
+        sources.extend(fragment_paths.into_iter().map(|path| DiscoveredSource {
+            source: ConfigSource::Fragment { path: path.clone() },
+            path,
+        }));
     }
 
-    // 3. overrides.toml
     let overrides_path = config_dir.join("overrides.toml");
-    if overrides_path.exists()
-        && fs::metadata(&overrides_path)
-            .map(|m| m.is_file() && m.len() > 0)
-            .unwrap_or(false)
+    let metadata = match fs::metadata(&overrides_path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(crate::config::types::ConfigError::Io {
+                path: overrides_path,
+                source,
+            });
+        }
+    };
+    if let Some(metadata) = metadata
+        && metadata.is_file()
+        && metadata.len() > 0
     {
         sources.push(DiscoveredSource {
             source: ConfigSource::Overrides {
@@ -101,5 +137,9 @@ pub fn discover_sources(config_dir: &Path, primary_path: &Path) -> Vec<Discovere
         });
     }
 
-    sources
+    Ok(sources)
+}
+
+pub fn discover_sources(config_dir: &Path, primary_path: &Path) -> Vec<DiscoveredSource> {
+    try_discover_sources(config_dir, primary_path).unwrap_or_default()
 }

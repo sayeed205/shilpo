@@ -22,7 +22,9 @@ pub use overrides::{
 };
 pub use provenance::{ConfigProvenance, format_key};
 pub use report::EffectiveWithOriginsReport;
-pub use resolver::{ConfigResolver, ConfigSnapshot, ResolutionReport};
+pub use resolver::{
+    ConfigInspection, ConfigInspectionError, ConfigResolver, ConfigSnapshot, ResolutionReport,
+};
 pub use source::{ConfigSource, SourceLocation, discover_sources};
 pub use types::*;
 pub use unknown_keys::UnknownConfigKey;

@@ -375,21 +375,44 @@ async fn main() {
             }
             ConfigCommands::Validate => {
                 let path = DoctorChecker::default_config_path();
-                match shilpo::config::ShellConfig::load(&path) {
-                    Ok(_) => output.success(
-                        "config.validate",
-                        &serde_json::json!({ "valid": true, "path": path }),
-                        Some(&format!("Configuration at {} is valid", path.display())),
-                        Vec::new(),
-                    ),
-                    Err(e) => output.error(
-                        "config.validate",
-                        "invalid_config",
-                        &format!("Configuration syntax error: {e}"),
-                        None,
-                        Vec::new(),
-                        EXIT_FAILURE,
-                    ),
+                let result = adapters::ConfigAdapter::validate(&path);
+                if result.success {
+                    output.success(
+                        result.command,
+                        &result.data,
+                        Some(&result.human_message),
+                        result.warnings,
+                    )
+                } else {
+                    output.error(
+                        result.command,
+                        result.error_code,
+                        &result.human_message,
+                        result.error_details,
+                        result.warnings,
+                        result.exit_code,
+                    )
+                }
+            }
+            ConfigCommands::Effective { origins } => {
+                let path = DoctorChecker::default_config_path();
+                let result = adapters::ConfigAdapter::effective(&path, origins);
+                if result.success {
+                    output.success(
+                        result.command,
+                        &result.data,
+                        Some(&result.human_message),
+                        result.warnings,
+                    )
+                } else {
+                    output.error(
+                        result.command,
+                        result.error_code,
+                        &result.human_message,
+                        result.error_details,
+                        result.warnings,
+                        result.exit_code,
+                    )
                 }
             }
             ConfigCommands::Reload => {
