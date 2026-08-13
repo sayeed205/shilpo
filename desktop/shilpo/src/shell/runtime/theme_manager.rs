@@ -50,14 +50,10 @@ impl ThemeTransition {
         from_revision: u64,
         to_revision: u64,
         start_colors: shilpo_ui::ThemeColor,
+        target_colors: shilpo_ui::ThemeColor,
         target_state: DaemonState,
         duration_ms: u64,
     ) -> Self {
-        let target_colors = shilpo_ui::material_theme_with_variant(
-            target_state.source_argb,
-            target_state.scheme_variant,
-            target_state.resolved_mode.is_dark(),
-        );
         Self {
             generation,
             from_revision,
@@ -104,15 +100,14 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
             };
             let state = update.state;
             let res = cx.update(|cx: &mut App| {
-                let (reduced_motion, duration_ms) = {
-                    let config = crate::config::ShellConfig::load_or_create(
-                        crate::config::default_config_path(),
-                    )
-                    .unwrap_or_default();
+                let (reduced_motion, duration_ms) = if cx.has_global::<super::ShellRuntime>() {
+                    let config = super::ShellRuntime::active_config(cx);
                     (
                         config.theme.reduced_motion,
                         config.theme.transition_duration_ms,
                     )
+                } else {
+                    (false, 300)
                 };
 
                 let target_colors = shilpo_ui::material_theme_with_variant(
@@ -149,6 +144,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
                     current_revision,
                     state.revision,
                     start_colors,
+                    target_colors,
                     state,
                     duration_ms,
                 ))
@@ -159,38 +155,53 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
             };
 
             let generation = transition.generation;
-            let span = tracing::info_span!(
-                target: "shilpo_profile",
-                "theme_transition",
-                from_revision = transition.from_revision,
-                to_revision = transition.to_revision,
-                duration_ms = transition.duration_ms,
-                outcome = tracing::field::Empty,
-                interrupted = tracing::field::Empty,
-            );
+            cx.spawn(async move |cx| {
+                let span = tracing::info_span!(
+                    target: "shilpo_profile",
+                    "theme_transition",
+                    from_revision = transition.from_revision,
+                    to_revision = transition.to_revision,
+                    duration_ms = transition.duration_ms,
+                    outcome = tracing::field::Empty,
+                    interrupted = tracing::field::Empty,
+                );
+                span.in_scope(|| {
+                    tracing::debug!(target: "shilpo_profile", "theme transition started");
+                });
 
-            let start_time = Instant::now();
-            loop {
-                if ACTIVE_GENERATION.load(Ordering::SeqCst) != generation {
-                    span.record("outcome", "superseded");
-                    span.record("interrupted", true);
-                    break;
-                }
+                let start_time = Instant::now();
+                loop {
+                    if ACTIVE_GENERATION.load(Ordering::SeqCst) != generation {
+                        span.record("outcome", "superseded");
+                        span.record("interrupted", true);
+                        break;
+                    }
 
-                let elapsed_ms = start_time.elapsed().as_millis() as u64;
-                let (_, current_colors, is_complete) = transition.progress_at(elapsed_ms);
+                    let elapsed_ms = start_time.elapsed().as_millis() as u64;
+                    let (_, current_colors, is_complete) = transition.progress_at(elapsed_ms);
 
-                if !is_complete {
-                    cx.update(|cx: &mut App| {
-                        shilpo_ui::Theme::global_mut(cx).colors = current_colors;
-                        cx.refresh_windows();
-                    });
-                    cx.background_executor()
-                        .timer(Duration::from_millis(16))
-                        .await;
-                } else {
-                    if ACTIVE_GENERATION.load(Ordering::SeqCst) == generation {
-                        cx.update(|cx: &mut App| {
+                    if !is_complete {
+                        let applied = cx.update(|cx: &mut App| {
+                            if ACTIVE_GENERATION.load(Ordering::SeqCst) != generation {
+                                return false;
+                            }
+                            shilpo_ui::Theme::global_mut(cx).colors = current_colors;
+                            cx.refresh_windows();
+                            true
+                        });
+                        if !applied {
+                            span.record("outcome", "superseded");
+                            span.record("interrupted", true);
+                            break;
+                        }
+                        cx.background_executor()
+                            .timer(Duration::from_millis(16))
+                            .await;
+                    } else {
+                        let applied = cx.update(|cx: &mut App| {
+                            if ACTIVE_GENERATION.load(Ordering::SeqCst) != generation {
+                                return false;
+                            }
                             shilpo_ui::Theme::global_mut(cx).apply_state(&transition.target_state);
                             ShellSurfaces::apply_theme_state(cx, &transition.target_state);
                             super::ShellRuntime::emit_theme_signal(
@@ -198,20 +209,22 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
                                 transition.target_state.resolved_mode.as_str().into(),
                                 format!("{:?}", transition.target_state.resolved_variant),
                             );
-                            CURRENT_REVISION.store(
-                                transition.target_state.revision,
-                                Ordering::SeqCst,
-                            );
+                            CURRENT_REVISION
+                                .store(transition.target_state.revision, Ordering::SeqCst);
+                            true
                         });
-                        span.record("outcome", "completed");
-                        span.record("interrupted", false);
-                    } else {
-                        span.record("outcome", "superseded");
-                        span.record("interrupted", true);
+                        if applied {
+                            span.record("outcome", "completed");
+                            span.record("interrupted", false);
+                        } else {
+                            span.record("outcome", "superseded");
+                            span.record("interrupted", true);
+                        }
+                        break;
                     }
-                    break;
                 }
-            }
+            })
+            .detach();
         }
     })
     .detach();
@@ -292,7 +305,9 @@ mod tests {
         };
 
         let start_colors = shilpo_ui::material_theme(state1.source_argb, false);
-        let transition = ThemeTransition::new(1, 1, 2, start_colors, state2.clone(), 300);
+        let target_colors = shilpo_ui::material_theme(state2.source_argb, false);
+        let transition =
+            ThemeTransition::new(1, 1, 2, start_colors, target_colors, state2.clone(), 300);
 
         // At t=0 ms
         let (eased, colors, complete) = transition.progress_at(0);
@@ -319,7 +334,8 @@ mod tests {
         let state1 = DaemonState::default();
         let state2 = DaemonState::default();
         let start_colors = shilpo_ui::material_theme(state1.source_argb, false);
-        let transition = ThemeTransition::new(1, 1, 2, start_colors, state2, 0);
+        let target_colors = shilpo_ui::material_theme(state2.source_argb, false);
+        let transition = ThemeTransition::new(1, 1, 2, start_colors, target_colors, state2, 0);
 
         let (_, colors, complete) = transition.progress_at(0);
         assert_eq!(colors, transition.target_colors);

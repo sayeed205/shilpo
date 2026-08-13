@@ -489,6 +489,7 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0,
+          "maximum": 5000,
           "default": 300
         }
       },

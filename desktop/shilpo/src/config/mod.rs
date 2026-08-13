@@ -598,6 +598,7 @@ start = ["builtin:workspaces"]
 
     #[test]
     fn schema_fixture_matches_generated_schema() {
+        // Keep the checked-in schema fixture aligned with the generated contract.
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../schema/config-v1.schema.json")).unwrap();
         let generated: serde_json::Value =

@@ -13,7 +13,7 @@ When system-wide theme changes occur (mode toggle, seed color update, wallpaper 
 
 1. **Cross-Platform Pure OKLCH Math (`shilpo-theme`)**:
    - `shilpo-theme` owns `interpolate_argb_oklch(from: u32, to: u32, t: f32) -> u32`.
-   - Converts ARGB colors through linear sRGB → XYZ → Oklab → OKLCH.
+   - Converts ARGB colors through the standard direct linear-sRGB → LMS/Oklab → OKLCH matrices.
    - Interpolates Lightness ($L$), Chroma ($C$), and Alpha ($A$) linearly.
    - Interpolates Hue ($h$) along the shortest circular arc across $0^\circ/360^\circ$.
    - Handles achromatic colors (Chroma $< 1\text{e}-4$) cleanly without arbitrary hue rotation.

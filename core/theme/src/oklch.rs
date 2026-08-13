@@ -2,7 +2,8 @@
 
 /// Interpolate two 0xAARRGGBB colors in OKLCH space.
 ///
-/// - `t` is clamped to `[0.0, 1.0]`. If `t` is non-finite or `t <= 0.0`, returns `from` byte-exact.
+/// - `t` is clamped to `[0.0, 1.0]`. `NaN` and negative infinity return `from`
+///   byte-exact; positive infinity returns `to` byte-exact.
 /// - `t >= 1.0` returns `to` byte-exact.
 /// - Lightness, Chroma, and Alpha are interpolated linearly.
 /// - Hue is interpolated along the shortest circular arc across 0°/360°.

@@ -332,6 +332,7 @@ pub struct ThemeConfig {
     #[serde(default)]
     pub custom_adapter_cmd: Option<Vec<String>>,
     #[serde(default = "default_transition_duration_ms")]
+    #[schemars(range(max = 5000))]
     pub transition_duration_ms: u64,
     #[serde(default)]
     pub scheme_variant: Option<String>,
