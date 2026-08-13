@@ -240,3 +240,39 @@ impl ShellRuntime {
         runtime.dbus_service.update_telemetry(telemetry);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    fn emit_test_notification_command_reaches_notification_domain(cx: &mut gpui::TestAppContext) {
+        let tx = cx.update(|app| {
+            shilpo_ui::init(app);
+            let tx = ShellRuntime::install_for_test(app);
+            ShellRuntime::set_service_hub_for_test(
+                app,
+                super::super::ServiceHub::new_offline_for_test(),
+            );
+            tx
+        });
+
+        tx.try_send(ShellCommand::EmitTestNotification {
+            title: "Test Title".into(),
+            body: "Test Body".into(),
+        })
+        .unwrap();
+
+        cx.update(ShellRuntime::drain_dbus_commands);
+
+        let history = cx.update(|app| {
+            app.global::<ShellRuntime>()
+                .service_hub()
+                .expect("test service hub installed")
+                .notification_history()
+        });
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].summary, "Test Title");
+        assert_eq!(history[0].body, "Test Body");
+    }
+}

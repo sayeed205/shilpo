@@ -102,8 +102,8 @@ busctl --user call org.shilpo.Shell /org/shilpo/Shell org.shilpo.Debug SetLogFil
 busctl --user call org.shilpo.Shell /org/shilpo/Shell org.shilpo.Debug EmitTestNotification ss "Test Title" "Test Body"
 ```
 
-The `shilpo shell`, workspace, window, capture, brightness, debug, and config commands use this interface; no shell socket or
-lock file is required.
+The `shilpo shell`, workspace, window, capture, brightness, and config commands use this interface; debug operations are
+available through the `busctl` calls above. No shell socket or lock file is required.
 
 
 ---

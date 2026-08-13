@@ -11,6 +11,15 @@ fn create_mock_controller(initial: &str) -> LogFilterController {
     LogFilterController::new_for_testing(initial)
 }
 
+fn assert_method_error(error: zbus::Error, expected_name: &str) {
+    match error {
+        zbus::Error::MethodError(name, _, _) => {
+            assert_eq!(name.to_string(), expected_name);
+        }
+        other => panic!("expected D-Bus method error {expected_name}, got {other:?}"),
+    }
+}
+
 async fn test_pair(
     service: ShellDbusService,
     debug_service: DebugDbusService,
@@ -161,7 +170,7 @@ async fn p2p_debug_filter_and_notification_contract() {
 
     // Invalid / empty filter preserves previous value and returns InvalidArgs
     let empty_err = debug_proxy.set_log_filter("   ".into()).await.unwrap_err();
-    assert!(matches!(empty_err, zbus::Error::MethodError(..)));
+    assert_method_error(empty_err, "org.freedesktop.DBus.Error.InvalidArgs");
     assert_eq!(
         debug_proxy.get_log_filter().await.unwrap(),
         "debug,shilpo_services=trace"
@@ -171,7 +180,7 @@ async fn p2p_debug_filter_and_notification_contract() {
         .set_log_filter("invalid[[[syntax".into())
         .await
         .unwrap_err();
-    assert!(matches!(malformed_err, zbus::Error::MethodError(..)));
+    assert_method_error(malformed_err, "org.freedesktop.DBus.Error.InvalidArgs");
     assert_eq!(
         debug_proxy.get_log_filter().await.unwrap(),
         "debug,shilpo_services=trace"
@@ -197,7 +206,7 @@ async fn p2p_debug_filter_and_notification_contract() {
         .emit_test_notification("".into(), "Body".into())
         .await
         .unwrap_err();
-    assert!(matches!(empty_title_err, zbus::Error::MethodError(..)));
+    assert_method_error(empty_title_err, "org.freedesktop.DBus.Error.InvalidArgs");
 
     // Oversize title (>256 bytes) rejected
     let oversize_title = "a".repeat(257);
@@ -205,7 +214,7 @@ async fn p2p_debug_filter_and_notification_contract() {
         .emit_test_notification(oversize_title, "Body".into())
         .await
         .unwrap_err();
-    assert!(matches!(title_err, zbus::Error::MethodError(..)));
+    assert_method_error(title_err, "org.freedesktop.DBus.Error.InvalidArgs");
 
     // Oversize body (>4096 bytes) rejected
     let oversize_body = "b".repeat(4097);
@@ -213,7 +222,7 @@ async fn p2p_debug_filter_and_notification_contract() {
         .emit_test_notification("Title".into(), oversize_body)
         .await
         .unwrap_err();
-    assert!(matches!(body_err, zbus::Error::MethodError(..)));
+    assert_method_error(body_err, "org.freedesktop.DBus.Error.InvalidArgs");
 
     // Ensure no commands were enqueued for invalid calls
     assert!(rx.try_recv().is_err());
@@ -229,7 +238,7 @@ async fn p2p_debug_filter_and_notification_contract() {
         .emit_test_notification("Overflow".into(), "Mailbox".into())
         .await
         .unwrap_err();
-    assert!(matches!(overflow_err, zbus::Error::MethodError(..)));
+    assert_method_error(overflow_err, "org.freedesktop.DBus.Error.LimitsExceeded");
 
     drop(server);
 }
@@ -268,17 +277,17 @@ async fn p2p_closed_mailbox_and_unavailable_controller() {
 
     // Unavailable filter controller returns Failed error
     let get_err = debug_proxy.get_log_filter().await.unwrap_err();
-    assert!(matches!(get_err, zbus::Error::MethodError(..)));
+    assert_method_error(get_err, "org.freedesktop.DBus.Error.Failed");
 
     let set_err = debug_proxy.set_log_filter("info".into()).await.unwrap_err();
-    assert!(matches!(set_err, zbus::Error::MethodError(..)));
+    assert_method_error(set_err, "org.freedesktop.DBus.Error.Failed");
 
     // Closed mailbox returns Failed error
     let notif_err = debug_proxy
         .emit_test_notification("Closed".into(), "Mailbox".into())
         .await
         .unwrap_err();
-    assert!(matches!(notif_err, zbus::Error::MethodError(..)));
+    assert_method_error(notif_err, "org.freedesktop.DBus.Error.Failed");
 
     drop(server);
 }

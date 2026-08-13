@@ -97,6 +97,29 @@ impl ServiceHub {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_offline_for_test() -> Self {
+        let (updates_tx, updates_rx, service_commands, _commands_rx) = service_worker::channels();
+        drop(updates_tx);
+        let adapter = Arc::new(shilpo_services::NotificationDomainState::new_ready(32));
+        let notif_rx = adapter.subscribe_events();
+        Self {
+            compositor: Arc::new(shilpo_services::TestCompositorAdapter::new_default()),
+            notification: adapter,
+            clipboard: shilpo_services::ClipboardService::with_store(None),
+            app_scanner: shilpo_services::AppScanner::new_empty(),
+            service_commands,
+            device_snapshot: crate::bar::service_worker::DeviceSnapshot::default(),
+            availability: crate::bar::service_worker::ServiceAvailability::default(),
+            notif_rx: Arc::new(Mutex::new(notif_rx)),
+            updates_rx: Arc::new(Mutex::new(updates_rx)),
+            _service_task: None,
+            _app_watcher: None,
+            started_at: std::time::Instant::now(),
+            heed_store_available: false,
+        }
+    }
+
     pub(crate) fn compositor(&self) -> Arc<dyn shilpo_services::CompositorAdapter> {
         self.compositor.clone()
     }
@@ -585,7 +608,7 @@ mod tests {
             },
             heed_store: None,
         };
-        let mut hub = ServiceHub::new_offline_harness();
+        let mut hub = ServiceHub::new_offline_for_test();
         if session.session_state.dnd_active {
             hub.set_dnd_enabled(true);
         }
@@ -599,7 +622,7 @@ mod tests {
 
     #[test]
     fn dnd_persistence_flag_survives_notification_restart() {
-        let mut hub = ServiceHub::new_offline_harness();
+        let mut hub = ServiceHub::new_offline_for_test();
         hub.set_dnd_enabled(true);
         assert!(hub.notification_dnd_flag());
         assert!(hub.is_dnd_enabled());
@@ -614,7 +637,7 @@ mod tests {
     impl ServiceHubTestHarness {
         fn new_offline() -> Self {
             Self {
-                hub: ServiceHub::new_offline_harness(),
+                hub: ServiceHub::new_offline_for_test(),
             }
         }
     }
@@ -657,28 +680,5 @@ mod tests {
         assert_eq!(drained[0].body, "Test Body");
     }
 
-    impl ServiceHub {
-        fn new_offline_harness() -> Self {
-            let (updates_tx, _updates_rx, service_commands, _commands_rx) =
-                service_worker::channels();
-            drop(updates_tx);
-            let adapter = Arc::new(shilpo_services::NotificationDomainState::new_ready(32));
-            let notif_rx = adapter.subscribe_events();
-            Self {
-                compositor: Arc::new(shilpo_services::TestCompositorAdapter::new_default()),
-                notification: adapter,
-                clipboard: shilpo_services::ClipboardService::with_store(None),
-                app_scanner: shilpo_services::AppScanner::new_empty(),
-                service_commands,
-                device_snapshot: crate::bar::service_worker::DeviceSnapshot::default(),
-                availability: crate::bar::service_worker::ServiceAvailability::default(),
-                notif_rx: Arc::new(Mutex::new(notif_rx)),
-                updates_rx: Arc::new(Mutex::new(_updates_rx)),
-                _service_task: None,
-                _app_watcher: None,
-                started_at: std::time::Instant::now(),
-                heed_store_available: false,
-            }
-        }
-    }
+    impl ServiceHub {}
 }

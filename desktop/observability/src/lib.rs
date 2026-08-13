@@ -262,4 +262,44 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_init_filter_reload_compositions_in_subprocess() {
+        if std::env::var_os("SHILPO_INIT_FILTER_CHILD").is_some() {
+            let guard = init(ProcessRole::Shell, "warn,shilpo=info").unwrap();
+            let controller = guard.log_filter_controller().unwrap();
+            assert_eq!(controller.current_filter(), "warn,shilpo=info");
+            controller.set_filter("info,shilpo_test=debug").unwrap();
+            assert_eq!(controller.current_filter(), "info,shilpo_test=debug");
+            return;
+        }
+
+        let temp = TempDir::new().unwrap();
+        for enabled in ["0", "1"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::test_init_filter_reload_compositions_in_subprocess",
+                ])
+                .env("SHILPO_INIT_FILTER_CHILD", "1")
+                .env("SHILPO_PROFILE", enabled)
+                .env("SHILPO_PROFILE_DIR", temp.path())
+                .env("RUST_LOG", "warn,shilpo=info")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "subscriber child failed for SHILPO_PROFILE={enabled}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let completed = std::fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .count();
+        assert_eq!(completed, 1);
+    }
 }
