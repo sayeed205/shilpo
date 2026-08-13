@@ -73,7 +73,7 @@ impl Example {
         self._update_task = cx.background_executor().spawn(async move {
             let chars: Vec<char> = EXAMPLE.chars().collect();
             while current < chars.len() {
-                let chunk_size = (5 + rand::random::<usize>() % 15).min(chars.len() - current);
+                let chunk_size = rand::random_range(5..20).min(chars.len() - current);
                 let chunk: String = chars[current..current + chunk_size].iter().collect();
                 _ = tx.try_send((replay_id, chunk));
                 current += chunk_size;

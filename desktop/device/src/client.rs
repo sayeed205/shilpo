@@ -1019,13 +1019,13 @@ mod tests {
         let daemon = Arc::new(DeviceDaemonService::new(Arc::new(
             InMemoryDeviceAdapter::new(),
         )));
-        let server_builder = zbus::connection::Builder::unix_stream(server_socket)
+        let server_builder = zbus::connection::Builder::async_io_unix_stream(server_socket)
             .server(zbus::Guid::generate())
             .unwrap()
             .p2p()
             .serve_at("/org/shilpo/Device", DeviceDbusService::new(daemon))
             .unwrap();
-        let client_builder = zbus::connection::Builder::unix_stream(client_socket).p2p();
+        let client_builder = zbus::connection::Builder::async_io_unix_stream(client_socket).p2p();
         let (server, connection) =
             futures_lite::future::zip(server_builder.build(), client_builder.build()).await;
         let server_connection = server.unwrap();
@@ -1093,13 +1093,13 @@ mod tests {
         let (server_socket, client_socket) = UnixStream::pair().unwrap();
         let adapter = Arc::new(InMemoryDeviceAdapter::new());
         let daemon = Arc::new(DeviceDaemonService::new(adapter.clone()));
-        let server_builder = zbus::connection::Builder::unix_stream(server_socket)
+        let server_builder = zbus::connection::Builder::async_io_unix_stream(server_socket)
             .server(zbus::Guid::generate())
             .unwrap()
             .p2p()
             .serve_at("/org/shilpo/Device", DeviceDbusService::new(daemon))
             .unwrap();
-        let client_builder = zbus::connection::Builder::unix_stream(client_socket).p2p();
+        let client_builder = zbus::connection::Builder::async_io_unix_stream(client_socket).p2p();
         let (server, connection) =
             futures_lite::future::zip(server_builder.build(), client_builder.build()).await;
         let server_connection = server.unwrap();

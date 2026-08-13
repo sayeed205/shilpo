@@ -5,7 +5,7 @@ use gpui::{
     Styled, Window, actions, prelude::FluentBuilder as _, px,
 };
 
-use rand::seq::SliceRandom as _;
+use rand::prelude::IndexedRandom as _;
 use shilpo_ui::{
     ActiveTheme as _, IconName,
     button::Button,
@@ -198,7 +198,7 @@ impl Render for TreeStory {
                         .outline()
                         .label("Select Item")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(random_item) = this.items.choose(&mut rand::thread_rng()) {
+                            if let Some(random_item) = this.items.choose(&mut rand::rng()) {
                                 this.tree_state.update(cx, |state, cx| {
                                     state.set_selected_item(Some(random_item), cx);
                                 });

@@ -53,7 +53,7 @@ impl TestDbusHarness {
     ) -> Self {
         let (server_stream, client_stream) = UnixStream::pair().expect("UnixStream pair");
         let guid = zbus::Guid::generate();
-        let server_builder = zbus::connection::Builder::unix_stream(server_stream)
+        let server_builder = zbus::connection::Builder::async_io_unix_stream(server_stream)
             .server(guid)
             .expect("server guid")
             .p2p()
@@ -62,7 +62,7 @@ impl TestDbusHarness {
             .serve_at("/org/shilpo/Shell", debug_service.clone())
             .expect("serve DebugDbusService");
 
-        let client_builder = zbus::connection::Builder::unix_stream(client_stream).p2p();
+        let client_builder = zbus::connection::Builder::async_io_unix_stream(client_stream).p2p();
 
         let (server_conn, client_conn) = wait_for("P2P connection build", async {
             tokio::try_join!(server_builder.build(), client_builder.build())
