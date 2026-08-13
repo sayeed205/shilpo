@@ -4,7 +4,7 @@ Consolidated desktop product package. Produces the single installed executable b
 
 ## Internal Submodules
 
-- `shell`: Shell daemon — top bar, workspace overview, notifications, OSD, extension surfaces, action dispatcher, and `org.shilpo.Shell` / `org.shilpo.Debug` D-Bus control plane (see [ADR-0014](../../docs/adr/0014-dbus-shell-control-plane.md), [ADR-0015](../../docs/adr/0015-runtime-debug-control.md)).
+- `shell`: Shell daemon — top bar, workspace overview, notifications, OSD, extension surfaces, action dispatcher, animated theme transitions, and `org.shilpo.Shell` / `org.shilpo.Debug` D-Bus control plane (see [ADR-0014](../../docs/adr/0014-dbus-shell-control-plane.md), [ADR-0015](../../docs/adr/0015-runtime-debug-control.md), [ADR-0016](../../docs/adr/0016-animated-theme-transitions.md)).
 - `settings`: Standalone control panel application for Shilpo configuration and system settings.
 - `cli`: Command-line interface dispatcher for subcommands (`shilpo daemon`, `shilpo settings`, `shilpo config`, `shilpo theme`, `shilpo doctor`, `shilpo ext`, etc.).
 - `config`: TOML configuration loading, schema validation, default resolution, per-output overrides.

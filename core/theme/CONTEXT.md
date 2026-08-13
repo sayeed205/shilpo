@@ -56,3 +56,6 @@ When the selection is `Auto`, core resolves it from the seed's chroma, or the
 producer's injected resolution wins when one is supplied at materialization. An
 explicit selection is its own resolution.
 _Avoid_: effective variant, active variant, actual variant
+
+**OKLCH Interpolation** (`interpolate_argb_oklch`):
+Pure sRGB ↔ Oklab ↔ OKLCH ARGB color space interpolation primitive for perceptual theme transitions, shortest hue arc calculation, and achromatic color handling (see [ADR-0016](../../docs/adr/0016-animated-theme-transitions.md)).

@@ -105,6 +105,19 @@ busctl --user call org.shilpo.Shell /org/shilpo/Shell org.shilpo.Debug EmitTestN
 The `shilpo shell`, workspace, window, capture, brightness, and config commands use this interface; debug operations are
 available through the `busctl` calls above. No shell socket or lock file is required.
 
+### Theme transitions
+
+Shell color changes use a perceptual OKLCH transition by default. Configure the duration in the primary TOML file:
+
+```toml
+[theme]
+transition_duration_ms = 300 # 0..=5000 milliseconds
+reduced_motion = false
+```
+
+Set `transition_duration_ms = 0` or `reduced_motion = true` to apply theme changes immediately. Existing configuration
+files omit the new key safely; the default remains 300 ms.
+
 
 ---
 

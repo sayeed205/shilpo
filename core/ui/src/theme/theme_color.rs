@@ -59,6 +59,18 @@ macro_rules! roles {
             fn from_scheme(scheme: &mcu_material_color::DynamicScheme) -> Self {
                 Self { $($field: argb_to_hsla(MaterialDynamicColors::$field().get_argb(scheme)),)+ }
             }
+
+            pub fn interpolate(&self, target: &Self, t: f32) -> Self {
+                if t.is_nan() || t <= 0.0 {
+                    *self
+                } else if t >= 1.0 {
+                    *target
+                } else {
+                    Self {
+                        $($field: interpolate_hsla(self.$field, target.$field, t),)+
+                    }
+                }
+            }
         }
     };
 }
@@ -199,6 +211,24 @@ pub fn argb_to_hsla(argb: u32) -> Hsla {
     .into()
 }
 
+#[inline]
+pub fn hsla_to_argb(hsla: Hsla) -> u32 {
+    let rgba = hsla.to_rgb();
+    let a = (rgba.a.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let r = (rgba.r.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let g = (rgba.g.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let b = (rgba.b.clamp(0.0, 1.0) * 255.0).round() as u32;
+    (a << 24) | (r << 16) | (g << 8) | b
+}
+
+#[inline]
+pub fn interpolate_hsla(from: Hsla, to: Hsla, t: f32) -> Hsla {
+    let from_argb = hsla_to_argb(from);
+    let to_argb = hsla_to_argb(to);
+    let result_argb = shilpo_theme::interpolate_argb_oklch(from_argb, to_argb, t);
+    argb_to_hsla(result_argb)
+}
+
 /// Converts an Hsla color to a `#RRGGBB` hex string.
 #[inline]
 pub fn hsla_to_hex(hsla: Hsla) -> String {
@@ -272,5 +302,24 @@ mod tests {
         assert!((color.g - 0x20 as f32 / 255.0).abs() < f32::EPSILON);
         assert!((color.b - 0x10 as f32 / 255.0).abs() < f32::EPSILON);
         assert!((color.a - 0x80 as f32 / 255.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_theme_color_interpolation_endpoints_and_midpoint() {
+        let light = material_theme(0xff6750a4, false);
+        let dark = material_theme(0xff386a20, true);
+
+        // t=0.0 reaches light byte-exact
+        assert_eq!(light.interpolate(&dark, 0.0), light);
+
+        // t=1.0 reaches dark byte-exact
+        assert_eq!(light.interpolate(&dark, 1.0), dark);
+
+        // t=0.5 produces a valid intermediate palette differing from both endpoints
+        let mid = light.interpolate(&dark, 0.5);
+        assert_ne!(mid.surface, light.surface);
+        assert_ne!(mid.surface, dark.surface);
+        assert_ne!(mid.primary, light.primary);
+        assert_ne!(mid.primary, dark.primary);
     }
 }
