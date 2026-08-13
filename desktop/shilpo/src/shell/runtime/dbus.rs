@@ -146,6 +146,26 @@ impl ShellRuntime {
                 ShellCommand::Capture(intent) => {
                     ShellSurfaces::request(cx, super::SurfaceRequest::OpenCapture(intent));
                 }
+                ShellCommand::EmitTestNotification { title, body } => {
+                    let notif = shilpo_services::Notification {
+                        id: 0,
+                        app_name: "Shilpo Debug".to_string(),
+                        summary: title,
+                        body,
+                        app_icon: Some("dialog-information".to_string()),
+                        desktop_entry: None,
+                        image_path: None,
+                        urgency: shilpo_services::NotificationUrgency::Normal,
+                        actions: Vec::new(),
+                        expire_timeout_ms: 5000,
+                        timestamp: chrono::Local::now(),
+                    };
+                    if let Some(hub) = cx.global::<Self>().service_hub() {
+                        hub.push_notification(notif);
+                    } else {
+                        tracing::warn!("service hub unavailable for test notification");
+                    }
+                }
             }
         }
         Self::publish_status(cx);

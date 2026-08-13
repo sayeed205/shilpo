@@ -30,11 +30,12 @@ pub use osd::{OsdKind, OsdView};
 pub use overview::WorkspaceOverview;
 pub use runtime::ShellRuntime;
 
-use dbus::{ShellCommand, ShellDbusService, ShellStatus, ShellTelemetry};
+use dbus::{DebugDbusService, ShellCommand, ShellDbusService, ShellStatus, ShellTelemetry};
 use std::sync::{Arc, Mutex};
 
 pub fn run_daemon() {
-    let _obs_guard = init_tracing();
+    let obs_guard = init_tracing();
+    let filter_controller = obs_guard.as_ref().and_then(|g| g.log_filter_controller());
 
     let (mailbox_tx, mailbox_rx) = tokio::sync::mpsc::channel::<ShellCommand>(128);
     let compositor_broker = Arc::new(Mutex::new(None));
@@ -50,11 +51,13 @@ pub fn run_daemon() {
     });
 
     let dbus_service = Arc::new(ShellDbusService::new(
-        mailbox_tx,
+        mailbox_tx.clone(),
         compositor_broker.clone(),
         status.clone(),
         telemetry.clone(),
     ));
+
+    let debug_service = Arc::new(DebugDbusService::new(filter_controller, mailbox_tx));
 
     let dbus_conn = futures_lite::future::block_on(async {
         use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
@@ -86,6 +89,14 @@ pub fn run_daemon() {
             .await
         {
             eprintln!("failed to serve org.shilpo.Shell interface: {error}");
+            std::process::exit(1);
+        }
+        if let Err(error) = conn
+            .object_server()
+            .at("/org/shilpo/Shell", (*debug_service).clone())
+            .await
+        {
+            eprintln!("failed to serve org.shilpo.Debug interface: {error}");
             std::process::exit(1);
         }
         conn

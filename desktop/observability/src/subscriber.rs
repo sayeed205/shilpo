@@ -2,9 +2,14 @@ use crate::{ProcessRole, is_profile_enabled, paths};
 use std::{
     fs, io,
     path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    EnvFilter, Registry, layer::SubscriberExt, reload::Handle, util::SubscriberInitExt,
+};
 
 static SUBSCRIBER_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -22,8 +27,89 @@ pub enum ObservabilityError {
     FinalizeFailed { path: PathBuf, source: io::Error },
 }
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum FilterError {
+    #[error("filter directive cannot be empty or whitespace")]
+    EmptyFilter,
+    #[error("invalid filter directive '{0}'")]
+    InvalidFilter(String),
+    #[error("failed to reload filter: {0}")]
+    ReloadFailed(String),
+}
+
+/// Controller for dynamically querying and modifying the active tracing `EnvFilter`.
+#[derive(Clone)]
+pub struct LogFilterController {
+    inner: Arc<LogFilterControllerInner>,
+}
+
+struct LogFilterControllerInner {
+    handle: Handle<EnvFilter, Registry>,
+    current_filter: Mutex<String>,
+    _layer_keepalive: Option<Arc<dyn std::any::Any + Send + Sync>>,
+}
+
+impl std::fmt::Debug for LogFilterController {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LogFilterController")
+            .field("current_filter", &self.current_filter())
+            .finish()
+    }
+}
+
+impl LogFilterController {
+    pub(crate) fn new(handle: Handle<EnvFilter, Registry>, initial_filter: String) -> Self {
+        Self {
+            inner: Arc::new(LogFilterControllerInner {
+                handle,
+                current_filter: Mutex::new(initial_filter),
+                _layer_keepalive: None,
+            }),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn new_for_testing(initial: &str) -> Self {
+        let filter = tracing_subscriber::EnvFilter::builder().parse_lossy(initial);
+        let (reload_layer, reload_handle) = tracing_subscriber::reload::Layer::new(filter);
+        Self {
+            inner: Arc::new(LogFilterControllerInner {
+                handle: reload_handle,
+                current_filter: Mutex::new(initial.to_string()),
+                _layer_keepalive: Some(Arc::new(reload_layer)),
+            }),
+        }
+    }
+
+    pub fn current_filter(&self) -> String {
+        self.inner.current_filter.lock().unwrap().clone()
+    }
+
+    pub fn set_filter(&self, filter_str: &str) -> Result<(), FilterError> {
+        let trimmed = filter_str.trim();
+        if trimmed.is_empty() {
+            return Err(FilterError::EmptyFilter);
+        }
+
+        let new_filter = trimmed
+            .parse::<EnvFilter>()
+            .map_err(|err| FilterError::InvalidFilter(err.to_string()))?;
+
+        let mut current = self.inner.current_filter.lock().unwrap();
+
+        self.inner
+            .handle
+            .reload(new_filter)
+            .map_err(|err| FilterError::ReloadFailed(err.to_string()))?;
+
+        *current = trimmed.to_string();
+        Ok(())
+    }
+}
+
 /// Guard object managing subscriber lifecycle and trace file finalization.
 pub struct ObservabilityGuard {
+    controller: Option<LogFilterController>,
     inner: Option<GuardInner>,
 }
 
@@ -35,15 +121,27 @@ struct GuardInner {
 
 impl ObservabilityGuard {
     pub fn disabled() -> Self {
-        Self { inner: None }
+        Self {
+            controller: None,
+            inner: None,
+        }
+    }
+
+    pub fn disabled_with_controller(controller: LogFilterController) -> Self {
+        Self {
+            controller: Some(controller),
+            inner: None,
+        }
     }
 
     pub fn enabled(
+        controller: LogFilterController,
         flush_guard: tracing_chrome::FlushGuard,
         active_path: PathBuf,
         final_path: PathBuf,
     ) -> Self {
         Self {
+            controller: Some(controller),
             inner: Some(GuardInner {
                 flush_guard,
                 active_path,
@@ -54,6 +152,10 @@ impl ObservabilityGuard {
 
     pub fn is_enabled(&self) -> bool {
         self.inner.is_some()
+    }
+
+    pub fn log_filter_controller(&self) -> Option<LogFilterController> {
+        self.controller.clone()
     }
 }
 
@@ -90,19 +192,23 @@ pub fn init(
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| default_filter.to_string());
 
-    let filter = tracing_subscriber::EnvFilter::builder().parse_lossy(filter_str);
+    let filter = tracing_subscriber::EnvFilter::builder().parse_lossy(&filter_str);
+    let (reload_layer, reload_handle) = tracing_subscriber::reload::Layer::new(filter);
+    let controller = LogFilterController::new(reload_handle, filter_str.clone());
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .compact()
         .with_writer(io::stderr);
 
     if !is_profile_enabled() {
-        let subscriber = tracing_subscriber::registry().with(filter).with(fmt_layer);
+        let subscriber = tracing_subscriber::registry()
+            .with(reload_layer)
+            .with(fmt_layer);
         if subscriber.try_init().is_err() {
             return Err(ObservabilityError::AlreadyInitialized);
         }
         SUBSCRIBER_INITIALIZED.store(true, Ordering::SeqCst);
-        return Ok(ObservabilityGuard::disabled());
+        return Ok(ObservabilityGuard::disabled_with_controller(controller));
     }
 
     let profile_dir = match paths::resolve_profile_dir() {
@@ -148,7 +254,7 @@ pub fn init(
         .build();
 
     let subscriber = tracing_subscriber::registry()
-        .with(filter)
+        .with(reload_layer)
         .with(fmt_layer)
         .with(chrome_layer);
 
@@ -166,6 +272,7 @@ pub fn init(
     );
 
     Ok(ObservabilityGuard::enabled(
+        controller,
         flush_guard,
         active_path,
         final_path,
@@ -173,17 +280,17 @@ pub fn init(
 }
 
 fn install_fallback_subscriber(default_filter: &str) {
-    let filter = std::env::var("RUST_LOG")
+    let filter_str = std::env::var("RUST_LOG")
         .ok()
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| default_filter.to_owned());
-    let subscriber = tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::builder().parse_lossy(filter))
-        .with(
-            tracing_subscriber::fmt::layer()
-                .compact()
-                .with_writer(io::stderr),
-        );
+    let filter = tracing_subscriber::EnvFilter::builder().parse_lossy(filter_str);
+    let (reload_layer, _reload_handle) = tracing_subscriber::reload::Layer::new(filter);
+    let subscriber = tracing_subscriber::registry().with(reload_layer).with(
+        tracing_subscriber::fmt::layer()
+            .compact()
+            .with_writer(io::stderr),
+    );
     if subscriber.try_init().is_ok() {
         SUBSCRIBER_INITIALIZED.store(true, Ordering::SeqCst);
     }

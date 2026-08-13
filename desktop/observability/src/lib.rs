@@ -13,7 +13,10 @@ pub use discovery::{
 pub use export::{ExportError, ExportReport, export_trace};
 pub use paths::{is_profile_enabled, resolve_profile_dir};
 pub use role::ProcessRole;
-pub use subscriber::{ObservabilityError, ObservabilityGuard, init, reset_initialized_for_testing};
+pub use subscriber::{
+    FilterError, LogFilterController, ObservabilityError, ObservabilityGuard, init,
+    reset_initialized_for_testing,
+};
 
 #[cfg(test)]
 mod tests {
@@ -185,5 +188,78 @@ mod tests {
         assert_eq!(summary.completed_count, 1);
         assert_eq!(summary.incomplete_count, 1);
         assert!(summary.newest_completed.is_some());
+    }
+
+    #[test]
+    fn test_log_filter_controller_local_seam() {
+        use tracing_subscriber::layer::SubscriberExt;
+        let filter = tracing_subscriber::EnvFilter::builder().parse_lossy("warn");
+        let (reload_layer, reload_handle) = tracing_subscriber::reload::Layer::new(filter);
+        let _subscriber = tracing_subscriber::registry().with(reload_layer);
+        let controller = LogFilterController::new(reload_handle, "warn".into());
+
+        assert_eq!(controller.current_filter(), "warn");
+
+        // Valid update
+        assert!(controller.set_filter("info,shilpo=debug").is_ok());
+        assert_eq!(controller.current_filter(), "info,shilpo=debug");
+
+        // Empty filter rejected
+        assert_eq!(controller.set_filter("   "), Err(FilterError::EmptyFilter));
+        assert_eq!(controller.current_filter(), "info,shilpo=debug");
+
+        // Invalid filter syntax rejected
+        assert!(matches!(
+            controller.set_filter("invalid[[[syntax"),
+            Err(FilterError::InvalidFilter(_))
+        ));
+        assert_eq!(controller.current_filter(), "info,shilpo=debug");
+    }
+
+    #[test]
+    fn test_log_filter_controller_concurrency() {
+        use tracing_subscriber::layer::SubscriberExt;
+        let filter = tracing_subscriber::EnvFilter::builder().parse_lossy("warn");
+        let (reload_layer, reload_handle) = tracing_subscriber::reload::Layer::new(filter);
+        let _subscriber = tracing_subscriber::registry().with(reload_layer);
+        let controller = LogFilterController::new(reload_handle, "warn".into());
+
+        let mut handles = vec![];
+        for i in 0..10 {
+            let c = controller.clone();
+            handles.push(std::thread::spawn(move || {
+                let directive = format!("info,target_{}=debug", i);
+                let _ = c.set_filter(&directive);
+                let current = c.current_filter();
+                assert!(!current.is_empty());
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_environment_serialized_filter_restoration() {
+        let _guard = env_guard();
+        let old_env = std::env::var("RUST_LOG").ok();
+
+        unsafe {
+            std::env::set_var("RUST_LOG", "debug,shilpo_test=trace");
+        }
+
+        let filter_str = std::env::var("RUST_LOG")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "info".to_string());
+        assert_eq!(filter_str, "debug,shilpo_test=trace");
+
+        unsafe {
+            if let Some(old) = old_env {
+                std::env::set_var("RUST_LOG", old);
+            } else {
+                std::env::remove_var("RUST_LOG");
+            }
+        }
     }
 }

@@ -7,6 +7,7 @@
 ## Architecture
 
 - **Subscriber Initialization**: Single global subscriber entry point for all durable process roles (`Shell`, `Settings`, `ExtensionHost`, `DeviceDaemon`, `ThemeDaemon`).
+- **Reloadable Filter Control**: Thread-safe `LogFilterController` for dynamic `EnvFilter` directive replacement without subscriber re-initialization.
 - **Opt-in Chrome Profiling**: Activated when `SHILPO_PROFILE` is `1` or `true`.
 - **Trace Lifecycle**: Writes active traces as `<role>-<pid>-<timestamp>-<uuid>.json.part` and atomically renames to `.json` on orderly process shutdown.
 - **Discovery & Export**: Discovers newest completed `.json` array trace and copies byte-for-byte to export destination.

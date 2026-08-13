@@ -627,6 +627,36 @@ mod tests {
         assert!(harness.hub.notification_dnd_flag());
     }
 
+    #[test]
+    fn emit_test_notification_routes_to_notification_domain() {
+        let mut harness = ServiceHubTestHarness::new_offline();
+        let notif = Notification {
+            id: 0,
+            app_name: "Shilpo Debug".to_string(),
+            summary: "Test Title".to_string(),
+            body: "Test Body".to_string(),
+            app_icon: Some("dialog-information".to_string()),
+            desktop_entry: None,
+            image_path: None,
+            urgency: shilpo_services::NotificationUrgency::Normal,
+            actions: Vec::new(),
+            expire_timeout_ms: 5000,
+            timestamp: chrono::Local::now(),
+        };
+
+        harness.hub.push_notification(notif);
+
+        let history = harness.hub.notification_history();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].summary, "Test Title");
+        assert_eq!(history[0].body, "Test Body");
+
+        let drained = harness.hub.drain_notifications();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].summary, "Test Title");
+        assert_eq!(drained[0].body, "Test Body");
+    }
+
     impl ServiceHub {
         fn new_offline_harness() -> Self {
             let (updates_tx, _updates_rx, service_commands, _commands_rx) =
