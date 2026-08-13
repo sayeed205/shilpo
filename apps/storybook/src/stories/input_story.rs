@@ -2,9 +2,9 @@ use gpui::{
     App, AppContext as _, ClickEvent, Context, Entity, InteractiveElement, IntoElement,
     ParentElement as _, Render, Role, Styled, Subscription, Window, div,
 };
+use shilpo_ui::{button::*, input::*, label::Label, *};
 
 use crate::section;
-use shilpo_ui::{button::*, input::*, label::Label, *};
 
 const CODE_EXAMPLE: &str = r#"{"single_line":"code editor"}"#;
 

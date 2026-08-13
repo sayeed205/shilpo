@@ -1,10 +1,12 @@
+use std::fs;
+
+use toml_edit::{DocumentMut, Item, Table};
+
 use crate::config::{
     provenance::{ConfigProvenance, format_key},
     source::{ConfigSource, SourceLocation},
     types::{ConfigDiagnostic, ConfigError, ShellConfig},
 };
-use std::fs;
-use toml_edit::{DocumentMut, Item, Table};
 
 pub fn line_col_from_offset(text: &str, offset: usize) -> (usize, usize) {
     let offset = offset.min(text.len());
@@ -367,10 +369,12 @@ pub fn record_provenance_tree(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use proptest::prelude::*;
     use std::collections::BTreeMap;
+
+    use proptest::prelude::*;
     use toml_edit::{DocumentMut, Item, Value};
+
+    use super::*;
 
     fn arb_key() -> impl Strategy<Value = String> {
         "[a-z][a-z0-9_]{0,8}"

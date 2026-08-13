@@ -1,10 +1,12 @@
+use std::time::Duration;
+
+use futures_lite::stream::StreamExt;
+use tokio::sync::mpsc;
+
 use super::{
     DebugDbusService, ShellCommand, ShellDbusService, ShellStatus, ShellTelemetry,
     test_harness::{TestDbusHarness, wait_for},
 };
-use futures_lite::stream::StreamExt;
-use std::time::Duration;
-use tokio::sync::mpsc;
 
 macro_rules! bounded {
     ($label:literal, $future:expr) => {

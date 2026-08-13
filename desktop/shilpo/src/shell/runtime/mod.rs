@@ -7,19 +7,20 @@ pub mod shell_surfaces;
 pub mod theme_manager;
 pub(crate) mod wallpaper_preview;
 
-pub use action_dispatcher::ActionDispatcher;
-pub use extension_host::ExtensionHost;
-pub use service_hub::ServiceHub;
-pub use session::SessionContext;
-pub use shell_surfaces::{ShellSurfaces, SurfaceRequest, SurfaceSnapshot};
-pub(crate) use wallpaper_preview::{WallpaperPreviewResource, WallpaperPreviewSnapshot};
-
-use shell_surfaces::WindowClosedOutcome;
-
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
+
+pub use action_dispatcher::ActionDispatcher;
+pub use extension_host::ExtensionHost;
+use gpui::{App, AppContext, Entity, Global, Subscription};
+pub use service_hub::ServiceHub;
+pub use session::SessionContext;
+use shell_surfaces::WindowClosedOutcome;
+pub use shell_surfaces::{ShellSurfaces, SurfaceRequest, SurfaceSnapshot};
+use shilpo_services::{CompositorCommandBroker, CompositorSnapshot};
+pub(crate) use wallpaper_preview::{WallpaperPreviewResource, WallpaperPreviewSnapshot};
 
 #[cfg(test)]
 use crate::extensions::ExtensionCommand;
@@ -27,8 +28,6 @@ use crate::{
     extensions::ExtensionCoordinator,
     shell::dbus::{ShellCommand, ShellDbusService, ShellStatus, ShellTelemetry},
 };
-use gpui::{App, AppContext, Entity, Global, Subscription};
-use shilpo_services::{CompositorCommandBroker, CompositorSnapshot};
 
 /// The shell runtime orchestrator: composes the deep service modules, watches
 /// the compositor stream, and routes lifecycle events between them.

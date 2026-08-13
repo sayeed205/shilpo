@@ -1,11 +1,11 @@
+use std::{io::Read, path::PathBuf, time::Duration};
+
 use gpui::{
     AnimationExt as _, App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, ObjectFit,
     ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
     StyleRefinement, Styled, StyledImage as _, Window, div, img, prelude::FluentBuilder as _, px,
 };
-use shilpo_ui::progress::ProgressCircle;
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
-use std::{io::Read, path::PathBuf, time::Duration};
+use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, progress::ProgressCircle, v_flex};
 
 const MAX_ARTWORK_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CACHED_ARTWORKS: usize = 32;
@@ -48,8 +48,10 @@ fn cached_artwork_path(art_url: &str) -> Option<PathBuf> {
     if !(art_url.starts_with("http://") || art_url.starts_with("https://")) {
         return None;
     }
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    use std::{
+        collections::hash_map::DefaultHasher,
+        hash::{Hash, Hasher},
+    };
     let mut hasher = DefaultHasher::new();
     art_url.hash(&mut hasher);
     let hash = hasher.finish();

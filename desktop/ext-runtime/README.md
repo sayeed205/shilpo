@@ -20,6 +20,18 @@ An extension may contribute one or more:
 - shell actions;
 - background tasks that react to typed shell events.
 
+### Trusted Local Scripts
+
+In addition to WASM extensions, Shilpo supports **trusted local scripts** for read-only status bar widgets.
+
+- **Location**: Discovered from `$XDG_CONFIG_HOME/shilpo/scripts/<bundle>/manifest.toml` (immediate child directories only).
+- **Trust Boundary**: Scripts are explicitly trusted, local-only programs running with the user's OS authority. WASM guests cannot invoke or configure scripts.
+- **Execution Role**: Managed exclusively within the `shilpo extension-host` worker process—never in the Shell/GPUI process.
+- **V1 Surface**: Restricted to read-only bar widgets. Interactive nodes and event handlers are rejected during ViewTree validation.
+- **Output Protocol**: Scripts emit JSON or text-shorthand records over stdout (max 1 MiB per record).
+- **Supervision**: Process groups are created with `setpgid` and cleanly terminated and reaped (`SIGKILL` + `wait`) on timeout, reload, removal, or host shutdown. Stderr is captured up to 64 KiB for diagnostics.
+- **Catalog & CLI**: Reported in `shilpo ext list` as `Trusted local script (not sandboxed)`. Scripts are excluded from registry install, update, and grant operations.
+
 ### Bar menus
 
 A bar menu is a single typed `ViewTree` surface linked to one bar widget in the same manifest:

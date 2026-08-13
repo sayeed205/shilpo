@@ -1,8 +1,9 @@
-use crate::v_flex;
 use gpui::{
     AnyElement, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     StyleRefinement, Styled,
 };
+
+use crate::v_flex;
 
 /// A footer slot for [`NavigationRail`](super::NavigationRail) holding profile or status elements.
 #[derive(IntoElement)]

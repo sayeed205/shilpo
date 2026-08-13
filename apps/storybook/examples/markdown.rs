@@ -27,8 +27,7 @@ use shilpo_ui::{
     },
     v_flex,
 };
-use storybook::Assets;
-use storybook::Open;
+use storybook::{Assets, Open};
 
 /// Markers, each mapped to a different `HighlightTheme` token-type name so
 /// `TODO`, `FIXME`, … render in distinct colors.

@@ -2,6 +2,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+
 use tokio::sync::{mpsc, watch};
 
 struct TaskHandle {
@@ -196,8 +197,9 @@ impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> CommandRunti
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_state_runtime_offline() {

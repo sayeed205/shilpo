@@ -1,10 +1,10 @@
-use shilpo_services::capture::backend::CaptureBackend;
-use shilpo_services::capture::backend::test::TestBackend;
-use shilpo_services::capture::{
-    Frame, FrameFormat, Rect, Region, capture_frame, copy_image_to_clipboard, create_backend,
-    crop_image, frame_to_rgba,
-};
 use std::time::Instant;
+
+use shilpo_services::capture::{
+    Frame, FrameFormat, Rect, Region,
+    backend::{CaptureBackend, test::TestBackend},
+    capture_frame, copy_image_to_clipboard, create_backend, crop_image, frame_to_rgba,
+};
 
 #[test]
 #[ignore = "requires a live Wayland compositor"]

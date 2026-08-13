@@ -20,9 +20,11 @@ pub use subscriber::{
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::{Mutex, OnceLock};
+
     use tempfile::TempDir;
+
+    use super::*;
 
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();

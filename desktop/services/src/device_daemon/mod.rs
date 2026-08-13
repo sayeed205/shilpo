@@ -2,18 +2,24 @@ pub mod dbus;
 pub mod in_memory_adapter;
 pub mod system_adapter;
 
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+
+pub use dbus::DeviceDbusService;
+pub use in_memory_adapter::{DeviceAdapter, InMemoryDeviceAdapter};
+pub use system_adapter::SystemDeviceAdapter;
+use tokio::sync::{Notify, broadcast, oneshot};
+
 use crate::device_protocol::{
     CancellationReason, CommandId, CommandOutcome, DeviceCommand, DeviceDomain, DomainLifecycle,
     DomainPortTelemetry, DomainState, DomainVersion, RejectionReason, check_protocol_version,
 };
-pub use dbus::DeviceDbusService;
-pub use in_memory_adapter::{DeviceAdapter, InMemoryDeviceAdapter};
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
-pub use system_adapter::SystemDeviceAdapter;
-use tokio::sync::{Notify, broadcast, oneshot};
 
 const DOMAIN_QUEUE_CAPACITY: usize = 16;
 
@@ -531,10 +537,9 @@ fn confirmation_timeout(domain: DeviceDomain) -> Duration {
 }
 
 fn command_confirmed(command: &DeviceCommand, before: &DomainState, after: &DomainState) -> bool {
-    use crate::device_protocol::DomainPayload as P;
     use crate::device_protocol::{
-        AudioAction, BluetoothAction, BrightnessAction, CaffeineAction, MediaAction, NetworkAction,
-        NightLightAction, PowerProfileAction,
+        AudioAction, BluetoothAction, BrightnessAction, CaffeineAction, DomainPayload as P,
+        MediaAction, NetworkAction, NightLightAction, PowerProfileAction,
     };
     match (command, &before.payload, &after.payload) {
         (DeviceCommand::Audio(AudioAction::SetVolume(v)), _, P::Audio(new)) => new.volume == *v,
@@ -645,9 +650,10 @@ fn vpn_active(payload: &crate::device_protocol::NetworkPayload, name: &str) -> b
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use crate::device_protocol::{AudioAction, BrightnessAction, DomainPayload, PROTOCOL_VERSION};
-    use std::sync::Mutex;
 
     #[derive(Clone)]
     struct DeferredAdapter {

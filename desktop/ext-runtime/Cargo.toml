@@ -14,6 +14,7 @@ flate2.workspace = true
 futures-lite.workspace = true
 hex.workspace = true
 jsonschema.workspace = true
+libc.workspace = true
 reqwest.workspace = true
 ring.workspace = true
 schemars.workspace = true

@@ -1,16 +1,17 @@
-use crate::{ActiveTheme, Sizable, Size, StyledExt};
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, ElementId, Hsla, InteractiveElement as _,
-    IntoElement, ParentElement, Pixels, RenderOnce, StyleRefinement, Styled, Window, canvas, px,
-    relative,
-};
-use gpui::{Bounds, Corners, div, fill};
-use instant::Duration;
 use std::f32::consts::TAU;
 
+use gpui::{
+    Animation, AnimationExt as _, AnyElement, App, Bounds, Corners, ElementId, Hsla,
+    InteractiveElement as _, IntoElement, ParentElement, Pixels, RenderOnce, StyleRefinement,
+    Styled, Window, canvas, div, fill, prelude::FluentBuilder as _, px, relative,
+};
+use instant::Duration;
+
 use super::ProgressState;
-use crate::plot::shape::{Arc, ArcData};
+use crate::{
+    ActiveTheme, Sizable, Size, StyledExt,
+    plot::shape::{Arc, ArcData},
+};
 
 #[derive(Clone)]
 struct WaveMorphState {

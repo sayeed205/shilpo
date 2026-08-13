@@ -1,8 +1,8 @@
 //! Global shortcut backend abstraction and Niri KDL generated include renderer.
 
+use std::{fs, path::PathBuf, sync::Arc};
+
 use crate::shell::actions::ResolvedShortcut;
-use std::path::PathBuf;
-use std::{fs, sync::Arc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectionStatus {
@@ -192,15 +192,15 @@ impl GlobalShortcutBackend for NiriShortcutBackend {
             )));
         }
 
-        if self.trigger_reload {
-            if let Err(error) = (self.reload)() {
-                if let Some(previous) = previous_content {
-                    let _ = fs::write(&self.output_path, previous);
-                } else {
-                    let _ = fs::remove_file(&self.output_path);
-                }
-                return Err(ShortcutBackendError::Reload(error));
+        if self.trigger_reload
+            && let Err(error) = (self.reload)()
+        {
+            if let Some(previous) = previous_content {
+                let _ = fs::write(&self.output_path, previous);
+            } else {
+                let _ = fs::remove_file(&self.output_path);
             }
+            return Err(ShortcutBackendError::Reload(error));
         }
 
         Ok(ProjectionReport {

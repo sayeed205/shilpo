@@ -1,3 +1,8 @@
+use gpui::{
+    App, Background, Edges, Entity, Focusable, InteractiveElement, IntoElement, KeyBinding,
+    ParentElement, RenderOnce, Styled, Window, div, prelude::FluentBuilder,
+};
+
 use crate::{
     ActiveTheme, Sizable, Size,
     actions::{
@@ -5,10 +10,6 @@ use crate::{
         SelectPageUp, SelectPrevColumn, SelectUp,
     },
     table::{TableDelegate, TableState},
-};
-use gpui::{
-    App, Background, Edges, Entity, Focusable, InteractiveElement, IntoElement, KeyBinding,
-    ParentElement, RenderOnce, Styled, Window, div, prelude::FluentBuilder,
 };
 
 const CONTEXT: &'static str = "DataTable";

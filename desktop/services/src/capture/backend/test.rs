@@ -1,7 +1,9 @@
 use std::time::Instant;
 
-use crate::capture::backend::CaptureBackend;
-use crate::capture::types::{Frame, FrameFormat};
+use crate::capture::{
+    backend::CaptureBackend,
+    types::{Frame, FrameFormat},
+};
 
 pub struct TestBackend;
 

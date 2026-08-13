@@ -1,8 +1,9 @@
-use crate::{ActiveTheme, Selectable, v_flex};
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, ElementId, InteractiveElement, IntoElement,
     ParentElement, RenderOnce, StyleRefinement, Styled, Window, div,
 };
+
+use crate::{ActiveTheme, Selectable, v_flex};
 
 mod footer;
 mod header;
@@ -14,7 +15,6 @@ pub use footer::*;
 pub use header::*;
 pub use item::*;
 pub use menu_button::*;
-
 use motion::{RailMotionState, RailTarget, spring_progress};
 
 /// Vertical item arrangement in [`NavigationRail`].

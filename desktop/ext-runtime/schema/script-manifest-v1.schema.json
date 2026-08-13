@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ScriptManifest",
+  "type": "object",
+  "properties": {
+    "contributions": {
+      "$ref": "#/$defs/ScriptContributions"
+    },
+    "id": {
+      "$ref": "#/$defs/ExtensionId"
+    },
+    "name": {
+      "type": "string"
+    },
+    "runtime": {
+      "$ref": "#/$defs/ScriptRuntimeConfig"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "version",
+    "runtime",
+    "contributions"
+  ],
+  "$defs": {
+    "ContributionId": {
+      "description": "A single-segment identifier naming one contribution within an extension (e.g. `clock`).",
+      "type": "string"
+    },
+    "ExtensionId": {
+      "description": "The package identity of an extension (reverse-domain notation, e.g. `io.github.alice`).",
+      "type": "string"
+    },
+    "ScriptBarWidgetContribution": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/ContributionId"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "ScriptContributions": {
+      "type": "object",
+      "properties": {
+        "bar_widgets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScriptBarWidgetContribution"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "bar_widgets"
+      ]
+    },
+    "ScriptMode": {
+      "type": "string",
+      "enum": [
+        "poll",
+        "stream"
+      ]
+    },
+    "ScriptRuntimeConfig": {
+      "type": "object",
+      "properties": {
+        "args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "executable": {
+          "type": "string"
+        },
+        "interval_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mode": {
+          "$ref": "#/$defs/ScriptMode"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "executable",
+        "timeout_ms"
+      ]
+    }
+  }
+}

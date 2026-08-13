@@ -1,15 +1,13 @@
-use std::rc::Rc;
-use std::time::Duration;
-use std::{cell::RefCell, ops::Range};
+use std::{cell::RefCell, ops::Range, rc::Rc, time::Duration};
 
 use gpui::{App, SharedString, Task};
 use ropey::Rope;
 
 use super::display_map::DisplayMap;
-use crate::highlighter::DiagnosticSet;
-use crate::highlighter::LanguageRegistry;
-use crate::highlighter::SyntaxHighlighter;
-use crate::input::{InputEdit, RopeExt as _, TabSize};
+use crate::{
+    highlighter::{DiagnosticSet, LanguageRegistry, SyntaxHighlighter},
+    input::{InputEdit, RopeExt as _, TabSize},
+};
 
 #[allow(dead_code)]
 pub(super) struct PendingBackgroundParse {

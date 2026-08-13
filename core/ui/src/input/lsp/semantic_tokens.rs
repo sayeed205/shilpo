@@ -6,8 +6,10 @@ use instant::Duration;
 use lsp_types::{Position, SemanticTokens, SemanticTokensLegend};
 use ropey::Rope;
 
-use crate::highlighter::HighlightTheme;
-use crate::input::{InputState, Lsp, RopeExt};
+use crate::{
+    highlighter::HighlightTheme,
+    input::{InputState, Lsp, RopeExt},
+};
 
 /// A provider of semantic highlighting tokens, layered on top of the
 /// built-in tree-sitter [`SyntaxHighlighter`](crate::highlighter::SyntaxHighlighter).
@@ -195,10 +197,12 @@ fn decode_semantic_tokens(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use lsp_types::{SemanticToken, SemanticTokenType, SemanticTokensLegend};
+
     use super::*;
     use crate::highlighter::HighlightTheme;
-    use lsp_types::{SemanticToken, SemanticTokenType, SemanticTokensLegend};
-    use std::sync::Arc;
 
     fn legend() -> SemanticTokensLegend {
         SemanticTokensLegend {

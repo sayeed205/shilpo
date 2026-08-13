@@ -17,15 +17,6 @@
 //!   diagnostics. `version` is metadata: it never participates in the
 //!   resolver's [`crate::config::RecoveryScope`] machinery.
 
-use crate::config::{
-    merge::read_source_document,
-    resolver::ConfigResolver,
-    source::{ConfigSource, discover_sources},
-    types::{ConfigDiagnostic, ConfigError},
-    unknown_keys::UnknownConfigKey,
-};
-use chrono::{DateTime, Utc};
-use serde::Serialize;
 use std::{
     fmt, fs, io,
     io::Write,
@@ -33,7 +24,18 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+use chrono::{DateTime, Utc};
+use serde::Serialize;
 use toml_edit::{DocumentMut, Item, Value};
+
+use crate::config::{
+    merge::read_source_document,
+    resolver::ConfigResolver,
+    source::{ConfigSource, discover_sources},
+    types::{ConfigDiagnostic, ConfigError},
+    unknown_keys::UnknownConfigKey,
+};
 
 /// The single authoritative latest declarative config schema version.
 ///
@@ -1111,12 +1113,14 @@ fn config_diagnostics(error: &ConfigError) -> Vec<ConfigDiagnostic> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
     };
+
     use tempfile::TempDir;
+
+    use super::*;
 
     fn temp_dir() -> TempDir {
         TempDir::new().expect("temp dir")

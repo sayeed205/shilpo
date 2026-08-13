@@ -1,27 +1,22 @@
-use gpui::Corners;
-use gpui::Half;
+use std::{ops::Range, rc::Rc};
+
 use gpui::{
-    AnyElement, App, Bounds, Edges, Element, ElementId, ElementInputHandler, Entity,
-    GlobalElementId,
-};
-use gpui::{
-    HighlightStyle, Hitbox, HitboxBehavior, Hsla, InteractiveElement, IntoElement, LayoutId,
-    MouseButton, MouseMoveEvent, MouseUpEvent, Path, Pixels, Point, Position, ShapedLine,
-    SharedString, Size, Style, Styled as _, TextAlign, TextRun, TextStyle, UnderlineStyle, Window,
-    fill, point, px, relative, size,
+    AnyElement, App, Bounds, Corners, Edges, Element, ElementId, ElementInputHandler, Entity,
+    GlobalElementId, Half, HighlightStyle, Hitbox, HitboxBehavior, Hsla, InteractiveElement,
+    IntoElement, LayoutId, MouseButton, MouseMoveEvent, MouseUpEvent, Path, Pixels, Point,
+    Position, ShapedLine, SharedString, Size, Style, Styled as _, TextAlign, TextRun, TextStyle,
+    UnderlineStyle, Window, fill, point, px, relative, size,
 };
 use ropey::Rope;
 use smallvec::SmallVec;
-use std::{ops::Range, rc::Rc};
 
+use super::{InputState, LastLayout, WhitespaceIndicators, mode::InputMode};
 use crate::{
     ActiveTheme as _, Colorize, IconName, Root, Selectable, Sizable as _,
     button::{Button, ButtonVariants as _},
     input::{RopeExt as _, blink_cursor::CURSOR_WIDTH, display_map::LineLayout},
     scroll::Scrollbar,
 };
-
-use super::{InputState, LastLayout, WhitespaceIndicators, mode::InputMode};
 
 const BOTTOM_MARGIN_ROWS: usize = 3;
 pub(super) const RIGHT_MARGIN: Pixels = px(10.);

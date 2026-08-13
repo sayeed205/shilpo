@@ -59,6 +59,10 @@ capability. This created security and design risks:
     - Reactive watches deliver ordered `ExtensionEvent::StateValue` events deferred until host calls return, coalescing updates under backpressure.
     - Uninstall supports explicit `StatePolicy::{Retain, Delete}` with rollback-safe artifact staging.
 
+7. **Trusted Local Script Boundary vs WASM Capabilities**:
+    - Trusted local scripts (`$XDG_CONFIG_HOME/shilpo/scripts/<bundle>/manifest.toml`) run with the user's OS authority as local-only status bar widgets.
+    - WASM guests compiled against `shilpo:extension@0.1.0` WIT contract have zero access to process execution, cannot spawn child processes, and cannot configure, invoke, or influence trusted local script execution.
+
 ## Consequences & Follow-ups
 
 - Extensions must compile against `shilpo:extension@0.1.0` WIT definitions.

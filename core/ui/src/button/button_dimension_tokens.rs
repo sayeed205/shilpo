@@ -1,7 +1,6 @@
 use gpui::{Pixels, px};
 
-use super::button_scale_tokens;
-use super::button_shared_tokens::COMMON_MIN_WIDTH;
+use super::{button_scale_tokens, button_shared_tokens::COMMON_MIN_WIDTH};
 use crate::Size;
 
 #[derive(Clone, Copy, Debug, PartialEq)]

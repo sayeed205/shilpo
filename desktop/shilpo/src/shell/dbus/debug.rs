@@ -1,8 +1,9 @@
 //! org.shilpo.Debug D-Bus service implementation.
 
-use super::server::ShellCommand;
 use shilpo_observability::{FilterError, LogFilterController};
 use tokio::sync::mpsc;
+
+use super::server::ShellCommand;
 
 /// D-Bus interface implementation for `org.shilpo.Debug`.
 #[derive(Clone)]

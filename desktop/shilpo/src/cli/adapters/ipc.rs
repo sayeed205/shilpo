@@ -1,8 +1,10 @@
 //! D-Bus adapter for shell commands and status queries over `org.shilpo.Shell`.
 
-use crate::shell::dbus::{CommandResult, ShellProxy, ShellStatus, ShellTelemetry};
 use std::sync::{Mutex, OnceLock};
+
 use zbus::Connection;
+
+use crate::shell::dbus::{CommandResult, ShellProxy, ShellStatus, ShellTelemetry};
 
 pub struct IpcAdapter;
 

@@ -3,6 +3,7 @@ pub mod catalog;
 pub mod circuit_breaker;
 pub mod cli;
 pub mod effects;
+pub mod script;
 pub mod secrets;
 pub mod state;
 pub mod wasm;

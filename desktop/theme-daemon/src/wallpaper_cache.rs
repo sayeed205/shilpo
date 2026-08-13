@@ -1,11 +1,14 @@
 //! In-memory LRU wallpaper analysis cache owned by shilpo-theme-daemon.
 
+use std::{
+    collections::{HashMap, VecDeque},
+    fs,
+    path::{Path, PathBuf},
+    sync::Mutex,
+    time::SystemTime,
+};
+
 use shilpo_ui::theme::SchemeVariant;
-use std::collections::{HashMap, VecDeque};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::time::SystemTime;
 
 /// Cache key uniquely identifying an analyzed wallpaper image under a specific scheme variant.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -154,9 +157,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Arc;
+
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[test]
     fn test_1_exact_key_hit_returns_stored_analysis() {

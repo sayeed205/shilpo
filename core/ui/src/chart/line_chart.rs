@@ -7,6 +7,7 @@ use gpui::{
 use num_traits::{Num, ToPrimitive};
 use shilpo_macros::IntoPlot;
 
+use super::build_point_x_labels;
 use crate::{
     ActiveTheme,
     plot::{
@@ -16,8 +17,6 @@ use crate::{
         tooltip::{CrossLine, Dot, Tooltip, TooltipState},
     },
 };
-
-use super::build_point_x_labels;
 
 #[derive(IntoPlot)]
 pub struct LineChart<T, X, Y>

@@ -10,11 +10,12 @@ use rust_i18n::t;
 use smallvec::SmallVec;
 
 use super::{Tab, TabVariant};
-use crate::animation::Lerp;
-use crate::button::{Button, ButtonVariants as _};
-use crate::menu::{DropdownMenu as _, PopupMenuItem};
 use crate::{
-    ActiveTheme, ElementExt, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex,
+    ActiveTheme, ElementExt, Icon, IconName, Selectable, Sizable, Size, StyledExt,
+    animation::Lerp,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    menu::{DropdownMenu as _, PopupMenuItem},
 };
 
 /// Tab indicator alignment for [`TabBar`].

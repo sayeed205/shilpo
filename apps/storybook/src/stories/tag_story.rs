@@ -2,7 +2,6 @@ use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     Styled, Window, px,
 };
-
 use shilpo_ui::{ActiveTheme as _, Sizable, h_flex, tag::Tag, v_flex};
 
 use crate::section;

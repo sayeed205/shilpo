@@ -1,5 +1,6 @@
-use gpui::{App, ElementId, Entity, FocusHandle, Global, OwnedMenu};
 use std::collections::HashSet;
+
+use gpui::{App, ElementId, Entity, FocusHandle, Global, OwnedMenu};
 
 use crate::text::{SelectionScope, TextViewState};
 

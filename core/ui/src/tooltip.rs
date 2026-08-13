@@ -635,8 +635,9 @@ impl<E: StatefulInteractiveElement + crate::ElementExt> ManagedTooltipExt for E 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use gpui::size;
+
+    use super::*;
 
     fn test_content(bounds: Bounds<Pixels>) -> TooltipContent {
         TooltipContent {

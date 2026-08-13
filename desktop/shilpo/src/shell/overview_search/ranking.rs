@@ -1,6 +1,8 @@
-use crate::actions::ActionDescriptor;
-use shilpo_services::{AppScanner, Application};
 use std::path::PathBuf;
+
+use shilpo_services::{AppScanner, Application};
+
+use crate::actions::ActionDescriptor;
 
 pub fn expand_path(query: &str) -> Option<PathBuf> {
     let q = query.trim();

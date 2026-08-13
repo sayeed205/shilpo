@@ -1,5 +1,4 @@
-use storybook::Assets;
-use storybook::{Gallery, create_new_window, init};
+use storybook::{Assets, Gallery, create_new_window, init};
 
 fn main() {
     let app = gpui_platform::application().with_assets(Assets);

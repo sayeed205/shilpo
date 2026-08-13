@@ -531,9 +531,9 @@ fn ast_to_node(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use gpui::ParentElement;
 
+    use super::*;
     use crate::text::{MarkdownExtensions, MarkdownNode, MarkdownPlugin};
 
     #[test]

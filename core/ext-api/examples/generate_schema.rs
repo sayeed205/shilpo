@@ -1,5 +1,6 @@
-use shilpo_ext_api::ExtensionManifest;
 use std::path::PathBuf;
+
+use shilpo_ext_api::ExtensionManifest;
 
 fn main() {
     let output = std::env::args_os()

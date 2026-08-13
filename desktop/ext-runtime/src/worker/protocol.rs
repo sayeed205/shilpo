@@ -16,12 +16,24 @@ pub enum ContributionSurface {
     Shortcut,
 }
 
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionRuntimeKind {
+    #[default]
+    Wasm,
+    TrustedLocalScript,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContributionDescriptor {
     pub id: CanonicalId,
     pub extension_name: String,
     pub name: String,
     pub surface: ContributionSurface,
+    #[serde(default)]
+    pub runtime_kind: ExtensionRuntimeKind,
     pub settings_schema: Option<String>,
     pub default_size: Option<(u32, u32)>,
     pub minimum_size: Option<(u32, u32)>,

@@ -1,9 +1,12 @@
+use std::{
+    io::{BufReader, BufWriter},
+    process::{Command, Stdio},
+};
+
 use shilpo_ext_runtime::{
     ExtensionCommand, ExtensionGeneration, HostGeneration, HostMessage, PROTOCOL_VERSION,
     WorkerPayload, recv_worker_message, send_host_message,
 };
-use std::io::{BufReader, BufWriter};
-use std::process::{Command, Stdio};
 
 #[test]
 fn ext_status_json_preserves_error_envelope_when_daemon_is_unavailable() {

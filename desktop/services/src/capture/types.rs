@@ -1,5 +1,4 @@
-use std::path::PathBuf;
-use std::time::Instant;
+use std::{path::PathBuf, time::Instant};
 
 /// What to do with a captured screenshot
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

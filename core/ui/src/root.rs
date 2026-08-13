@@ -1,3 +1,12 @@
+use std::{any::TypeId, collections::HashMap, rc::Rc};
+
+use gpui::{
+    Anchor, AnyView, App, AppContext, Bounds, ClipboardItem, Context, DefiniteLength, ElementId,
+    Entity, EntityId, FocusHandle, Hitbox, InteractiveElement, IntoElement, KeyBinding,
+    ParentElement as _, Pixels, Render, StyleRefinement, Styled, WeakEntity, WeakFocusHandle,
+    Window, actions, div, prelude::FluentBuilder as _,
+};
+
 use crate::{
     ActiveTheme, ElementExt, Placement, StyledExt,
     dialog::{ANIMATION_DURATION, Dialog},
@@ -10,13 +19,6 @@ use crate::{
     tooltip::TooltipOverlay,
     window_border,
 };
-use gpui::{
-    Anchor, AnyView, App, AppContext, Bounds, ClipboardItem, Context, DefiniteLength, ElementId,
-    Entity, EntityId, FocusHandle, Hitbox, InteractiveElement, IntoElement, KeyBinding,
-    ParentElement as _, Pixels, Render, StyleRefinement, Styled, WeakEntity, WeakFocusHandle,
-    Window, actions, div, prelude::FluentBuilder as _,
-};
-use std::{any::TypeId, collections::HashMap, rc::Rc};
 
 actions!(root, [Tab, TabPrev]);
 
@@ -584,8 +586,9 @@ impl Render for Root {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use gpui::TestAppContext;
+
+    use super::*;
 
     struct TestView;
 

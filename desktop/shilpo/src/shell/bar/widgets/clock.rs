@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use chrono::{
     DateTime, Local,
     format::{Item, StrftimeItems},
@@ -7,7 +9,6 @@ use gpui::{
     Styled, Window, div, px,
 };
 use shilpo_ui::{ActiveTheme, StyledExt};
-use std::sync::Arc;
 
 pub fn format_clock(now: &DateTime<Local>, fmt: Option<&str>) -> String {
     if let Some(formatted) = fmt
@@ -177,8 +178,9 @@ impl RenderOnce for DateWidget {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::NaiveDate;
+
+    use super::*;
 
     #[test]
     fn test_format_clock_and_date_defaults() {

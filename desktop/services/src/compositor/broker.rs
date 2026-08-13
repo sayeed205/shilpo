@@ -1,7 +1,3 @@
-use super::{
-    CompositorCommand, CompositorConnection, CompositorSnapshot, DomainVersion, MailboxPolicy,
-    RejectionReason, StaleUpdateError,
-};
 use std::{
     collections::VecDeque,
     fmt,
@@ -13,7 +9,13 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+
 use tokio::sync::oneshot;
+
+use super::{
+    CompositorCommand, CompositorConnection, CompositorSnapshot, DomainVersion, MailboxPolicy,
+    RejectionReason, StaleUpdateError,
+};
 
 /// Terminal outcome returned when a compositor command finishes.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

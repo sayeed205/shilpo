@@ -1,7 +1,8 @@
 use super::process::HostGeneration;
 use super::protocol::{
     ContributionDescriptor, ContributionInstance, ContributionSurface, ExtensionChanges,
-    ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, ReplaceableEvent,
+    ExtensionCommand, ExtensionGeneration, ExtensionRuntimeKind, ExtensionSnapshot,
+    ExtensionUpdate, ReplaceableEvent,
 };
 use crate::{
     CURRENT_SHILPO_VERSION, CatalogPaths, ExtensionCatalog, ExtensionHost, ExtensionRuntime,
@@ -285,6 +286,7 @@ pub struct ExtensionEngine<R = crate::WasmRuntime> {
     catalog_mtime: Option<std::time::SystemTime>,
     active_sources: BTreeMap<ExtensionId, ActiveSource>,
     session: ExtensionSession<R>,
+    script_runtime: crate::script::ScriptRuntime,
     generation: ExtensionGeneration,
     diagnostics: Vec<String>,
     replaceable_events: HashMap<std::mem::Discriminant<ReplaceableEvent>, ReplaceableEvent>,
@@ -318,12 +320,15 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                 })
             }));
 
+        let script_runtime = crate::script::ScriptRuntime::new(paths.clone());
+
         let mut engine = Self {
             paths,
             catalog,
             catalog_mtime,
             active_sources: BTreeMap::new(),
             session,
+            script_runtime,
             generation: ExtensionGeneration(0),
             diagnostics: Vec::new(),
             replaceable_events: HashMap::new(),
@@ -474,7 +479,10 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     invalidated_views: Vec::new(),
                 })
             }
-            ExtensionCommand::Shutdown => None,
+            ExtensionCommand::Shutdown => {
+                self.script_runtime.shutdown();
+                None
+            }
         };
         if result.is_some() {
             _span.record("outcome", "success");
@@ -628,6 +636,11 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
         }
 
         self.pending_reconcile = Some(preserved_instances);
+        let active_wasm_ids: Vec<ExtensionId> = self.active_sources.keys().cloned().collect();
+        if let Err(error) = self.script_runtime.reconcile(&active_wasm_ids) {
+            self.diagnostics
+                .push(format!("script runtime error: {error}"));
+        }
         Ok(())
     }
 
@@ -735,6 +748,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     extension_name: m.name.clone(),
                     name: contrib.name.clone(),
                     surface: ContributionSurface::Bar,
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
                     settings_schema: None,
                     default_size: None,
                     minimum_size: None,
@@ -749,6 +763,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     extension_name: m.name.clone(),
                     name: contrib.name.clone(),
                     surface: ContributionSurface::BarMenu,
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
                     settings_schema: None,
                     default_size: None,
                     minimum_size: None,
@@ -771,6 +786,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     extension_name: m.name.clone(),
                     name: contrib.name.clone(),
                     surface: ContributionSurface::Desktop,
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
                     settings_schema: None,
                     default_size,
                     minimum_size,
@@ -792,6 +808,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     extension_name: m.name.clone(),
                     name: contrib.name.clone(),
                     surface: ContributionSurface::Settings,
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
                     settings_schema: Some(contrib.schema.clone()),
                     default_size: None,
                     minimum_size: None,
@@ -806,6 +823,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     extension_name: m.name.clone(),
                     name: contrib.name.clone(),
                     surface: ContributionSurface::SidePanel,
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
                     settings_schema: None,
                     default_size: None,
                     minimum_size: None,
@@ -820,6 +838,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     extension_name: m.name.clone(),
                     name: contrib.name.clone(),
                     surface: ContributionSurface::Launcher,
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
                     settings_schema: None,
                     default_size: None,
                     minimum_size: None,
@@ -834,6 +853,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     extension_name: m.name.clone(),
                     name: contrib.name.clone(),
                     surface: ContributionSurface::Action,
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
                     settings_schema: None,
                     default_size: None,
                     minimum_size: None,
@@ -848,6 +868,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     extension_name: m.name.clone(),
                     name: contrib.name.clone(),
                     surface: ContributionSurface::Shortcut,
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
                     settings_schema: None,
                     default_size: None,
                     minimum_size: None,
@@ -862,6 +883,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     extension_name: m.name.clone(),
                     name: contrib.name.clone(),
                     surface: ContributionSurface::Background,
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
                     settings_schema: None,
                     default_size: None,
                     minimum_size: None,
@@ -872,13 +894,28 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
             }
         }
 
-        let views = self.session.views.clone().into_iter().collect();
+        for desc in self.script_runtime.descriptors() {
+            descriptors.push(desc);
+        }
+
+        let mut views: BTreeMap<CanonicalId, ViewTree> =
+            self.session.views.clone().into_iter().collect();
+        for (k, v) in self.script_runtime.views() {
+            views.insert(k, v);
+        }
+
+        for (id, root) in self.script_runtime.asset_roots() {
+            prevalidated_asset_roots.insert(id, root);
+        }
+
+        let mut all_diagnostics = self.diagnostics.clone();
+        all_diagnostics.extend(self.script_runtime.diagnostics());
 
         ExtensionSnapshot {
             generation: self.generation,
             descriptors: Arc::from(descriptors),
             views: Arc::new(views),
-            diagnostics: Arc::from(self.diagnostics.clone()),
+            diagnostics: Arc::from(all_diagnostics),
             catalog_changed_at: if catalog_changed {
                 Some(self.generation)
             } else {
@@ -1066,6 +1103,7 @@ mod tests {
             catalog_mtime: None,
             active_sources: BTreeMap::new(),
             session,
+            script_runtime: crate::script::ScriptRuntime::new(CatalogPaths::platform_default()),
             generation: ExtensionGeneration(1),
             diagnostics: Vec::new(),
             replaceable_events: HashMap::new(),

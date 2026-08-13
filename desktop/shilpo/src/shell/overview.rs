@@ -1,11 +1,5 @@
-use crate::app_icons::{app_icon, build_app_icon_index, resolve_app_icon_path};
-use crate::overview_search::{
-    OverviewSearch, SearchIntent, SearchMode, SearchResult, SearchResultIcon,
-};
-use crate::runtime::{ShellRuntime, ShellSurfaces};
-use crate::workspace_miniature::{
-    PREVIEW_HEIGHT, PREVIEW_WIDTH, WorkspaceMiniature, WorkspaceMiniatureModel,
-};
+use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc, time::Duration};
+
 use gpui::{
     Animation, AnimationExt as _, App, AppContext, Context, DragMoveEvent, ElementId, Entity,
     FocusHandle, Focusable, ImageSource, InteractiveElement, IntoElement, KeyDownEvent,
@@ -20,7 +14,15 @@ use shilpo_ui::{
     input::{Input, InputEvent, InputState, InputVariant},
     v_flex,
 };
-use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc, time::Duration};
+
+use crate::{
+    app_icons::{app_icon, build_app_icon_index, resolve_app_icon_path},
+    overview_search::{OverviewSearch, SearchIntent, SearchMode, SearchResult, SearchResultIcon},
+    runtime::{ShellRuntime, ShellSurfaces},
+    workspace_miniature::{
+        PREVIEW_HEIGHT, PREVIEW_WIDTH, WorkspaceMiniature, WorkspaceMiniatureModel,
+    },
+};
 
 // ── Animation constants ────────────────────────────────────────────────────
 const ENTER_DURATION: Duration = Duration::from_millis(250);
@@ -1569,8 +1571,9 @@ impl Focusable for WorkspaceOverview {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use shilpo_services::Application;
+
+    use super::*;
 
     #[test]
     fn test_workspace_overview_navigation() {

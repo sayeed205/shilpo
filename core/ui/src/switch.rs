@@ -1,13 +1,15 @@
-use crate::{
-    ActiveTheme, Disableable, Icon, IconName, Side, Sizable, Size, StyledExt,
-    animation::cubic_bezier, h_flex, text::Text, tooltip::ComponentTooltip,
-};
+use std::{rc::Rc, time::Duration};
+
 use gpui::{
     Animation, AnimationExt as _, App, ElementId, Hsla, InteractiveElement, IntoElement,
     ParentElement as _, RenderOnce, SharedString, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, px,
 };
-use std::{rc::Rc, time::Duration};
+
+use crate::{
+    ActiveTheme, Disableable, Icon, IconName, Side, Sizable, Size, StyledExt,
+    animation::cubic_bezier, h_flex, text::Text, tooltip::ComponentTooltip,
+};
 
 /// A Switch element that can be toggled on or off.
 #[derive(IntoElement)]
@@ -360,8 +362,9 @@ impl Switch {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::{Arc, Mutex};
+
+    use super::*;
 
     #[test]
     fn test_switch_builder() {

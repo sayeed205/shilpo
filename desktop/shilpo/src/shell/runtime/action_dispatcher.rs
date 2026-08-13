@@ -2,13 +2,12 @@ use gpui::App;
 use shilpo_ext_api::CanonicalId;
 use shilpo_services::{CompositorCommand, CompositorSnapshot, Notification};
 
+use super::{ShellRuntime, ShellSurfaces, shell_surfaces::SurfaceRequest};
 use crate::{
     actions::{ActionDescriptor, ActionId, ActionInvocation, ActionRegistry},
     error::ShellError,
     extensions::ContributionDescriptor,
 };
-
-use super::{ShellRuntime, ShellSurfaces, shell_surfaces::SurfaceRequest};
 
 /// Owns the shell action registry and the keybinding table, plus the logic that
 /// maps `ActionInvocation`s onto shell behavior and compositor commands.
@@ -596,6 +595,7 @@ mod tests {
             extension_name: "org.shilpo.test".into(),
             name: "second".into(),
             surface: crate::extensions::ContributionSurface::Action,
+            runtime_kind: shilpo_ext_runtime::worker::protocol::ExtensionRuntimeKind::Wasm,
             settings_schema: None,
             default_size: None,
             minimum_size: None,

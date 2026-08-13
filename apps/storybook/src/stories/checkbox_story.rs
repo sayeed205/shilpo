@@ -2,7 +2,6 @@ use gpui::{
     App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled,
     Window, div, px,
 };
-
 use shilpo_ui::{
     ActiveTheme, Disableable as _, Sizable, checkbox::Checkbox, h_flex, text::markdown, v_flex,
 };

@@ -1,8 +1,7 @@
 use gpui::{App, SharedString, Task, Window};
 
-use crate::IndexPath;
-
 use super::delegate::{SearchableListDelegate, SearchableListItem};
+use crate::IndexPath;
 
 // MARK: Primitive impls
 

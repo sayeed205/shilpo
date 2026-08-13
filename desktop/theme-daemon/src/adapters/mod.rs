@@ -1,7 +1,7 @@
+use std::{env, process::Command};
+
 use anyhow::{Result, bail};
 use shilpo_ui::theme::ThemeMode;
-use std::env;
-use std::process::Command;
 use tracing::info;
 
 pub trait DesktopAdapter: Send + Sync + std::fmt::Debug {

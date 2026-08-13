@@ -1,6 +1,8 @@
-use crate::config::source::SourceLocation;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+use crate::config::source::SourceLocation;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigProvenance {

@@ -1,8 +1,9 @@
-use crate::v_flex;
 use gpui::{
     AnyElement, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     StyleRefinement, Styled,
 };
+
+use crate::v_flex;
 
 /// A header slot for [`NavigationRail`](super::NavigationRail) holding a FAB, logo, or menu button.
 #[derive(IntoElement)]

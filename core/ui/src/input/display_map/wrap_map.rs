@@ -9,9 +9,11 @@ use std::ops::Range;
 use gpui::{App, Font, Pixels};
 use ropey::Rope;
 
-use super::fold_map::FoldMap;
-use super::text_wrapper::{LineItem, TextWrapper, WrapDisplayPoint};
-use super::{BufferPoint, WrapPoint};
+use super::{
+    BufferPoint, WrapPoint,
+    fold_map::FoldMap,
+    text_wrapper::{LineItem, TextWrapper, WrapDisplayPoint},
+};
 use crate::input::rope_ext::RopeExt;
 
 /// WrapMap manages soft-wrapping and provides buffer ↔ wrap coordinate mapping.

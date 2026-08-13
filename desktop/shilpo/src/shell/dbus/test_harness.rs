@@ -1,14 +1,19 @@
 //! Reusable headless P2P D-Bus test harness for org.shilpo.Shell and org.shilpo.Debug interfaces.
 
+use std::{
+    future::Future,
+    os::unix::net::UnixStream,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+use shilpo_observability::LogFilterController;
+use tokio::sync::mpsc;
+
 use super::{
     DebugDbusService, DebugProxy, ShellCommand, ShellDbusService, ShellProxy, ShellStatus,
     ShellTelemetry,
 };
-use shilpo_observability::LogFilterController;
-use std::os::unix::net::UnixStream;
-use std::sync::{Arc, Mutex};
-use std::{future::Future, time::Duration};
-use tokio::sync::mpsc;
 
 pub const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 

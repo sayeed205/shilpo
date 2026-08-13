@@ -1,8 +1,5 @@
 use std::rc::Rc;
 
-use crate::{
-    ActiveTheme, Icon, IconName, InteractiveElementExt as _, Sizable as _, StyledExt, h_flex,
-};
 use gpui::{
     AnyElement, App, ClickEvent, Context, Decorations, Hsla, InteractiveElement, IntoElement,
     MouseButton, ParentElement, Pixels, Render, RenderOnce, StatefulInteractiveElement as _,
@@ -10,6 +7,10 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use smallvec::SmallVec;
+
+use crate::{
+    ActiveTheme, Icon, IconName, InteractiveElementExt as _, Sizable as _, StyledExt, h_flex,
+};
 
 pub const TITLE_BAR_HEIGHT: Pixels = px(48.);
 #[cfg(target_os = "macos")]

@@ -67,8 +67,9 @@ impl TextSelector {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ropey::Rope;
+
+    use super::*;
 
     #[test]
     fn test_word_range() {

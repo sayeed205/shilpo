@@ -1,10 +1,14 @@
 //! DBus client utilities for interacting with NetworkManager services.
 
-use super::{IpConfig, NetworkDevice, VpnConnection, WifiAccessPoint};
-use anyhow::{Context, Result};
 use std::collections::HashMap;
-use zbus::Connection;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
+
+use anyhow::{Context, Result};
+use zbus::{
+    Connection,
+    zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value},
+};
+
+use super::{IpConfig, NetworkDevice, VpnConnection, WifiAccessPoint};
 
 const NM_BUS_NAME: &str = "org.freedesktop.NetworkManager";
 const NM_OBJECT_PATH: &str = "/org/freedesktop/NetworkManager";

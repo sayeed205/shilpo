@@ -7,7 +7,7 @@ Packaging and process topology are intentionally different decisions.
 
 - `shilpo daemon` owns GPUI shell surfaces, shell coordination, and `org.shilpo.Shell`.
 - `shilpo settings` is a separate GPUI process.
-- `shilpo extension-host` is a private child of the shell and is the only process that constructs Wasmtime.
+- `shilpo extension-host` is a private child of the shell that constructs Wasmtime components and supervises trusted local script child process groups.
 - `shilpo device-daemon` owns `org.shilpo.Device`.
 - `shilpo theme-daemon` owns `org.shilpo.Theme`.
 - Other `shilpo` commands are short-lived clients.

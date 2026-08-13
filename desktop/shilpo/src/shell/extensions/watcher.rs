@@ -1,6 +1,7 @@
+use std::{path::PathBuf, sync::mpsc};
+
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use shilpo_ext_runtime::ExtensionCommand;
-use std::{path::PathBuf, sync::mpsc};
 
 pub struct ExtensionWatcher {
     _watcher: RecommendedWatcher,

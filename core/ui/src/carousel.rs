@@ -1,9 +1,10 @@
+use std::rc::Rc;
+
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement,
     RenderOnce, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, px,
 };
-use std::rc::Rc;
 
 use crate::{ActiveTheme, Icon, IconName, h_flex};
 

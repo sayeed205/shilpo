@@ -1,10 +1,12 @@
-use super::ipc::IpcAdapter;
+use std::path::{Path, PathBuf};
+
 use shilpo_ext_api::ExtensionId;
 use shilpo_ext_runtime::{
     ExtensionCatalog, ExtensionCli, ExtensionCliResult, ReleaseChannel, UpdateState,
     default_extension_state_dir, sign_package,
 };
-use std::path::{Path, PathBuf};
+
+use super::ipc::IpcAdapter;
 
 pub struct ExtAdapter {
     ipc: IpcAdapter,
@@ -229,23 +231,83 @@ impl ExtAdapter {
         let dev_regs = shilpo_ext_runtime::development_registrations(&self.state_dir).0;
         let installed = self.catalog.installed().unwrap_or_default();
         let installed_count = installed.len();
+        let catalog_paths = shilpo_ext_runtime::CatalogPaths::platform_default();
+        let script_bundles = shilpo_ext_runtime::script::discover_script_bundles(&catalog_paths);
+        let script_items: Vec<serde_json::Value> = script_bundles
+            .iter()
+            .map(|b| {
+                serde_json::json!({
+                    "id": b.id,
+                    "name": b.name,
+                    "version": b.version,
+                    "path": b.path,
+                    "mode": b.mode,
+                    "runtime_kind": "trusted_local_script",
+                    "trusted": true,
+                    "sandboxed": false,
+                    "label": "Trusted local script (not sandboxed)",
+                    "contributions_count": b.contributions_count,
+                    "diagnostics": b.diagnostics,
+                })
+            })
+            .collect();
+
+        let mut human_lines = Vec::new();
+        human_lines.push(format!("Development extensions: {}", dev_regs.len()));
+        human_lines.push(format!(
+            "Installed extensions: {}",
+            if dev_only { 0 } else { installed_count }
+        ));
+        if !installed.is_empty() && !dev_only {
+            for ext in &installed {
+                human_lines.push(format!(
+                    "  {} (v{}) [wasm, installed] - {} contributions",
+                    ext.receipt.id,
+                    ext.receipt.active.version,
+                    ext.manifest.contributions.bar_widgets.len()
+                        + ext.manifest.contributions.desktop_widgets.len()
+                ));
+            }
+        }
+        human_lines.push(format!(
+            "Trusted local script extensions: {}",
+            script_bundles.len()
+        ));
+        for b in &script_bundles {
+            human_lines.push(format!(
+                "  {} (v{}) [script, local] - {} contributions (Trusted local script (not sandboxed))",
+                b.id, b.version, b.contributions_count
+            ));
+        }
+
         ExtOpResult {
             success: true,
             data: serde_json::json!({
                 "development": dev_regs,
                 "installed": if dev_only { Vec::new() } else { installed },
+                "scripts": script_items,
             }),
-            human_message: format!(
-                "Development extensions: {}\nInstalled extensions: {}",
-                dev_regs.len(),
-                if dev_only { 0 } else { installed_count }
-            ),
+            human_message: human_lines.join("\n"),
             warnings: Vec::new(),
             exit_code: 0,
         }
     }
 
     pub fn install(&self, target: &str, hash: Option<&str>) -> ExtOpResult {
+        let catalog_paths = shilpo_ext_runtime::CatalogPaths::platform_default();
+        let script_bundles = shilpo_ext_runtime::script::discover_script_bundles(&catalog_paths);
+        if script_bundles.iter().any(|b| b.id.as_str() == target) {
+            return ExtOpResult {
+                success: false,
+                data: serde_json::Value::Null,
+                human_message: format!(
+                    "script extension '{target}' is a trusted local script in $XDG_CONFIG_HOME/shilpo/scripts and is not managed via catalog install"
+                ),
+                warnings: Vec::new(),
+                exit_code: 1,
+            };
+        }
+
         let cli_res = if target.starts_with("https://") {
             match self.catalog.install_url(target, hash) {
                 Ok(receipt) => ExtensionCliResult {

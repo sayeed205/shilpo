@@ -7,12 +7,13 @@ use shilpo_services::{
     NetworkAction,
 };
 use shilpo_theme_daemon::ThemeClient;
-use shilpo_ui::scroll::ScrollableElement;
-use shilpo_ui::theme::{SchemeVariant, ThemeMode};
 use shilpo_ui::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt,
     button::{Button, ButtonGroup, ButtonGroupMode, ButtonVariants},
-    h_flex, v_flex,
+    h_flex,
+    scroll::ScrollableElement,
+    theme::{SchemeVariant, ThemeMode},
+    v_flex,
 };
 
 /// Material 3 scheme variant labels.

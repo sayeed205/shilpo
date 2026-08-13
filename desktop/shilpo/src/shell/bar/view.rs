@@ -1,9 +1,8 @@
-use crate::bar::service_worker::{self, ConfigUpdate, WorkerCommand, WorkerUpdate};
-use crate::bar::widgets::clock::{format_clock, format_date};
-use crate::battery::BatteryIndicator;
-use crate::config::{BarPosition, BarWidget, ShellConfig};
-use crate::osd::OsdKind;
-use crate::runtime::{ShellRuntime, ShellSurfaces, SurfaceRequest};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Path, PathBuilder, Pixels, Point,
     Render, Styled, Window, div, prelude::*, px,
@@ -11,15 +10,22 @@ use gpui::{
 use shilpo_services::{
     AudioInfo, BatteryInfo, BluetoothInfo, MediaInfo, NetworkInfo, Notification,
 };
-use shilpo_ui::ElementExt;
-use shilpo_ui::{ActiveTheme, h_flex, v_flex};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use shilpo_ui::{ActiveTheme, ElementExt, h_flex, v_flex};
 
 use super::geometry::HUG_CORNER_RADIUS;
-use crate::bar::cards::{
-    adapter::CardCoordinator,
-    model::{CardRequest, CardSourceId, CardSourceState},
+use crate::{
+    bar::{
+        cards::{
+            adapter::CardCoordinator,
+            model::{CardRequest, CardSourceId, CardSourceState},
+        },
+        service_worker::{self, ConfigUpdate, WorkerCommand, WorkerUpdate},
+        widgets::clock::{format_clock, format_date},
+    },
+    battery::BatteryIndicator,
+    config::{BarPosition, BarWidget, ShellConfig},
+    osd::OsdKind,
+    runtime::{ShellRuntime, ShellSurfaces, SurfaceRequest},
 };
 
 fn build_hug_corner(
@@ -942,8 +948,9 @@ mod notification_tests {
 
 #[cfg(test)]
 mod hug_corner_tests {
-    use super::*;
     use gpui::point;
+
+    use super::*;
 
     #[test]
     fn fills_the_complete_quarter_circle_bounds() {
@@ -966,8 +973,9 @@ mod hug_corner_tests {
 
 #[cfg(test)]
 mod bar_input_region_tests {
-    use crate::bar::view::compute_bar_input_region;
     use gpui::{Bounds, point, px, size};
+
+    use crate::bar::view::compute_bar_input_region;
 
     #[test]
     fn calculates_union_of_child_bounds_for_input_region() {

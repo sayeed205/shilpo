@@ -3,7 +3,6 @@ use gpui::{
     Render, StatefulInteractiveElement as _, Styled, Window, actions, div,
     prelude::FluentBuilder as _,
 };
-
 use shilpo_ui::{
     IconName,
     button::{Button, ButtonVariant, ButtonVariants},

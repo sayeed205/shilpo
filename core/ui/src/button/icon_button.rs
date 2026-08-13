@@ -1,9 +1,5 @@
 use std::rc::Rc;
 
-use crate::{
-    ActiveTheme, Disableable, Selectable, Sizable, Size, StyledExt, button::ButtonIcon,
-    progress::ProgressCircle,
-};
 use gpui::{
     App, ClickEvent, CursorStyle, Div, ElementId, InteractiveElement, Interactivity, IntoElement,
     ParentElement, RenderOnce, Role, Stateful, StatefulInteractiveElement as _, StyleRefinement,
@@ -11,6 +7,10 @@ use gpui::{
 };
 
 use super::{button_shared_tokens, icon_button_tokens, shared};
+use crate::{
+    ActiveTheme, Disableable, Selectable, Sizable, Size, StyledExt, button::ButtonIcon,
+    progress::ProgressCircle,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum IconButtonVariant {
@@ -405,12 +405,13 @@ impl RenderOnce for IconButton {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::IconName;
     use gpui::{
         AppContext, Context, Entity, IntoElement, Render, TestAppContext, VisualTestContext,
         Window, div, px,
     };
+
+    use super::*;
+    use crate::IconName;
 
     struct ClickState {
         count: usize,

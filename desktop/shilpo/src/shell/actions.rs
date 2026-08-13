@@ -1,6 +1,7 @@
+use std::{borrow::Cow, collections::BTreeMap, fmt, str::FromStr};
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use shilpo_ext_api::{CanonicalId, IdError};
-use std::{borrow::Cow, collections::BTreeMap, fmt, str::FromStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BuiltinActionId {
@@ -1060,6 +1061,7 @@ mod tests {
             extension_name: "Example".into(),
             name: "Open panel".into(),
             surface: shilpo_ext_runtime::worker::protocol::ContributionSurface::Shortcut,
+            runtime_kind: shilpo_ext_runtime::worker::protocol::ExtensionRuntimeKind::Wasm,
             settings_schema: None,
             default_size: None,
             minimum_size: None,

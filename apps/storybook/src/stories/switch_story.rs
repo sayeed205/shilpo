@@ -2,7 +2,6 @@ use gpui::{
     App, AppContext, Context, Div, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
     Render, SharedString, Styled, Window, px,
 };
-
 use shilpo_ui::{
     ActiveTheme, Disableable as _, IconName, Sizable, h_flex, label::Label, switch::Switch, v_flex,
 };

@@ -1,4 +1,3 @@
-use crate::runtime::ShellRuntime;
 use gpui::{
     AnyElement, App, AvailableSpace, IntoElement, ParentElement, Pixels, Size, Styled, Window,
     deferred, div, px,
@@ -9,6 +8,7 @@ use super::{
     model::{CardCapabilities, CardChannel, CardOwnerId, CardSourceId},
     provider::CardProvider,
 };
+use crate::runtime::ShellRuntime;
 
 pub(crate) struct ExtensionMenuCardProvider {
     pub owner_id: CardOwnerId,
@@ -174,11 +174,12 @@ impl CardProvider for ExtensionMenuCardProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::shell::bar::ext_view_adapter::render_ext_view_tree;
     use gpui::{Context, Render, TestAppContext};
     use shilpo_ext_api::*;
     use shilpo_ui::ActiveTheme;
+
+    use super::*;
+    use crate::shell::bar::ext_view_adapter::render_ext_view_tree;
 
     struct MeasuredMenu {
         tree: ViewTree,

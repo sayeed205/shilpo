@@ -4,7 +4,6 @@
 //! configuration sources (`config.toml`, `overrides.toml`, and immediate `conf.d/*.toml` fragments)
 //! with trailing-edge debouncing at 100 ms.
 
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::{
     fmt,
     path::{Path, PathBuf},
@@ -15,6 +14,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
+use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 /// Logical path classification for filesystem events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,8 +307,9 @@ impl ConfigWatcher {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn path_classification_rules() {

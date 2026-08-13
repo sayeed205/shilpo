@@ -256,8 +256,9 @@ impl RenderOnce for Kbd {
 mod tests {
     #[test]
     fn test_format() {
-        use super::Kbd;
         use gpui::Keystroke;
+
+        use super::Kbd;
 
         if cfg!(target_os = "macos") {
             assert_eq!(Kbd::format(&Keystroke::parse("cmd-a").unwrap()), "⌘A");

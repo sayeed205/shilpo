@@ -29,8 +29,7 @@ use shilpo_ui::{
     tree::{TreeItem, TreeState, tree},
     v_flex,
 };
-use storybook::Assets;
-use storybook::Open;
+use storybook::{Assets, Open};
 
 enum Lang {
     BuiltIn(Language),

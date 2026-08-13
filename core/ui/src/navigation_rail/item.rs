@@ -1,13 +1,15 @@
-use crate::{
-    ActiveTheme, Disableable, Icon, Selectable, StyledExt, h_flex, icon::IconNamed,
-    tooltip::Tooltip, v_flex,
-};
+use std::rc::Rc;
+
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, ParentElement,
     RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
     hsla, px,
 };
-use std::rc::Rc;
+
+use crate::{
+    ActiveTheme, Disableable, Icon, Selectable, StyledExt, h_flex, icon::IconNamed,
+    tooltip::Tooltip, v_flex,
+};
 
 /// An individual destination item within a [`NavigationRail`](super::NavigationRail).
 #[derive(IntoElement)]

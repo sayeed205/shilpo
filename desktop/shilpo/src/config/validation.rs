@@ -1,9 +1,10 @@
+use serde::{Deserialize, Serialize};
+
 use crate::config::{
     provenance::ConfigProvenance,
     source::SourceLocation,
     types::{ConfigDiagnostic, ShellConfig},
 };
-use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RecoveryScope {

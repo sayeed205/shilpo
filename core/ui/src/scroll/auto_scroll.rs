@@ -1,5 +1,7 @@
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use gpui::{AsyncApp, Bounds, Context, Pixels, Point, Task, WeakEntity, px};
 

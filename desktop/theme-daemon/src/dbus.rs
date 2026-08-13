@@ -1,9 +1,10 @@
-use crate::daemon::DaemonState;
-use crate::executors::ProjectionStatus;
-use shilpo_ui::theme::{ColorSource, SchemeVariant, ThemeMode};
 use std::sync::{Arc, Mutex};
+
+use shilpo_ui::theme::{ColorSource, SchemeVariant, ThemeMode};
 use tokio::sync::mpsc;
 use zbus::object_server::SignalEmitter;
+
+use crate::{daemon::DaemonState, executors::ProjectionStatus};
 
 pub enum ActorMessage {
     GetState(tokio::sync::oneshot::Sender<Result<DaemonState, String>>),

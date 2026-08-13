@@ -9,14 +9,14 @@ use std::ops::Range;
 use gpui::{App, Font, Pixels};
 use ropey::Rope;
 
-use super::fold_map::FoldMap;
-use super::folding::FoldRange;
-use super::text_wrapper::{LineItem, WrapDisplayPoint};
-use super::wrap_map::WrapMap;
-use super::{BufferPoint, DisplayPoint};
-use crate::input::Point as TreeSitterPoint;
-use crate::input::display_map::WrapPoint;
-use crate::input::rope_ext::RopeExt as _;
+use super::{
+    BufferPoint, DisplayPoint,
+    fold_map::FoldMap,
+    folding::FoldRange,
+    text_wrapper::{LineItem, WrapDisplayPoint},
+    wrap_map::WrapMap,
+};
+use crate::input::{Point as TreeSitterPoint, display_map::WrapPoint, rope_ext::RopeExt as _};
 
 /// DisplayMap is the main interface for Editor/Input coordinate mapping.
 ///

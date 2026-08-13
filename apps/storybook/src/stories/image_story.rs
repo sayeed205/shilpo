@@ -1,9 +1,10 @@
-use crate::section;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement as _,
     Render, Styled, Window, img,
 };
 use shilpo_ui::{dock::PanelControl, v_flex};
+
+use crate::section;
 
 pub struct ImageStory {
     focus_handle: gpui::FocusHandle,

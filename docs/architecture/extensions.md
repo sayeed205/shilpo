@@ -463,14 +463,23 @@ Initial capabilities:
 | `notifications:show`                 | Extension-attributed notifications           |
 | `clipboard:read` / `clipboard:write` | Separate grants                              |
 | `network:http`                       | Explicit host and path patterns              |
-| `process:exec`                       | Explicit executable and argument patterns    |
 | `filesystem:read`                    | Extension assets/data or user-selected roots |
 | `filesystem:write`                   | Extension data or user-selected roots        |
 | `actions:invoke`                     | Explicit shell action IDs                    |
 
-There is no ambient WASI filesystem, environment, network, or process access. Capability changes on update require
+There is no ambient WASI filesystem, environment, network, or process access. WASM guests cannot execute child processes or invoke scripts. Capability changes on update require
 renewed approval. Grants are persisted separately from the package so replacing package files cannot grant new
 authority.
+
+### Trusted Local Scripts
+
+Shilpo also supports **trusted local scripts** for read-only status bar widgets.
+
+- **Discovery**: `$XDG_CONFIG_HOME/shilpo/scripts/<bundle>/manifest.toml` (immediate child directories only).
+- **Trust Boundary**: Scripts are local-only programs running with the user's OS authority. WASM guests cannot invoke, configure, or influence scripts.
+- **Execution Boundary**: Supervised strictly inside the private `shilpo extension-host` worker process—never in the Shell/GPUI process.
+- **Surface**: Read-only bar widgets in v1. Interactive nodes and event handlers are rejected.
+- **Process Supervision**: Child process groups are spawned with `setpgid` and cleanly terminated (`SIGKILL`) and reaped (`wait`) on timeout, reload, removal, or host shutdown. Stderr is captured up to 64 KiB.
 
 ## Lifecycle and failure policy
 

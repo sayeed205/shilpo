@@ -2,8 +2,6 @@ use gpui::{
     App, AppContext as _, ClickEvent, Context, Entity, Focusable, InteractiveElement, IntoElement,
     ParentElement as _, Render, Styled, Subscription, Window, div, px,
 };
-
-use crate::section;
 use shilpo_ui::{
     ActiveTheme as _, Sizable,
     button::Button,
@@ -11,6 +9,8 @@ use shilpo_ui::{
     input::{Input, InputEvent, InputState},
     v_flex,
 };
+
+use crate::section;
 
 pub fn init(_: &mut App) {}
 

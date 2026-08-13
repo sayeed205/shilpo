@@ -6,6 +6,17 @@ use gpui::{
 };
 use rust_i18n::t;
 
+// MARK: Public re-exports for back-compat
+/// Re-exported for backward compatibility. New code should prefer [`SearchableGroup`].
+pub use crate::searchable_list::SearchableGroup as SelectGroup;
+/// Re-exported for backward compatibility. New code should prefer [`SearchableListDelegate`].
+pub use crate::searchable_list::SearchableListDelegate as SelectDelegate;
+/// Re-exported for backward compatibility. New code should prefer [`SearchableListItem`].
+pub use crate::searchable_list::SearchableListItem as SelectItem;
+/// Re-exported for backward compatibility. New code should prefer [`SearchableListItemElement`].
+pub use crate::searchable_list::SearchableListItemElement as SelectListItem;
+/// Re-exported for backward compatibility.
+pub use crate::searchable_list::SearchableVec;
 use crate::{
     ActiveTheme, Disableable, ElementExt as _, Icon, IconName, IndexPath, Sizable, Size,
     StyleSized, StyledExt,
@@ -19,19 +30,6 @@ use crate::{
     },
     v_flex,
 };
-
-// MARK: Public re-exports for back-compat
-
-/// Re-exported for backward compatibility. New code should prefer [`SearchableGroup`].
-pub use crate::searchable_list::SearchableGroup as SelectGroup;
-/// Re-exported for backward compatibility. New code should prefer [`SearchableListDelegate`].
-pub use crate::searchable_list::SearchableListDelegate as SelectDelegate;
-/// Re-exported for backward compatibility. New code should prefer [`SearchableListItem`].
-pub use crate::searchable_list::SearchableListItem as SelectItem;
-/// Re-exported for backward compatibility. New code should prefer [`SearchableListItemElement`].
-pub use crate::searchable_list::SearchableListItemElement as SelectListItem;
-/// Re-exported for backward compatibility.
-pub use crate::searchable_list::SearchableVec;
 
 const CONTEXT: &str = "Select";
 

@@ -1,9 +1,10 @@
+use std::rc::Rc;
+
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement,
     RenderOnce, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window,
     div, prelude::FluentBuilder as _,
 };
-use std::rc::Rc;
 
 use crate::{ActiveTheme, Colorize, Disableable, StyledExt, v_flex};
 

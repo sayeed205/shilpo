@@ -23,7 +23,6 @@
 //! - [`adapter::CardCoordinator::dispatch`] — route semantic `CardRequest` events
 //! - [`adapter::CardCoordinator::source_state`] — widget rendering state token
 //! - [`adapter::CardCoordinator::holds_bar_visibility`] — infrastructure hold signal
-//!
 pub(crate) mod adapter;
 pub(crate) mod band;
 pub(crate) mod battery_card;

@@ -4,25 +4,36 @@ use std::{ffi::c_void, sync::Arc};
 
 use gpui::{Action, App, AssetSource, ImageFormat, Pixels, Point, SharedString, Window};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::{BOOL, GlobalFree, HANDLE, HWND, LPARAM, POINT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, ClientToScreen, CreateDIBSection, DIB_RGB_COLORS,
-    DeleteObject, HBITMAP, HDC, HGDIOBJ,
+use windows::{
+    Win32::{
+        Foundation::{BOOL, GlobalFree, HANDLE, HWND, LPARAM, POINT, WPARAM},
+        Graphics::{
+            Gdi::{
+                BI_RGB, BITMAPINFO, BITMAPINFOHEADER, ClientToScreen, CreateDIBSection,
+                DIB_RGB_COLORS, DeleteObject, HBITMAP, HDC, HGDIOBJ,
+            },
+            GdiPlus::{
+                GdipCreateBitmapFromStream, GdipCreateHBITMAPFromBitmap, GdipDisposeImage,
+                GdipGetImageThumbnail, GdiplusShutdown, GdiplusStartup, GdiplusStartupInput,
+                GpBitmap, GpImage,
+            },
+        },
+        System::{
+            Com::StructuredStorage::CreateStreamOnHGlobal,
+            Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
+        },
+        UI::{
+            Input::KeyboardAndMouse::SetCapture,
+            WindowsAndMessaging::{
+                AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MENUITEMINFOW, MF_CHECKED,
+                MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MIIM_BITMAP, PostMessageW,
+                SetForegroundWindow, SetMenuItemInfoW, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
+                TPM_TOPALIGN, TrackPopupMenuEx, WM_NULL,
+            },
+        },
+    },
+    core::PCWSTR,
 };
-use windows::Win32::Graphics::GdiPlus::{
-    GdipCreateBitmapFromStream, GdipCreateHBITMAPFromBitmap, GdipDisposeImage,
-    GdipGetImageThumbnail, GdiplusShutdown, GdiplusStartup, GdiplusStartupInput, GpBitmap, GpImage,
-};
-use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
-use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
-use windows::Win32::UI::Input::KeyboardAndMouse::SetCapture;
-use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MENUITEMINFOW, MF_CHECKED, MF_GRAYED,
-    MF_POPUP, MF_SEPARATOR, MF_STRING, MIIM_BITMAP, PostMessageW, SetForegroundWindow,
-    SetMenuItemInfoW, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN, TrackPopupMenuEx,
-    WM_NULL,
-};
-use windows::core::PCWSTR;
 
 use super::{NativeMenuItem, resolve_icon_image};
 

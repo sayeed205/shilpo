@@ -1,5 +1,6 @@
-use crate::{Icon, Sizable, Size, progress::ProgressCircle};
 use gpui::{App, IntoElement, RenderOnce, Window};
+
+use crate::{Icon, Sizable, Size, progress::ProgressCircle};
 
 /// Button icon which can be an Icon or Progress use for `icon` method of Button.
 #[doc(hidden)]

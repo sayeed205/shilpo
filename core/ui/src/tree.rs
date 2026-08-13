@@ -627,13 +627,12 @@ impl RenderOnce for Tree {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
+    use gpui::{AppContext as _, Render, Subscription};
     use indoc::indoc;
 
     use super::{TreeEvent, TreeState};
-    use gpui::{AppContext as _, Render, Subscription};
 
     struct TestCollector {
         _state: gpui::Entity<TreeState>,

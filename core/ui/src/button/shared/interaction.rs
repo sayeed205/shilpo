@@ -21,8 +21,9 @@ pub(crate) fn cursor(disabled: bool, loading: bool, explicit: Option<CursorStyle
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use gpui::hsla;
+
+    use super::*;
 
     #[test]
     fn disabled_cursor_wins_over_explicit_cursor() {

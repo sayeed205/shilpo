@@ -1,15 +1,18 @@
-use crate::adapters::DesktopAdapter;
-use crate::daemon::DaemonState;
-use crate::persistence::write_state_snapshot_to;
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+
 use serde::{Deserialize, Serialize};
 use shilpo_ui::theme::ThemeMode;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
+
+use crate::{adapters::DesktopAdapter, daemon::DaemonState, persistence::write_state_snapshot_to};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "status", content = "error")]
@@ -340,9 +343,11 @@ impl AdapterExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use anyhow::bail;
     use std::sync::atomic::AtomicUsize;
+
+    use anyhow::bail;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_persistence_coalescing_and_durability() {

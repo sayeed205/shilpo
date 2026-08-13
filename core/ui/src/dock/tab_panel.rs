@@ -8,6 +8,10 @@ use gpui::{
 };
 use rust_i18n::t;
 
+use super::{
+    ClosePanel, DockArea, DockPlacement, Panel, PanelControl, PanelEvent, PanelState, PanelStyle,
+    PanelView, StackPanel, ToggleZoom,
+};
 use crate::{
     ActiveTheme, AxisExt, IconName, Placement, Selectable, Sizable,
     button::{Button, ButtonVariants as _},
@@ -16,11 +20,6 @@ use crate::{
     menu::{DropdownMenu, PopupMenu},
     tab::{Tab, TabBar},
     v_flex,
-};
-
-use super::{
-    ClosePanel, DockArea, DockPlacement, Panel, PanelControl, PanelEvent, PanelState, PanelStyle,
-    PanelView, StackPanel, ToggleZoom,
 };
 
 #[derive(Clone)]

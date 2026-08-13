@@ -1,5 +1,7 @@
 //! D-Bus command drain loop and status publishing for ShellRuntime.
 
+use gpui::App;
+
 use super::{ShellRuntime, ShellSurfaces};
 use crate::{
     actions::ActionInvocation,
@@ -7,7 +9,6 @@ use crate::{
     error::ShellError,
     shell::dbus::{ShellCommand, ShellStatus, ShellTelemetry},
 };
-use gpui::App;
 
 impl ShellRuntime {
     pub fn save_audio_preference(cx: &App, device: Option<String>, port: Option<String>) {

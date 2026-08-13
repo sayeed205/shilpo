@@ -2,22 +2,19 @@
 //!
 //! Based on the `Input` example from the `gpui` crate.
 //! https://github.com/zed-industries/zed/blob/main/crates/gpui/examples/input.rs
+use std::{borrow::Cow, cell::Cell, ops::Range, rc::Rc};
+
 use anyhow::Result;
 use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Edges, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
+    EventEmitter, FocusHandle, Focusable, Half, InteractiveElement as _, IntoElement, KeyBinding,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
     Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, ShapedLine, SharedString, Styled as _,
-    Subscription, Task, UTF16Selection, Window, actions, div, point, prelude::FluentBuilder as _,
-    px,
+    Subscription, Task, TextAlign, UTF16Selection, Window, actions, div, point,
+    prelude::FluentBuilder as _, px,
 };
-use gpui::{Half, TextAlign};
 use ropey::{Rope, RopeSlice};
 use serde::Deserialize;
-use std::borrow::Cow;
-use std::cell::Cell;
-use std::ops::Range;
-use std::rc::Rc;
 use sum_tree::Bias;
 use unicode_segmentation::*;
 
@@ -31,23 +28,25 @@ use super::{
     number_input,
     number_input::{NumberStep, StepAction},
 };
-use crate::Size;
-use crate::actions::{SelectDown, SelectLeft, SelectRight, SelectUp};
-use crate::highlighter::DiagnosticSet;
 #[cfg(feature = "tree-sitter")]
 use crate::highlighter::LanguageRegistry;
-use crate::input::blink_cursor::CURSOR_WIDTH;
-use crate::input::movement::MoveDirection;
-use crate::input::{
-    HoverDefinition, InlineCompletion, Lsp, Position, RopeExt as _, Selection,
-    display_map::LineLayout,
-    element::RIGHT_MARGIN,
-    popovers::{ContextMenu, DiagnosticPopover, HoverPopover},
-    search::SearchPanel,
+use crate::{
+    Root, Size,
+    actions::{SelectDown, SelectLeft, SelectRight, SelectUp},
+    highlighter::DiagnosticSet,
+    history::History,
+    input::{
+        HoverDefinition, InlineCompletion, Lsp, Position, RopeExt as _, Selection,
+        blink_cursor::CURSOR_WIDTH,
+        display_map::LineLayout,
+        element::RIGHT_MARGIN,
+        movement::MoveDirection,
+        popovers::{ContextMenu, DiagnosticPopover, HoverPopover},
+        search::SearchPanel,
+    },
+    native_menu::NativeMenu,
+    scroll::AutoScroll,
 };
-use crate::native_menu::NativeMenu;
-use crate::scroll::AutoScroll;
-use crate::{Root, history::History};
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = input, no_json)]
@@ -2689,9 +2688,13 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::time::Duration;
+        use std::{
+            sync::{
+                Arc,
+                atomic::{AtomicBool, Ordering},
+            },
+            time::Duration,
+        };
 
         const PARSE_DEBOUNCE: Duration = Duration::from_millis(150);
 
@@ -3162,9 +3165,10 @@ impl Render for InputState {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{TestAppContext, VisualTestContext};
+
     use super::*;
     use crate::theme::Theme;
-    use gpui::{TestAppContext, VisualTestContext};
 
     struct InputView {
         input: Entity<InputState>,
@@ -3206,8 +3210,7 @@ mod tests {
 
     #[gpui::test]
     fn test_highlighting_preserved_after_fold(cx: &mut TestAppContext) {
-        use crate::highlighter::HighlightTheme;
-        use crate::input::display_map::FoldRange;
+        use crate::{highlighter::HighlightTheme, input::display_map::FoldRange};
 
         let input_view = InputView::new(cx);
         let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);

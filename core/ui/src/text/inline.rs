@@ -1,4 +1,3 @@
-use gpui::Corners;
 use std::{
     ops::Range,
     rc::Rc,
@@ -6,15 +5,17 @@ use std::{
 };
 
 use gpui::{
-    App, BorderStyle, Bounds, CursorStyle, Edges, Element, ElementId, GlobalElementId, Half,
-    HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, StyledText,
-    TextLayout, Window, point, px, quad,
+    App, BorderStyle, Bounds, Corners, CursorStyle, Edges, Element, ElementId, GlobalElementId,
+    Half, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString,
+    StyledText, TextLayout, Window, point, px, quad,
 };
 
 use crate::{
-    ActiveTheme, WindowExt as _, global_state::GlobalState, input::Selection,
-    text::TextViewMultiClickKind, text::node::LinkMark, text::selection::word_range_at,
+    ActiveTheme, WindowExt as _,
+    global_state::GlobalState,
+    input::Selection,
+    text::{TextViewMultiClickKind, node::LinkMark, selection::word_range_at},
 };
 
 /// A inline element used to render a inline text and support selectable.
@@ -597,8 +598,9 @@ fn point_in_text_selection(
 
 #[cfg(test)]
 mod tests {
-    use super::point_in_text_selection;
     use gpui::{point, px};
+
+    use super::point_in_text_selection;
 
     #[test]
     fn test_point_in_text_selection() {

@@ -1,10 +1,13 @@
+#[cfg(not(target_family = "wasm"))]
+use std::path::Path;
 use std::path::PathBuf;
 
+#[cfg(not(target_family = "wasm"))]
+use autocorrect::ignorer::Ignorer;
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement, KeyBinding, ParentElement, Render,
     Styled, Window, actions, prelude::FluentBuilder as _, px,
 };
-
 use rand::prelude::IndexedRandom as _;
 use shilpo_ui::{
     ActiveTheme as _, IconName,
@@ -16,11 +19,6 @@ use shilpo_ui::{
     tree::{TreeItem, TreeState, tree},
     v_flex,
 };
-
-#[cfg(not(target_family = "wasm"))]
-use autocorrect::ignorer::Ignorer;
-#[cfg(not(target_family = "wasm"))]
-use std::path::Path;
 
 use crate::{Story, section};
 

@@ -1,4 +1,5 @@
-use crate::{ActiveTheme, Disableable, Icon, Selectable, Sizable as _, StyledExt, h_flex};
+use std::collections::HashMap;
+
 use gpui::{
     AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement, IntoElement, MouseButton,
     MouseDownEvent, MouseMoveEvent, ParentElement, RenderOnce, Stateful,
@@ -6,7 +7,8 @@ use gpui::{
     prelude::FluentBuilder as _,
 };
 use smallvec::SmallVec;
-use std::collections::HashMap;
+
+use crate::{ActiveTheme, Disableable, Icon, Selectable, Sizable as _, StyledExt, h_flex};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ListItemMode {

@@ -1,6 +1,8 @@
-use std::path::PathBuf;
-use std::process::{Child, Command};
-use std::sync::{Arc, Mutex};
+use std::{
+    path::PathBuf,
+    process::{Child, Command},
+    sync::{Arc, Mutex},
+};
 
 use tokio::sync::watch;
 

@@ -1,27 +1,27 @@
-use instant::Duration;
 use std::ops::Range;
 
-use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
-use crate::input::InputState;
-use crate::list::cache::{MeasuredEntrySize, RowEntry, RowsCache};
-use crate::{
-    ActiveTheme, IconName, Size,
-    input::{Input, InputEvent},
-    scroll::Scrollbar,
-    v_flex,
-};
-use crate::{Icon, IndexPath, Selectable, Sizable, StyledExt};
-use crate::{VirtualListScrollHandle, list::ListDelegate, v_virtual_list};
 use gpui::{
-    App, AvailableSpace, ClickEvent, Context, DefiniteLength, EdgesRefinement, EventEmitter,
-    ListSizingBehavior, RenderOnce, Role, ScrollStrategy, SharedString, StatefulInteractiveElement,
-    StyleRefinement, Subscription, px, size,
+    App, AppContext, AvailableSpace, ClickEvent, Context, DefiniteLength, EdgesRefinement, Entity,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, Length,
+    ListSizingBehavior, MouseButton, ParentElement, Render, RenderOnce, Role, ScrollStrategy,
+    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Task, Window,
+    div, prelude::FluentBuilder, px, size,
 };
-use gpui::{
-    AppContext, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
-    Length, MouseButton, ParentElement, Render, Styled, Task, Window, div, prelude::FluentBuilder,
-};
+use instant::Duration;
 use rust_i18n::t;
+
+use crate::{
+    ActiveTheme, Icon, IconName, IndexPath, Selectable, Sizable, Size, StyledExt,
+    VirtualListScrollHandle,
+    actions::{Cancel, Confirm, SelectDown, SelectUp},
+    input::{Input, InputEvent, InputState},
+    list::{
+        ListDelegate,
+        cache::{MeasuredEntrySize, RowEntry, RowsCache},
+    },
+    scroll::Scrollbar,
+    v_flex, v_virtual_list,
+};
 
 pub(crate) fn init(cx: &mut App) {
     let context: Option<&str> = Some("List");

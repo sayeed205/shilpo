@@ -1,13 +1,13 @@
 use std::{panic::Location, rc::Rc};
 
-use crate::StyledExt;
-
-use super::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
 use gpui::{
     App, Div, Element, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     ScrollHandle, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder,
 };
+
+use super::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
+use crate::StyledExt;
 
 /// A trait for elements that can be made scrollable with scrollbars.
 ///
@@ -253,11 +253,12 @@ fn render_scrollbar<H: ScrollbarHandle + Clone>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use gpui::{
         Context, Render, ScrollDelta, ScrollWheelEvent, TestAppContext, VisualTestContext, point,
         px,
     };
+
+    use super::*;
 
     fn draw(cx: &mut VisualTestContext) {
         cx.run_until_parked();

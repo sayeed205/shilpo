@@ -1,6 +1,6 @@
-use futures::Stream as _;
 use std::{pin::Pin, sync::Arc, task::Poll};
 
+use futures::Stream as _;
 use gpui::{
     App, AppContext as _, Bounds, Context, FocusHandle, IntoElement, KeyBinding, ListState,
     ParentElement as _, Pixels, Point, Render, SharedString, Styled as _, Task, Window,
@@ -627,9 +627,10 @@ fn parse_content(
 
 #[cfg(test)]
 mod tests {
+    use gpui::TestAppContext;
+
     use super::*;
     use crate::text::MarkdownNode;
-    use gpui::TestAppContext;
 
     #[gpui::test]
     fn set_text_then_push_str_appends_to_replaced_content(cx: &mut TestAppContext) {

@@ -1,4 +1,3 @@
-use shilpo_services::Application;
 use std::{
     collections::HashMap,
     io::Cursor,
@@ -11,6 +10,7 @@ use gpui::{
     div, img,
 };
 use image::{DynamicImage, GenericImageView as _, RgbaImage, imageops::FilterType};
+use shilpo_services::Application;
 use shilpo_ui::StyledExt;
 
 pub(crate) fn app_icon(

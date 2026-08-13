@@ -1,23 +1,23 @@
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, DefiniteLength, Edges, EdgesRefinement, Entity, Hsla, InteractiveElement as _,
     IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Rems, RenderOnce, Role,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, Window, div, px, relative,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, Window, div,
+    prelude::FluentBuilder as _, px, relative,
 };
-
-use crate::button::{Button, ButtonVariants as _};
-use crate::input::clear_button;
-use crate::native_menu::NativeMenu;
-use crate::progress::ProgressCircle;
-use crate::{ActiveTheme, Colorize, v_flex};
-use crate::{IconName, Size};
-use crate::{Selectable, StyledExt, h_flex};
-use crate::{Sizable, StyleSized};
 
 use super::{
     InputContentType, InputState, content_type::sync_native_content_type, element::EditorScrollbar,
+};
+use crate::{
+    ActiveTheme, Colorize, IconName, Selectable, Sizable, Size, StyleSized, StyledExt,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    input::clear_button,
+    native_menu::NativeMenu,
+    progress::ProgressCircle,
+    v_flex,
 };
 
 /// Returns `(background, foreground)` colors for input-like components.
@@ -612,8 +612,9 @@ impl RenderOnce for Input {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use gpui::AppContext;
+
+    use super::*;
 
     #[test]
     fn content_types_map_to_accessibility_roles() {
