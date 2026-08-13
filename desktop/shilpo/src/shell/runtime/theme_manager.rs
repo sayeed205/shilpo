@@ -7,8 +7,42 @@ use shilpo_theme_daemon::{DaemonState, ThemeClient};
 
 use super::shell_surfaces::{self, ShellSurfaces};
 
-static ACTIVE_GENERATION: AtomicU64 = AtomicU64::new(0);
-static CURRENT_REVISION: AtomicU64 = AtomicU64::new(0);
+#[derive(Debug)]
+struct TransitionGate {
+    generation: AtomicU64,
+    revision: AtomicU64,
+}
+
+impl TransitionGate {
+    const fn new() -> Self {
+        Self {
+            generation: AtomicU64::new(0),
+            revision: AtomicU64::new(0),
+        }
+    }
+
+    fn initialize_revision(&self, revision: u64) {
+        self.revision.store(revision, Ordering::SeqCst);
+    }
+
+    fn supersede(&self) -> u64 {
+        self.generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    fn is_current(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::SeqCst) == generation
+    }
+
+    fn current_revision(&self) -> u64 {
+        self.revision.load(Ordering::SeqCst)
+    }
+
+    fn commit_revision(&self, revision: u64) {
+        self.revision.store(revision, Ordering::SeqCst);
+    }
+}
+
+static TRANSITION_GATE: TransitionGate = TransitionGate::new();
 
 /// M3 Emphasized Easing: cubic-bezier(0.2, 0.0, 0.0, 1.0)
 pub fn cubic_bezier_emphasized(t: f32) -> f32 {
@@ -85,7 +119,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
         .clone()
         .filter(|path| path.is_file());
     shilpo_ui::Theme::global_mut(cx).apply_state(&initial_theme_state);
-    CURRENT_REVISION.store(initial_theme_state.revision, Ordering::SeqCst);
+    TRANSITION_GATE.initialize_revision(initial_theme_state.revision);
 
     let mut rx = theme_client.subscribe();
     let theme_client_for_task = theme_client.clone();
@@ -118,7 +152,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
                 let start_colors = shilpo_ui::Theme::global(cx).colors;
 
                 if reduced_motion || duration_ms == 0 {
-                    ACTIVE_GENERATION.fetch_add(1, Ordering::SeqCst);
+                    TRANSITION_GATE.supersede();
                     shilpo_ui::Theme::global_mut(cx).apply_state(&state);
                     ShellSurfaces::apply_theme_state(cx, &state);
                     super::ShellRuntime::emit_theme_signal(
@@ -126,19 +160,19 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
                         state.resolved_mode.as_str().into(),
                         format!("{:?}", state.resolved_variant),
                     );
-                    CURRENT_REVISION.store(state.revision, Ordering::SeqCst);
+                    TRANSITION_GATE.commit_revision(state.revision);
                     return None;
                 }
 
                 if target_colors == start_colors {
-                    ACTIVE_GENERATION.fetch_add(1, Ordering::SeqCst);
+                    TRANSITION_GATE.supersede();
                     shilpo_ui::Theme::global_mut(cx).apply_state(&state);
                     CURRENT_REVISION.store(state.revision, Ordering::SeqCst);
                     return None;
                 }
 
-                let generation = ACTIVE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-                let current_revision = CURRENT_REVISION.load(Ordering::SeqCst);
+                let generation = TRANSITION_GATE.supersede();
+                let current_revision = TRANSITION_GATE.current_revision();
                 Some(ThemeTransition::new(
                     generation,
                     current_revision,
@@ -171,7 +205,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
 
                 let start_time = Instant::now();
                 loop {
-                    if ACTIVE_GENERATION.load(Ordering::SeqCst) != generation {
+                    if !TRANSITION_GATE.is_current(generation) {
                         span.record("outcome", "superseded");
                         span.record("interrupted", true);
                         break;
@@ -182,7 +216,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
 
                     if !is_complete {
                         let applied = cx.update(|cx: &mut App| {
-                            if ACTIVE_GENERATION.load(Ordering::SeqCst) != generation {
+                            if !TRANSITION_GATE.is_current(generation) {
                                 return false;
                             }
                             shilpo_ui::Theme::global_mut(cx).colors = current_colors;
@@ -199,7 +233,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
                             .await;
                     } else {
                         let applied = cx.update(|cx: &mut App| {
-                            if ACTIVE_GENERATION.load(Ordering::SeqCst) != generation {
+                            if !TRANSITION_GATE.is_current(generation) {
                                 return false;
                             }
                             shilpo_ui::Theme::global_mut(cx).apply_state(&transition.target_state);
@@ -209,8 +243,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
                                 transition.target_state.resolved_mode.as_str().into(),
                                 format!("{:?}", transition.target_state.resolved_variant),
                             );
-                            CURRENT_REVISION
-                                .store(transition.target_state.revision, Ordering::SeqCst);
+                            TRANSITION_GATE.commit_revision(transition.target_state.revision);
                             true
                         });
                         if applied {
@@ -340,5 +373,31 @@ mod tests {
         let (_, colors, complete) = transition.progress_at(0);
         assert_eq!(colors, transition.target_colors);
         assert!(complete);
+    }
+
+    #[test]
+    fn transition_gate_is_latest_wins_and_revision_safe() {
+        let gate = TransitionGate::new();
+        gate.initialize_revision(7);
+        assert_eq!(gate.current_revision(), 7);
+
+        let first = gate.supersede();
+        assert!(gate.is_current(first));
+        let second = gate.supersede();
+        assert!(!gate.is_current(first));
+        assert!(gate.is_current(second));
+
+        gate.commit_revision(11);
+        assert_eq!(gate.current_revision(), 11);
+    }
+
+    #[test]
+    fn stale_generation_cannot_become_current_again() {
+        let gate = TransitionGate::new();
+        let stale = gate.supersede();
+        let current = gate.supersede();
+        assert!(!gate.is_current(stale));
+        assert!(gate.is_current(current));
+        assert!(!gate.is_current(stale));
     }
 }
