@@ -11,6 +11,7 @@ path = "examples/generate_distribution_schemas.rs"
 [dependencies]
 base64.workspace = true
 flate2.workspace = true
+futures-lite.workspace = true
 hex.workspace = true
 jsonschema.workspace = true
 reqwest.workspace = true
@@ -25,6 +26,9 @@ toml.workspace = true
 url.workspace = true
 shilpo-ext-api.workspace = true
 shilpo-observability.workspace = true
+oo7.workspace = true
+smol.workspace = true
+uuid.workspace = true
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 tracing.workspace = true

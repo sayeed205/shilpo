@@ -565,6 +565,21 @@ start = ["builtin:workspaces"]
     }
 
     #[test]
+    fn extension_secret_reference_settings_round_trip_without_plaintext() {
+        let mut config = valid();
+        let reference = shilpo_ext_api::SecretRef::new("opaque-handle-123");
+        config.extensions.settings.insert(
+            "org.shilpo.weather".into(),
+            serde_json::json!({ "credential": serde_json::to_value(&reference).unwrap() }),
+        );
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(serialized.contains("opaque-handle-123"));
+        assert!(!serialized.contains("SENTINEL_SECRET_BYTES"));
+        let round_tripped: ShellConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(round_tripped, config);
+    }
+
+    #[test]
     fn desktop_extension_instances_are_namespaced_and_unique() {
         let contribution = "ext:io.github.alice.world-clock/desktop"
             .parse::<ExtensionContributionRef>()

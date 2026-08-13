@@ -19,8 +19,8 @@ pub use manifest::{
     ActionContribution, BackgroundTaskContribution, BarWidgetContribution, Capability,
     CapabilityKind, Contributions, DesktopWidgetContribution, ExtensionManifest,
     LauncherProviderContribution, LibraryConfig, ManifestError, SUPPORTED_API_VERSION,
-    SUPPORTED_SCHEMA_VERSION, SettingsPageContribution, SidePanelContribution, Subscription,
-    valid_virtual_path_pattern, wildcard_matches,
+    SUPPORTED_SCHEMA_VERSION, SecretPurpose, SecretRef, SettingsPageContribution,
+    SidePanelContribution, Subscription, valid_virtual_path_pattern, wildcard_matches,
 };
 pub use view::{
     BadgeNode, ButtonNode, ContainerDirection, ContainerNode, IconButtonNode, IconNode, ImageNode,
@@ -122,5 +122,104 @@ mod contract_tests {
             pkg.name.version,
             Some(semver::Version::parse("0.1.0").unwrap())
         );
+    }
+
+    #[test]
+    fn secret_purpose_validation_accepts_valid_and_rejects_invalid() {
+        let valid = [
+            "weather-api",
+            "oauth-refresh",
+            "a",
+            "a-1-b",
+            "a0123456789-b",
+        ];
+        for s in valid {
+            assert!(
+                SecretPurpose::parse(s).is_ok(),
+                "should accept valid purpose '{s}'"
+            );
+        }
+
+        let long_str = "a".repeat(65);
+        let invalid = [
+            "",
+            "Weather-api",
+            "weather_api",
+            "weather/api",
+            "-weather",
+            "1weather",
+            "weather api",
+            "weather.api",
+            long_str.as_str(),
+        ];
+        for s in invalid {
+            assert!(
+                SecretPurpose::parse(s).is_err(),
+                "should reject invalid purpose '{s}'"
+            );
+        }
+    }
+
+    #[test]
+    fn secrets_capability_validates_purposes_and_rejects_duplicates() {
+        let manifest_toml = r#"
+            id = "io.github.test.secrets"
+            name = "Secrets Test"
+            version = "1.0.0"
+            schema_version = 1
+            api_version = "0.1.0"
+
+            [[capabilities]]
+            kind = "secrets"
+            purposes = ["api-key", "refresh-token"]
+        "#;
+        let manifest = ExtensionManifest::from_toml(manifest_toml).unwrap();
+        assert_eq!(
+            manifest.capabilities,
+            vec![Capability::Secrets {
+                purposes: vec![
+                    SecretPurpose::parse("api-key").unwrap(),
+                    SecretPurpose::parse("refresh-token").unwrap(),
+                ]
+            }]
+        );
+
+        let duplicate_toml = r#"
+            id = "io.github.test.secrets"
+            name = "Secrets Test"
+            version = "1.0.0"
+            schema_version = 1
+            api_version = "0.1.0"
+
+            [[capabilities]]
+            kind = "secrets"
+            purposes = ["api-key", "api-key"]
+        "#;
+        assert!(ExtensionManifest::from_toml(duplicate_toml).is_err());
+    }
+
+    #[test]
+    fn secret_ref_serializes_as_tagged_json_and_redacts_debug_output() {
+        let reference = SecretRef::new("secret-handle-9999");
+        let json = serde_json::to_string(&reference).expect("SecretRef should serialize");
+        assert_eq!(json, r#"{"secret_ref":"secret-handle-9999"}"#);
+
+        let deserialized: SecretRef =
+            serde_json::from_str(&json).expect("SecretRef should deserialize");
+        assert_eq!(deserialized.handle, "secret-handle-9999");
+
+        let debug_str = format!("{reference:?}");
+        assert!(
+            !debug_str.contains("secret-handle-9999"),
+            "Debug output must not leak handle"
+        );
+        assert!(debug_str.contains("<redacted>"));
+
+        let display_str = format!("{reference}");
+        assert!(
+            !display_str.contains("secret-handle-9999"),
+            "Display output must not leak handle"
+        );
+        assert!(display_str.contains("<redacted>"));
     }
 }

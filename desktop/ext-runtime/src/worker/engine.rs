@@ -247,7 +247,26 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
             Version::parse(CURRENT_SHILPO_VERSION).expect("Shilpo version is valid semver");
         let catalog = ExtensionCatalog::open(paths.clone(), shilpo_version);
         let catalog_mtime = catalog_mtime(&paths.data_dir);
-        let session = ExtensionSession::new(runtime);
+        let mut session = ExtensionSession::new(runtime);
+        let grant_catalog = catalog.clone();
+        session
+            .host
+            .runtime_mut()
+            .set_grant_checker(Arc::new(move |extension_id, scope| {
+                let Some(purpose) = scope.strip_prefix("secrets:") else {
+                    return false;
+                };
+                let Ok(grants) = grant_catalog.load_grants(extension_id) else {
+                    return false;
+                };
+                grants.granted_capabilities.iter().any(|capability| {
+                    matches!(
+                        capability,
+                        Capability::Secrets { purposes }
+                            if purposes.iter().any(|declared| declared.as_str() == purpose)
+                    )
+                })
+            }));
 
         let mut engine = Self {
             paths,

@@ -37,12 +37,21 @@ interface types {
         rate-limited,
         unsupported,
         internal,
+        backend-unavailable,
+        locked,
+        denied,
+        cancelled,
     }
 
     /// Standard error payload returned by host imports.
     record error {
         kind: error-kind,
         message: string,
+    }
+
+    /// Opaque reference handle to an encrypted secret stored in host secret service.
+    record secret-ref {
+        handle: string,
     }
 
     /// Typed scalar data value used for extension settings, input, state, and
@@ -54,6 +63,7 @@ interface types {
         float-value(f64),
         text-value(string),
         bytes-value(list<u8>),
+        secret-ref(secret-ref),
     }
 
     record activation-input {
@@ -382,15 +392,19 @@ interface state {
     write: func(key: string, value: data-value) -> result<_, error>;
 }
 
-/// Host import for encrypted secret storage (seam for #138).
+/// Host import for encrypted secret storage backed by Secret Service.
+/// Required capability scopes: `secrets:<purpose>`.
 interface secrets {
-    use types.{error};
+    use types.{secret-ref, error};
 
-    /// Opaque handle; the secret value never crosses this ABI.
-    record secret-ref { handle: string }
+    /// Creates or replaces a secret for the specified purpose.
+    set: func(purpose: string, value: list<u8>) -> result<secret-ref, error>;
 
-    /// Retrieves secret value (plaintext never logged/cached).
-    get-secret: func(key: string) -> result<option<secret-ref>, error>;
+    /// Reads secret value for purpose and opaque reference.
+    read: func(purpose: string, reference: secret-ref) -> result<option<list<u8>>, error>;
+
+    /// Deletes secret entry for purpose and opaque reference (idempotent).
+    delete: func(purpose: string, reference: secret-ref) -> result<_, error>;
 }
 
 /// Host import for system theme inspection and accent setting.

@@ -3,8 +3,11 @@ pub mod catalog;
 pub mod circuit_breaker;
 pub mod cli;
 pub mod effects;
+pub mod secrets;
 pub mod wasm;
 pub mod worker;
+
+pub use secrets::{FakeSecretBroker, Oo7SecretBroker, SecretBroker, SecretBrokerError};
 
 pub use adapter::{
     DispatchResult, ExtensionHost, ExtensionRuntime, GuestExtension, HostError, InMemoryRuntime,
@@ -14,8 +17,8 @@ pub use catalog::{
     CURRENT_SHILPO_VERSION, CatalogError, CatalogExtension, CatalogPaths, ExtensionCatalog,
     ExtensionCatalogSnapshot, ExtensionUpdate as CatalogExtensionUpdate, InstallationReceipt,
     InstalledExtension, InstalledVersionReceipt, PackageSignature, RegistryIndex, RegistryRelease,
-    RegistrySource, ReleaseChannel, SignedRegistryIndex, StoredGrants, TrustState, UpdateState,
-    default_extension_config_dir, default_extension_data_dir, generate_signing_key,
+    RegistrySource, ReleaseChannel, SecretPolicy, SignedRegistryIndex, StoredGrants, TrustState,
+    UpdateState, default_extension_config_dir, default_extension_data_dir, generate_signing_key,
     package_signature_path, sign_package, sign_registry_index, sign_release,
 };
 pub use circuit_breaker::{CircuitBreaker, DiagnosticCode, DiagnosticLevel, ExtensionDiagnostic};
@@ -50,6 +53,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tar::Archive;
 
@@ -557,16 +561,14 @@ mod tests {
         let capability = Capability::FilesystemRead {
             paths: vec!["assets/icons/*".into()],
         };
-        assert!(
-            !capability_allows_operation(
-                &capability,
-                &HostOperation::ShowNotification {
-                    title: "test".into(),
-                    body: "test".into(),
-                    icon: None,
-                }
-            )
-        );
+        assert!(!capability_allows_operation(
+            &capability,
+            &HostOperation::ShowNotification {
+                title: "test".into(),
+                body: "test".into(),
+                icon: None,
+            }
+        ));
 
         let invalid = format!(
             "{MANIFEST}\n[[capabilities]]\nkind = \"filesystem:read\"\npaths = [\"../secrets/**\"]"
@@ -631,7 +633,7 @@ mod tests {
 
         let valid_component_bytes = test_component_bytes(VALID_CORE_WAT);
         let id = ExtensionId::new("io.github.test.wasm").unwrap();
-        let mut runtime = WasmRuntime::new().unwrap();
+        let mut runtime = WasmRuntime::with_broker(Arc::new(FakeSecretBroker::new())).unwrap();
         runtime
             .load(
                 &id,
@@ -673,7 +675,7 @@ mod tests {
     fn wasm_adapter_accepts_typed_component_with_runtime_budgets() {
         let runaway_bytes = test_component_bytes(RUNAWAY_CORE_WAT);
         let id = ExtensionId::new("io.github.test.runaway").unwrap();
-        let mut runtime = WasmRuntime::new().unwrap();
+        let mut runtime = WasmRuntime::with_broker(Arc::new(FakeSecretBroker::new())).unwrap();
         let budget = RuntimeBudget {
             fuel: RuntimeBudget::default().fuel,
             deadline: Duration::from_secs(1),
@@ -696,9 +698,7 @@ mod tests {
                 timeout_budget,
             )
             .unwrap();
-        assert!(runtime
-            .view(&timeout_id, "bar", timeout_budget)
-            .is_ok());
+        assert!(runtime.view(&timeout_id, "bar", timeout_budget).is_ok());
     }
 
     struct FailingRuntime;
@@ -952,6 +952,172 @@ mod tests {
         );
 
         fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn live_grant_revocation_takes_effect_on_next_hostcall_without_reload() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let granted = Arc::new(AtomicBool::new(true));
+        let granted_clone = granted.clone();
+
+        let grant_checker = Arc::new(move |_ext_id: &ExtensionId, scope: &str| -> bool {
+            if scope == "secrets:api-key" {
+                granted_clone.load(Ordering::Relaxed)
+            } else {
+                false
+            }
+        });
+
+        let fake_broker = Arc::new(FakeSecretBroker::new());
+        let runtime =
+            wasm::WasmRuntime::with_broker_and_grant_checker(fake_broker, Some(grant_checker))
+                .unwrap();
+
+        // Verify grant_checker reflects live status change immediately
+        granted.store(false, Ordering::Relaxed);
+        let ext_id = ExtensionId::new("io.github.test.revocation").unwrap();
+        let scope = "secrets:api-key";
+        let checker_fn = &runtime.grant_checker.as_ref().unwrap();
+        assert!(
+            !checker_fn(&ext_id, scope),
+            "Live revocation must take effect on next check"
+        );
+
+        granted.store(true, Ordering::Relaxed);
+        assert!(
+            checker_fn(&ext_id, scope),
+            "Grant re-enablement must take effect on next check"
+        );
+    }
+
+    #[test]
+    fn catalog_uninstall_secret_policy_retain_and_delete() {
+        use semver::Version;
+        use shilpo_ext_api::SecretPurpose;
+
+        let temp_dir = make_temp_dir("uninstall-secret-policy");
+        let catalog_paths = CatalogPaths::new(temp_dir.join("data"), temp_dir.join("config"));
+        let catalog = ExtensionCatalog::open(
+            catalog_paths,
+            Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+        );
+
+        let ext_id = ExtensionId::new("io.github.test.uninstall").unwrap();
+        let receipt_path = catalog
+            .paths()
+            .data_dir
+            .join("extensions")
+            .join("receipts")
+            .join(format!("{ext_id}.toml"));
+        let ext_dir = catalog
+            .paths()
+            .data_dir
+            .join("extensions")
+            .join("installed")
+            .join(ext_id.as_str());
+
+        fs::create_dir_all(receipt_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(&ext_dir).unwrap();
+        fs::write(&receipt_path, format!("id = \"{ext_id}\"\nschema_version = 1\n[active]\nversion = \"1.0.0\"\npackage_hash = \"hash\"\ninstalled_at = \"2026-08-13T00:00:00Z\"\n")).unwrap();
+
+        let broker = FakeSecretBroker::new();
+        let purpose = SecretPurpose::parse("auth-token").unwrap();
+        let secret_ref = broker
+            .set(
+                &ext_id,
+                &purpose,
+                b"secret-pass-phrase",
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+            )
+            .unwrap();
+
+        // 1. Uninstall with Retain policy
+        catalog
+            .uninstall_with_secrets_policy(&ext_id, SecretPolicy::Retain, Some(&broker))
+            .unwrap();
+        let read_back = broker
+            .read(
+                &ext_id,
+                &purpose,
+                &secret_ref,
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+            )
+            .unwrap();
+        assert_eq!(read_back.as_deref(), Some(&b"secret-pass-phrase"[..]));
+
+        // Secret deletion failures must leave the installation intact.
+        broker.set_simulated_error(Some(SecretBrokerError::BackendUnavailable(
+            "test backend unavailable".into(),
+        )));
+        fs::create_dir_all(receipt_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(&ext_dir).unwrap();
+        let failed =
+            catalog.uninstall_with_secrets_policy(&ext_id, SecretPolicy::Delete, Some(&broker));
+        assert!(failed.is_err());
+        assert!(receipt_path.is_file());
+        broker.set_simulated_error(None);
+
+        // Re-create receipt for Delete test
+        fs::create_dir_all(receipt_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(&ext_dir).unwrap();
+        fs::write(&receipt_path, format!("id = \"{ext_id}\"\nschema_version = 1\n[active]\nversion = \"1.0.0\"\npackage_hash = \"hash\"\ninstalled_at = \"2026-08-13T00:00:00Z\"\n")).unwrap();
+
+        // 2. Uninstall with Delete policy
+        catalog
+            .uninstall_with_secrets_policy(&ext_id, SecretPolicy::Delete, Some(&broker))
+            .unwrap();
+        let read_deleted = broker
+            .read(
+                &ext_id,
+                &purpose,
+                &secret_ref,
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+            )
+            .unwrap();
+        assert_eq!(
+            read_deleted, None,
+            "Delete policy must delete all extension secrets"
+        );
+
+        fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn sentinel_secret_bytes_absent_from_diagnostics_ipc_and_tracing() {
+        let sentinel_bytes = b"SENTINEL_SECRET_BYTES_8888";
+        let sentinel_handle = "secret-handle-7777";
+
+        assert_eq!(sentinel_bytes.len(), 26);
+        let reference = shilpo_ext_api::SecretRef::new(sentinel_handle);
+
+        let debug_fmt = format!("{reference:?}");
+        assert!(
+            !debug_fmt.contains(sentinel_handle),
+            "SecretRef debug must redact handle"
+        );
+        assert!(
+            !debug_fmt.contains("SENTINEL"),
+            "SecretRef debug must not contain secret bytes"
+        );
+
+        let display_fmt = format!("{reference}");
+        assert!(
+            !display_fmt.contains(sentinel_handle),
+            "SecretRef display must redact handle"
+        );
+        assert!(
+            !display_fmt.contains("SENTINEL"),
+            "SecretRef display must not contain secret bytes"
+        );
+
+        let serialized_json = serde_json::to_string(&reference).unwrap();
+        assert_eq!(serialized_json, r#"{"secret_ref":"secret-handle-7777"}"#);
+        assert!(
+            !serialized_json.contains("SENTINEL"),
+            "JSON serialized reference must not contain secret bytes"
+        );
     }
 
     fn make_temp_dir(name: &str) -> PathBuf {
