@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use ropey::{LineType, Rope, RopeSlice};
 use sum_tree::Bias;
+
 #[cfg(feature = "tree-sitter")]
 pub use tree_sitter::{InputEdit, Point};
 
@@ -89,12 +90,9 @@ pub trait RopeExt {
     /// # Example
     ///
     /// ```
-    /// use shilpo_ui::{
-    ///     Rope,
-    ///     RopeExt,
-    /// };
+    /// use shilpo_ui::{Rope, RopeExt};
     ///
-    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope",);
+    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope");
     /// assert_eq!(rope.line_start_offset(0), 0);
     /// assert_eq!(rope.line_start_offset(1), 6);
     /// ```
@@ -105,11 +103,8 @@ pub trait RopeExt {
     /// Return the end of the rope if the row is out of bounds.
     ///
     /// ```
-    /// use shilpo_ui::{
-    ///     Rope,
-    ///     RopeExt,
-    /// };
-    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope",);
+    /// use shilpo_ui::{Rope, RopeExt};
+    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope");
     /// assert_eq!(rope.line_end_offset(0), 5); // "Hello\n"
     /// assert_eq!(rope.line_end_offset(1), 12); // "World\r\n"
     /// ```
@@ -118,11 +113,8 @@ pub trait RopeExt {
     /// Return a line slice at the given row (0-based) index. including `\r` if present, but not `\n`.
     ///
     /// ```
-    /// use shilpo_ui::{
-    ///     Rope,
-    ///     RopeExt,
-    /// };
-    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope",);
+    /// use shilpo_ui::{Rope, RopeExt};
+    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope");
     /// assert_eq!(rope.slice_line(0).to_string(), "Hello");
     /// assert_eq!(rope.slice_line(1).to_string(), "World\r");
     /// assert_eq!(rope.slice_line(2).to_string(), "This is a test 中文");
@@ -135,20 +127,11 @@ pub trait RopeExt {
     /// If the range is out of bounds, it will be clamped to the valid range.
     ///
     /// ```
-    /// use shilpo_ui::{
-    ///     Rope,
-    ///     RopeExt,
-    /// };
-    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope",);
+    /// use shilpo_ui::{Rope, RopeExt};
+    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope");
     /// assert_eq!(rope.slice_lines(0..2).to_string(), "Hello\nWorld\r");
-    /// assert_eq!(
-    ///     rope.slice_lines(1..3).to_string(),
-    ///     "World\r\nThis is a test 中文"
-    /// );
-    /// assert_eq!(
-    ///     rope.slice_lines(2..5).to_string(),
-    ///     "This is a test 中文\nRope"
-    /// );
+    /// assert_eq!(rope.slice_lines(1..3).to_string(), "World\r\nThis is a test 中文");
+    /// assert_eq!(rope.slice_lines(2..5).to_string(), "This is a test 中文\nRope");
     /// assert_eq!(rope.slice_lines(3..10).to_string(), "Rope");
     /// assert_eq!(rope.slice_lines(5..10).to_string(), ""); // out of bounds
     /// ```
@@ -159,27 +142,18 @@ pub trait RopeExt {
     /// Each line slice includes `\r` if present, but not `\n`.
     ///
     /// ```
-    /// use shilpo_ui::{
-    ///     Rope,
-    ///     RopeExt,
-    /// };
-    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope",);
-    /// let lines: Vec<_,> = rope.iter_lines().map(|r| r.to_string(),).collect();
-    /// assert_eq!(
-    ///     lines,
-    ///     vec!["Hello", "World\r", "This is a test 中文", "Rope"]
-    /// );
+    /// use shilpo_ui::{Rope, RopeExt};
+    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope");
+    /// let lines: Vec<_> = rope.iter_lines().map(|r| r.to_string()).collect();
+    /// assert_eq!(lines, vec!["Hello", "World\r", "This is a test 中文", "Rope"]);
     /// ```
     fn iter_lines(&self) -> RopeLines<'_>;
 
     /// Return the number of lines in the rope.
     ///
     /// ```
-    /// use shilpo_ui::{
-    ///     Rope,
-    ///     RopeExt,
-    /// };
-    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope",);
+    /// use shilpo_ui::{Rope, RopeExt};
+    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope");
     /// assert_eq!(rope.lines_len(), 4);
     /// ```
     fn lines_len(&self) -> usize;
@@ -189,11 +163,8 @@ pub trait RopeExt {
     /// If the row is out of bounds, return 0.
     ///
     /// ```
-    /// use shilpo_ui::{
-    ///     Rope,
-    ///     RopeExt,
-    /// };
-    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope",);
+    /// use shilpo_ui::{Rope, RopeExt};
+    /// let rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope");
     /// assert_eq!(rope.line_len(0), 5); // "Hello"
     /// assert_eq!(rope.line_len(1), 6); // "World\r"
     /// assert_eq!(rope.line_len(2), 21); // "This is a test 中文"
@@ -209,16 +180,10 @@ pub trait RopeExt {
     /// - If the range is out of bounds.
     ///
     /// ```
-    /// use shilpo_ui::{
-    ///     Rope,
-    ///     RopeExt,
-    /// };
-    /// let mut rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope",);
-    /// rope.replace(6..11, "Universe",);
-    /// assert_eq!(
-    ///     rope.to_string(),
-    ///     "Hello\nUniverse\r\nThis is a test 中文\nRope"
-    /// );
+    /// use shilpo_ui::{Rope, RopeExt};
+    /// let mut rope = Rope::from("Hello\nWorld\r\nThis is a test 中文\nRope");
+    /// rope.replace(6..11, "Universe");
+    /// assert_eq!(rope.to_string(), "Hello\nUniverse\r\nThis is a test 中文\nRope");
     /// ```
     fn replace(&mut self, range: Range<usize>, new_text: &str);
 
@@ -271,13 +236,10 @@ pub trait RopeExt {
     /// - Otherwise return the ix.
     ///
     /// ```
-    /// use shilpo_ui::{
-    ///     Rope,
-    ///     RopeExt,
-    /// };
+    /// use shilpo_ui::{Rope, RopeExt};
     /// use sum_tree::Bias;
     ///
-    /// let rope = Rope::from("Hello 中文🎉 test\nRope",);
+    /// let rope = Rope::from("Hello 中文🎉 test\nRope");
     /// assert_eq!(rope.clip_offset(5, Bias::Left), 5);
     /// // Inside multi-byte character '中' (3 bytes)
     /// assert_eq!(rope.clip_offset(7, Bias::Left), 6);
@@ -292,11 +254,8 @@ pub trait RopeExt {
     /// # Example
     ///
     /// ```
-    /// use shilpo_ui::{
-    ///     Rope,
-    ///     RopeExt,
-    /// };
-    /// let rope = Rope::from("a 中文🎉 test\nRope",);
+    /// use shilpo_ui::{Rope, RopeExt};
+    /// let rope = Rope::from("a 中文🎉 test\nRope");
     /// assert_eq!(rope.char_index_to_offset(0), 0);
     /// assert_eq!(rope.char_index_to_offset(1), 1);
     /// assert_eq!(rope.char_index_to_offset(3), "a 中".len());
@@ -311,11 +270,8 @@ pub trait RopeExt {
     /// # Example
     ///
     /// ```
-    /// use shilpo_ui::{
-    ///     Rope,
-    ///     RopeExt,
-    /// };
-    /// let rope = Rope::from("a 中文🎉 test\nRope",);
+    /// use shilpo_ui::{Rope, RopeExt};
+    /// let rope = Rope::from("a 中文🎉 test\nRope");
     /// assert_eq!(rope.offset_to_char_index(0), 0);
     /// assert_eq!(rope.offset_to_char_index(1), 1);
     /// assert_eq!(rope.offset_to_char_index(3), 3);
@@ -502,10 +458,10 @@ impl RopeExt for Rope {
 
 #[cfg(test)]
 mod tests {
+    use super::Point;
     use ropey::Rope;
     use sum_tree::Bias;
 
-    use super::Point;
     use crate::{RopeExt, input::Position};
 
     #[test]

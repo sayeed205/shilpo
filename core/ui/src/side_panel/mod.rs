@@ -1,9 +1,10 @@
+use crate::ActiveTheme;
+use crate::scroll::ScrollableElement;
+use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, ElementId, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
-    Styled, Window, div, prelude::FluentBuilder, px,
+    Styled, Window, div, px,
 };
-
-use crate::{ActiveTheme, scroll::ScrollableElement};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SidePanelPosition {

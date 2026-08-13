@@ -1,7 +1,7 @@
-use std::sync::{Arc, Mutex};
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
+
 #[cfg(target_os = "linux")]
 use zbus::proxy;
 

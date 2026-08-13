@@ -1,11 +1,3 @@
-use std::rc::Rc;
-
-use gpui::{
-    AnyElement, App, ClickEvent, ElementId, InteractiveElement as _, IntoElement,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled,
-    Window, div, percentage, prelude::FluentBuilder,
-};
-
 use crate::{
     ActiveTheme as _, Collapsible, Icon, IconName, Sizable as _, StyledExt,
     button::{Button, ButtonVariants as _},
@@ -14,6 +6,12 @@ use crate::{
     sidebar::SidebarItem,
     v_flex,
 };
+use gpui::{
+    AnyElement, App, ClickEvent, ElementId, InteractiveElement as _, IntoElement,
+    ParentElement as _, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled,
+    Window, div, percentage, prelude::FluentBuilder,
+};
+use std::rc::Rc;
 
 /// Menu for the [`super::Sidebar`]
 #[derive(Clone)]

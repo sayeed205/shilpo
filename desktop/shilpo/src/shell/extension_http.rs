@@ -71,12 +71,11 @@ pub(crate) async fn build_response_event(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use shilpo_ext_api::{Capability, ExtensionManifest, HostOperation, ViewTree};
     use shilpo_ext_runtime::{
         AuthorizedHostOperationKind, ExtensionHost, GuestExtension, InMemoryRuntime,
     };
-
-    use super::*;
 
     struct TestGuest(HostOperation);
     impl GuestExtension for TestGuest {

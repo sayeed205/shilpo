@@ -1,7 +1,5 @@
-use std::{
-    collections::{HashSet, VecDeque},
-    time::Duration,
-};
+use std::collections::{HashSet, VecDeque};
+use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt, App, AppContext, Context, ElementId, Entity, InteractiveElement,
@@ -13,7 +11,8 @@ use shilpo_ui::{
     ActiveTheme, Colorize, Icon, IconName, StyledExt, animation::cubic_bezier, h_flex, v_flex,
 };
 
-use crate::runtime::{ShellRuntime, shell_surfaces::NotificationLifecycleCallback};
+use crate::runtime::ShellRuntime;
+use crate::runtime::shell_surfaces::NotificationLifecycleCallback;
 
 #[derive(Clone)]
 pub(crate) struct ToastEntry {

@@ -1,5 +1,3 @@
-use std::{sync::Arc, time::Duration};
-
 use anyhow::{Context as _, Result};
 use gpui::*;
 use serde::{Deserialize, Serialize};
@@ -12,7 +10,9 @@ use shilpo_ui::{
     input::{Input, InputState},
     scroll::ScrollbarShow,
 };
-use storybook::{Assets, ButtonStory, IconStory, StoryContainer};
+use std::{sync::Arc, time::Duration};
+use storybook::Assets;
+use storybook::{ButtonStory, IconStory, StoryContainer};
 
 actions!(tiles_story, [Quit]);
 

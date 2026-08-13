@@ -1,15 +1,17 @@
+use gpui::div;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Window, div, prelude::FluentBuilder as _,
+    Styled, Window, prelude::FluentBuilder as _,
 };
+
+use shilpo_ui::group_box::{GroupBox, GroupBoxVariants as _};
+use shilpo_ui::label::Label;
+use shilpo_ui::tag::Tag;
+use shilpo_ui::{ActiveTheme, IconName, StyledExt, h_flex};
 use shilpo_ui::{
-    ActiveTheme, IconName, Sizable, StyledExt,
+    Sizable,
     button::{Button, ButtonVariants as _},
     collapsible::Collapsible,
-    group_box::{GroupBox, GroupBoxVariants as _},
-    h_flex,
-    label::Label,
-    tag::Tag,
     v_flex,
 };
 

@@ -2,9 +2,8 @@ pub mod color;
 pub mod dbus;
 pub mod wayland;
 
-use std::sync::Arc;
-
 use anyhow::Result;
+use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 

@@ -215,10 +215,9 @@ impl WallpaperPreviewResource {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use gpui::AppContext;
     use image::RgbImage;
-
-    use super::*;
 
     struct TestImageFile {
         path: PathBuf,

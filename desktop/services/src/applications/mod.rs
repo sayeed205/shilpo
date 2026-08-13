@@ -1,5 +1,6 @@
 pub mod icons;
 
+use anyhow::Result;
 use std::{
     fs::{self, File},
     io::{BufRead, BufReader},
@@ -8,8 +9,6 @@ use std::{
     sync::{Arc, Mutex, mpsc},
     thread,
 };
-
-use anyhow::Result;
 
 /// Represents an installed desktop application parsed from a .desktop file.
 #[derive(Debug, Clone, PartialEq, Eq)]

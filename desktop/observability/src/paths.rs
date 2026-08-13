@@ -1,8 +1,6 @@
-use std::path::PathBuf;
-
-use uuid::Uuid;
-
 use crate::{ObservabilityError, ProcessRole};
+use std::path::PathBuf;
+use uuid::Uuid;
 
 /// Check whether profiling is enabled via environment variable `SHILPO_PROFILE`.
 pub fn is_profile_enabled() -> bool {

@@ -697,10 +697,9 @@ impl Render for NotificationList {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{TestAppContext, VisualTestContext};
-
     use super::*;
     use crate::theme::Theme;
+    use gpui::{TestAppContext, VisualTestContext};
 
     struct FooKind;
     struct BarKind;

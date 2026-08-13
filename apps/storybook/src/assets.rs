@@ -1,7 +1,6 @@
-use std::borrow::Cow;
-
 use anyhow::anyhow;
 use gpui::{AssetSource, Result, SharedString};
+use std::borrow::Cow;
 
 #[cfg(not(target_family = "wasm"))]
 #[derive(rust_embed::RustEmbed)]
@@ -29,14 +28,10 @@ impl AssetSource for Assets {
 
 #[cfg(target_family = "wasm")]
 mod wasm {
-    use std::{
-        collections::HashMap,
-        sync::{Arc, RwLock},
-    };
-
-    use wasm_bindgen_futures::spawn_local;
-
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, RwLock};
+    use wasm_bindgen_futures::spawn_local;
 
     pub struct Assets {
         endpoint: SharedString,

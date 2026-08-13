@@ -1,14 +1,12 @@
-use std::collections::BTreeMap;
-
-use serde::{Deserialize, Serialize};
-use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
-
 use crate::config::{
     merge::{key_offset, line_col_from_offset},
     provenance::format_key,
     source::ConfigSource,
     types::ShellConfig,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
 /// Stable machine-readable diagnostic code for unknown config keys.
 ///
@@ -436,9 +434,8 @@ pub fn log_unknown_key_warnings(warnings: &[UnknownConfigKey]) {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
+    use std::path::PathBuf;
 
     fn path() -> PathBuf {
         PathBuf::from("/tmp/test-config.toml")

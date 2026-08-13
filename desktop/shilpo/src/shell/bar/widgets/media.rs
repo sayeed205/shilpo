@@ -1,11 +1,9 @@
+use crate::bar::service_worker::{self, CommandSender, WorkerCommand};
+use crate::runtime::ShellSurfaces;
+use crate::widgets::MediaControl;
 use gpui::{App, ElementId, IntoElement, RenderOnce, StyleRefinement, Styled, Window};
-use shilpo_services::{DeviceCommand, MediaAction, MediaInfo, PlaybackState};
-
-use crate::{
-    bar::service_worker::{self, CommandSender, WorkerCommand},
-    runtime::ShellSurfaces,
-    widgets::MediaControl,
-};
+use shilpo_services::{DeviceCommand, MediaAction};
+use shilpo_services::{MediaInfo, PlaybackState};
 
 /// MPRIS Media player preview widget for Shilpo status bar.
 #[derive(IntoElement)]

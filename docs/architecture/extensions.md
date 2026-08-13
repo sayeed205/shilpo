@@ -133,10 +133,9 @@ The runtime seam has two justified adapters:
 The runtime adapter executes guest functions. It does not decide shell policy. Capability checks, scheduling, and effect
 validation remain in `ExtensionHost`.
 
-The current component ABI is versioned as `shilpo:extension@0.1.0` and carries JSON strings for the provisional
-`ExtensionEvent`, `HostEffect`, and `ViewTree` representations. The WIT-only typed contract, generated host/guest
-bindings, explicit activation record, and removal of general `process:exec` are designed in #76; this migration does
-not claim those guarantees. During the `@0.x` epoch the ABI may break freely; compatibility hosting is deferred.
+The current component ABI is the canonical typed `shilpo:extension@0.1.0` WIT contract. Generated host and guest
+bindings carry typed events, effects, and `ViewTree` values; JSON-over-string and general `process:exec` were removed by
+ADR-0016. During the `@0.x` epoch the ABI may break freely; compatibility hosting is deferred.
 
 ### Guest SDKs
 
@@ -480,6 +479,13 @@ Shilpo also supports **trusted local scripts** for read-only status bar widgets.
 - **Execution Boundary**: Supervised strictly inside the private `shilpo extension-host` worker process—never in the Shell/GPUI process.
 - **Surface**: Read-only bar widgets in v1. Interactive nodes and event handlers are rejected.
 - **Process Supervision**: Child process groups are spawned with `setpgid` and cleanly terminated (`SIGKILL`) and reaped (`wait`) on timeout, reload, removal, or host shutdown. Stderr is captured up to 64 KiB.
+- **Protocol**: A dedicated schema-v1 manifest declares only read-only bar widgets and either polling or JSONL
+  streaming. Versioned records are capped at 1 MiB, decoded into typed models, and validated as canonical `ViewTree`
+  values before entering the shared snapshot.
+- **Lifecycle**: The worker advances scripts independently of host commands, coalesces poll ticks, applies bounded
+  retry/circuit-breaker policy, retains last-valid views, and transactionally reconciles source replacements.
+- **Exclusions**: Scripts have no WIT imports, host effects, stdin event protocol, catalog install/update/grant path,
+  search provider, action, bar-menu, settings-page, or background-task contribution.
 
 ## Lifecycle and failure policy
 

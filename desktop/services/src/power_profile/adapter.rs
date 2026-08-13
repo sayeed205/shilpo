@@ -25,15 +25,14 @@ pub(crate) use dbus::ZbusPowerProfileAdapter;
 pub(crate) mod dbus {
     //! D-Bus backend backed by the `net.hadess.PowerProfiles` daemon.
 
-    use std::{collections::HashMap, time::Duration};
+    use std::collections::HashMap;
+    use std::time::Duration;
 
     use futures_lite::StreamExt;
 
     use super::PowerProfileAdapter;
-    use crate::{
-        power_profile::{PowerProfile, PowerProfileCommand, PowerProfileInfo},
-        runtime::{CommandContext, StateContext},
-    };
+    use crate::power_profile::{PowerProfile, PowerProfileCommand, PowerProfileInfo};
+    use crate::runtime::{CommandContext, StateContext};
 
     /// The system bus name, object path, and interface of the daemon.
     const POWER_PROFILES_BUS: &str = "net.hadess.PowerProfiles";
@@ -233,10 +232,8 @@ pub(crate) mod mock {
     use tokio::sync::mpsc;
 
     use super::PowerProfileAdapter;
-    use crate::{
-        power_profile::{PowerProfileCommand, PowerProfileInfo},
-        runtime::CommandContext,
-    };
+    use crate::power_profile::{PowerProfileCommand, PowerProfileInfo};
+    use crate::runtime::CommandContext;
 
     /// Test backend whose event source is driven by the test.
     pub(crate) struct TestPowerProfileAdapter {

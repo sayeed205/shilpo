@@ -1,5 +1,13 @@
-use std::{cmp::Ordering, collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+use crate::actions::ActionInvocation;
+use crate::bar::widgets::pill_strip::{
+    PILL_SLOT_SIZE, PillOrientation, render_active_pill_indicator,
+};
+use crate::{
+    app_icons::{icon_device_pixels, rasterized_app_icon, resolve_app_icon_path},
+    runtime::ShellRuntime,
+};
 use gpui::{
     Animation, AnimationExt as _, App, ElementId, InteractiveElement, IntoElement, MouseButton,
     ObjectFit, ParentElement, RenderOnce, Role, ScrollWheelEvent, StatefulInteractiveElement,
@@ -7,13 +15,7 @@ use gpui::{
 };
 use shilpo_services::{CompositorSnapshot, WindowInfo};
 use shilpo_ui::{ActiveTheme, StyledExt};
-
-use crate::{
-    actions::ActionInvocation,
-    app_icons::{icon_device_pixels, rasterized_app_icon, resolve_app_icon_path},
-    bar::widgets::pill_strip::{PILL_SLOT_SIZE, PillOrientation, render_active_pill_indicator},
-    runtime::ShellRuntime,
-};
+use std::cmp::Ordering;
 
 const ICON_SIZE: f32 = 18.;
 

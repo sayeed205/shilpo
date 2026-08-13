@@ -1,6 +1,5 @@
-use std::sync::{Arc, Mutex};
-
 use anyhow::Result;
+use std::sync::{Arc, Mutex};
 use zbus::{Connection, interface};
 
 /// Represents a menu item in a System Tray DBusMenu.

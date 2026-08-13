@@ -1,7 +1,3 @@
-use std::path::{Path, PathBuf};
-
-use toml_edit::DocumentMut;
-
 use crate::config::{
     changeset::ConfigChangeSet,
     merge::{initial_merged_document, merge_document, read_source_document},
@@ -11,6 +7,8 @@ use crate::config::{
     unknown_keys::{UnknownConfigKey, sanitize_document},
     validation::{RecoveryScope, apply_scoped_recovery},
 };
+use std::path::{Path, PathBuf};
+use toml_edit::DocumentMut;
 
 /// A complete layered candidate: config, provenance, sources, unknown keys.
 type CandidateResult = (

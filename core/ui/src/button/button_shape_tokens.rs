@@ -1,7 +1,7 @@
+use crate::Size;
 use gpui::Pixels;
 
 use super::{ButtonRounded, button_dimension_tokens, button_scale_tokens};
-use crate::Size;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ButtonShape {
@@ -79,9 +79,8 @@ pub(crate) fn resolve_pressed(
 
 #[cfg(test)]
 mod tests {
-    use gpui::px;
-
     use super::*;
+    use gpui::px;
 
     #[test]
     fn default_shapes_are_pills() {

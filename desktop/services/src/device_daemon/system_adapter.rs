@@ -1,10 +1,9 @@
-use std::sync::{Arc, Mutex};
-
 use super::DeviceAdapter;
 use crate::device_protocol::{
     AudioAction, BrightnessAction, CaffeineAction, DeviceCommand, DeviceDomain, DomainLifecycle,
     DomainPayload, DomainState, NightLightAction,
 };
+use std::sync::{Arc, Mutex};
 
 /// Adapter that projects the existing Linux integration services through the
 /// daemon's typed device protocol.  Services that cannot connect at startup

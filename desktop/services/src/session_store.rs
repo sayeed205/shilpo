@@ -22,21 +22,17 @@
 //!   or when the open path fails), callers receive `None` and persist
 //!   exclusively in memory. The clipboard service treats `None` as offline
 //!   rather than as an error.
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
-};
-
-use heed::{
-    byteorder::NativeEndian,
-    types::{SerdeJson, Str, U64},
-};
+use heed::byteorder::NativeEndian;
+use heed::types::{SerdeJson, Str, U64};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 pub const DEFAULT_CLIPBOARD_HISTORY_LIMIT: usize = 100;
 
@@ -540,9 +536,8 @@ impl HeedSessionStore {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU32, Ordering};
-
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     static TEST_DIR_COUNTER: AtomicU32 = AtomicU32::new(1);
 

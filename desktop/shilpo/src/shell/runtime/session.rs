@@ -1,8 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
-use shilpo_services::{HeedSessionStore, RecoveryOutcome};
-
 use crate::config::{ShellConfig, ShellSessionState};
+use shilpo_services::{HeedSessionStore, RecoveryOutcome};
 
 #[derive(Clone)]
 pub struct SessionContext {

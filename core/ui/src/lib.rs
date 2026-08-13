@@ -1,6 +1,5 @@
-use std::ops::Deref;
-
 use gpui::{App, SharedString};
+use std::ops::Deref;
 
 mod async_util;
 mod element_ext;
@@ -91,6 +90,13 @@ pub mod toggle_button;
 pub mod tooltip;
 pub mod tree;
 
+pub use navigation_rail::{
+    NavigationRail, NavigationRailArrangement, NavigationRailFooter, NavigationRailHeader,
+    NavigationRailItem, NavigationRailMenuButton,
+};
+pub use side_panel::{SidePanel, SidePanelPosition};
+
+pub use crate::Disableable;
 pub use element_ext::*;
 pub use event::InteractiveElementExt;
 pub use focus_trap::{FocusTrapContainer, FocusTrapElement};
@@ -99,13 +105,6 @@ pub use global_state::GlobalState;
 pub use icon::*;
 pub use index_path::IndexPath;
 pub use input::{Rope, RopeExt, RopeLines};
-pub use navigation_rail::{
-    NavigationRail, NavigationRailArrangement, NavigationRailFooter, NavigationRailHeader,
-    NavigationRailItem, NavigationRailMenuButton,
-};
-pub use side_panel::{SidePanel, SidePanelPosition};
-
-pub use crate::Disableable;
 pub mod font;
 
 pub use font::FontFamilyCache;

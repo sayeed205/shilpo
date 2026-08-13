@@ -1,14 +1,14 @@
 use clap::{CommandFactory, Parser};
-use shilpo::cli::{
-    adapters::{self, DoctorChecker, ExtAdapter, IpcAdapter, SystemdAdapter, ThemeAdapter},
-    args::{
-        ActionCommands, BrightnessCommands, CaptureAction, Cli, Commands, ConfigCommands,
-        ExtCommands, ModeValue, ProfileCommands, ShellCommands, ThemeCommands, ThemeModeAction,
-        ThemeSeedAction, ThemeWallpaperAction, VisibilityAction, WindowCommands, WorkspaceCommands,
-    },
-    output::{CliOutput, EXIT_FAILURE, EXIT_INVALID_ARGS, EXIT_SUCCESS},
-    parse_duration,
+use shilpo::cli::adapters::{
+    self, DoctorChecker, ExtAdapter, IpcAdapter, SystemdAdapter, ThemeAdapter,
 };
+use shilpo::cli::args::{
+    ActionCommands, BrightnessCommands, CaptureAction, Cli, Commands, ConfigCommands, ExtCommands,
+    ModeValue, ProfileCommands, ShellCommands, ThemeCommands, ThemeModeAction, ThemeSeedAction,
+    ThemeWallpaperAction, VisibilityAction, WindowCommands, WorkspaceCommands,
+};
+use shilpo::cli::output::{CliOutput, EXIT_FAILURE, EXIT_INVALID_ARGS, EXIT_SUCCESS};
+use shilpo::cli::parse_duration;
 
 #[tokio::main]
 async fn main() {

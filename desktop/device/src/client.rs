@@ -1,19 +1,13 @@
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, Mutex, RwLock,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
-
-use futures_lite::StreamExt;
-use tokio::sync::broadcast;
-
 use crate::protocol::{
     CommandOutcome, DeviceCommand, DeviceDomain, DomainLifecycle, DomainPayload, DomainState,
     DomainVersion, PROTOCOL_VERSION,
 };
+use futures_lite::StreamExt;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
+use tokio::sync::broadcast;
 
 #[derive(Clone, Debug)]
 pub struct DeviceClientUpdate {
@@ -1014,13 +1008,12 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn two_clients_share_typed_production_dbus_projection_and_commands() {
-        use std::{os::unix::net::UnixStream, sync::Arc};
-
+        use crate::protocol::{AudioAction, AudioPayload};
         use shilpo_services::device_daemon::{
             DeviceDaemonService, DeviceDbusService, InMemoryDeviceAdapter,
         };
-
-        use crate::protocol::{AudioAction, AudioPayload};
+        use std::os::unix::net::UnixStream;
+        use std::sync::Arc;
 
         let (server_socket, client_socket) = UnixStream::pair().unwrap();
         let daemon = Arc::new(DeviceDaemonService::new(Arc::new(
@@ -1090,13 +1083,12 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn battery_projection_retains_last_known_payload_during_reconnect() {
-        use std::{os::unix::net::UnixStream, sync::Arc};
-
+        use crate::protocol::{BatteryChargeState, BatteryPayload};
         use shilpo_services::device_daemon::{
             DeviceDaemonService, DeviceDbusService, InMemoryDeviceAdapter,
         };
-
-        use crate::protocol::{BatteryChargeState, BatteryPayload};
+        use std::os::unix::net::UnixStream;
+        use std::sync::Arc;
 
         let (server_socket, client_socket) = UnixStream::pair().unwrap();
         let adapter = Arc::new(InMemoryDeviceAdapter::new());

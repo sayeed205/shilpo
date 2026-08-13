@@ -1,20 +1,19 @@
-use std::{rc::Rc, time::Duration};
-
+use crate::{
+    ActiveTheme, Collapsible, Icon, IconName, Side, Sizable, StyledExt,
+    button::{Button, ButtonVariants},
+    h_flex,
+    scroll::ScrollableElement,
+    v_flex,
+};
 use gpui::{
     AbsoluteLength, AnyElement, App, ClickEvent, DefiniteLength, EdgesRefinement, ElementId,
     InteractiveElement as _, IntoElement, Length, ListAlignment, ListState, ParentElement, Pixels,
     RenderOnce, SharedString, StyleRefinement, Styled, Window, div, list, prelude::FluentBuilder,
     px,
 };
+use std::{rc::Rc, time::Duration};
 
-use crate::{
-    ActiveTheme, Collapsible, Icon, IconName, Side, Sizable, StyledExt,
-    animation::{Transition, ease_in_out_cubic},
-    button::{Button, ButtonVariants},
-    h_flex,
-    scroll::ScrollableElement,
-    v_flex,
-};
+use crate::animation::{Transition, ease_in_out_cubic};
 
 mod footer;
 mod group;

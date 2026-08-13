@@ -1,10 +1,7 @@
-use std::{collections::HashMap, path::PathBuf};
-
-use gpui::App;
 use shilpo_ext_api::{CanonicalId, ExtensionEvent, ExtensionId, HostOperation, ViewTree};
 use shilpo_ext_runtime::{AuthorizedHostOperation, AuthorizedHostOperationKind};
+use std::{collections::HashMap, path::PathBuf};
 
-use super::{ShellRuntime, shell_surfaces::ShellSurfaces};
 use crate::{
     actions::{ActionId, ActionInvocation},
     extensions::{
@@ -12,6 +9,9 @@ use crate::{
         ExtensionGeneration,
     },
 };
+use gpui::App;
+
+use super::{ShellRuntime, shell_surfaces::ShellSurfaces};
 
 /// Owns the wasm extension runtime (coordinator), its in-flight task registry,
 /// and the location service used by extension effects.

@@ -1,11 +1,9 @@
-use std::collections::BTreeMap;
-
-use serde::{Deserialize, Serialize};
-
 use crate::config::{
     provenance::ConfigProvenance, resolver::ConfigSnapshot, source::SourceLocation,
     types::ShellConfig,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EffectiveWithOriginsReport {

@@ -9,11 +9,12 @@ use gpui::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{DockArea, DockItem, PanelView, TabPanel};
 use crate::{
     StyledExt,
     resizable::{PANEL_MIN_SIZE, resize_handle},
 };
+
+use super::{DockArea, DockItem, PanelView, TabPanel};
 
 #[derive(Clone)]
 struct ResizePanel;

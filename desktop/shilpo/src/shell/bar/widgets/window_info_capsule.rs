@@ -1,3 +1,5 @@
+use crate::actions::ActionInvocation;
+use crate::runtime::ShellRuntime;
 use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
@@ -5,8 +7,6 @@ use gpui::{
 use shilpo_ui::{
     ActiveTheme, Colorize, ContextMenuExt, Icon, IconName, PopupMenuItem, StyledExt, h_flex,
 };
-
-use crate::{actions::ActionInvocation, runtime::ShellRuntime};
 
 pub type ClickHandler = Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static>;
 

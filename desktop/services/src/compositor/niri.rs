@@ -1,3 +1,15 @@
+use super::{
+    BrokerOptions, CompositorAdapter, CompositorCapabilities, CompositorCommand,
+    CompositorCommandBroker, CompositorConnection, CompositorOutput, CompositorSnapshot,
+    DomainVersion, ExecutorAck, RejectionReason, SupervisorState, WindowInfo, WorkspaceInfo,
+    broker::{CommandCancellation, StreamCancelHandle, create_stream_cancel_handle},
+};
+use anyhow::Result;
+use niri_ipc::{
+    Event, Reply, Request, Response,
+    socket::Socket,
+    state::{EventStreamState, EventStreamStatePart},
+};
 use std::{
     env,
     io::{BufRead, BufReader, Write as _},
@@ -10,21 +22,7 @@ use std::{
     thread,
     time::Duration,
 };
-
-use anyhow::Result;
-use niri_ipc::{
-    Event, Reply, Request, Response,
-    socket::Socket,
-    state::{EventStreamState, EventStreamStatePart},
-};
 use tokio::sync::watch;
-
-use super::{
-    BrokerOptions, CompositorAdapter, CompositorCapabilities, CompositorCommand,
-    CompositorCommandBroker, CompositorConnection, CompositorOutput, CompositorSnapshot,
-    DomainVersion, ExecutorAck, RejectionReason, SupervisorState, WindowInfo, WorkspaceInfo,
-    broker::{CommandCancellation, StreamCancelHandle, create_stream_cancel_handle},
-};
 
 const INITIAL_BACKOFF_MS: u64 = 250;
 const MAX_BACKOFF_MS: u64 = 30_000;
@@ -973,13 +971,12 @@ fn publish_snapshot_from_state(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::compositor::{CancellationReason, CommandOutcome};
     use std::{
         fs::OpenOptions,
         os::unix::{io::AsRawFd, net::UnixListener},
     };
-
-    use super::*;
-    use crate::compositor::{CancellationReason, CommandOutcome};
 
     fn fake_niri_root() -> PathBuf {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

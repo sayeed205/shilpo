@@ -32,6 +32,56 @@ In addition to WASM extensions, Shilpo supports **trusted local scripts** for re
 - **Supervision**: Process groups are created with `setpgid` and cleanly terminated and reaped (`SIGKILL` + `wait`) on timeout, reload, removal, or host shutdown. Stderr is captured up to 64 KiB for diagnostics.
 - **Catalog & CLI**: Reported in `shilpo ext list` as `Trusted local script (not sandboxed)`. Scripts are excluded from registry install, update, and grant operations.
 
+Each immediate child of `$XDG_CONFIG_HOME/shilpo/scripts/` is a bundle. The manifest is a separate deny-unknown-fields
+schema; it is not a WASM extension manifest:
+
+```toml
+schema_version = 1
+id = "local.cpu-temperature"
+name = "CPU Temperature"
+version = "0.1.0"
+
+[runtime]
+mode = "poll" # or "stream"
+executable = "cpu-temp"
+args = []
+interval_ms = 5000 # poll only
+timeout_ms = 1000
+
+[[contributions.bar_widgets]]
+id = "temperature"
+name = "CPU Temperature"
+```
+
+The executable is a normalized relative path contained by the canonical bundle root. It is invoked directly with the
+declared argv, never through a shell. Poll intervals are 1 second through 24 hours; timeouts are 100 ms through 60
+seconds and must be shorter than the poll interval. Stream manifests omit `interval_ms`.
+
+Scripts write schema-v1 UTF-8 JSON records to stdout. Poll mode requires exactly one non-empty record per invocation;
+stream mode uses newline-delimited records. Each record is capped at 1 MiB and addresses one manifest contribution:
+
+```json
+{"schema_version":1,"contribution":"temperature","kind":"view","view":{"root":{"kind":"text","content":"45°C"}}}
+```
+
+```json
+{"schema_version":1,"contribution":"temperature","kind":"text","text":"45°C","tooltip":"CPU: 45°C","icon":"thermometer"}
+```
+
+Every decoded tree passes canonical `ViewTree` validation plus the script runtime's read-only policy. Invalid UTF-8,
+JSON, schema versions, contribution IDs, icons, paths, and interactive nodes retain the last valid view and emit a
+bounded diagnostic. Source reconciliation validates a replacement before stopping its task and retains the last valid
+view until the replacement publishes successfully.
+
+The extension-host closes stdin, clears the environment except for `PATH` and locale, bounds stdout/stderr, and owns a
+process group for every invocation. Polls never overlap; a due tick coalesces to one pending run. Stream failures use
+the extension failure backoff/circuit breaker. Timeout, source removal, replacement, circuit-open, shutdown, and worker
+exit cancel, kill, and reap the complete group.
+
+This runtime deliberately provides no registry/URL installation, signing, updates, grants, WIT imports, host effects,
+stdin event protocol, search providers, actions, bar menus, settings pages, or background tasks. Local scripts run with
+the user's OS authority and must not be described as sandboxed.
+
 ### Bar menus
 
 A bar menu is a single typed `ViewTree` surface linked to one bar widget in the same manifest:

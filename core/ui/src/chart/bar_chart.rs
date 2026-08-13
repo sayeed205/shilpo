@@ -7,7 +7,6 @@ use gpui::{
 use num_traits::{Num, ToPrimitive};
 use shilpo_macros::IntoPlot;
 
-use super::build_band_labels;
 use crate::{
     ActiveTheme,
     plot::{
@@ -18,6 +17,8 @@ use crate::{
         tooltip::{CrossLine, Tooltip, TooltipState},
     },
 };
+
+use super::build_band_labels;
 
 #[derive(IntoPlot)]
 pub struct BarChart<T, B, V>

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use shilpo_ext_api::{
-    Alignment, ContainerDirection, ContainerNode, ContributionId, IconNode, TextNode, ViewLimits,
-    ViewNode, ViewTree,
+    Alignment, ContainerDirection, ContainerNode, ContributionId, IconNode, SemanticColorToken,
+    TextNode, ViewLimits, ViewNode, ViewStyle, ViewTree,
 };
 
 use super::manifest::ScriptManifest;
@@ -69,7 +69,21 @@ pub fn decode_and_validate_record(
 
     let view_tree = match record.payload {
         ScriptRecordPayload::View { view } => view,
-        ScriptRecordPayload::Text { text, icon, .. } => {
+        ScriptRecordPayload::Text {
+            text,
+            tooltip,
+            icon,
+        } => {
+            if tooltip
+                .as_ref()
+                .is_some_and(|value| value.trim().is_empty())
+            {
+                return Err("tooltip cannot be empty when provided".into());
+            }
+            let semantic_style = Some(ViewStyle {
+                color: Some(SemanticColorToken::OnSurface),
+                ..ViewStyle::default()
+            });
             let root = if let Some(icon_name) = icon {
                 if icon_name.trim().is_empty() {
                     return Err("icon name cannot be empty".into());
@@ -80,13 +94,16 @@ pub fn decode_and_validate_record(
                         ViewNode::Icon(IconNode {
                             name: icon_name,
                             size: None,
-                            style: None,
+                            style: Some(ViewStyle {
+                                color: Some(SemanticColorToken::OnSurfaceVariant),
+                                ..ViewStyle::default()
+                            }),
                         }),
                         ViewNode::Text(TextNode {
                             content: text,
                             font_size: None,
                             bold: None,
-                            style: None,
+                            style: semantic_style,
                         }),
                     ],
                     style: None,
@@ -101,7 +118,7 @@ pub fn decode_and_validate_record(
                     content: text,
                     font_size: None,
                     bold: None,
-                    style: None,
+                    style: semantic_style,
                 })
             };
             ViewTree::new(root)
@@ -109,8 +126,39 @@ pub fn decode_and_validate_record(
     };
 
     view_tree
-        .validate_read_only(ViewLimits::default())
+        .validate(ViewLimits::default())
         .map_err(|e| format!("invalid view tree in script record: {e}"))?;
+    validate_read_only_node(&view_tree.root)?;
 
     Ok((record.contribution, view_tree))
+}
+
+fn validate_read_only_node(node: &ViewNode) -> Result<(), String> {
+    match node {
+        ViewNode::Button(_)
+        | ViewNode::IconButton(_)
+        | ViewNode::Toggle(_)
+        | ViewNode::Slider(_)
+        | ViewNode::TextInput(_) => {
+            Err("script bar widgets are read-only in v1; interactive nodes are rejected".into())
+        }
+        ViewNode::Container(container) => {
+            if container.event_id.is_some() {
+                return Err(
+                    "script bar widgets are read-only in v1; event IDs are rejected".into(),
+                );
+            }
+            for child in &container.children {
+                validate_read_only_node(child)?;
+            }
+            Ok(())
+        }
+        ViewNode::List(list) => {
+            for item in &list.items {
+                validate_read_only_node(item)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }

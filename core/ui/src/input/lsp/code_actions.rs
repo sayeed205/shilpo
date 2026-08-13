@@ -1,8 +1,7 @@
-use std::ops::Range;
-
 use anyhow::Result;
 use gpui::{App, Context, Entity, SharedString, Task, Window};
 use lsp_types::CodeAction;
+use std::ops::Range;
 
 use crate::input::{
     InputState, ToggleCodeActions,

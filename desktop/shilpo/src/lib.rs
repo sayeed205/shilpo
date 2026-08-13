@@ -5,7 +5,8 @@ pub mod settings;
 pub mod shell;
 
 pub use assets::Assets;
-pub use cli::{parse_duration, *};
+pub use cli::parse_duration;
+pub use cli::*;
 pub use config::*;
 pub use settings::*;
 pub use shell::*;

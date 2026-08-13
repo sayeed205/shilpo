@@ -62,6 +62,9 @@ capability. This created security and design risks:
 7. **Trusted Local Script Boundary vs WASM Capabilities**:
     - Trusted local scripts (`$XDG_CONFIG_HOME/shilpo/scripts/<bundle>/manifest.toml`) run with the user's OS authority as local-only status bar widgets.
     - WASM guests compiled against `shilpo:extension@0.1.0` WIT contract have zero access to process execution, cannot spawn child processes, and cannot configure, invoke, or influence trusted local script execution.
+    - The script runtime is a separate, host-owned adapter with a dedicated schema-v1 manifest and bounded JSON record
+      protocol. Script bundles are local-only, visibly unsandboxed, and excluded from registry, update, grant, WIT
+      import, host-effect, and interactive contribution paths.
 
 ## Consequences & Follow-ups
 

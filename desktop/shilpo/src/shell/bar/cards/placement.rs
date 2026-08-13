@@ -4,10 +4,10 @@
 //! geometry types that can be constructed in plain `#[test]` cases without a
 //! display server.
 
+use crate::config::BarPosition;
 use gpui::{Bounds, Pixels, Point, Size, px};
 
 use super::model::CardSizeTier;
-use crate::config::BarPosition;
 
 // ────────────────────────────────────────────────────────────────
 // Constants
@@ -527,9 +527,8 @@ fn fits_vertically(card: Bounds<Pixels>, monitor: Bounds<Pixels>, safe: Pixels) 
 
 #[cfg(test)]
 mod tests {
-    use gpui::{Bounds, Pixels, Point, Size, point, px, size};
-
     use super::*;
+    use gpui::{Bounds, Pixels, Point, Size, point, px, size};
 
     fn monitor_1080p() -> Bounds<Pixels> {
         Bounds {

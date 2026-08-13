@@ -2,8 +2,9 @@
 
 use gpui::{Pixels, px};
 
-use super::ButtonVariant;
 use crate::Size;
+
+use super::ButtonVariant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ButtonScale {

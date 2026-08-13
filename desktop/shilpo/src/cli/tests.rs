@@ -1,13 +1,9 @@
-use std::fs;
-
+use crate::adapters::ConfigMigrateAdapter;
+use crate::args::{Cli, Commands, ConfigCommands, ModeValue, ShellCommands, VisibilityAction};
+use crate::output::{CliOutput, EXIT_FAILURE, EXIT_INVALID_ARGS, JsonEnvelope};
 use clap::Parser;
+use std::fs;
 use tempfile::TempDir;
-
-use crate::{
-    adapters::ConfigMigrateAdapter,
-    args::{Cli, Commands, ConfigCommands, ModeValue, ShellCommands, VisibilityAction},
-    output::{CliOutput, EXIT_FAILURE, EXIT_INVALID_ARGS, JsonEnvelope},
-};
 
 #[test]
 fn test_cli_parser_shell_subcommands() {
@@ -598,7 +594,8 @@ fn test_cli_config_version_in_fragment_or_override_rejected() {
 
 #[test]
 fn test_cli_config_effective_human_roundtrip() {
-    use crate::{adapters::ConfigAdapter, config::ShellConfig};
+    use crate::adapters::ConfigAdapter;
+    use crate::config::ShellConfig;
 
     let (_dir, primary) = cli_tmp_primary("version = 1\n[theme]\nfont_family = \"Inter\"\n");
 
@@ -687,7 +684,8 @@ fn test_cli_config_read_only_invariants() {
 
 #[test]
 fn test_cli_config_adapter_uses_shared_resolver_seam() {
-    use crate::{adapters::ConfigAdapter, config::ConfigResolver};
+    use crate::adapters::ConfigAdapter;
+    use crate::config::ConfigResolver;
 
     let (_dir, primary) = cli_tmp_primary("version = 1\n[bar]\nheight = 50\n");
 

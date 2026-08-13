@@ -235,26 +235,6 @@
           "required": [
             "kind"
           ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "secrets"
-            },
-            "purposes": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/SecretPurpose"
-              }
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "purposes"
-          ]
         }
       ]
     },
@@ -435,9 +415,6 @@
         "beta",
         "development"
       ]
-    },
-    "SecretPurpose": {
-      "type": "string"
     },
     "WallpaperSource": {
       "type": "string",

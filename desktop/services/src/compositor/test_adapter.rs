@@ -1,11 +1,9 @@
-use std::sync::{Arc, Mutex};
-
-use tokio::sync::watch;
-
 use super::{
     BrokerOptions, CompositorAdapter, CompositorCommand, CompositorCommandBroker,
     CompositorSnapshot, ExecutorAck, StaleUpdateError,
 };
+use std::sync::{Arc, Mutex};
+use tokio::sync::watch;
 
 /// In-memory compositor adapter implementation for testing.
 pub struct TestCompositorAdapter {

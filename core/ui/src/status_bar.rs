@@ -25,7 +25,7 @@ use crate::{ActiveTheme, StyledExt, h_flex};
 /// ```
 /// use shilpo_ui::status_bar::StatusBar;
 ///
-/// let _ = StatusBar::new().left("Ln 1, Col 1",).right("UTF-8",);
+/// let _ = StatusBar::new().left("Ln 1, Col 1").right("UTF-8");
 /// ```
 #[derive(IntoElement)]
 pub struct StatusBar {

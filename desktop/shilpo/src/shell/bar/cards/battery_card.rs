@@ -4,9 +4,10 @@ use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ParentElement, Pixels, Size,
     StatefulInteractiveElement, Styled, Window, div, px,
 };
+use shilpo_services::ServiceLifecycle;
 use shilpo_services::{
     BatteryChargeState, BatteryDevicePayload, BatteryPayload, BatteryTechnology,
-    BatteryWarningLevel, ServiceLifecycle,
+    BatteryWarningLevel,
 };
 use shilpo_ui::{ActiveTheme, Icon, IconName, h_flex, v_flex};
 
@@ -524,9 +525,8 @@ fn render_physical_device_details(
 
 #[cfg(test)]
 mod tests {
-    use shilpo_services::{OptionalF64, OptionalU64};
-
     use super::*;
+    use shilpo_services::{OptionalF64, OptionalU64};
 
     #[test]
     fn test_format_time_helpers() {

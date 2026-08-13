@@ -1,15 +1,17 @@
-use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ops::Range;
+use std::rc::Rc;
 
 use gpui::{DefiniteLength, Hsla, SharedString, px, relative};
-use html5ever::{LocalName, ParseOpts, local_name, parse_document, tendril::TendrilSink};
+use html5ever::tendril::TendrilSink;
+use html5ever::{LocalName, ParseOpts, local_name, parse_document};
 use markup5ever_rcdom::{Node, NodeData, RcDom};
 
-use crate::text::{
-    document::ParsedDocument,
-    node::{
-        self, BlockNode, ImageNode, InlineNode, LinkMark, NodeContext, Paragraph, Table, TableRow,
-        TextMark,
-    },
+use crate::text::document::ParsedDocument;
+use crate::text::node::{
+    self, BlockNode, ImageNode, InlineNode, LinkMark, NodeContext, Paragraph, Table, TableRow,
+    TextMark,
 };
 
 const BLOCK_ELEMENTS: [&str; 35] = [
@@ -657,11 +659,12 @@ fn consume_paragraph(children: &mut Vec<BlockNode>, paragraph: &mut Paragraph) {
 mod tests {
     use gpui::{px, relative};
 
-    use super::trim_text;
     use crate::text::{
         document::ParsedDocument,
         node::{BlockNode, ImageNode, InlineNode, NodeContext, Paragraph},
     };
+
+    use super::trim_text;
 
     #[test]
     fn test_cleanup_html() {

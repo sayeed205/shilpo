@@ -1,26 +1,20 @@
-use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-    os::fd::AsFd,
-    time::Instant,
-};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::os::fd::AsFd;
+use std::time::Instant;
 
 use anyhow::Context;
 use memfd::MemfdOptions;
-use wayland_client::{
-    Connection, Dispatch, Proxy, QueueHandle,
-    globals::{GlobalList, registry_queue_init},
-    protocol::{wl_buffer, wl_output, wl_registry, wl_shm, wl_shm_pool},
-};
+use wayland_client::globals::{GlobalList, registry_queue_init};
+use wayland_client::protocol::{wl_buffer, wl_output, wl_registry, wl_shm, wl_shm_pool};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_frame_v1::{self, ZwlrScreencopyFrameV1},
     zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
 };
 
-use crate::capture::{
-    backend::CaptureBackend,
-    types::{Frame, FrameFormat},
-};
+use crate::capture::backend::CaptureBackend;
+use crate::capture::types::{Frame, FrameFormat};
 
 struct OutputEntry {
     output: wl_output::WlOutput,

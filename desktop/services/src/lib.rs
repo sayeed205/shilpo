@@ -24,6 +24,8 @@ pub mod status;
 pub mod tray;
 pub mod upower;
 
+pub use session_store::*;
+
 pub use applications::{
     AppScanner, Application, find_terminal_emulator, parse_uri_list, percent_decode,
     resolve_handler_for_uri, validate_drag_drop_payload,
@@ -56,12 +58,10 @@ pub use notifications::{
     NotificationSnapshot, NotificationUrgency,
 };
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
-pub use session_store::*;
 pub use status::{BarState, ReadinessState, ServiceHealth, ServiceLifecycle};
 
 pub async fn run_device_daemon() -> anyhow::Result<()> {
     use std::sync::Arc;
-
     use zbus::object_server::SignalEmitter;
 
     let _obs_guard = shilpo_observability::init(

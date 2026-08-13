@@ -3,11 +3,10 @@
 //!
 //! Note: diagnostics.rs is available in WASM, only syntax highlighting requires stubs.
 
-use std::{ops::Range, time::Duration};
-
-use gpui::{HighlightStyle, SharedString};
-
 use crate::ActiveTheme as _;
+use gpui::{HighlightStyle, SharedString};
+use std::ops::Range;
+use std::time::Duration;
 
 // Syntax highlighter stub
 pub struct SyntaxHighlighter;
@@ -99,14 +98,13 @@ impl LanguageConfig {
 
 // Re-export theme types from registry module (which will be conditionally compiled)
 // For WASM, we create minimal stubs here
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::{
     collections::HashMap,
     sync::{LazyLock, Mutex},
 };
-
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use serde_repr::{Deserialize_repr, Serialize_repr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use crate::{ActiveTheme, AxisExt, ElementExt, Sizable, StyledExt, h_flex};
 use gpui::{
     AccessibleAction, Along, App, AppContext as _, Axis, Background, Bounds, Context, Corners,
     DefiniteLength, DragMoveEvent, Empty, Entity, EntityId, EventEmitter, InteractiveElement,
@@ -7,8 +8,6 @@ use gpui::{
     Point, Render, RenderOnce, Role, StatefulInteractiveElement as _, StyleRefinement, Styled,
     Window, div, prelude::FluentBuilder as _, px, relative,
 };
-
-use crate::{ActiveTheme, AxisExt, ElementExt, Sizable, StyledExt, h_flex};
 
 #[derive(Clone)]
 struct DragThumb((EntityId, bool));
@@ -157,15 +156,12 @@ pub enum SliderScale {
     /// # For example
     ///
     /// ```
-    /// use shilpo_ui::slider::{
-    ///     SliderScale,
-    ///     SliderState,
-    /// };
+    /// use shilpo_ui::slider::{SliderState, SliderScale};
     ///
     /// let slider = SliderState::new()
-    ///     .min(1.0,) // Must be > 0 for logarithmic scale
-    ///     .max(1000.0,)
-    ///     .scale(SliderScale::Logarithmic,);
+    ///     .min(1.0)    // Must be > 0 for logarithmic scale
+    ///     .max(1000.0)
+    ///     .scale(SliderScale::Logarithmic);
     /// ```
     ///
     /// - Moving the slider 1/3 of the way will yield ~10

@@ -1,13 +1,12 @@
+use gpui::{App, FontWeight, HighlightStyle, Hsla, SharedString};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::{
     collections::HashMap,
     ops::Deref,
     sync::{Arc, LazyLock, Mutex},
 };
-
-use gpui::{App, FontWeight, HighlightStyle, Hsla, SharedString};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use serde_repr::{Deserialize_repr, Serialize_repr};
 
 use crate::{
     ActiveTheme, ThemeMode,

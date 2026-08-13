@@ -1,13 +1,10 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
-
 use crate::device_protocol::{
     AudioAction, BrightnessAction, CaffeineAction, DeviceCommand, DeviceDomain, DomainLifecycle,
     DomainPayload, DomainState, NightLightAction,
 };
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 pub trait DeviceAdapter: Send + Sync {
     fn name(&self) -> &'static str;
@@ -45,45 +42,41 @@ impl InMemoryDeviceAdapter {
                 domain,
                 DomainState {
                     domain,
-                    version: crate::device_protocol::DomainVersion::new(1, 1,),
+                    version: crate::device_protocol::DomainVersion::new(1, 1),
                     lifecycle: DomainLifecycle::Ready,
                     payload: match domain {
-                        DeviceDomain::Audio => {
-                            DomainPayload::Audio(crate::device_protocol::AudioPayload {
-                                volume: 50,
-                                ..Default::default()
-                            },)
-                        }
+                        DeviceDomain::Audio => DomainPayload::Audio(crate::device_protocol::AudioPayload {
+                            volume: 50,
+                            ..Default::default()
+                        }),
                         DeviceDomain::Brightness => {
                             DomainPayload::Brightness(crate::device_protocol::BrightnessPayload {
                                 percentage: 70,
                                 ..Default::default()
-                            },)
+                            })
                         }
                         DeviceDomain::NightLight => {
                             DomainPayload::NightLight(crate::device_protocol::NightLightPayload {
                                 temperature: 4000,
                                 ..Default::default()
-                            },)
+                            })
                         }
-                        DeviceDomain::Caffeine => DomainPayload::Caffeine(
-                            crate::device_protocol::CaffeinePayload::default(),
-                        ),
-                        DeviceDomain::Bluetooth => DomainPayload::Bluetooth(
-                            crate::device_protocol::BluetoothPayload::default(),
-                        ),
-                        DeviceDomain::Network => DomainPayload::Network(
-                            crate::device_protocol::NetworkPayload::default(),
-                        ),
-                        DeviceDomain::PowerProfile => DomainPayload::PowerProfile(
-                            crate::device_protocol::PowerProfilePayload::default(),
-                        ),
-                        DeviceDomain::Media => {
-                            DomainPayload::Media(crate::device_protocol::MediaPayload::default(),)
+                        DeviceDomain::Caffeine => {
+                            DomainPayload::Caffeine(crate::device_protocol::CaffeinePayload::default())
                         }
-                        DeviceDomain::Battery => DomainPayload::Battery(
-                            crate::device_protocol::BatteryPayload::default(),
-                        ),
+                        DeviceDomain::Bluetooth => {
+                            DomainPayload::Bluetooth(crate::device_protocol::BluetoothPayload::default())
+                        }
+                        DeviceDomain::Network => {
+                            DomainPayload::Network(crate::device_protocol::NetworkPayload::default())
+                        }
+                        DeviceDomain::PowerProfile => {
+                            DomainPayload::PowerProfile(crate::device_protocol::PowerProfilePayload::default())
+                        }
+                        DeviceDomain::Media => DomainPayload::Media(crate::device_protocol::MediaPayload::default()),
+                        DeviceDomain::Battery => {
+                            DomainPayload::Battery(crate::device_protocol::BatteryPayload::default())
+                        }
                     },
                     error: None,
                 },

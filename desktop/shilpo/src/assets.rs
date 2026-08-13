@@ -1,7 +1,6 @@
-use std::borrow::Cow;
-
 use anyhow::anyhow;
 use gpui::{AssetSource, Result, SharedString};
+use std::borrow::Cow;
 
 #[derive(rust_embed::RustEmbed)]
 #[folder = "../../core/assets"]

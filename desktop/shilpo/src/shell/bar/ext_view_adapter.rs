@@ -1,3 +1,4 @@
+use crate::runtime::ShellRuntime;
 use gpui::{
     App, AppContext, InteractiveElement, IntoElement, MouseButton, ParentElement,
     StatefulInteractiveElement, Styled, Window, div, px,
@@ -12,8 +13,6 @@ use shilpo_ui::{
     progress::LoadingIndicator,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
 };
-
-use crate::runtime::ShellRuntime;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContainerDescriptor {
@@ -640,14 +639,13 @@ pub fn create_showcase_view_tree() -> ViewTree {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::shell::runtime::ShellRuntime;
     use gpui::{Context, Render, TestAppContext, VisualTestContext, point};
     use shilpo_ext_api::{
         ButtonNode, ContainerNode, ContributionId, ExtensionId, SliderNode, TextInputNode,
         ToggleNode, ViewLimits,
     };
-
-    use super::*;
-    use crate::shell::runtime::ShellRuntime;
 
     struct TestExtensionView {
         contribution: CanonicalId,

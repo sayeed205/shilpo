@@ -1,5 +1,4 @@
-use std::{io::Cursor, sync::Arc};
-
+use crate::config::CaptureConfig;
 use gpui::{
     App, AppContext, Context, FocusHandle, Focusable, Image, ImageFormat, ImageSource,
     InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
@@ -8,8 +7,8 @@ use gpui::{
 use image::RgbaImage;
 use shilpo_services::capture::{CaptureIntent, Region, copy_image_to_clipboard, crop_image};
 use shilpo_ui::ActiveTheme;
-
-use crate::config::CaptureConfig;
+use std::io::Cursor;
+use std::sync::Arc;
 
 /// GPUI-owned selection surface. The compositor frame is frozen before this
 /// window is opened, so dragging never changes the pixels underneath it.
@@ -80,9 +79,7 @@ impl CaptureOverlayView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(start) = self.drag_start else {
-            return;
-        };
+        let Some(start) = self.drag_start else { return };
         let end = event.position;
         self.selection = Some(region_between(start, end));
         cx.notify();

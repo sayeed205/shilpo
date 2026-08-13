@@ -1,12 +1,10 @@
+use crate::discovery::{discover_newest_completed_trace, is_valid_completed_trace_file};
+use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
     io::Write,
     path::{Path, PathBuf},
 };
-
-use serde::{Deserialize, Serialize};
-
-use crate::discovery::{discover_newest_completed_trace, is_valid_completed_trace_file};
 
 /// Export outcome data payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

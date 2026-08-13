@@ -1,9 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::{
     fmt, fs,
     path::{Path, PathBuf},
 };
-
-use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConfigSource {

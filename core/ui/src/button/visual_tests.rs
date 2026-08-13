@@ -5,15 +5,12 @@ use gpui::{
     TestAppContext, VisualTestContext, Window, div, prelude::FluentBuilder as _, px,
 };
 
-use crate::{
-    Disableable, IconName, Sizable, Size,
-    button::{
-        Button, ButtonGroup, ButtonGroupMode, ButtonVariant, ButtonVariants, IconButton,
-        IconButtonSize, SplitButton,
-        button_geometry::{self, ButtonSlotGeometry, CornerShape},
-        button_tokens, icon_button_dimensions,
-    },
+use crate::button::button_geometry::{self, ButtonSlotGeometry, CornerShape};
+use crate::button::{
+    Button, ButtonGroup, ButtonGroupMode, ButtonVariant, ButtonVariants, IconButton,
+    IconButtonSize, SplitButton, button_tokens, icon_button_dimensions,
 };
+use crate::{Disableable, IconName, Sizable, Size};
 
 fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();

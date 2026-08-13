@@ -5,6 +5,7 @@ use gpui::{
     StatefulInteractiveElement, StyleRefinement, Styled, Window, anchored, deferred, div,
     prelude::FluentBuilder, px, rems,
 };
+
 use rust_i18n::t;
 
 use crate::{

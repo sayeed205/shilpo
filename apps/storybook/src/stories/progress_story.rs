@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gpui::{
     App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled, Task,
     Window, div, prelude::FluentBuilder as _,
@@ -11,6 +9,7 @@ use shilpo_ui::{
     progress::{LoadingIndicator, Progress, ProgressCircle},
     v_flex,
 };
+use std::time::Duration;
 
 use crate::section;
 

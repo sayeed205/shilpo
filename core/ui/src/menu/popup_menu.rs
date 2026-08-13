@@ -1,22 +1,18 @@
-use std::rc::Rc;
-
+use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
+use crate::actions::{SelectLeft, SelectRight};
+use crate::menu::menu_item::MenuItemElement;
+use crate::scroll::ScrollableElement;
+use crate::{ActiveTheme, ElementExt, Icon, IconName, Sizable as _, h_flex, v_flex};
+use crate::{Side, Size, StyledExt, kbd::Kbd};
 use gpui::{
-    Action, Anchor, AnyElement, App, AppContext, Bounds, ClickEvent, Context, DismissEvent, Edges,
-    Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
-    MouseDownEvent, OwnedMenuItem, ParentElement, Pixels, Point, Render, Role, ScrollHandle,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, anchored,
-    div, prelude::FluentBuilder, px,
+    Action, Anchor, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Edges, Entity,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
+    ParentElement, Pixels, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement,
+    Styled, WeakEntity, Window, anchored, div, prelude::FluentBuilder, px,
 };
+use gpui::{ClickEvent, MouseDownEvent, OwnedMenuItem, Point, Subscription};
 
-use crate::{
-    ActiveTheme, ElementExt, Icon, IconName, Side, Sizable as _, Size, StyledExt,
-    actions::{Cancel, Confirm, SelectDown, SelectLeft, SelectRight, SelectUp},
-    h_flex,
-    kbd::Kbd,
-    menu::menu_item::MenuItemElement,
-    scroll::ScrollableElement,
-    v_flex,
-};
+use std::rc::Rc;
 
 const CONTEXT: &str = "PopupMenu";
 

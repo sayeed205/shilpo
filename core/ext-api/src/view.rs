@@ -1,10 +1,7 @@
-use std::{
-    fmt,
-    path::{Component, Path},
-};
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::path::{Component, Path};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ViewLimits {
@@ -50,39 +47,6 @@ impl ViewTree {
     pub fn validate(&self, limits: ViewLimits) -> Result<(), ViewValidationError> {
         let mut state = ValidationState::default();
         validate_node(&self.root, 1, limits, &mut state)
-    }
-
-    pub fn validate_read_only(&self, limits: ViewLimits) -> Result<(), ViewValidationError> {
-        self.validate(limits)?;
-        validate_node_read_only(&self.root)
-    }
-}
-
-fn validate_node_read_only(node: &ViewNode) -> Result<(), ViewValidationError> {
-    match node {
-        ViewNode::Button(_)
-        | ViewNode::IconButton(_)
-        | ViewNode::Toggle(_)
-        | ViewNode::Slider(_)
-        | ViewNode::TextInput(_) => {
-            invalid("script bar widgets are read-only in v1; interactive nodes are rejected")
-        }
-        ViewNode::Container(container) => {
-            if container.event_id.is_some() {
-                return invalid("script bar widgets are read-only in v1; event IDs are rejected");
-            }
-            for child in &container.children {
-                validate_node_read_only(child)?;
-            }
-            Ok(())
-        }
-        ViewNode::List(list) => {
-            for item in &list.items {
-                validate_node_read_only(item)?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
     }
 }
 
@@ -1040,61 +1004,5 @@ mod tests {
             event_id: None,
         }));
         assert!(tree_distinct.validate(ViewLimits::default()).is_ok());
-    }
-
-    #[test]
-    fn validate_read_only_rejects_interactive_nodes_and_event_ids() {
-        let read_only_tree = ViewTree::new(ViewNode::Container(ContainerNode {
-            direction: ContainerDirection::Row,
-            children: vec![
-                ViewNode::Icon(IconNode {
-                    name: "thermometer".into(),
-                    size: None,
-                    style: None,
-                }),
-                ViewNode::Text(TextNode {
-                    content: "45°C".into(),
-                    font_size: None,
-                    bold: None,
-                    style: None,
-                }),
-            ],
-            style: None,
-            gap: None,
-            align_items: None,
-            justify_content: None,
-            wrap: false,
-            event_id: None,
-        }));
-        assert!(
-            read_only_tree
-                .validate_read_only(ViewLimits::default())
-                .is_ok()
-        );
-
-        let button_tree = ViewTree::new(ViewNode::Button(ButtonNode {
-            label: "Click".into(),
-            event_id: "click_btn".into(),
-            style: None,
-        }));
-        let err = button_tree
-            .validate_read_only(ViewLimits::default())
-            .unwrap_err();
-        assert!(err.to_string().contains("read-only"));
-
-        let container_event_tree = ViewTree::new(ViewNode::Container(ContainerNode {
-            direction: ContainerDirection::Row,
-            children: vec![],
-            style: None,
-            gap: None,
-            align_items: None,
-            justify_content: None,
-            wrap: false,
-            event_id: Some("clicked_container".into()),
-        }));
-        let err = container_event_tree
-            .validate_read_only(ViewLimits::default())
-            .unwrap_err();
-        assert!(err.to_string().contains("read-only"));
     }
 }

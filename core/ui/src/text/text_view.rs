@@ -1,22 +1,19 @@
 use std::sync::Arc;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, Bounds, Element, ElementId, Entity, GlobalElementId, Hitbox, HitboxBehavior,
     InspectorElementId, InteractiveElement, IntoElement, LayoutId, ParentElement, Pixels,
-    SharedString, StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _,
+    SharedString, StyleRefinement, Styled, Window, div,
 };
 
-use crate::{
-    StyledExt,
-    global_state::GlobalState,
-    scroll::ScrollableElement,
-    text::{
-        TextViewFormat, TextViewStyle,
-        markdown_ext::{MarkdownExtensions, MarkdownNode, MarkdownPlugin},
-        node::CodeBlock,
-        state::TextViewState,
-    },
-};
+use crate::StyledExt;
+use crate::scroll::ScrollableElement;
+use crate::text::TextViewFormat;
+use crate::text::markdown_ext::{MarkdownExtensions, MarkdownNode, MarkdownPlugin};
+use crate::text::node::CodeBlock;
+use crate::text::state::TextViewState;
+use crate::{global_state::GlobalState, text::TextViewStyle};
 
 /// Type for code block actions generator function.
 pub(crate) type CodeBlockActionsFn =
@@ -358,14 +355,13 @@ impl Element for TextView {
 
 #[cfg(test)]
 mod tests {
+    use super::{TextView, TextViewPlugin};
+    use crate::text::TextViewState;
     use gpui::{
         AppContext as _, Context, Entity, IntoElement, Modifiers, MouseButton, MouseDownEvent,
         MouseUpEvent, ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext,
         Window, div, point, px,
     };
-
-    use super::{TextView, TextViewPlugin};
-    use crate::text::TextViewState;
 
     struct TextViewTestRoot {
         text_view: Entity<TextViewState>,

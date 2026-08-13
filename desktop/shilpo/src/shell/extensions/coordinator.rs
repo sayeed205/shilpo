@@ -1,14 +1,13 @@
-use std::{
-    path::{Component, Path, PathBuf},
-    sync::{Arc, mpsc},
-    time::Duration,
-};
-
 use shilpo_ext_api::{CanonicalId, ViewTree};
 use shilpo_ext_runtime::{
     CatalogPaths, ContributionDescriptor, ContributionSurface, ExtensionCommand,
     ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, HostGeneration,
     default_extension_state_dir,
+};
+use std::{
+    path::{Component, Path, PathBuf},
+    sync::{Arc, mpsc},
+    time::Duration,
 };
 
 pub struct ExtensionCoordinator {
@@ -42,6 +41,7 @@ impl ExtensionCoordinator {
             default_extension_state_dir().join("dev"),
             paths.data_dir.join("installed"),
             paths.data_dir.join("activated"),
+            paths.config_dir.clone(),
         ];
         let mut watcher = None;
         let mut fallback_scan = None;

@@ -1,5 +1,3 @@
-use std::{cell::RefCell, ops::Range, rc::Rc, time::Duration};
-
 use anyhow::Result;
 use gpui::{Context, EntityInputHandler, Task, Window};
 use lsp_types::{
@@ -8,6 +6,7 @@ use lsp_types::{
     request::Completion,
 };
 use ropey::Rope;
+use std::{cell::RefCell, ops::Range, rc::Rc, time::Duration};
 
 use crate::input::{
     InputState,

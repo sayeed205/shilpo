@@ -27,6 +27,17 @@ pub enum ExtensionRuntimeKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptExtensionStatus {
+    pub id: ExtensionId,
+    pub name: String,
+    pub version: String,
+    pub source: String,
+    pub status: String,
+    pub contributions_count: usize,
+    pub diagnostics: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContributionDescriptor {
     pub id: CanonicalId,
     pub extension_name: String,
@@ -75,6 +86,8 @@ pub struct ExtensionSnapshot {
     pub catalog_changed_at: Option<ExtensionGeneration>,
     pub settings_schemas: Arc<BTreeMap<CanonicalId, serde_json::Value>>,
     pub prevalidated_asset_roots: Arc<BTreeMap<ExtensionId, PathBuf>>,
+    #[serde(default)]
+    pub script_extensions: Arc<[ScriptExtensionStatus]>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

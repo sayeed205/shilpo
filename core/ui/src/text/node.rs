@@ -14,7 +14,6 @@ use gpui::{
 use markdown::mdast;
 use ropey::Rope;
 
-use super::{TextViewStyle, utils::list_item_prefix};
 use crate::{
     ActiveTheme as _, Icon, IconName, StyledExt, WindowExt as _, h_flex,
     highlighter::{HighlightTheme, LanguageRegistry, SyntaxHighlighter},
@@ -29,6 +28,8 @@ use crate::{
     tooltip::Tooltip,
     v_flex,
 };
+
+use super::{TextViewStyle, utils::list_item_prefix};
 
 thread_local! {
     static CODE_BLOCK_HIGHLIGHTERS: RefCell<HashMap<SharedString, SyntaxHighlighter>> =

@@ -1,14 +1,13 @@
-use std::{fs::File, io::Write, os::fd::AsFd};
-
 use anyhow::{Context, Result, anyhow};
 use rustix::fs::{MemfdFlags, memfd_create};
+use std::fs::File;
+use std::io::Write;
+use std::os::fd::AsFd;
 use tracing::{debug, error, info, warn};
 use wayland_client::{
     Connection, Dispatch, EventQueue, QueueHandle,
-    protocol::{
-        wl_output::{self, WlOutput},
-        wl_registry::{self, WlRegistry},
-    },
+    protocol::wl_output::{self, WlOutput},
+    protocol::wl_registry::{self, WlRegistry},
 };
 use wayland_protocols_wlr::gamma_control::v1::client::{
     zwlr_gamma_control_manager_v1::{self, ZwlrGammaControlManagerV1},

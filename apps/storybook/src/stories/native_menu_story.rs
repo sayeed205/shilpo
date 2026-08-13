@@ -1,4 +1,5 @@
-use std::{cell::Cell, rc::Rc};
+use std::cell::Cell;
+use std::rc::Rc;
 
 use gpui::{
     Action, App, AppContext, Bounds, ClickEvent, Context, Div, Entity, FocusHandle, Focusable,

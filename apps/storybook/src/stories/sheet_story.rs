@@ -6,6 +6,7 @@ use gpui::{
     ParentElement, Render, SharedString, Styled, Task, WeakEntity, Window, div,
     prelude::FluentBuilder as _, px,
 };
+
 use shilpo_ui::{
     ActiveTheme as _, Icon, IconName, IndexPath, Placement, WindowExt,
     button::{Button, ButtonVariant, ButtonVariants as _},
@@ -17,7 +18,8 @@ use shilpo_ui::{
     v_flex,
 };
 
-use crate::{Story, TestAction, section};
+use crate::TestAction;
+use crate::{Story, section};
 
 pub struct ListItemDeletegate {
     story: WeakEntity<SheetStory>,

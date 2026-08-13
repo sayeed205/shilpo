@@ -1,14 +1,13 @@
 use std::{rc::Rc, time::Duration};
 
+use crate::{
+    ActiveTheme, Disableable, FocusableExt, IconName, Selectable, Sizable, Size, StyledExt as _,
+    icon::IconNamed, text::Text, tooltip::ComponentTooltip, v_flex,
+};
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Div, ElementId, InteractiveElement, IntoElement,
     ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement, StyleRefinement,
     Styled, Toggled, Window, div, prelude::FluentBuilder as _, px, relative, rems, svg,
-};
-
-use crate::{
-    ActiveTheme, Disableable, FocusableExt, IconName, Selectable, Sizable, Size, StyledExt as _,
-    icon::IconNamed, text::Text, tooltip::ComponentTooltip, v_flex,
 };
 
 /// A Checkbox element.
@@ -354,9 +353,8 @@ impl Checkbox {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_checkbox_builder() {

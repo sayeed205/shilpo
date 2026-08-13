@@ -1,19 +1,21 @@
 use std::rc::Rc;
 
+use crate::theme::ActiveTheme;
+use gpui::Window;
+use gpui::{AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable};
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyBinding, ParentElement, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, Window, actions,
+    InteractiveElement, IntoElement, KeyBinding, ParentElement, RenderOnce, Role, SharedString,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, actions,
     prelude::FluentBuilder as _, px,
 };
 
-use super::{Input, InputState, InputVariant, MaskPattern};
 use crate::{
     Disableable, IconName, Sizable, Size, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
-    theme::ActiveTheme,
 };
+
+use super::{Input, InputState, InputVariant, MaskPattern};
 
 actions!(number_input, [Increment, Decrement]);
 
@@ -425,9 +427,8 @@ impl RenderOnce for NumberInput {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext, IntoElement};
-
     use super::{InputState, NumberInput, StepAction, step_value};
+    use gpui::{AppContext, IntoElement};
 
     // `test_number_step` lives in `state::tests` because `NumberStep::value`
     // now needs a `Context<InputState>` to invoke the `by_value` closure.

@@ -637,11 +637,22 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
 
         self.pending_reconcile = Some(preserved_instances);
         let active_wasm_ids: Vec<ExtensionId> = self.active_sources.keys().cloned().collect();
-        if let Err(error) = self.script_runtime.reconcile(&active_wasm_ids) {
-            self.diagnostics
-                .push(format!("script runtime error: {error}"));
-        }
+        self.script_runtime.reconcile(&active_wasm_ids);
         Ok(())
+    }
+
+    pub fn tick_scripts(&mut self) -> Option<ExtensionUpdate> {
+        if !self.script_runtime.tick() {
+            return None;
+        }
+        self.generation = self.generation.next();
+        Some(ExtensionUpdate {
+            host_generation: HostGeneration(0),
+            generation: self.generation,
+            snapshot: Some(self.build_snapshot(false)),
+            effects: Vec::new(),
+            invalidated_views: self.script_runtime.views().into_keys().collect(),
+        })
     }
 
     fn discover_sources(&mut self) -> Result<BTreeMap<ExtensionId, ActiveSource>, String> {
@@ -923,6 +934,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
             },
             settings_schemas: Arc::new(settings_schemas),
             prevalidated_asset_roots: Arc::new(prevalidated_asset_roots),
+            script_extensions: Arc::from(self.script_runtime.statuses()),
         }
     }
 }

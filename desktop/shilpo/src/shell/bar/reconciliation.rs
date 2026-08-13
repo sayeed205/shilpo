@@ -1,9 +1,7 @@
-use std::collections::HashMap;
-
-use gpui::{Bounds, DisplayId, Pixels};
-
 use super::geometry::BarGeometry;
 use crate::config::{BarConfig, ShellConfig};
+use gpui::{Bounds, DisplayId, Pixels};
+use std::collections::HashMap;
 
 /// Metadata describing a physical monitor output.
 #[derive(Debug, Clone, PartialEq)]
@@ -102,10 +100,9 @@ pub fn reconcile_output_bars(
 
 #[cfg(test)]
 mod tests {
-    use gpui::{point, px, size};
-
     use super::*;
     use crate::config::{OutputConfig, ShellConfig};
+    use gpui::{point, px, size};
 
     fn sample_bounds(w: f32, h: f32) -> Bounds<Pixels> {
         Bounds::new(point(px(0.), px(0.)), size(px(w), px(h)))

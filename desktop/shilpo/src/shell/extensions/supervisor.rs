@@ -1,3 +1,10 @@
+use serde::{Deserialize, Serialize};
+use shilpo_ext_runtime::{
+    ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, FrameReader,
+    HostGeneration, HostMessage, PROTOCOL_VERSION, ProcessCodecError, ReplaceableEvent,
+    ScriptExtensionStatus, WorkerMessage, WorkerPayload, recv_worker_message_nonblocking,
+    send_host_message,
+};
 use std::{
     io,
     path::PathBuf,
@@ -9,13 +16,6 @@ use std::{
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
-};
-
-use serde::{Deserialize, Serialize};
-use shilpo_ext_runtime::{
-    ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, FrameReader,
-    HostGeneration, HostMessage, PROTOCOL_VERSION, ProcessCodecError, ReplaceableEvent,
-    WorkerMessage, WorkerPayload, recv_worker_message_nonblocking, send_host_message,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +40,7 @@ pub struct ExtensionHostDiagnostics {
     pub last_error: Option<String>,
     pub stale_updates_dropped: u64,
     pub malformed_frames: u64,
+    pub script_extensions: Vec<ScriptExtensionStatus>,
 }
 
 pub const RETRY_DELAYS: [Duration; 3] = [
@@ -542,6 +543,8 @@ fn supervisor_loop<S: ChildSpawner>(
         if let WorkerPayload::Update(update) = initial_worker_msg.payload {
             if let Some(ref new_snapshot) = update.snapshot {
                 *params.snapshot.write().unwrap() = new_snapshot.clone();
+                params.diagnostics.lock().unwrap().script_extensions =
+                    new_snapshot.script_extensions.to_vec();
             }
             let mut update = update;
             update.host_generation = current_host_gen;
@@ -643,6 +646,8 @@ fn supervisor_loop<S: ChildSpawner>(
                             update.host_generation = current_host_gen;
                             if let Some(ref new_snapshot) = update.snapshot {
                                 *params.snapshot.write().unwrap() = new_snapshot.clone();
+                                params.diagnostics.lock().unwrap().script_extensions =
+                                    new_snapshot.script_extensions.to_vec();
                             }
                             let _ = params.update_tx.try_send(update);
                         }

@@ -26,6 +26,11 @@ Every message carries protocol version 1, a monotonically increasing host genera
 engine generations remain distinct and are checked separately. The shell rejects stale host or engine generations before
 publishing snapshots or executing effects.
 
+Trusted local scripts are spawned only below this private process. Each invocation has a dedicated process group,
+closed stdin, bounded pipes, a minimal environment, and cancellation owned by the extension-host. On Linux the host is
+a child subreaper so timeout, source replacement/removal, circuit-open, and shutdown can kill and reap adopted
+descendants. The shell process never constructs script commands or receives script process handles.
+
 ## Supervision
 
 The supervisor states are `Starting`, `Ready`, `Backoff`, `Quarantined`, `Stopping`, and `Stopped`. Unexpected exits

@@ -1,6 +1,7 @@
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, Render, Styled as _, Window, px,
 };
+
 use shilpo_ui::{dock::PanelControl, text::markdown};
 
 use crate::Story;

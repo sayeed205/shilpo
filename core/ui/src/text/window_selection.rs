@@ -309,9 +309,7 @@ impl Root {
 
         let mut items: Vec<(Point<Pixels>, String)> = Vec::new();
         for (id, (view, _, scope)) in self.selectable_text_views.iter() {
-            let Some(view) = view.upgrade() else {
-                continue;
-            };
+            let Some(view) = view.upgrade() else { continue };
             let state = view.read(cx);
             let in_window_selection = resolved.is_some()
                 && state.is_selectable()
@@ -848,20 +846,20 @@ impl Element for TextSelectionController {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc, time::Duration};
-
+    use super::{SelectionScope, SelectionScopeElement};
+    use crate::global_state::GlobalState;
+    use crate::{
+        Placement, Root,
+        text::{TextView, TextViewState},
+    };
     use gpui::{
         AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
         Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement as _, Render,
         Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
     };
-
-    use super::{SelectionScope, SelectionScopeElement};
-    use crate::{
-        Placement, Root,
-        global_state::GlobalState,
-        text::{TextView, TextViewState},
-    };
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
 
     struct ChatTestView {
         focus_handle: FocusHandle,

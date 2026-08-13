@@ -1,35 +1,34 @@
+use crate::bar::cards::adapter::CardCoordinator;
+use crate::bar::cards::model::CardRequest;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
+use gpui::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};
 use gpui::{
     App, AppContext, Bounds, DisplayId, Entity, Pixels, Point, Size, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions,
-    layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
-    point, px, size,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, point, px, size,
 };
 use shilpo_ext_api::{CanonicalId, ExtensionId};
 use shilpo_services::{
     BarState, CompositorAdapter, CompositorCommandBroker, CompositorOutput, CompositorSnapshot,
-    capture::{CaptureIntent, capture_frame, frame_to_rgba},
 };
 use shilpo_theme_daemon::DaemonState;
+use std::sync::Mutex;
 use uuid::Uuid;
 
-use super::{ShellRuntime, WallpaperPreviewResource};
 use crate::{
     actions::ActionInvocation,
-    bar::{
-        BarSpec, BarView, OutputDescriptor, ReconciliationOp,
-        cards::{adapter::CardCoordinator, model::CardRequest},
-        geometry::BarGeometry,
-    },
+    bar::{BarSpec, BarView, OutputDescriptor, ReconciliationOp, geometry::BarGeometry},
     error::ShellError,
     extensions::{ContributionInstance, ContributionSurface},
     overview::{OverviewCloseReason, WorkspaceOverview},
 };
+use shilpo_services::capture::{CaptureIntent, capture_frame, frame_to_rgba};
+
+use super::{ShellRuntime, WallpaperPreviewResource};
 
 #[derive(Clone, Copy)]
 pub(crate) struct OverviewLifecycleCallback {
@@ -1998,9 +1997,8 @@ fn readiness_for(
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
-
     use super::*;
+    use std::{cell::Cell, rc::Rc};
 
     struct LifecycleTestView;
 

@@ -1,9 +1,8 @@
-use std::{fs, path::PathBuf};
-
 use gpui::{App, IntoElement, ParentElement, Styled, Window, div};
-use shilpo_ui::{
-    ActiveTheme, IconName, StyledExt, button::Button, h_flex, scroll::ScrollableElement, v_flex,
-};
+use shilpo_ui::scroll::ScrollableElement;
+use shilpo_ui::{ActiveTheme, IconName, StyledExt, button::Button, h_flex, v_flex};
+use std::fs;
+use std::path::PathBuf;
 
 pub struct KeybindingsPage;
 

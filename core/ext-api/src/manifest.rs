@@ -1,18 +1,12 @@
-use std::{
-    collections::HashSet,
-    fmt,
-    path::{Component, Path},
-};
-
+use crate::effects::WallpaperSource;
+use crate::events::EventKind;
+use crate::id::{ContributionId, ExtensionId, IdError};
 use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-
-use crate::{
-    effects::WallpaperSource,
-    events::EventKind,
-    id::{ContributionId, ExtensionId, IdError},
-};
+use std::collections::HashSet;
+use std::fmt;
+use std::path::{Component, Path};
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 pub const SUPPORTED_API_VERSION: &str = "0.1.0";

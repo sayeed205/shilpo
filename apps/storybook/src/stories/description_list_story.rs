@@ -1,16 +1,16 @@
+use gpui::*;
 use gpui::{
     Action, App, AppContext, Axis, Context, Entity, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, Styled, Window, *,
+    ParentElement, Render, Styled, Window,
 };
 use serde::Deserialize;
+use shilpo_ui::{AxisExt, h_flex, menu::DropdownMenu as _};
 use shilpo_ui::{
-    AxisExt, Sizable as _, Size,
+    Sizable as _, Size,
     button::Button,
     checkbox::Checkbox,
     description_list::{DescriptionItem, DescriptionList},
     dock::PanelControl,
-    h_flex,
-    menu::DropdownMenu as _,
     text::TextView,
     v_flex,
 };

@@ -2,15 +2,15 @@ pub mod broker;
 pub mod niri;
 pub mod test_adapter;
 
-use std::sync::Arc;
-
+pub use broker::ExecutorAck;
 pub use broker::{
     BrokerOptions, CancellationReason, CommandCancellation, CommandExecutorFn, CommandOutcome,
     CommandTicket, CompositorBrokerTelemetry, CompositorCommandBroker, CompositorTarget,
-    ExecutorAck,
 };
 pub use niri::NiriCompositorService;
 pub use test_adapter::TestCompositorAdapter;
+
+use std::sync::Arc;
 use tokio::sync::watch;
 
 /// DomainVersion tuple containing owner_generation and revision with strict lexicographical ordering.

@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
+use gpui::{Corners, Edges, Pixels};
+
 #[cfg(test)]
 use std::cell::RefCell;
-
-use gpui::{Corners, Edges, Pixels};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum CornerToken {
@@ -165,9 +165,8 @@ pub(crate) fn renderer_probe(
 
 #[cfg(test)]
 mod tests {
-    use gpui::px;
-
     use super::*;
+    use gpui::px;
 
     #[test]
     fn full_uses_terminal_height() {

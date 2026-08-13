@@ -1,19 +1,19 @@
-use std::{
-    collections::{BTreeSet, HashMap},
-    ops::{ControlFlow, Range},
-    sync::Arc,
-    time::{Duration, Instant},
-    usize,
-};
+use crate::highlighter::{HighlightTheme, LanguageRegistry};
 
 use anyhow::{Context, Result, anyhow};
 use gpui::{HighlightStyle, SharedString};
+
 use ropey::{ChunkCursor, Rope};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use std::{
+    collections::{BTreeSet, HashMap},
+    ops::{ControlFlow, Range},
+    usize,
+};
 use tree_sitter::{
     InputEdit, ParseOptions, Parser, Point, Query, QueryCursor, StreamingIterator, Tree,
 };
-
-use crate::highlighter::{HighlightTheme, LanguageRegistry};
 
 /// When a node spans more than this many bytes beyond the requested query
 /// range, we recurse into its children instead of querying it directly.
@@ -1036,20 +1036,17 @@ impl SyntaxHighlighter {
     /// # Example
     ///
     /// ```no_run
+    /// use shilpo_ui::highlighter::{HighlightTheme, SyntaxHighlighter};
     /// use ropey::Rope;
-    /// use shilpo_ui::highlighter::{
-    ///     HighlightTheme,
-    ///     SyntaxHighlighter,
-    /// };
     ///
     /// let code = "fn main() {\n    println!(\"Hello\");\n}";
-    /// let rope = Rope::from_str(code,);
-    /// let mut highlighter = SyntaxHighlighter::new("rust",);
-    /// highlighter.update(None, &rope, None,);
+    /// let rope = Rope::from_str(code);
+    /// let mut highlighter = SyntaxHighlighter::new("rust");
+    /// highlighter.update(None, &rope, None);
     ///
     /// let theme = HighlightTheme::default_dark();
     /// let range = 0..code.len();
-    /// let styles = highlighter.styles(&range, &theme,);
+    /// let styles = highlighter.styles(&range, &theme);
     /// ```
     pub fn styles(
         &self,

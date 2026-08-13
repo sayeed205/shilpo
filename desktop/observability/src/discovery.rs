@@ -1,12 +1,10 @@
+use crate::ProcessRole;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
     time::SystemTime,
 };
-
-use serde::{Deserialize, Serialize};
-
-use crate::ProcessRole;
 
 /// Metadata for a completed trace file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

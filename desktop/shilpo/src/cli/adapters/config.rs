@@ -3,14 +3,10 @@
 //! Accepts explicit primary paths so tests never touch real user configuration
 //! or process-global XDG variables.
 
-use std::path::Path;
-
+use crate::cli::output::EXIT_FAILURE;
+use crate::config::{ConfigInspectionError, ConfigResolver, EffectiveWithOriginsReport};
 use serde_json::Value;
-
-use crate::{
-    cli::output::EXIT_FAILURE,
-    config::{ConfigInspectionError, ConfigResolver, EffectiveWithOriginsReport},
-};
+use std::path::Path;
 
 /// Structured result of a config CLI inspection command (`validate` or `effective`).
 #[derive(Debug)]

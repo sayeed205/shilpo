@@ -1,8 +1,8 @@
+use gpui::Half;
 use std::ops::Range;
 
 use gpui::{
-    App, Font, Half, LineFragment, Pixels, Point, ShapedLine, Size, TextAlign, Window, point, px,
-    size,
+    App, Font, LineFragment, Pixels, Point, ShapedLine, Size, TextAlign, Window, point, px, size,
 };
 use ropey::Rope;
 use smallvec::SmallVec;
@@ -686,11 +686,10 @@ impl LineLayout {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::rc::Rc;
 
     use gpui::{Boundary, FontFeatures, FontStyle, FontWeight, px};
-
-    use super::*;
 
     #[test]
     fn test_update() {

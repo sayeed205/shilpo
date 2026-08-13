@@ -1,11 +1,10 @@
-use std::{cell::Cell, rc::Rc};
-
 use gpui::{
     Anchor, AnyElement, App, Bounds, Context, Deferred, DismissEvent, Div, ElementId, EventEmitter,
     FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding, MouseButton,
     ParentElement, Pixels, Point, Render, RenderOnce, Stateful, StyleRefinement, Styled,
     Subscription, Window, anchored, deferred, div, prelude::FluentBuilder as _, px,
 };
+use std::{cell::Cell, rc::Rc};
 
 use crate::{
     ElementExt, Selectable, StyledExt as _, actions::Cancel, global_state::GlobalState, v_flex,
@@ -474,9 +473,8 @@ impl RenderOnce for Popover {
 
 #[cfg(test)]
 mod tests {
-    use gpui::MouseButton;
-
     use super::*;
+    use gpui::MouseButton;
 
     #[test]
     fn test_popover_builder_chaining() {

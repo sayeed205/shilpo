@@ -1,18 +1,19 @@
-use std::{cell::Cell, rc::Rc, time::Duration};
-
 use gpui::{
     Anchor, Animation, AnimationExt as _, App, Context, Corners, ElementId, InteractiveElement,
     IntoElement, ParentElement, RenderOnce, SharedString, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder,
 };
+use std::time::Duration;
+use std::{cell::Cell, rc::Rc};
 
-use super::{
-    Button, ButtonRounded, ButtonVariant, ButtonVariants, SplitButtonShapes, split_button_tokens,
-};
 use crate::{
     Disableable, Selectable, Sizable, Size, StyledExt as _,
     menu::{DropdownMenu, PopupMenu},
     tooltip::ComponentTooltip,
+};
+
+use super::{
+    Button, ButtonRounded, ButtonVariant, ButtonVariants, SplitButtonShapes, split_button_tokens,
 };
 
 #[derive(IntoElement)]
@@ -462,9 +463,8 @@ impl RenderOnce for SplitButton {
 
 #[cfg(test)]
 mod tests {
-    use gpui::px;
-
     use super::*;
+    use gpui::px;
 
     #[gpui::test]
     fn test_split_button_builder(_cx: &mut gpui::TestAppContext) {

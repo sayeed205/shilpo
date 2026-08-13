@@ -1,7 +1,3 @@
-use std::rc::Rc;
-
-use gpui::{App, ElementId, Entity, Window};
-
 use crate::{
     Placement, Root,
     dialog::{AlertDialog, Dialog},
@@ -9,6 +5,8 @@ use crate::{
     notification::Notification,
     sheet::Sheet,
 };
+use gpui::{App, ElementId, Entity, Window};
+use std::rc::Rc;
 
 /// Extension trait for [`Window`] to add dialog, sheet .. functionality.
 pub trait WindowExt: Sized {

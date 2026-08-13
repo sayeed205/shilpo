@@ -1,10 +1,8 @@
-use std::path::PathBuf;
-
-use shilpo_services::{AppScanner, Application, ClipboardItem};
-use shilpo_ui::IconName;
-
 use super::{calculator, parser, ranking};
 use crate::actions::ActionDescriptor;
+use shilpo_services::{AppScanner, Application, ClipboardItem};
+use shilpo_ui::IconName;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum SearchResultIcon {

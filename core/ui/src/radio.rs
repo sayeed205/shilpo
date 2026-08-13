@@ -1,14 +1,13 @@
 use std::rc::Rc;
 
+use crate::{
+    ActiveTheme, AxisExt, FocusableExt as _, Sizable, Size, StyledExt, h_flex, text::Text,
+    tooltip::ComponentTooltip, v_flex,
+};
 use gpui::{
     AnyElement, App, Axis, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
     RenderOnce, Role, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window,
     div, prelude::FluentBuilder, px, relative,
-};
-
-use crate::{
-    ActiveTheme, AxisExt, FocusableExt as _, Sizable, Size, StyledExt, h_flex, text::Text,
-    tooltip::ComponentTooltip, v_flex,
 };
 
 /// A Radio element.
@@ -471,9 +470,8 @@ impl RadioGroup {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_radio_builder() {

@@ -1,10 +1,9 @@
+use crate::{ActiveTheme, theme::Colorize};
+use gpui::Hsla;
 #[cfg(test)]
 use std::cell::RefCell;
 
-use gpui::Hsla;
-
 use super::ButtonVariant;
-use crate::{ActiveTheme, theme::Colorize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ButtonPaintState {

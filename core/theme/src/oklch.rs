@@ -242,9 +242,8 @@ mod tests {
     }
 
     mod proptests {
-        use proptest::prelude::*;
-
         use super::*;
+        use proptest::prelude::*;
 
         proptest! {
             #[test]

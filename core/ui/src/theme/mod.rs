@@ -1,16 +1,12 @@
-use gpui::{App, Global, Hsla, Pixels, SharedString, px};
-
 use crate::{
     highlighter::HighlightTheme, list::ListSettings, notification::NotificationSettings,
     scroll::ScrollbarShow, sheet::SheetSettings,
 };
+use gpui::{App, Global, Hsla, Pixels, SharedString, px};
 pub mod state;
-use std::{
-    ops::{Deref, DerefMut},
-    sync::Arc,
-};
-
 pub use state::*;
+use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 mod color;
 mod theme_color;

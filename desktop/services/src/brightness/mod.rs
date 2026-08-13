@@ -1,14 +1,12 @@
-use std::{
-    collections::HashMap,
-    future::Future,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex as StdMutex},
-};
-
 use anyhow::Result;
 use ddc::Ddc;
 use ddc_i2c::from_i2c_device;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{debug, warn};
 
@@ -938,9 +936,8 @@ impl Drop for BrightnessService {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::TempDir;
-
     use super::*;
+    use tempfile::TempDir;
 
     #[derive(Default)]
     struct MockDbusSetter {

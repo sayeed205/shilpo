@@ -1,8 +1,6 @@
-use std::{
-    path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, Instant},
-};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use gpui::{App, AppContext};
 use shilpo_theme_daemon::{DaemonState, ThemeClient};
