@@ -26,3 +26,7 @@ belongs in the macro crate and must be checked by building the proc-macro consum
 available. The desktop watchers use
 `RecommendedWatcher`, `Event`, `Config`, and `RecursiveMode`; update the watchers in `desktop/shilpo` and
 `desktop/services` when that stable migration becomes appropriate.
+
+`ddc` remains on the 0.2 line because `ddc-i2c` 0.2.2 implements its device traits against `ddc` 0.2. Upgrading the
+workspace dependency independently to 0.3 creates two incompatible trait versions and breaks the brightness adapter.
+Upgrade both crates together once `ddc-i2c` publishes support for `ddc` 0.3.
