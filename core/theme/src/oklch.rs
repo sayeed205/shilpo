@@ -240,4 +240,56 @@ mod tests {
         let (a, _, _, _) = unpack_argb(mid);
         assert!((a - 0.5).abs() < 0.02);
     }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn test_oklch_endpoint_identity_prop(
+                from in any::<u32>(),
+                to in any::<u32>(),
+                t_low in -1000.0f32..=0.0f32,
+                t_high in 1.0f32..=1000.0f32,
+            ) {
+                prop_assert_eq!(interpolate_argb_oklch(from, to, t_low), from);
+                prop_assert_eq!(interpolate_argb_oklch(from, to, t_high), to);
+            }
+
+            #[test]
+            fn test_oklch_determinism_prop(
+                from in any::<u32>(),
+                to in any::<u32>(),
+                t in -10.0f32..=10.0f32,
+            ) {
+                let res1 = interpolate_argb_oklch(from, to, t);
+                let res2 = interpolate_argb_oklch(from, to, t);
+                prop_assert_eq!(res1, res2);
+            }
+
+            #[test]
+            fn test_oklch_alpha_interpolation_prop(
+                from in any::<u32>(),
+                to in any::<u32>(),
+                t in 0.001f32..0.999f32,
+            ) {
+                let res = interpolate_argb_oklch(from, to, t);
+                let a1 = ((from >> 24) & 0xff) as f32;
+                let a2 = ((to >> 24) & 0xff) as f32;
+                let expected_a = ((1.0 - t) * a1 + t * a2).round() as u32;
+                let actual_a = (res >> 24) & 0xff;
+                prop_assert!((actual_a as i32 - expected_a as i32).abs() <= 1);
+            }
+
+            #[test]
+            fn test_oklch_totality_prop(
+                from in any::<u32>(),
+                to in any::<u32>(),
+                t in -1e6f32..1e6f32,
+            ) {
+                let _ = interpolate_argb_oklch(from, to, t);
+            }
+        }
+    }
 }

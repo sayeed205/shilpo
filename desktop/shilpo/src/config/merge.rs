@@ -283,3 +283,198 @@ pub fn record_provenance_tree(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use toml_edit::{DocumentMut, Item, Value};
+
+    fn arb_key() -> impl Strategy<Value = String> {
+        "[a-z][a-z0-9_]{0,8}"
+    }
+
+    fn arb_scalar_value() -> impl Strategy<Value = Value> {
+        prop_oneof![
+            any::<bool>().prop_map(Value::from),
+            (-1000i64..=1000i64).prop_map(Value::from),
+            "[a-zA-Z0-9 _-]{0,20}".prop_map(Value::from),
+        ]
+    }
+
+    fn arb_toml_item(depth: u32) -> impl Strategy<Value = Item> {
+        if depth == 0 {
+            arb_scalar_value().prop_map(Item::Value).boxed()
+        } else {
+            prop_oneof![
+                arb_scalar_value().prop_map(Item::Value),
+                prop::collection::vec(arb_scalar_value(), 0..=3)
+                    .prop_map(|v| Item::Value(Value::Array(v.into_iter().collect()))),
+                arb_table_item(depth - 1),
+            ]
+            .boxed()
+        }
+    }
+
+    fn arb_table_item(depth: u32) -> impl Strategy<Value = Item> {
+        prop::collection::btree_map(arb_key(), arb_toml_item(depth - 1), 0..=3).prop_map(|map| {
+            let mut table = toml_edit::Table::new();
+            for (k, v) in map {
+                table.insert(&k, v);
+            }
+            Item::Table(table)
+        })
+    }
+
+    fn arb_toml_doc() -> impl Strategy<Value = DocumentMut> {
+        prop::collection::btree_map(arb_key(), arb_toml_item(2), 0..=4).prop_map(|map| {
+            let mut doc = DocumentMut::new();
+            for (k, v) in map {
+                doc.insert(&k, v);
+            }
+            doc
+        })
+    }
+
+    fn doc_to_toml_val(doc: &DocumentMut) -> toml::Value {
+        let text = doc.to_string();
+        if text.trim().is_empty() {
+            toml::Value::Table(toml::Table::new())
+        } else {
+            match text.parse::<toml::Table>() {
+                Ok(table) => toml::Value::Table(table),
+                Err(e) => panic!(
+                    "failed to parse doc string into toml::Table:\n---\n{text}\n---\nError: {e}"
+                ),
+            }
+        }
+    }
+
+    fn do_merge(
+        base: &DocumentMut,
+        overlay: &DocumentMut,
+        base_src: &ConfigSource,
+        overlay_src: &ConfigSource,
+    ) -> (DocumentMut, ConfigProvenance) {
+        let mut acc = base.clone();
+        let mut prov = ConfigProvenance::new();
+        let defaults_loc = SourceLocation {
+            source: base_src.clone(),
+            line: None,
+            column: None,
+        };
+        record_provenance_tree(acc.as_item(), "", &defaults_loc, &mut prov);
+
+        let overlay_text = overlay.to_string();
+        merge_document(&mut acc, &mut prov, overlay_src, overlay, &overlay_text);
+        (acc, prov)
+    }
+
+    proptest! {
+        #[test]
+        fn test_toml_semantic_round_trip_prop(doc in arb_toml_doc()) {
+            let text1 = doc.to_string();
+            let parsed1: DocumentMut = text1.parse().expect("parse text1");
+            let text2 = parsed1.to_string();
+            let parsed2: DocumentMut = text2.parse().expect("parse text2");
+
+            let val1 = doc_to_toml_val(&parsed1);
+            let val2 = doc_to_toml_val(&parsed2);
+            prop_assert_eq!(val1, val2);
+        }
+
+        #[test]
+        fn test_merge_empty_right_identity_prop(doc in arb_toml_doc()) {
+            let empty_doc = DocumentMut::new();
+            let src1 = ConfigSource::Primary { path: "primary.toml".into() };
+            let src2 = ConfigSource::Overrides { path: "override.toml".into() };
+
+            let (merged, _prov) = do_merge(&doc, &empty_doc, &src1, &src2);
+            prop_assert_eq!(doc_to_toml_val(&merged), doc_to_toml_val(&doc));
+        }
+
+        #[test]
+        fn test_merge_right_biased_replacement_prop(
+            base in arb_toml_doc(),
+            overlay in arb_toml_doc(),
+        ) {
+            let src1 = ConfigSource::Primary { path: "primary.toml".into() };
+            let src2 = ConfigSource::Overrides { path: "override.toml".into() };
+
+            let (merged, _prov) = do_merge(&base, &overlay, &src1, &src2);
+
+            for (key, overlay_item) in overlay.as_table().iter() {
+                if let Some(_base_item) = base.get(key).filter(|b| !is_table_like(b) || !is_table_like(overlay_item)) {
+                    let m_item = merged.get(key).expect("key present in merged");
+                    let m_str = m_item.to_string();
+                    let o_str = overlay_item.to_string();
+                    prop_assert_eq!(m_str.trim(), o_str.trim());
+                }
+            }
+        }
+
+        #[test]
+        fn test_merge_disjoint_keys_retained_prop(
+            doc1 in arb_toml_doc(),
+            doc2 in arb_toml_doc(),
+        ) {
+            let src1 = ConfigSource::Primary { path: "primary.toml".into() };
+            let src2 = ConfigSource::Overrides { path: "override.toml".into() };
+
+            let (merged, _) = do_merge(&doc1, &doc2, &src1, &src2);
+
+            for (key, _) in doc1.as_table().iter() {
+                prop_assert!(merged.contains_key(key));
+            }
+            for (key, _) in doc2.as_table().iter() {
+                prop_assert!(merged.contains_key(key));
+            }
+        }
+
+        #[test]
+        fn test_merge_associativity_prop(
+            doc_a in arb_toml_doc(),
+            doc_b in arb_toml_doc(),
+            doc_c in arb_toml_doc(),
+        ) {
+            let src_a = ConfigSource::Primary { path: "a.toml".into() };
+            let src_b = ConfigSource::Fragment { path: "b.toml".into() };
+            let src_c = ConfigSource::Overrides { path: "c.toml".into() };
+
+            let (ab, _) = do_merge(&doc_a, &doc_b, &src_a, &src_b);
+            let (abc1, _) = do_merge(&ab, &doc_c, &src_b, &src_c);
+
+            let (bc, _) = do_merge(&doc_b, &doc_c, &src_b, &src_c);
+            let (abc2, _) = do_merge(&doc_a, &bc, &src_a, &src_c);
+
+            let val1 = doc_to_toml_val(&abc1);
+            let val2 = doc_to_toml_val(&abc2);
+            prop_assert_eq!(val1, val2);
+        }
+
+        #[test]
+        fn test_provenance_points_to_latest_source_and_no_stale_ancestors_prop(
+            base in arb_toml_doc(),
+            overlay in arb_toml_doc(),
+        ) {
+            let src1 = ConfigSource::Primary { path: "primary.toml".into() };
+            let src2 = ConfigSource::Overrides { path: "override.toml".into() };
+
+            let (merged, prov) = do_merge(&base, &overlay, &src1, &src2);
+
+            let mut expected_prov = ConfigProvenance::new();
+            let loc1 = SourceLocation { source: src1.clone(), line: None, column: None };
+            record_provenance_tree(base.as_item(), "", &loc1, &mut expected_prov);
+            let overlay_text = overlay.to_string();
+            let mut acc_test = base.clone();
+            merge_document(&mut acc_test, &mut expected_prov, &src2, &overlay, &overlay_text);
+
+            for (path, loc) in expected_prov.map.iter() {
+                let actual_loc = prov.get(path);
+                prop_assert_eq!(actual_loc.map(|l| &l.source), Some(&loc.source));
+            }
+
+            prop_assert_eq!(doc_to_toml_val(&merged), doc_to_toml_val(&acc_test));
+        }
+    }
+}

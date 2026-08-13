@@ -10,3 +10,6 @@ serde_json = { workspace = true }
 schemars = { workspace = true }
 mcu-material-color = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

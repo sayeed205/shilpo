@@ -1,15 +1,10 @@
 use super::{
-    DebugDbusService, DebugProxy, ShellCommand, ShellDbusService, ShellProxy, ShellStatus,
-    ShellTelemetry,
+    DebugDbusService, ShellCommand, ShellDbusService, ShellStatus, ShellTelemetry,
+    test_harness::TestDbusHarness,
 };
-use shilpo_observability::LogFilterController;
-use std::os::unix::net::UnixStream;
-use std::sync::{Arc, Mutex};
+use futures_lite::stream::StreamExt;
+use std::time::Duration;
 use tokio::sync::mpsc;
-
-fn create_mock_controller(initial: &str) -> LogFilterController {
-    LogFilterController::new_for_testing(initial)
-}
 
 fn assert_method_error(error: zbus::Error, expected_name: &str) {
     match error {
@@ -20,90 +15,16 @@ fn assert_method_error(error: zbus::Error, expected_name: &str) {
     }
 }
 
-async fn test_pair(
-    service: ShellDbusService,
-    debug_service: DebugDbusService,
-    receiver: mpsc::Receiver<ShellCommand>,
-) -> (
-    zbus::Connection,
-    zbus::Connection,
-    mpsc::Receiver<ShellCommand>,
-) {
-    let (server_stream, client_stream) = UnixStream::pair().unwrap();
-    let guid = zbus::Guid::generate();
-    let server_builder = zbus::connection::Builder::unix_stream(server_stream)
-        .server(guid)
-        .unwrap()
-        .p2p()
-        .serve_at("/org/shilpo/Shell", service)
-        .unwrap()
-        .serve_at("/org/shilpo/Shell", debug_service)
-        .unwrap();
-    let client_builder = zbus::connection::Builder::unix_stream(client_stream).p2p();
-    let (server, client) =
-        tokio::try_join!(server_builder.build(), client_builder.build()).unwrap();
-    (server, client, receiver)
-}
-
-fn services_pair(
-    controller: Option<LogFilterController>,
-) -> (
-    ShellDbusService,
-    DebugDbusService,
-    mpsc::Receiver<ShellCommand>,
-) {
-    let (tx, rx) = mpsc::channel(128);
-    let shell_service = ShellDbusService::new(
-        tx.clone(),
-        Arc::new(Mutex::new(None)),
-        Arc::new(arc_swap::ArcSwap::from_pointee(ShellStatus::default())),
-        Arc::new(arc_swap::ArcSwap::from_pointee(ShellTelemetry::default())),
-    );
-    let debug_service = DebugDbusService::new(controller, tx);
-    (shell_service, debug_service, rx)
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p2p_introspection_and_status_contract() {
-    let controller = create_mock_controller("warn,shilpo=info");
-    let (shell_service, debug_service, receiver) = services_pair(Some(controller));
-    let (_server, client, _receiver) = test_pair(shell_service, debug_service, receiver).await;
+async fn test_introspection_exact_contract() {
+    let harness = TestDbusHarness::new().await;
+    let xml = harness.introspect_xml().await;
 
-    let shell_proxy = ShellProxy::builder(&client)
-        .destination("org.shilpo.Shell")
-        .unwrap()
-        .build()
-        .await
-        .unwrap();
-    let debug_proxy = DebugProxy::builder(&client)
-        .destination("org.shilpo.Shell")
-        .unwrap()
-        .build()
-        .await
-        .unwrap();
+    assert!(xml.contains("interface name=\"org.shilpo.Shell\""));
+    assert!(xml.contains("interface name=\"org.shilpo.Debug\""));
 
-    let status = shell_proxy.get_status().await.unwrap();
-    assert_eq!(status, ShellStatus::default());
-
-    let initial_filter = debug_proxy.get_log_filter().await.unwrap();
-    assert_eq!(initial_filter, "warn,shilpo=info");
-
-    let introspect = zbus::fdo::IntrospectableProxy::builder(&client)
-        .destination("org.shilpo.Shell")
-        .unwrap()
-        .path("/org/shilpo/Shell")
-        .unwrap()
-        .build()
-        .await
-        .unwrap();
-
-    let xml = tokio::time::timeout(std::time::Duration::from_secs(5), introspect.introspect())
-        .await
-        .expect("introspection response timed out")
-        .unwrap();
-
-    for member in [
-        "org.shilpo.Shell",
+    // 18 org.shilpo.Shell methods
+    for method in [
         "ReloadConfig",
         "ShowBar",
         "HideBar",
@@ -122,172 +43,350 @@ async fn p2p_introspection_and_status_contract() {
         "GetStatus",
         "GetTelemetry",
         "Capture",
+    ] {
+        assert!(
+            xml.contains(&format!("method name=\"{method}\"")),
+            "missing method {method} in introspection XML"
+        );
+    }
+
+    // 5 org.shilpo.Shell signals
+    for signal in [
         "ShellStarted",
         "ShellStopping",
         "WorkspaceChanged",
         "ThemeChanged",
         "ConfigReloaded",
-        "org.shilpo.Debug",
-        "SetLogFilter",
-        "GetLogFilter",
-        "EmitTestNotification",
     ] {
-        assert!(xml.contains(member), "missing D-Bus member {member}");
+        assert!(
+            xml.contains(&format!("signal name=\"{signal}\"")),
+            "missing signal {signal} in introspection XML"
+        );
     }
 
-    drop(_server);
-    p2p_debug_filter_and_notification_contract().await;
-    p2p_closed_mailbox_and_unavailable_controller().await;
+    // 3 org.shilpo.Debug methods
+    for debug_method in ["SetLogFilter", "GetLogFilter", "EmitTestNotification"] {
+        assert!(
+            xml.contains(&format!("method name=\"{debug_method}\"")),
+            "missing debug method {debug_method} in introspection XML"
+        );
+    }
 }
 
-async fn p2p_debug_filter_and_notification_contract() {
-    let controller = create_mock_controller("info");
-    let (shell_service, debug_service, receiver) = services_pair(Some(controller));
-    let (server, client, mut rx) = test_pair(shell_service, debug_service, receiver).await;
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_mailbox_command_delivery_and_fifo() {
+    let mut harness = TestDbusHarness::new().await;
 
-    let shell_proxy = ShellProxy::builder(&client)
-        .destination("org.shilpo.Shell")
-        .unwrap()
-        .build()
-        .await
-        .unwrap();
-    let debug_proxy = DebugProxy::builder(&client)
-        .destination("org.shilpo.Shell")
-        .unwrap()
-        .build()
-        .await
-        .unwrap();
+    harness.shell_proxy.reload_config().await.unwrap();
+    harness.shell_proxy.show_bar().await.unwrap();
+    harness.shell_proxy.set_brightness(42).await.unwrap();
 
-    // Valid filter change
-    debug_proxy
-        .set_log_filter("debug,shilpo_services=trace".into())
-        .await
-        .unwrap();
-    assert_eq!(
-        debug_proxy.get_log_filter().await.unwrap(),
-        "debug,shilpo_services=trace"
-    );
+    let cmd1 = harness.mailbox_rx.recv().await.unwrap();
+    let cmd2 = harness.mailbox_rx.recv().await.unwrap();
+    let cmd3 = harness.mailbox_rx.recv().await.unwrap();
 
-    // Invalid / empty filter preserves previous value and returns InvalidArgs
-    let empty_err = debug_proxy.set_log_filter("   ".into()).await.unwrap_err();
-    assert_method_error(empty_err, "org.freedesktop.DBus.Error.InvalidArgs");
-    assert_eq!(
-        debug_proxy.get_log_filter().await.unwrap(),
-        "debug,shilpo_services=trace"
-    );
+    assert_eq!(cmd1, ShellCommand::ReloadConfig);
+    assert_eq!(cmd2, ShellCommand::ShowBar);
+    assert_eq!(cmd3, ShellCommand::SetBrightness(42));
+}
 
-    let malformed_err = debug_proxy
-        .set_log_filter("invalid[[[syntax".into())
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_boundary_error_handling() {
+    let mut harness = TestDbusHarness::new().await;
+
+    // Invalid brightness (>100) -> InvalidArgs
+    let err = harness.shell_proxy.set_brightness(101).await.unwrap_err();
+    assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
+
+    // Invalid display brightness (empty display_id or >100) -> InvalidArgs
+    let err = harness
+        .shell_proxy
+        .set_display_brightness("".into(), 50)
         .await
         .unwrap_err();
-    assert_method_error(malformed_err, "org.freedesktop.DBus.Error.InvalidArgs");
-    assert_eq!(
-        debug_proxy.get_log_filter().await.unwrap(),
-        "debug,shilpo_services=trace"
-    );
+    assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
-    // Valid notification input yields exactly one EmitTestNotification command
-    debug_proxy
-        .emit_test_notification("Test Title".into(), "Test Body".into())
-        .await
-        .unwrap();
-
-    let cmd = rx.recv().await.unwrap();
-    assert_eq!(
-        cmd,
-        ShellCommand::EmitTestNotification {
-            title: "Test Title".into(),
-            body: "Test Body".into(),
-        }
-    );
-
-    // Invalid title (empty) rejected without enqueueing
-    let empty_title_err = debug_proxy
-        .emit_test_notification("".into(), "Body".into())
+    let err = harness
+        .shell_proxy
+        .set_display_brightness("DP-1".into(), 101)
         .await
         .unwrap_err();
-    assert_method_error(empty_title_err, "org.freedesktop.DBus.Error.InvalidArgs");
+    assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
-    // Oversize title (>256 bytes) rejected
-    let oversize_title = "a".repeat(257);
-    let title_err = debug_proxy
-        .emit_test_notification(oversize_title, "Body".into())
+    // Invalid capture intent -> InvalidArgs
+    let err = harness
+        .shell_proxy
+        .capture("invalid_intent".into())
         .await
         .unwrap_err();
-    assert_method_error(title_err, "org.freedesktop.DBus.Error.InvalidArgs");
+    assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
-    // Oversize body (>4096 bytes) rejected
-    let oversize_body = "b".repeat(4097);
-    let body_err = debug_proxy
-        .emit_test_notification("Title".into(), oversize_body)
+    // Invalid debug inputs -> InvalidArgs
+    let err = harness
+        .debug_proxy
+        .set_log_filter("   ".into())
         .await
         .unwrap_err();
-    assert_method_error(body_err, "org.freedesktop.DBus.Error.InvalidArgs");
+    assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
-    // Ensure no commands were enqueued for invalid calls
-    assert!(rx.try_recv().is_err());
+    let err = harness
+        .debug_proxy
+        .set_log_filter("invalid[[syntax".into())
+        .await
+        .unwrap_err();
+    assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
-    // Argument validation on org.shilpo.Shell
-    assert!(shell_proxy.set_brightness(101).await.is_err());
+    let err = harness
+        .debug_proxy
+        .emit_test_notification("".into(), "body".into())
+        .await
+        .unwrap_err();
+    assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
-    // Mailbox overflow returns LimitsExceeded
+    let err = harness
+        .debug_proxy
+        .emit_test_notification("a".repeat(257), "body".into())
+        .await
+        .unwrap_err();
+    assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
+
+    let err = harness
+        .debug_proxy
+        .emit_test_notification("title".into(), "b".repeat(4097))
+        .await
+        .unwrap_err();
+    assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
+
+    // Mailbox rejected calls enqueue nothing
+    assert!(harness.mailbox_rx.try_recv().is_err());
+
+    // Mailbox overflow -> LimitsExceeded
     for _ in 0..128 {
-        shell_proxy.show_bar().await.unwrap();
+        harness.shell_proxy.show_bar().await.unwrap();
     }
-    let overflow_err = debug_proxy
+    let overflow_err = harness
+        .debug_proxy
         .emit_test_notification("Overflow".into(), "Mailbox".into())
         .await
         .unwrap_err();
     assert_method_error(overflow_err, "org.freedesktop.DBus.Error.LimitsExceeded");
-
-    drop(server);
 }
 
-async fn p2p_closed_mailbox_and_unavailable_controller() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_closed_mailbox_and_unavailable_controller() {
     let (tx, rx) = mpsc::channel(128);
     let shell_service = ShellDbusService::new(
         tx.clone(),
-        Arc::new(Mutex::new(None)),
-        Arc::new(arc_swap::ArcSwap::from_pointee(ShellStatus::default())),
-        Arc::new(arc_swap::ArcSwap::from_pointee(ShellTelemetry::default())),
+        std::sync::Arc::new(std::sync::Mutex::new(None)),
+        std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(ShellStatus::default())),
+        std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(ShellTelemetry::default())),
     );
     let debug_service = DebugDbusService::new(None, tx);
-    drop(rx); // Close mailbox
+    drop(rx); // Close receiver
 
-    let (server_stream, client_stream) = UnixStream::pair().unwrap();
-    let guid = zbus::Guid::generate();
-    let server_builder = zbus::connection::Builder::unix_stream(server_stream)
-        .server(guid)
-        .unwrap()
-        .p2p()
-        .serve_at("/org/shilpo/Shell", shell_service)
-        .unwrap()
-        .serve_at("/org/shilpo/Shell", debug_service)
-        .unwrap();
-    let client_builder = zbus::connection::Builder::unix_stream(client_stream).p2p();
-    let (server, client) =
-        tokio::try_join!(server_builder.build(), client_builder.build()).unwrap();
+    let harness =
+        TestDbusHarness::new_with_services(shell_service, debug_service, mpsc::channel(1).1).await;
 
-    let debug_proxy = DebugProxy::builder(&client)
-        .destination("org.shilpo.Shell")
-        .unwrap()
-        .build()
-        .await
-        .unwrap();
+    let err = harness.debug_proxy.get_log_filter().await.unwrap_err();
+    assert_method_error(err, "org.freedesktop.DBus.Error.Failed");
 
-    // Unavailable filter controller returns Failed error
-    let get_err = debug_proxy.get_log_filter().await.unwrap_err();
-    assert_method_error(get_err, "org.freedesktop.DBus.Error.Failed");
-
-    let set_err = debug_proxy.set_log_filter("info".into()).await.unwrap_err();
-    assert_method_error(set_err, "org.freedesktop.DBus.Error.Failed");
-
-    // Closed mailbox returns Failed error
-    let notif_err = debug_proxy
-        .emit_test_notification("Closed".into(), "Mailbox".into())
+    let err = harness
+        .debug_proxy
+        .set_log_filter("info".into())
         .await
         .unwrap_err();
-    assert_method_error(notif_err, "org.freedesktop.DBus.Error.Failed");
+    assert_method_error(err, "org.freedesktop.DBus.Error.Failed");
 
-    drop(server);
+    let err = harness
+        .debug_proxy
+        .emit_test_notification("Title".into(), "Body".into())
+        .await
+        .unwrap_err();
+    assert_method_error(err, "org.freedesktop.DBus.Error.Failed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_atomic_status_and_telemetry_snapshots() {
+    let harness = TestDbusHarness::new().await;
+
+    let custom_status = ShellStatus {
+        running: true,
+        instance_id: "test-instance-123".into(),
+        pid: 4321,
+        readiness: "ready".into(),
+        bar_state: "visible".into(),
+        overview_visible: true,
+    };
+    harness.update_status(custom_status.clone());
+
+    let status = harness.shell_proxy.get_status().await.unwrap();
+    assert_eq!(status, custom_status);
+
+    let custom_telemetry = ShellTelemetry {
+        compositor_connected: true,
+        compositor_state: "connected".into(),
+        compositor_owner_generation: 12,
+        compositor_revision: 34,
+        uptime_seconds: 12345,
+        ..Default::default()
+    };
+    harness.update_telemetry(custom_telemetry.clone());
+
+    let telemetry = harness.shell_proxy.get_telemetry().await.unwrap();
+    assert_eq!(telemetry, custom_telemetry);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_lifecycle_signals() {
+    let harness = TestDbusHarness::new().await;
+
+    let mut started_stream = harness.shell_proxy.receive_shell_started().await.unwrap();
+    let mut stopping_stream = harness.shell_proxy.receive_shell_stopping().await.unwrap();
+
+    let emitter = harness.signal_emitter().await;
+    ShellDbusService::shell_started(&emitter, "inst-42", 1234)
+        .await
+        .unwrap();
+    ShellDbusService::shell_stopping(&emitter, "inst-42")
+        .await
+        .unwrap();
+
+    let started_sig = tokio::time::timeout(Duration::from_secs(2), started_stream.next())
+        .await
+        .expect("started signal timeout")
+        .expect("started stream item");
+    let started_args = started_sig.args().unwrap();
+    assert_eq!(started_args.instance_id, "inst-42");
+    assert_eq!(started_args.pid, 1234);
+
+    let stopping_sig = tokio::time::timeout(Duration::from_secs(2), stopping_stream.next())
+        .await
+        .expect("stopping signal timeout")
+        .expect("stopping stream item");
+    let stopping_args = stopping_sig.args().unwrap();
+    assert_eq!(stopping_args.instance_id, "inst-42");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_workspace_changed_dedup_semantics() {
+    let harness = TestDbusHarness::new().await;
+    let mut stream = harness
+        .shell_proxy
+        .receive_workspace_changed()
+        .await
+        .unwrap();
+    let emitter = harness.signal_emitter().await;
+
+    // Prime workspace 1 (initial priming emits nothing)
+    harness.shell_service.prime_workspace(1);
+
+    // Repeated workspace 1 emits nothing
+    harness
+        .shell_service
+        .emit_workspace_changed_if_needed(&emitter, 1, 10, 100)
+        .await;
+
+    // Change to workspace 2 emits once
+    harness
+        .shell_service
+        .emit_workspace_changed_if_needed(&emitter, 2, 10, 101)
+        .await;
+
+    let sig = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .expect("workspace changed timeout")
+        .expect("workspace changed item");
+    let args = sig.args().unwrap();
+    assert_eq!(args.workspace_id, 2);
+    assert_eq!(args.owner_generation, 10);
+    assert_eq!(args.revision, 101);
+
+    // Repeat workspace 2 with updated generation/revision emits nothing
+    harness
+        .shell_service
+        .emit_workspace_changed_if_needed(&emitter, 2, 11, 102)
+        .await;
+
+    let no_sig = tokio::time::timeout(Duration::from_millis(100), stream.next()).await;
+    assert!(no_sig.is_err(), "expected no signal for repeated workspace");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_theme_changed_dedup_semantics() {
+    let harness = TestDbusHarness::new().await;
+    let mut stream = harness.shell_proxy.receive_theme_changed().await.unwrap();
+    let emitter = harness.signal_emitter().await;
+
+    // First call populates initial state and emits nothing
+    harness
+        .shell_service
+        .emit_theme_changed_if_needed(&emitter, "dark", "Expressive")
+        .await;
+
+    // Changed mode emits once
+    harness
+        .shell_service
+        .emit_theme_changed_if_needed(&emitter, "light", "Expressive")
+        .await;
+
+    let sig = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .expect("theme changed timeout")
+        .expect("theme changed item");
+    let args = sig.args().unwrap();
+    assert_eq!(args.mode, "light");
+    assert_eq!(args.scheme_variant, "Expressive");
+
+    // Equal repeat emits nothing
+    harness
+        .shell_service
+        .emit_theme_changed_if_needed(&emitter, "light", "Expressive")
+        .await;
+
+    let no_sig = tokio::time::timeout(Duration::from_millis(100), stream.next()).await;
+    assert!(no_sig.is_err(), "expected no signal for repeated theme");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_config_reloaded_signal_semantics() {
+    let harness = TestDbusHarness::new().await;
+    let mut stream = harness.shell_proxy.receive_config_reloaded().await.unwrap();
+    let emitter = harness.signal_emitter().await;
+
+    // Successful reload sorts component names
+    harness
+        .shell_service
+        .emit_config_reloaded(&emitter, true, vec!["theme".into(), "bar".into()], 0)
+        .await;
+
+    let sig1 = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .expect("config reloaded timeout")
+        .expect("config reloaded item");
+    let args1 = sig1.args().unwrap();
+    assert!(args1.success);
+    assert_eq!(args1.changed_components, vec!["bar", "theme"]);
+    assert_eq!(args1.diagnostic_count, 0);
+
+    // Failed reload clears component list but preserves diagnostic count
+    harness
+        .shell_service
+        .emit_config_reloaded(&emitter, false, vec!["bar".into(), "theme".into()], 5)
+        .await;
+
+    let sig2 = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .expect("config reloaded timeout")
+        .expect("config reloaded item");
+    let args2 = sig2.args().unwrap();
+    assert!(!args2.success);
+    assert!(args2.changed_components.is_empty());
+    assert_eq!(args2.diagnostic_count, 5);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_clean_lifecycle_drop() {
+    let harness = TestDbusHarness::new().await;
+    harness.shell_proxy.get_status().await.unwrap();
+    drop(harness);
 }

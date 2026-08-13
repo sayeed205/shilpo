@@ -4,6 +4,8 @@ pub mod client;
 pub mod debug;
 pub mod server;
 #[cfg(test)]
+pub mod test_harness;
+#[cfg(test)]
 mod tests;
 pub mod types;
 

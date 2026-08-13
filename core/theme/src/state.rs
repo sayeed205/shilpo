@@ -921,4 +921,67 @@ mod tests {
         assert!(!changed);
         assert_eq!(state.revision, revision);
     }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_scheme_variant() -> impl Strategy<Value = SchemeVariant> {
+            prop_oneof![
+                Just(SchemeVariant::Auto),
+                Just(SchemeVariant::TonalSpot),
+                Just(SchemeVariant::Content),
+                Just(SchemeVariant::Expressive),
+                Just(SchemeVariant::Fidelity),
+                Just(SchemeVariant::FruitSalad),
+                Just(SchemeVariant::Monochrome),
+                Just(SchemeVariant::Neutral),
+                Just(SchemeVariant::Rainbow),
+            ]
+        }
+
+        proptest! {
+            #[test]
+            fn test_palette_generation_determinism_prop(
+                seed in any::<u32>(),
+                variant in arb_scheme_variant(),
+            ) {
+                let (light1, dark1) = generate_m3_palettes(seed, variant);
+                let (light2, dark2) = generate_m3_palettes(seed, variant);
+                prop_assert_eq!(light1, light2);
+                prop_assert_eq!(dark1, dark2);
+            }
+
+            #[test]
+            fn test_palette_token_shape_and_keys_prop(
+                seed in any::<u32>(),
+                variant in arb_scheme_variant(),
+            ) {
+                let (light, dark) = generate_m3_palettes(seed, variant);
+                prop_assert!(!light.is_empty());
+                prop_assert_eq!(light.len(), dark.len());
+                let light_keys: std::collections::BTreeSet<_> = light.keys().collect();
+                let dark_keys: std::collections::BTreeSet<_> = dark.keys().collect();
+                prop_assert_eq!(light_keys, dark_keys);
+
+                for (key, val) in light.iter().chain(dark.iter()) {
+                    prop_assert_eq!(val.len(), 7, "token {} value {} should be #RRGGBB", key, val);
+                    prop_assert!(val.starts_with('#'), "token {} value {} should start with #", key, val);
+                    prop_assert!(val[1..].chars().all(|c| c.is_ascii_hexdigit()), "token {} value {} should be hex", key, val);
+                }
+            }
+
+            #[test]
+            fn test_resolve_variant_invariants_prop(
+                seed in any::<u32>(),
+                variant in arb_scheme_variant(),
+            ) {
+                let resolved = resolve_variant(seed, variant);
+                prop_assert_ne!(resolved, SchemeVariant::Auto);
+                if variant != SchemeVariant::Auto {
+                    prop_assert_eq!(resolved, variant);
+                }
+            }
+        }
+    }
 }
