@@ -1,6 +1,11 @@
 use crate::runtime::ShellRuntime;
-use gpui::{AnyElement, App, IntoElement, ParentElement, Pixels, Size, Styled, Window, div, px};
-use shilpo_ext_api::{CanonicalId, ViewNode, ViewStyle, ViewTree};
+use gpui::{
+    AnyElement, App, AvailableSpace, IntoElement, ParentElement, Pixels, Size, Styled, Window, div,
+    px,
+};
+use shilpo_ext_api::CanonicalId;
+#[cfg(test)]
+use shilpo_ext_api::{ViewNode, ViewStyle, ViewTree};
 
 use super::{
     model::{CardCapabilities, CardChannel, CardOwnerId, CardSourceId},
@@ -11,6 +16,7 @@ pub(crate) struct ExtensionMenuCardProvider {
     pub owner_id: CardOwnerId,
     pub menu_canonical_id: CanonicalId,
     pub _bar_widget_canonical_id: CanonicalId,
+    measured_size: std::sync::Arc<std::sync::Mutex<Option<Size<Pixels>>>>,
 }
 
 impl ExtensionMenuCardProvider {
@@ -20,6 +26,7 @@ impl ExtensionMenuCardProvider {
             owner_id,
             menu_canonical_id,
             _bar_widget_canonical_id: bar_widget_canonical_id,
+            measured_size: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
@@ -46,25 +53,19 @@ impl CardProvider for ExtensionMenuCardProvider {
         _source: &CardSourceId,
         cx: &App,
     ) -> Size<Pixels> {
-        let default_font_size = 14.0f32;
-        let Some(tree) = ShellRuntime::extension_view(cx, &self.menu_canonical_id) else {
-            return Size {
-                width: px(160.0),
-                height: px(96.0),
-            };
-        };
-
-        let intrinsic = measure_view_tree_intrinsic(&tree, default_font_size);
-
-        // Include host card chrome padding (16px top/bottom/left/right -> 32px total).
-        let chrome_pad = 32.0f32;
-        let measured_w = (intrinsic.width.as_f32() + chrome_pad).clamp(160.0, 960.0);
-        let measured_h = (intrinsic.height.as_f32() + chrome_pad).clamp(96.0, 720.0);
-
-        Size {
-            width: px(measured_w),
-            height: px(measured_h),
-        }
+        self.measured_size
+            .lock()
+            .expect("extension menu measurement lock is not poisoned")
+            .unwrap_or_else(|| Size {
+                width: cx
+                    .primary_display()
+                    .map(|display| display.bounds().size.width)
+                    .unwrap_or(px(1.0)),
+                height: cx
+                    .primary_display()
+                    .map(|display| display.bounds().size.height)
+                    .unwrap_or(px(1.0)),
+            })
     }
 
     fn render_content(
@@ -78,7 +79,7 @@ impl CardProvider for ExtensionMenuCardProvider {
             return div().into_any_element();
         };
 
-        let element = crate::shell::bar::ext_view_adapter::render_ext_view_tree(
+        let mut element = crate::shell::bar::ext_view_adapter::render_ext_view_tree(
             &self.menu_canonical_id,
             Some(&source.instance_id),
             &tree,
@@ -86,28 +87,45 @@ impl CardProvider for ExtensionMenuCardProvider {
             cx,
         );
 
-        let default_font_size = 14.0f32;
-        let intrinsic = measure_view_tree_intrinsic(&tree, default_font_size);
-        let chrome_pad = 32.0f32;
-        let measured_w = intrinsic.width.as_f32() + chrome_pad;
-        let measured_h = intrinsic.height.as_f32() + chrome_pad;
-
-        let mut container = div().p_4().size_full();
-        if measured_h > 720.0 {
-            container.style().overflow.y = Some(gpui::Overflow::Scroll);
-        }
-        if measured_w > 960.0 {
+        let intrinsic = element.layout_as_root(AvailableSpace::min_size(), window, cx);
+        let max_width = (window.bounds().size.width - px(32.0)).max(px(1.0));
+        let max_height = (window.bounds().size.height - px(32.0)).max(px(1.0));
+        let mut container = div().p_4().max_w(max_width).max_h(max_height);
+        if intrinsic.width > max_width {
             container.style().overflow.x = Some(gpui::Overflow::Scroll);
         }
-
-        container.child(element).into_any_element()
+        if intrinsic.height > max_height {
+            container.style().overflow.y = Some(gpui::Overflow::Scroll);
+        }
+        let content = container.child(element).into_any_element();
+        let measured = Size {
+            width: intrinsic.width.min(max_width) + px(32.0),
+            height: intrinsic.height.min(max_height) + px(32.0),
+        };
+        let mut cached = self
+            .measured_size
+            .lock()
+            .expect("extension menu measurement lock is not poisoned");
+        if *cached != Some(measured) {
+            *cached = Some(measured);
+            let source = source.clone();
+            window.defer(cx, move |_, cx| {
+                super::adapter::CardCoordinator::dispatch(
+                    cx,
+                    super::model::CardRequest::Reposition { source },
+                );
+            });
+        }
+        content.into_any_element()
     }
 }
 
+#[cfg(test)]
 pub fn measure_view_tree_intrinsic(tree: &ViewTree, font_size: f32) -> Size<Pixels> {
     measure_view_node_intrinsic(&tree.root, font_size)
 }
 
+#[cfg(test)]
 pub fn measure_view_node_intrinsic(node: &ViewNode, font_size: f32) -> Size<Pixels> {
     use shilpo_ext_api::*;
     match node {
@@ -342,6 +360,7 @@ pub fn measure_view_node_intrinsic(node: &ViewNode, font_size: f32) -> Size<Pixe
     }
 }
 
+#[cfg(test)]
 fn apply_style_constraints(size: Size<Pixels>, style: Option<&ViewStyle>) -> Size<Pixels> {
     let mut w = size.width.as_f32();
     let mut h = size.height.as_f32();

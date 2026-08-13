@@ -257,6 +257,9 @@ pub enum CardRequest {
         bounds: Bounds<Pixels>,
         display_id: DisplayId,
     },
+    Reposition {
+        source: CardSourceId,
+    },
 
     // ── system lifecycle ─────────────────────────────────────────
     Dismiss {
@@ -687,6 +690,15 @@ impl CardState {
                 if slot.source.as_ref() == Some(&source) && slot.is_open() {
                     slot.card_bounds = Some(bounds);
                     slot.display_id = Some(display_id);
+                }
+            }
+
+            CardRequest::Reposition { source } => {
+                if self.persistent.source.as_ref() == Some(&source) && self.persistent.is_open() {
+                    effects.push(CardEffect::RepositionChannel {
+                        channel: CardChannel::Persistent,
+                        source,
+                    });
                 }
             }
 

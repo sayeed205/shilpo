@@ -151,6 +151,23 @@ impl ExtensionHost {
         }
     }
 
+    pub(crate) fn send_event_to_extension(
+        &self,
+        extension_id: &ExtensionId,
+        event: ExtensionEvent,
+    ) {
+        let Some(ext) = &self.extensions else {
+            return;
+        };
+        if let Err(error) = ext.send_command(ExtensionCommand::Response {
+            expected: ext.generation(),
+            extension_id: extension_id.clone(),
+            event,
+        }) {
+            tracing::warn!(%error, "targeted extension event was not queued");
+        }
+    }
+
     pub(crate) fn send_lifecycle_for(
         &self,
         surface: ContributionSurface,
@@ -594,6 +611,16 @@ impl ShellRuntime {
         cx.global_mut::<Self>()
             .extension_host_mut()
             .send_event(event);
+    }
+
+    pub fn dispatch_extension_menu_event(
+        cx: &mut App,
+        extension_id: &ExtensionId,
+        event: ExtensionEvent,
+    ) {
+        cx.global_mut::<Self>()
+            .extension_host_mut()
+            .send_event_to_extension(extension_id, event);
     }
 
     pub(crate) fn dispatch_surface_lifecycle(

@@ -43,6 +43,7 @@ use super::{
 pub struct CardCoordinator {
     state: CardState,
     providers: HashMap<CardOwnerId, Arc<dyn CardProvider>>,
+    extension_menus: HashMap<CardOwnerId, shilpo_ext_api::CanonicalId>,
 
     // ── Timer tasks (dropping the Task cancels it) ────────────────
     preview_open_task: Option<Task<()>>,
@@ -82,6 +83,23 @@ impl CardCoordinator {
             .insert(owner_id, provider);
     }
 
+    pub(crate) fn register_extension_menu_provider(
+        cx: &mut App,
+        provider: Arc<dyn CardProvider>,
+        menu_id: shilpo_ext_api::CanonicalId,
+    ) {
+        let owner_id = provider.owner_id();
+        let coordinator = &mut cx
+            .global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .card_coordinator;
+        coordinator
+            .providers
+            .entry(owner_id.clone())
+            .or_insert(provider);
+        coordinator.extension_menus.insert(owner_id, menu_id);
+    }
+
     pub(crate) fn register_provider_direct(&mut self, provider: Arc<dyn CardProvider>) {
         let owner_id = provider.owner_id();
         tracing::debug!(owner = %owner_id, "card provider registered directly");
@@ -104,6 +122,29 @@ impl CardCoordinator {
             .card_coordinator
             .providers
             .remove(owner_id);
+        cx.global_mut::<ShellRuntime>()
+            .shell_surfaces_mut()
+            .card_coordinator
+            .extension_menus
+            .remove(owner_id);
+    }
+
+    pub(crate) fn reconcile_extension_menu_providers(
+        cx: &mut App,
+        desired: &std::collections::HashSet<shilpo_ext_api::CanonicalId>,
+    ) {
+        let stale = cx
+            .global::<ShellRuntime>()
+            .shell_surfaces()
+            .card_coordinator
+            .extension_menus
+            .iter()
+            .filter(|(_, menu)| !desired.contains(menu))
+            .map(|(owner, _)| owner.clone())
+            .collect::<Vec<_>>();
+        for owner in stale {
+            Self::remove_provider(cx, &owner);
+        }
     }
 
     /// Dispatch a semantic `CardRequest` through the state machine and
@@ -380,13 +421,7 @@ impl CardCoordinator {
                     "card channel opening"
                 );
                 if channel == CardChannel::Persistent {
-                    ShellRuntime::dispatch_extension_event(
-                        cx,
-                        shilpo_ext_api::ExtensionEvent::BarMenuOpened {
-                            contribution_id: source.owner.to_string(),
-                            instance_id: source.instance_id.to_string(),
-                        },
-                    );
+                    Self::dispatch_menu_event(cx, source, true, None);
                 }
                 Self::open_channel(cx, channel, source.clone(), generation);
             }
@@ -433,17 +468,10 @@ impl CardCoordinator {
                             shilpo_ext_api::BarMenuCloseReason::SourceUnavailable
                         }
                         CardDismissReason::Explicit => {
-                            shilpo_ext_api::BarMenuCloseReason::OutsideClick
+                            shilpo_ext_api::BarMenuCloseReason::SourceUnavailable
                         }
                     };
-                    ShellRuntime::dispatch_extension_event(
-                        cx,
-                        shilpo_ext_api::ExtensionEvent::BarMenuClosed {
-                            contribution_id: src.owner.to_string(),
-                            instance_id: src.instance_id.to_string(),
-                            reason: mapped_reason,
-                        },
-                    );
+                    Self::dispatch_menu_event(cx, &src, false, Some(mapped_reason));
                 }
                 Self::close_channel(cx, channel, display_id, reason);
                 Self::schedule_close_completion(cx, channel, display_id, generation);
@@ -489,6 +517,37 @@ impl CardCoordinator {
                 );
             }
         }
+    }
+
+    fn dispatch_menu_event(
+        cx: &mut App,
+        source: &CardSourceId,
+        opened: bool,
+        reason: Option<shilpo_ext_api::BarMenuCloseReason>,
+    ) {
+        let Some(menu_id) = cx
+            .global::<ShellRuntime>()
+            .shell_surfaces()
+            .card_coordinator
+            .extension_menus
+            .get(&source.owner)
+            .cloned()
+        else {
+            return;
+        };
+        let event = if opened {
+            shilpo_ext_api::ExtensionEvent::BarMenuOpened {
+                contribution_id: menu_id.to_string(),
+                instance_id: source.instance_id.to_string(),
+            }
+        } else {
+            shilpo_ext_api::ExtensionEvent::BarMenuClosed {
+                contribution_id: menu_id.to_string(),
+                instance_id: source.instance_id.to_string(),
+                reason: reason.expect("closed menu event has a reason"),
+            }
+        };
+        ShellRuntime::dispatch_extension_menu_event(cx, &menu_id.extension_id, event);
     }
 
     // ── Timer management ──────────────────────────────────────────

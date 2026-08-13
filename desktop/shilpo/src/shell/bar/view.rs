@@ -5,12 +5,13 @@ use crate::config::{BarPosition, BarWidget, ShellConfig};
 use crate::osd::OsdKind;
 use crate::runtime::{ShellRuntime, ShellSurfaces, SurfaceRequest};
 use gpui::{
-    App, AppContext, Context, DisplayId, Entity, IntoElement, ParentElement, Path, PathBuilder,
-    Pixels, Point, Render, Styled, Window, div, prelude::*, px,
+    App, AppContext, Context, Entity, IntoElement, ParentElement, Path, PathBuilder, Pixels, Point,
+    Render, Styled, Window, div, prelude::*, px,
 };
 use shilpo_services::{
     AudioInfo, BatteryInfo, BluetoothInfo, MediaInfo, NetworkInfo, Notification,
 };
+use shilpo_ui::ElementExt;
 use shilpo_ui::{ActiveTheme, h_flex, v_flex};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -396,6 +397,12 @@ impl BarView {
     ) -> gpui::AnyElement {
         use crate::config::{BarWidget, BuiltinBarWidget};
         let mut elements: Vec<gpui::AnyElement> = Vec::new();
+        let desired_menus =
+            ShellRuntime::descriptors_for(cx, crate::extensions::ContributionSurface::BarMenu)
+                .into_iter()
+                .map(|descriptor| descriptor.id)
+                .collect();
+        CardCoordinator::reconcile_extension_menu_providers(cx, &desired_menus);
 
         for (index, name) in widget_names.iter().enumerate() {
             match name {
@@ -585,7 +592,11 @@ impl BarView {
                                     ext_ref.clone(),
                                 ),
                             );
-                            CardCoordinator::register_provider(cx, provider);
+                            CardCoordinator::register_extension_menu_provider(
+                                cx,
+                                provider,
+                                menu_desc.id.clone(),
+                            );
 
                             let source_id = CardSourceId::new(
                                 menu_desc.id,
@@ -602,19 +613,33 @@ impl BarView {
                                     wrapper.bg(cx.theme().surface_container_high).rounded_lg();
                             }
                             let source_id_clone = source_id.clone();
+                            let source_id_prepaint = source_id.clone();
                             let current_display = self.display_id;
-                            wrapper = wrapper.cursor_pointer().on_click(move |_, window, cx| {
-                                let bounds = window.bounds();
-                                CardCoordinator::dispatch(
-                                    cx,
-                                    CardRequest::PersistentToggleAt {
-                                        source: source_id_clone.clone(),
-                                        bounds,
-                                        display_id: current_display
-                                            .unwrap_or_else(|| DisplayId::new(0)),
-                                    },
-                                );
-                            });
+                            wrapper = wrapper
+                                .cursor_pointer()
+                                .on_prepaint(move |bounds, _, cx| {
+                                    if let Some(display_id) = current_display {
+                                        CardCoordinator::dispatch(
+                                            cx,
+                                            CardRequest::AnchorUpdate {
+                                                source: source_id_prepaint.clone(),
+                                                bounds,
+                                                display_id,
+                                            },
+                                        );
+                                    }
+                                })
+                                .on_click(move |_, _, cx| {
+                                    if let Some(display_id) = current_display {
+                                        CardCoordinator::dispatch(
+                                            cx,
+                                            CardRequest::PersistentToggle {
+                                                source: source_id_clone.clone(),
+                                            },
+                                        );
+                                        let _ = display_id;
+                                    }
+                                });
                             elements.push(wrapper.child(view_element).into_any_element());
                         } else {
                             elements.push(view_element);

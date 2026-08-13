@@ -173,6 +173,18 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
                     Vec::new()
                 }
             }
+            ExtensionEvent::BarMenuOpened {
+                contribution_id, ..
+            }
+            | ExtensionEvent::BarMenuClosed {
+                contribution_id, ..
+            } => {
+                if let Ok(canonical) = contribution_id.parse::<CanonicalId>() {
+                    vec![canonical.extension_id]
+                } else {
+                    Vec::new()
+                }
+            }
             _ => self.runtime_ids.clone(),
         };
 
@@ -181,9 +193,40 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
                 for authorized in result.accepted {
                     self.apply_effect(&id, authorized.kind(), &mut changes);
                 }
+                self.refresh_event_views(event, &id, &mut changes);
             }
         }
         changes
+    }
+
+    fn refresh_event_views(
+        &mut self,
+        event: &ExtensionEvent,
+        extension_id: &ExtensionId,
+        changes: &mut ExtensionChanges,
+    ) {
+        let contribution_id = match event {
+            ExtensionEvent::Input {
+                contribution_id, ..
+            }
+            | ExtensionEvent::BarMenuOpened {
+                contribution_id, ..
+            }
+            | ExtensionEvent::BarMenuClosed {
+                contribution_id, ..
+            } => contribution_id,
+            _ => return,
+        };
+        let Ok(canonical) = contribution_id.parse::<CanonicalId>() else {
+            return;
+        };
+        if &canonical.extension_id != extension_id {
+            return;
+        }
+        if let Ok(Some(view)) = self.host.render_view(&canonical) {
+            self.views.insert(canonical.clone(), view);
+            changes.invalidated_views.push(canonical);
+        }
     }
 
     pub fn dispatch_to_extension(
@@ -196,6 +239,7 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
             for authorized in result.accepted {
                 self.apply_effect(extension_id, authorized.kind(), &mut changes);
             }
+            self.refresh_event_views(event, extension_id, &mut changes);
         }
         changes
     }
@@ -318,7 +362,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                 Some(ExtensionUpdate {
                     host_generation: HostGeneration(0),
                     generation: self.generation,
-                    snapshot: None,
+                    snapshot: (!changes.invalidated_views.is_empty())
+                        .then(|| self.build_snapshot(false)),
                     effects: changes.effects,
                     invalidated_views: changes.invalidated_views,
                 })
@@ -345,7 +390,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                 Some(ExtensionUpdate {
                     host_generation: HostGeneration(0),
                     generation: self.generation,
-                    snapshot: None,
+                    snapshot: (!changes.invalidated_views.is_empty())
+                        .then(|| self.build_snapshot(false)),
                     effects: changes.effects,
                     invalidated_views: changes.invalidated_views,
                 })
@@ -362,7 +408,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                 Some(ExtensionUpdate {
                     host_generation: HostGeneration(0),
                     generation: self.generation,
-                    snapshot: None,
+                    snapshot: (!changes.invalidated_views.is_empty())
+                        .then(|| self.build_snapshot(false)),
                     effects: changes.effects,
                     invalidated_views: changes.invalidated_views,
                 })
