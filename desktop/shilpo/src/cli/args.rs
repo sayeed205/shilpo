@@ -197,6 +197,12 @@ pub enum ConfigCommands {
     Path,
     /// Validate configuration file syntax and values
     Validate,
+    /// Print effective configuration (with optional provenance origins)
+    Effective {
+        /// Include winning source origins/provenance for every leaf value
+        #[arg(long)]
+        origins: bool,
+    },
     /// Signal running daemon to reload configuration
     Reload,
     /// Migrate the primary configuration file to the latest schema version
