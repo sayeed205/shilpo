@@ -551,6 +551,16 @@ impl ShellRuntime {
             .collect()
     }
 
+    pub fn descriptors_for(cx: &App, surface: ContributionSurface) -> Vec<ContributionDescriptor> {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>()
+                .extension_host()
+                .descriptors_for(surface)
+        } else {
+            Vec::new()
+        }
+    }
+
     pub fn extension_view(cx: &App, id: &CanonicalId) -> Option<ViewTree> {
         cx.global::<Self>().extension_host().view(id)
     }

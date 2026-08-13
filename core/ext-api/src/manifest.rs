@@ -89,6 +89,8 @@ pub struct Contributions {
     #[serde(default)]
     pub bar_widgets: Vec<BarWidgetContribution>,
     #[serde(default)]
+    pub bar_menus: Vec<BarMenuContribution>,
+    #[serde(default)]
     pub desktop_widgets: Vec<DesktopWidgetContribution>,
     #[serde(default)]
     pub settings_pages: Vec<SettingsPageContribution>,
@@ -116,6 +118,9 @@ macro_rules! named_contribution {
 
 named_contribution!(BarWidgetContribution {
     description: Option<String>
+});
+named_contribution!(BarMenuContribution {
+    bar_widget: ContributionId
 });
 named_contribution!(DesktopWidgetContribution {
     description: Option<String>,
@@ -264,6 +269,11 @@ impl Contributions {
             .iter()
             .map(|entry| (&entry.id, entry.name.as_str()))
             .chain(
+                self.bar_menus
+                    .iter()
+                    .map(|entry| (&entry.id, entry.name.as_str())),
+            )
+            .chain(
                 self.desktop_widgets
                     .iter()
                     .map(|entry| (&entry.id, entry.name.as_str())),
@@ -345,6 +355,26 @@ impl ExtensionManifest {
         }
         for page in &self.contributions.settings_pages {
             validate_relative_path("settings page schema", &page.schema)?;
+        }
+        let mut bar_widget_targets = HashSet::new();
+        for menu in &self.contributions.bar_menus {
+            let target_exists = self
+                .contributions
+                .bar_widgets
+                .iter()
+                .any(|bw| bw.id == menu.bar_widget);
+            if !target_exists {
+                return Err(ManifestError::Validation(format!(
+                    "bar menu '{}' targets unknown bar widget '{}'",
+                    menu.id, menu.bar_widget
+                )));
+            }
+            if !bar_widget_targets.insert(&menu.bar_widget) {
+                return Err(ManifestError::Validation(format!(
+                    "multiple bar menus target bar widget '{}'",
+                    menu.bar_widget
+                )));
+            }
         }
         for widget in &self.contributions.desktop_widgets {
             if let (Some(minimum), Some(default)) = (widget.min_width, widget.default_width)
@@ -588,5 +618,123 @@ impl fmt::Debug for SecretRef {
 impl fmt::Display for SecretRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SecretRef(<redacted>)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_bar_menu_manifest() {
+        let toml = r#"
+            id = "org.shilpo.weather"
+            name = "Weather App"
+            version = "1.0.0"
+
+            [[contributions.bar_widgets]]
+            id = "weather-widget"
+            name = "Weather"
+
+            [[contributions.bar_menus]]
+            id = "weather-menu"
+            name = "Weather Details"
+            bar_widget = "weather-widget"
+        "#;
+        let manifest = ExtensionManifest::from_toml(toml).unwrap();
+        assert_eq!(manifest.contributions.bar_menus.len(), 1);
+        assert_eq!(
+            manifest.contributions.bar_menus[0].id.as_str(),
+            "weather-menu"
+        );
+        assert_eq!(
+            manifest.contributions.bar_menus[0].bar_widget.as_str(),
+            "weather-widget"
+        );
+    }
+
+    #[test]
+    fn test_bar_menu_missing_target_fails() {
+        let toml = r#"
+            id = "org.shilpo.weather"
+            name = "Weather App"
+            version = "1.0.0"
+
+            [[contributions.bar_menus]]
+            id = "weather-menu"
+            name = "Weather Details"
+            bar_widget = "nonexistent-widget"
+        "#;
+        let err = ExtensionManifest::from_toml(toml).unwrap_err();
+        assert!(err.to_string().contains("unknown bar widget"));
+    }
+
+    #[test]
+    fn test_bar_menu_duplicate_target_fails() {
+        let toml = r#"
+            id = "org.shilpo.weather"
+            name = "Weather App"
+            version = "1.0.0"
+
+            [[contributions.bar_widgets]]
+            id = "weather-widget"
+            name = "Weather"
+
+            [[contributions.bar_menus]]
+            id = "weather-menu-1"
+            name = "Weather Details 1"
+            bar_widget = "weather-widget"
+
+            [[contributions.bar_menus]]
+            id = "weather-menu-2"
+            name = "Weather Details 2"
+            bar_widget = "weather-widget"
+        "#;
+        let err = ExtensionManifest::from_toml(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("multiple bar menus target bar widget")
+        );
+    }
+
+    #[test]
+    fn test_bar_menu_duplicate_contribution_id_fails() {
+        let toml = r#"
+            id = "org.shilpo.weather"
+            name = "Weather App"
+            version = "1.0.0"
+
+            [[contributions.bar_widgets]]
+            id = "weather-item"
+            name = "Weather"
+
+            [[contributions.bar_menus]]
+            id = "weather-item"
+            name = "Weather Details"
+            bar_widget = "weather-item"
+        "#;
+        let err = ExtensionManifest::from_toml(toml).unwrap_err();
+        assert!(err.to_string().contains("duplicate contribution ID"));
+    }
+
+    #[test]
+    fn test_bar_menu_unknown_sizing_field_fails() {
+        let toml = r#"
+            id = "org.shilpo.weather"
+            name = "Weather App"
+            version = "1.0.0"
+
+            [[contributions.bar_widgets]]
+            id = "weather-widget"
+            name = "Weather"
+
+            [[contributions.bar_menus]]
+            id = "weather-menu"
+            name = "Weather Details"
+            bar_widget = "weather-widget"
+            width = 300
+        "#;
+        let err = ExtensionManifest::from_toml(toml).unwrap_err();
+        assert!(matches!(err, ManifestError::ParseError(_)));
     }
 }

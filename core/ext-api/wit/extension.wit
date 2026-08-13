@@ -122,6 +122,18 @@ interface events {
         timer-fired,
     }
 
+    enum bar-menu-close-reason {
+        source-toggle,
+        escape,
+        focus-lost,
+        outside-click,
+        overview-opened,
+        bar-closed,
+        display-removed,
+        owner-removed,
+        source-unavailable,
+    }
+
     /// Inbound events dispatched into guest components.
     variant extension-event {
         shell-started,
@@ -138,6 +150,8 @@ interface events {
         contribution-unmounted(unmounted-event),
         contribution-resized(resized-event),
         contribution-settings-changed(settings-event),
+        bar-menu-opened(bar-menu-opened-payload),
+        bar-menu-closed(bar-menu-closed-payload),
         input(input-event),
         state-value(state-event),
         http-response(http-response-event),
@@ -155,6 +169,8 @@ interface events {
     record unmounted-event { contribution-id: string, instance-id: option<string> }
     record resized-event { contribution-id: string, instance-id: option<string>, width: f32, height: f32 }
     record settings-event { contribution-id: string, instance-id: option<string>, settings: data-value }
+    record bar-menu-opened-payload { contribution-id: string, instance-id: string }
+    record bar-menu-closed-payload { contribution-id: string, instance-id: string, reason: bar-menu-close-reason }
     record input-event { contribution-id: string, instance-id: option<string>, event-id: string, value: option<data-value> }
     /// State-change event queued for a live watch after a changed mutation commits.
     /// `value` is `none` for deletions. Events for one watch preserve revision order.

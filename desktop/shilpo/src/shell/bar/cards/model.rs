@@ -50,6 +50,18 @@ impl From<SharedString> for CardOwnerId {
     }
 }
 
+impl From<shilpo_ext_api::CanonicalId> for CardOwnerId {
+    fn from(id: shilpo_ext_api::CanonicalId) -> Self {
+        Self(SharedString::from(id.to_string()))
+    }
+}
+
+impl From<&shilpo_ext_api::CanonicalId> for CardOwnerId {
+    fn from(id: &shilpo_ext_api::CanonicalId) -> Self {
+        Self(SharedString::from(id.to_string()))
+    }
+}
+
 /// Fully qualified identity key for a rendered card source instance.
 ///
 /// Separates provider ownership (`owner`) from a specific rendered instance (`instance_id`)
@@ -175,6 +187,8 @@ pub enum CardDismissReason {
     SourceToggle,
     Escape,
     FocusLost,
+    #[allow(dead_code)]
+    OutsideClick,
     OverviewOpened,
     BarClosed,
     DisplayRemoved,
@@ -289,6 +303,7 @@ pub enum CardEffect {
         reason: CardDismissReason,
         display_id: Option<DisplayId>,
         generation: u64,
+        source: Option<CardSourceId>,
     },
     RepositionChannel {
         channel: CardChannel,
@@ -773,6 +788,7 @@ impl CardState {
 
                 if self.preview.is_open() && self.preview.source.as_ref() != Some(&source) {
                     let old_display = self.preview.display_id;
+                    let old_source = self.preview.source.clone();
                     self.preview.lifecycle = ChannelLifecycle::Closed;
                     self.preview.source = None;
                     self.preview.display_id = None;
@@ -783,6 +799,7 @@ impl CardState {
                         reason: CardDismissReason::Explicit,
                         display_id: old_display,
                         generation: self.preview.generation,
+                        source: old_source,
                     });
                 }
 
@@ -838,6 +855,7 @@ impl CardState {
         if self.persistent.is_open() {
             let tok = self.persistent.generation;
             let display_id = self.persistent.display_id;
+            let old_source = self.persistent.source.clone();
             self.persistent.lifecycle = ChannelLifecycle::Closed;
             self.persistent.source = None;
             self.persistent.display_id = None;
@@ -848,6 +866,7 @@ impl CardState {
                 reason: CardDismissReason::SourceToggle,
                 display_id,
                 generation: tok,
+                source: old_source,
             });
             effects.push(CardEffect::Diagnostic(CardDiagnostic {
                 kind: DiagnosticKind::ChannelClosed,
@@ -901,6 +920,7 @@ impl CardState {
 
         let tok = self.persistent.generation;
         let display_id = self.persistent.display_id;
+        let source = self.persistent.source.clone();
         self.persistent.lifecycle = ChannelLifecycle::Closing;
         self.persistent.restore_focus_after_close = !matches!(
             reason,
@@ -912,6 +932,7 @@ impl CardState {
             reason,
             display_id,
             generation: tok,
+            source,
         });
         effects
     }
@@ -937,6 +958,7 @@ impl CardState {
         if self.preview.is_open() {
             let tok = self.preview.generation;
             let display_id = self.preview.display_id;
+            let source = self.preview.source.clone();
             self.preview.lifecycle = ChannelLifecycle::Closing;
 
             effects.push(CardEffect::CloseChannel {
@@ -944,6 +966,7 @@ impl CardState {
                 reason,
                 display_id,
                 generation: tok,
+                source,
             });
         }
         effects.append(&mut self.update_hold());
@@ -957,12 +980,14 @@ impl CardState {
         if self.preview.is_open() {
             let generation = self.preview.generation;
             let display_id = self.preview.display_id;
+            let source = self.preview.source.clone();
             self.preview.lifecycle = ChannelLifecycle::Closing;
             effects.push(CardEffect::CloseChannel {
                 channel: CardChannel::Preview,
                 reason,
                 display_id,
                 generation,
+                source,
             });
         }
         effects.append(&mut self.update_hold());

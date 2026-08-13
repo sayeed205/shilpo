@@ -75,6 +75,12 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
                 self.views.insert(canonical, view);
             }
         }
+        for contribution in &manifest.contributions.bar_menus {
+            let canonical = CanonicalId::new(id.clone(), contribution.id.clone());
+            if let Ok(Some(view)) = self.host.render_view(&canonical) {
+                self.views.insert(canonical, view);
+            }
+        }
         for contribution in &manifest.contributions.desktop_widgets {
             let canonical = CanonicalId::new(id.clone(), contribution.id.clone());
             if let Ok(Some(view)) = self.host.render_view(&canonical) {
@@ -685,6 +691,19 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     settings_schema: None,
                     default_size: None,
                     minimum_size: None,
+                    bar_widget: None,
+                });
+            }
+            for contrib in &m.contributions.bar_menus {
+                descriptors.push(ContributionDescriptor {
+                    id: CanonicalId::new(ext_id.clone(), contrib.id.clone()),
+                    extension_name: m.name.clone(),
+                    name: contrib.name.clone(),
+                    surface: ContributionSurface::BarMenu,
+                    settings_schema: None,
+                    default_size: None,
+                    minimum_size: None,
+                    bar_widget: Some(CanonicalId::new(ext_id.clone(), contrib.bar_widget.clone())),
                 });
             }
             for contrib in &m.contributions.desktop_widgets {
@@ -704,6 +723,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     settings_schema: None,
                     default_size,
                     minimum_size,
+                    bar_widget: None,
                 });
             }
             for contrib in &m.contributions.settings_pages {
@@ -722,6 +742,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     settings_schema: Some(contrib.schema.clone()),
                     default_size: None,
                     minimum_size: None,
+                    bar_widget: None,
                 });
             }
             for contrib in &m.contributions.side_panels {
@@ -733,6 +754,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     settings_schema: None,
                     default_size: None,
                     minimum_size: None,
+                    bar_widget: None,
                 });
             }
             for contrib in &m.contributions.launcher_providers {
@@ -744,6 +766,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     settings_schema: None,
                     default_size: None,
                     minimum_size: None,
+                    bar_widget: None,
                 });
             }
             for contrib in &m.contributions.actions {
@@ -755,6 +778,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     settings_schema: None,
                     default_size: None,
                     minimum_size: None,
+                    bar_widget: None,
                 });
             }
             for contrib in &m.contributions.background_tasks {
@@ -766,6 +790,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     settings_schema: None,
                     default_size: None,
                     minimum_size: None,
+                    bar_widget: None,
                 });
             }
         }
@@ -863,5 +888,108 @@ mod tests {
         let changes = session.dispatch(&ExtensionEvent::ShellStarted);
         assert_eq!(changes.effects.len(), 1);
         assert_eq!(changes.effects[0].0.as_str(), "io.github.test.sample");
+    }
+
+    struct MenuGuest;
+    impl GuestExtension for MenuGuest {
+        fn on_event(&mut self, _event: &ExtensionEvent) -> Vec<HostOperation> {
+            Vec::new()
+        }
+
+        fn view(&self, contribution_id: &str) -> Option<ViewTree> {
+            if contribution_id == "weather-menu" {
+                Some(ViewTree::new(shilpo_ext_api::ViewNode::Text(
+                    shilpo_ext_api::TextNode {
+                        content: "Weather Menu".into(),
+                        style: None,
+                        font_size: None,
+                        bold: None,
+                    },
+                )))
+            } else {
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn test_bar_menu_descriptor_discovery_and_view_rendering() {
+        let runtime = InMemoryRuntime::new();
+        let manifest = ExtensionManifest::from_toml(
+            r#"
+            id = "io.github.test.weather"
+            name = "Weather"
+            version = "1.0.0"
+            schema_version = 1
+            api_version = "0.1.0"
+            min_shilpo_version = "0.1.0"
+
+            [[contributions.bar_widgets]]
+            id = "weather"
+            name = "Weather Widget"
+
+            [[contributions.bar_menus]]
+            id = "weather-menu"
+            name = "Weather Details Menu"
+            bar_widget = "weather"
+            "#,
+        )
+        .unwrap();
+
+        let mut session = ExtensionSession::new(runtime);
+        session
+            .register(
+                manifest.clone(),
+                Box::new(MenuGuest),
+                manifest.capabilities.clone(),
+            )
+            .unwrap();
+
+        let menu_canonical = CanonicalId::new(
+            manifest.id.clone(),
+            shilpo_ext_api::ContributionId::new("weather-menu").unwrap(),
+        );
+        let widget_canonical = CanonicalId::new(
+            manifest.id.clone(),
+            shilpo_ext_api::ContributionId::new("weather").unwrap(),
+        );
+
+        assert!(session.views.contains_key(&menu_canonical));
+
+        let mut engine = ExtensionEngine {
+            paths: CatalogPaths::platform_default(),
+            catalog: ExtensionCatalog::open(
+                CatalogPaths::platform_default(),
+                semver::Version::new(0, 1, 0),
+            ),
+            catalog_mtime: None,
+            active_sources: BTreeMap::new(),
+            session,
+            generation: ExtensionGeneration(1),
+            diagnostics: Vec::new(),
+            replaceable_events: HashMap::new(),
+            pending_reconcile: None,
+        };
+        engine.active_sources.insert(
+            manifest.id.clone(),
+            ActiveSource {
+                manifest,
+                root: std::path::PathBuf::from("/tmp"),
+                grants: Vec::new(),
+                fingerprint: 0,
+            },
+        );
+
+        let snapshot = engine.build_snapshot(false);
+        let menu_desc = snapshot
+            .descriptors
+            .iter()
+            .find(|d| d.surface == ContributionSurface::BarMenu)
+            .expect("bar menu descriptor must exist");
+
+        assert_eq!(menu_desc.id, menu_canonical);
+        assert_eq!(menu_desc.bar_widget, Some(widget_canonical));
+        assert_eq!(menu_desc.default_size, None);
+        assert_eq!(menu_desc.minimum_size, None);
     }
 }

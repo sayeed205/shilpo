@@ -117,8 +117,10 @@ constrained extension API.
   identity, window title, and prominent visual thumbnail. It does not request browser-tab integration.
 - Audio and Settings are configured but currently do not render, and Bluetooth appears not to receive live updates.
   These are known follow-up concerns, not part of the initial card slice unless explicitly selected later.
-- The initial coordinator serves built-ins. Its concepts should remain generic enough for a later declarative,
-  capability-checked extension API; extensions do not receive raw shell-surface access.
+- The built-in provider contract remains Shell-internal. Extension bar menus use a separate declarative projection into
+  the persistent channel and never receive raw shell-surface access. Their `ViewTree` content is measured intrinsically
+  by the host under finite constraints, then clamped to host safety policy and monitor geometry; extensions declare no
+  dimensions or size tiers.
 
 ## Repository facts discovered during the grill
 

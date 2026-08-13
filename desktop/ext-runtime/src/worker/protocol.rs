@@ -6,6 +6,7 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ContributionSurface {
     Bar,
+    BarMenu,
     Desktop,
     Settings,
     SidePanel,
@@ -23,6 +24,8 @@ pub struct ContributionDescriptor {
     pub settings_schema: Option<String>,
     pub default_size: Option<(u32, u32)>,
     pub minimum_size: Option<(u32, u32)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar_widget: Option<CanonicalId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

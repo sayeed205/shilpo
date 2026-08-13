@@ -1846,6 +1846,45 @@ mod secret_host_tests {
             "extension state must never become a credential store"
         );
     }
+
+    #[test]
+    fn test_bar_menu_event_wit_conversion_all_reasons() {
+        use shilpo_ext_api::BarMenuCloseReason;
+
+        let opened = shilpo_ext_api::ExtensionEvent::BarMenuOpened {
+            contribution_id: "org.shilpo.weather/weather-menu".into(),
+            instance_id: "bar:0:center:0".into(),
+        };
+        let wit_opened = convert_event_to_wit(&opened);
+        assert!(matches!(
+            wit_opened,
+            self::shilpo::extension::events::ExtensionEvent::BarMenuOpened(_)
+        ));
+
+        let reasons = [
+            BarMenuCloseReason::SourceToggle,
+            BarMenuCloseReason::Escape,
+            BarMenuCloseReason::FocusLost,
+            BarMenuCloseReason::OutsideClick,
+            BarMenuCloseReason::OverviewOpened,
+            BarMenuCloseReason::BarClosed,
+            BarMenuCloseReason::DisplayRemoved,
+            BarMenuCloseReason::OwnerRemoved,
+            BarMenuCloseReason::SourceUnavailable,
+        ];
+        for reason in reasons {
+            let closed = shilpo_ext_api::ExtensionEvent::BarMenuClosed {
+                contribution_id: "org.shilpo.weather/weather-menu".into(),
+                instance_id: "bar:0:center:0".into(),
+                reason,
+            };
+            let wit_closed = convert_event_to_wit(&closed);
+            assert!(matches!(
+                wit_closed,
+                self::shilpo::extension::events::ExtensionEvent::BarMenuClosed(_)
+            ));
+        }
+    }
 }
 
 fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::ExtensionEvent {
@@ -1928,6 +1967,50 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
             contribution_id: contribution_id.clone(),
             instance_id: instance_id.clone(),
             settings: data_value_from_json(settings),
+        }),
+        ApiEvent::BarMenuOpened {
+            contribution_id,
+            instance_id,
+        } => wit_events::ExtensionEvent::BarMenuOpened(wit_events::BarMenuOpenedPayload {
+            contribution_id: contribution_id.clone(),
+            instance_id: instance_id.clone(),
+        }),
+        ApiEvent::BarMenuClosed {
+            contribution_id,
+            instance_id,
+            reason,
+        } => wit_events::ExtensionEvent::BarMenuClosed(wit_events::BarMenuClosedPayload {
+            contribution_id: contribution_id.clone(),
+            instance_id: instance_id.clone(),
+            reason: match reason {
+                shilpo_ext_api::BarMenuCloseReason::SourceToggle => {
+                    wit_events::BarMenuCloseReason::SourceToggle
+                }
+                shilpo_ext_api::BarMenuCloseReason::Escape => {
+                    wit_events::BarMenuCloseReason::Escape
+                }
+                shilpo_ext_api::BarMenuCloseReason::FocusLost => {
+                    wit_events::BarMenuCloseReason::FocusLost
+                }
+                shilpo_ext_api::BarMenuCloseReason::OutsideClick => {
+                    wit_events::BarMenuCloseReason::OutsideClick
+                }
+                shilpo_ext_api::BarMenuCloseReason::OverviewOpened => {
+                    wit_events::BarMenuCloseReason::OverviewOpened
+                }
+                shilpo_ext_api::BarMenuCloseReason::BarClosed => {
+                    wit_events::BarMenuCloseReason::BarClosed
+                }
+                shilpo_ext_api::BarMenuCloseReason::DisplayRemoved => {
+                    wit_events::BarMenuCloseReason::DisplayRemoved
+                }
+                shilpo_ext_api::BarMenuCloseReason::OwnerRemoved => {
+                    wit_events::BarMenuCloseReason::OwnerRemoved
+                }
+                shilpo_ext_api::BarMenuCloseReason::SourceUnavailable => {
+                    wit_events::BarMenuCloseReason::SourceUnavailable
+                }
+            },
         }),
         ApiEvent::Input {
             contribution_id,

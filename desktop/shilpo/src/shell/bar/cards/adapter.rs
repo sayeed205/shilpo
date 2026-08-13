@@ -370,7 +370,7 @@ impl CardCoordinator {
         match effect {
             CardEffect::OpenChannel {
                 channel,
-                source,
+                ref source,
                 generation,
             } => {
                 tracing::debug!(
@@ -379,7 +379,16 @@ impl CardCoordinator {
                     generation,
                     "card channel opening"
                 );
-                Self::open_channel(cx, channel, source, generation);
+                if channel == CardChannel::Persistent {
+                    ShellRuntime::dispatch_extension_event(
+                        cx,
+                        shilpo_ext_api::ExtensionEvent::BarMenuOpened {
+                            contribution_id: source.owner.to_string(),
+                            instance_id: source.instance_id.to_string(),
+                        },
+                    );
+                }
+                Self::open_channel(cx, channel, source.clone(), generation);
             }
 
             CardEffect::CloseChannel {
@@ -387,12 +396,55 @@ impl CardCoordinator {
                 reason,
                 display_id,
                 generation,
+                source,
             } => {
                 tracing::debug!(
                     channel = ?channel,
                     reason = ?reason,
                     "card channel closing"
                 );
+                if channel == CardChannel::Persistent
+                    && let Some(src) = source
+                {
+                    let mapped_reason = match reason {
+                        CardDismissReason::SourceToggle => {
+                            shilpo_ext_api::BarMenuCloseReason::SourceToggle
+                        }
+                        CardDismissReason::Escape => shilpo_ext_api::BarMenuCloseReason::Escape,
+                        CardDismissReason::FocusLost => {
+                            shilpo_ext_api::BarMenuCloseReason::FocusLost
+                        }
+                        CardDismissReason::OutsideClick => {
+                            shilpo_ext_api::BarMenuCloseReason::OutsideClick
+                        }
+                        CardDismissReason::OverviewOpened => {
+                            shilpo_ext_api::BarMenuCloseReason::OverviewOpened
+                        }
+                        CardDismissReason::BarClosed | CardDismissReason::Shutdown => {
+                            shilpo_ext_api::BarMenuCloseReason::BarClosed
+                        }
+                        CardDismissReason::DisplayRemoved => {
+                            shilpo_ext_api::BarMenuCloseReason::DisplayRemoved
+                        }
+                        CardDismissReason::OwnerRemoved => {
+                            shilpo_ext_api::BarMenuCloseReason::OwnerRemoved
+                        }
+                        CardDismissReason::SourceDisappeared => {
+                            shilpo_ext_api::BarMenuCloseReason::SourceUnavailable
+                        }
+                        CardDismissReason::Explicit => {
+                            shilpo_ext_api::BarMenuCloseReason::OutsideClick
+                        }
+                    };
+                    ShellRuntime::dispatch_extension_event(
+                        cx,
+                        shilpo_ext_api::ExtensionEvent::BarMenuClosed {
+                            contribution_id: src.owner.to_string(),
+                            instance_id: src.instance_id.to_string(),
+                            reason: mapped_reason,
+                        },
+                    );
+                }
                 Self::close_channel(cx, channel, display_id, reason);
                 Self::schedule_close_completion(cx, channel, display_id, generation);
             }

@@ -26,6 +26,7 @@
       "default": {
         "actions": [],
         "background_tasks": [],
+        "bar_menus": [],
         "bar_widgets": [],
         "desktop_widgets": [],
         "launcher_providers": [],
@@ -129,6 +130,26 @@
       "required": [
         "id",
         "name"
+      ]
+    },
+    "BarMenuContribution": {
+      "type": "object",
+      "properties": {
+        "bar_widget": {
+          "$ref": "#/$defs/ContributionId"
+        },
+        "id": {
+          "$ref": "#/$defs/ContributionId"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "bar_widget"
       ]
     },
     "BarWidgetContribution": {
@@ -414,6 +435,13 @@
           "default": [],
           "items": {
             "$ref": "#/$defs/BackgroundTaskContribution"
+          }
+        },
+        "bar_menus": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BarMenuContribution"
           }
         },
         "bar_widgets": {

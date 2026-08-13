@@ -21,9 +21,9 @@ or one card). Each open entry carries owner identity, monitor, anchor geometry, 
 global, not per-monitor: at most one persistent card and one preview may be visible across the entire shell.
 
 The coordinator is responsible for placement, timing, collision avoidance, focus, dismissal, auto-hide holds, and surface
-lifecycle. Widgets supply a stable source identity, independently declared hover and click capabilities, live anchor
-geometry, an internal content provider, and preferred dimensions for each source/channel. The coordinator clamps those
-dimensions to the available monitor space. The initial provider contract is restricted to built-in widgets.
+lifecycle. Built-in widgets supply a stable source identity, independently declared hover and click capabilities, live
+anchor geometry, an internal content provider, and preferred dimensions for each source/channel. The coordinator clamps
+those dimensions to the available monitor space. The built-in provider contract remains internal to the Shell.
 
 **Rejected alternative: per-widget surface management.** Letting each widget create and manage its own surface would
 duplicate placement logic, make shell-wide exclusivity unenforceable, and scatter focus and dismissal policies across
@@ -41,10 +41,25 @@ required for the bar representation are reused rather than duplicated.
 
 ## Extension boundary
 
-The coordinator concepts must not preclude a future constrained, declarative extension API. That future API will be a
-separate capability-checked projection into the coordinator rather than exposing the built-in content-provider contract.
-Extensions do not receive raw shell-surface access. Its schema and lifecycle are deferred until extension-provided cards
-are designed.
+Extension bar menus use a constrained declarative projection into the persistent channel rather than the built-in
+content-provider contract. A bar-menu contribution links to one bar-widget contribution and supplies a `ViewTree`; it
+does not declare a width, height, or size tier. The Shell measures the tree's intrinsic content size under host-owned
+constraints, adds host-owned card chrome, clamps the result to the monitor work area and safety limits, and enables
+overflow scrolling only where the measured content exceeds those bounds. Placement uses the resulting bounded size.
+
+This keeps content responsive to theme metrics, fonts, localization, and live updates without making surface geometry
+part of the extension API. Extensions do not receive raw shell-surface access, GPUI types, placement controls, or focus
+policy. The Shell maps typed menu lifecycle transitions to extension events while retaining ownership of exclusivity,
+dismissal, focus restoration, and surface lifetime.
+
+**Rejected alternative: extension-declared dimensions or size tiers.** Fixed tiers waste space for small content and
+force discontinuous jumps for larger content. Arbitrary dimensions make extension authors predict host typography and
+monitor constraints while expanding the public validation surface. Both encode presentation policy in the manifest
+instead of measuring the declarative content the host already owns.
+
+**Rejected alternative: unbounded intrinsic sizing.** A malformed or adversarial tree could request an unusable surface.
+Dynamic sizing is therefore always constrained by host policy and available monitor geometry; those limits are not guest
+configuration.
 
 **Rejected alternative: exposing raw shell surfaces to extensions.** Direct surface access would bypass the coordinator's
 exclusivity, placement, and focus rules, creating an unsandboxable escape hatch.
@@ -60,7 +75,7 @@ exclusivity, placement, and focus rules, creating an unsandboxable escape hatch.
   `shilpo-shell` (ADR-0001 principle).
 - Existing `shilpo-ui` presentation primitives (`Card`, `Popover`, `HoverCard`) are reused for card content where
   applicable; genuinely missing generic primitives are added to `shilpo-ui` with interactive Storybook stories.
-- The initial provider contract serves built-ins only. Future extensions require a separately designed,
-  capability-checked declarative API rather than raw surface control or direct access to the built-in provider contract.
+- The provider contract serves built-ins only. Extension bar menus use a separate declarative adapter with host-measured,
+  host-bounded intrinsic sizing rather than raw surface control or direct access to the provider contract.
 - Widget-specific Battery, Workspace, and Running Apps behavior is recorded in the
   [design record](../bar-widget-cards-grill.md), not in this ADR.
