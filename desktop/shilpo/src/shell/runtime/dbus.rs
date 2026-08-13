@@ -146,6 +146,25 @@ impl ShellRuntime {
                 ShellCommand::Capture(intent) => {
                     ShellSurfaces::request(cx, super::SurfaceRequest::OpenCapture(intent));
                 }
+                ShellCommand::InvokeAction {
+                    action_id,
+                    payload_json,
+                } => match action_id.parse::<crate::actions::ActionId>() {
+                    Ok(id) => {
+                        let payload = payload_json.and_then(|p| serde_json::from_str(&p).ok());
+                        match crate::actions::ActionInvocation::from_id_and_payload(id, payload) {
+                            Ok(invocation) => {
+                                if let Err(error) = ShellRuntime::dispatch_action(cx, invocation) {
+                                    tracing::warn!(%error, "D-Bus action dispatch failed");
+                                }
+                            }
+                            Err(error) => tracing::warn!(%error, "D-Bus action payload rejected"),
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, action = %action_id, "D-Bus action ID rejected")
+                    }
+                },
                 ShellCommand::EmitTestNotification { title, body } => {
                     let notif = shilpo_services::Notification {
                         id: 0,

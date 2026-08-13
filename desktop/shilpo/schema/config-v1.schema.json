@@ -3,29 +3,22 @@
   "title": "ShellConfig",
   "type": "object",
   "properties": {
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "theme": {
+      "$ref": "#/$defs/ThemeConfig"
+    },
     "bar": {
       "$ref": "#/$defs/BarConfig"
-    },
-    "capture": {
-      "$ref": "#/$defs/CaptureConfig",
-      "default": {
-        "default_selection": "rectangle",
-        "screenshot_dir": "~/Pictures/Screenshots",
-        "show_pointer": true
-      }
-    },
-    "clock_format": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "default": null
     },
     "desktop": {
       "$ref": "#/$defs/DesktopConfig",
       "default": {
-        "wallpaper_dir": "~/Pictures/Wallpapers",
-        "widgets": []
+        "widgets": [],
+        "wallpaper_dir": "~/Pictures/Wallpapers"
       }
     },
     "extensions": {
@@ -34,13 +27,6 @@
         "settings": {}
       }
     },
-    "locale": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "default": null
-    },
     "outputs": {
       "type": "object",
       "additionalProperties": {
@@ -48,12 +34,12 @@
       },
       "default": {}
     },
-    "startup": {
-      "$ref": "#/$defs/StartupConfig",
-      "default": {
-        "autostart_apps": [],
-        "compositor_wait_timeout_ms": 3000
-      }
+    "clock_format": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
     },
     "temperature_unit": {
       "type": [
@@ -62,13 +48,34 @@
       ],
       "default": null
     },
-    "theme": {
-      "$ref": "#/$defs/ThemeConfig"
+    "locale": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
     },
-    "version": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0
+    "startup": {
+      "$ref": "#/$defs/StartupConfig",
+      "default": {
+        "autostart_apps": [],
+        "compositor_wait_timeout_ms": 3000
+      }
+    },
+    "capture": {
+      "$ref": "#/$defs/CaptureConfig",
+      "default": {
+        "screenshot_dir": "~/Pictures/Screenshots",
+        "show_pointer": true,
+        "default_selection": "rectangle"
+      }
+    },
+    "keybindings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/KeybindingConfig"
+      },
+      "default": []
     }
   },
   "additionalProperties": false,
@@ -78,19 +85,105 @@
     "bar"
   ],
   "$defs": {
+    "ThemeConfig": {
+      "type": "object",
+      "properties": {
+        "font_family": {
+          "type": "string"
+        },
+        "heading_font_family": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "mono_font_family": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "corner_radius_scale": {
+          "type": "number",
+          "format": "float"
+        },
+        "high_contrast": {
+          "type": "boolean",
+          "default": false
+        },
+        "reduced_motion": {
+          "type": "boolean",
+          "default": false
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "gtk_theme_light": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "gtk_theme_dark": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "custom_adapter_cmd": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "default": null
+        },
+        "transition_duration_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 5000,
+          "default": 300
+        },
+        "scheme_variant": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "font_family",
+        "corner_radius_scale"
+      ]
+    },
     "BarConfig": {
       "type": "object",
       "properties": {
-        "exclusive_zone": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "default": null,
-          "minimum": 0
+        "position": {
+          "$ref": "#/$defs/BarPosition"
+        },
+        "style": {
+          "$ref": "#/$defs/BarStyle"
         },
         "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "padding": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -98,26 +191,24 @@
         "margin": {
           "$ref": "#/$defs/BarMargin"
         },
+        "widget_spacing": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
         "opacity": {
           "type": "number",
           "format": "float",
           "default": 0.9200000166893005
         },
-        "padding": {
-          "type": "integer",
+        "exclusive_zone": {
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint32",
-          "minimum": 0
-        },
-        "position": {
-          "$ref": "#/$defs/BarPosition"
-        },
-        "style": {
-          "$ref": "#/$defs/BarStyle"
-        },
-        "widget_spacing": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "default": null
         },
         "widgets": {
           "$ref": "#/$defs/BarWidgets"
@@ -132,6 +223,23 @@
         "margin",
         "widget_spacing",
         "widgets"
+      ]
+    },
+    "BarPosition": {
+      "type": "string",
+      "enum": [
+        "Top",
+        "Bottom",
+        "Left",
+        "Right"
+      ]
+    },
+    "BarStyle": {
+      "type": "string",
+      "enum": [
+        "Hug",
+        "Float",
+        "Rect"
       ]
     },
     "BarMargin": {
@@ -154,30 +262,15 @@
         "vertical"
       ]
     },
-    "BarPosition": {
-      "type": "string",
-      "enum": [
-        "Top",
-        "Bottom",
-        "Left",
-        "Right"
-      ]
-    },
-    "BarStyle": {
-      "type": "string",
-      "enum": [
-        "Hug",
-        "Float",
-        "Rect"
-      ]
-    },
-    "BarWidget": {
-      "type": "string",
-      "pattern": "^(builtin:(workspaces|running_apps|clock|date|media|sysinfo|network|bluetooth|caffeine|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
-    },
     "BarWidgets": {
       "type": "object",
       "properties": {
+        "start": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BarWidget"
+          }
+        },
         "center": {
           "type": "array",
           "items": {
@@ -185,12 +278,6 @@
           }
         },
         "end": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/BarWidget"
-          }
-        },
-        "start": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/BarWidget"
@@ -204,37 +291,23 @@
         "end"
       ]
     },
-    "CaptureConfig": {
-      "type": "object",
-      "properties": {
-        "default_selection": {
-          "type": "string",
-          "default": "rectangle"
-        },
-        "screenshot_dir": {
-          "type": "string",
-          "default": "~/Pictures/Screenshots"
-        },
-        "show_pointer": {
-          "type": "boolean",
-          "default": true
-        }
-      },
-      "additionalProperties": false
+    "BarWidget": {
+      "type": "string",
+      "pattern": "^(builtin:(workspaces|running_apps|clock|date|media|sysinfo|network|bluetooth|caffeine|audio|battery|settings)|ext:[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*){2,}/[a-z0-9][a-z0-9_-]*)$"
     },
     "DesktopConfig": {
       "type": "object",
       "properties": {
+        "widgets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesktopWidgetConfig"
+          },
+          "default": []
+        },
         "wallpaper_dir": {
           "type": "string",
           "default": "~/Pictures/Wallpapers"
-        },
-        "widgets": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/DesktopWidgetConfig"
-          }
         }
       },
       "additionalProperties": false
@@ -242,28 +315,15 @@
     "DesktopWidgetConfig": {
       "type": "object",
       "properties": {
-        "contribution": {
-          "$ref": "#/$defs/ExtensionContributionRef"
-        },
-        "height": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
         "instance": {
           "type": "string"
+        },
+        "contribution": {
+          "$ref": "#/$defs/ExtensionContributionRef"
         },
         "output": {
           "type": "string",
           "default": "primary"
-        },
-        "settings": {
-          "default": {}
-        },
-        "width": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
         },
         "x": {
           "type": "integer",
@@ -274,6 +334,19 @@
           "type": "integer",
           "format": "int32",
           "default": 0
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "settings": {
+          "default": {}
         }
       },
       "additionalProperties": false,
@@ -307,7 +380,34 @@
           "type": "boolean",
           "default": true
         },
-        "exclusive_zone": {
+        "scale": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BarPosition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BarStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "height": {
           "type": [
             "integer",
             "null"
@@ -315,7 +415,7 @@
           "format": "uint32",
           "minimum": 0
         },
-        "height": {
+        "padding": {
           "type": [
             "integer",
             "null"
@@ -333,14 +433,7 @@
             }
           ]
         },
-        "opacity": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "float"
-        },
-        "padding": {
+        "widget_spacing": {
           "type": [
             "integer",
             "null"
@@ -348,34 +441,14 @@
           "format": "uint32",
           "minimum": 0
         },
-        "position": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BarPosition"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "scale": {
+        "opacity": {
           "type": [
             "number",
             "null"
           ],
           "format": "float"
         },
-        "style": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BarStyle"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "widget_spacing": {
+        "exclusive_zone": {
           "type": [
             "integer",
             "null"
@@ -401,102 +474,59 @@
       "properties": {
         "autostart_apps": {
           "type": "array",
-          "default": [],
           "items": {
             "type": "string"
-          }
+          },
+          "default": []
         },
         "compositor_wait_timeout_ms": {
           "type": "integer",
           "format": "uint64",
-          "default": 3000,
-          "minimum": 0
+          "minimum": 0,
+          "default": 3000
         }
       },
       "additionalProperties": false
     },
-    "ThemeConfig": {
+    "CaptureConfig": {
       "type": "object",
       "properties": {
-        "corner_radius_scale": {
-          "type": "number",
-          "format": "float"
+        "screenshot_dir": {
+          "type": "string",
+          "default": "~/Pictures/Screenshots"
         },
-        "custom_adapter_cmd": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "default": null,
-          "items": {
-            "type": "string"
-          }
+        "show_pointer": {
+          "type": "boolean",
+          "default": true
         },
-        "font_family": {
+        "default_selection": {
+          "type": "string",
+          "default": "rectangle"
+        }
+      },
+      "additionalProperties": false
+    },
+    "KeybindingConfig": {
+      "type": "object",
+      "properties": {
+        "action": {
           "type": "string"
         },
-        "gtk_theme_dark": {
+        "shortcut": {
           "type": [
             "string",
             "null"
           ],
           "default": null
         },
-        "gtk_theme_light": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "heading_font_family": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "high_contrast": {
+        "enabled": {
           "type": "boolean",
-          "default": false
-        },
-        "mono_font_family": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "provider": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "reduced_motion": {
-          "type": "boolean",
-          "default": false
-        },
-        "scheme_variant": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "transition_duration_ms": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 5000,
-          "default": 300
+          "default": true
         }
       },
       "additionalProperties": false,
       "required": [
-        "font_family",
-        "corner_radius_scale"
+        "action"
       ]
     }
   }

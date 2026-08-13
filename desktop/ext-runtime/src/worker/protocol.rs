@@ -13,6 +13,7 @@ pub enum ContributionSurface {
     Launcher,
     Action,
     Background,
+    Shortcut,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +27,10 @@ pub struct ContributionDescriptor {
     pub minimum_size: Option<(u32, u32)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bar_widget: Option<CanonicalId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<CanonicalId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_binding: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

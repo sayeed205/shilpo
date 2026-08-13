@@ -132,6 +132,13 @@ async fn test_introspection_exact_contract() {
                 &[(None, "(bsttusbssbssbssbssbssbssbts)", Some("out"))],
             ),
             ("Capture", &[(Some("intent"), "s", Some("in"))]),
+            (
+                "InvokeAction",
+                &[
+                    (Some("action_id"), "s", Some("in")),
+                    (Some("payload_json"), "ms", Some("in")),
+                ],
+            ),
         ],
     );
     assert_interface_contract(

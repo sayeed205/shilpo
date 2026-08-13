@@ -34,6 +34,18 @@ pub struct ShellConfig {
     pub startup: StartupConfig,
     #[serde(default)]
     pub capture: CaptureConfig,
+    #[serde(default)]
+    pub keybindings: Vec<KeybindingConfig>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct KeybindingConfig {
+    pub action: String,
+    #[serde(default)]
+    pub shortcut: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -580,6 +592,7 @@ impl Default for ShellConfig {
             locale: None,
             startup: StartupConfig::default(),
             capture: CaptureConfig::default(),
+            keybindings: Vec::new(),
         }
     }
 }
@@ -887,6 +900,57 @@ impl ShellConfig {
                     "capture.default_selection",
                     "must be 'rectangle' or 'ellipse'",
                 ));
+            }
+        }
+
+        let mut seen_keybinding_actions = std::collections::HashSet::new();
+        let mut seen_keybinding_shortcuts = std::collections::HashMap::new();
+        for (index, kb) in self.keybindings.iter().enumerate() {
+            let prefix = format!("keybindings[{index}]");
+            if kb.action.trim().is_empty() {
+                d.push(ConfigDiagnostic::new(
+                    format!("{prefix}.action"),
+                    "action ID must not be empty",
+                ));
+            } else if !seen_keybinding_actions.insert(kb.action.as_str()) {
+                d.push(ConfigDiagnostic::new(
+                    format!("{prefix}.action"),
+                    format!("duplicate keybinding entry for action '{}'", kb.action),
+                ));
+            }
+
+            if kb.enabled {
+                match &kb.shortcut {
+                    Some(spec) if !spec.trim().is_empty() => {
+                        match shilpo_ext_api::manifest::validate_shortcut_spec(spec) {
+                            Ok(canonical) => {
+                                if let Some(prev_action) = seen_keybinding_shortcuts
+                                    .insert(canonical.clone(), kb.action.as_str())
+                                {
+                                    d.push(ConfigDiagnostic::new(
+                                        format!("{prefix}.shortcut"),
+                                        format!(
+                                            "duplicate shortcut binding '{canonical}' for actions '{prev_action}' and '{}'",
+                                            kb.action
+                                        ),
+                                    ));
+                                }
+                            }
+                            Err(err) => {
+                                d.push(ConfigDiagnostic::new(
+                                    format!("{prefix}.shortcut"),
+                                    format!("invalid shortcut specification '{spec}': {err}"),
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        d.push(ConfigDiagnostic::new(
+                            format!("{prefix}.shortcut"),
+                            "enabled keybinding must specify a non-empty shortcut",
+                        ));
+                    }
+                }
             }
         }
 

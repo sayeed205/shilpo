@@ -12,6 +12,7 @@ use crate::{
 use gpui::App;
 
 use super::{ShellRuntime, shell_surfaces::ShellSurfaces};
+use crate::shell::keybindings::GlobalShortcutBackend;
 
 /// Owns the wasm extension runtime (coordinator), its in-flight task registry,
 /// and the location service used by extension effects.
@@ -344,11 +345,7 @@ impl ExtensionHost {
             return;
         }
 
-        if update
-            .snapshot
-            .as_ref()
-            .is_some_and(|s| s.catalog_changed_at.is_some())
-        {
+        if update.snapshot.is_some() {
             Self::sync_extension_actions(cx);
             ShellSurfaces::reconcile_bar_extension_instances(cx);
         }
@@ -369,16 +366,43 @@ impl ExtensionHost {
         }
     }
 
-    /// Reconciles the action registry with the actions contributed by the loaded
-    /// extensions.
+    /// Reconciles the action registry and keybindings with the contributions
+    /// from loaded extensions.
     pub(crate) fn sync_extension_actions(cx: &mut App) {
-        let desired = cx
+        let desired_actions = cx
             .global::<ShellRuntime>()
             .extension_host()
             .descriptors_for(ContributionSurface::Action);
         cx.global_mut::<ShellRuntime>()
             .action_dispatcher_mut()
-            .sync_extension_actions(desired);
+            .sync_extension_actions(desired_actions);
+
+        let extension_shortcuts = cx
+            .global::<ShellRuntime>()
+            .extension_host()
+            .descriptors_for(ContributionSurface::Shortcut);
+
+        let user_bindings = ShellRuntime::active_config(cx).keybindings;
+
+        let report = cx
+            .global_mut::<ShellRuntime>()
+            .action_dispatcher_mut()
+            .reconcile_keybindings(&user_bindings, &extension_shortcuts);
+
+        let backend = crate::shell::keybindings::NiriShortcutBackend::new();
+        let compositor = std::env::var("SHILPO_COMPOSITOR").ok();
+        match backend.sync_for_compositor(compositor.as_deref(), &report.resolved) {
+            Ok(projection) => {
+                for diagnostic in projection.diagnostics {
+                    tracing::warn!(%diagnostic, "shortcut projection diagnostic");
+                }
+                tracing::info!(include = %projection.include_directive, "Niri shortcut include required");
+            }
+            Err(error) => tracing::error!(
+                ?error,
+                "shortcut projection failed; last-good projection retained"
+            ),
+        }
     }
 
     pub(crate) fn execute_effect(

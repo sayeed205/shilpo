@@ -17,9 +17,19 @@ pub enum ShellCommand {
     HideOverview,
     ToggleOverview,
     SetBrightness(u8),
-    SetDisplayBrightness { display_id: String, percentage: u8 },
+    SetDisplayBrightness {
+        display_id: String,
+        percentage: u8,
+    },
     Capture(shilpo_services::capture::CaptureIntent),
-    EmitTestNotification { title: String, body: String },
+    EmitTestNotification {
+        title: String,
+        body: String,
+    },
+    InvokeAction {
+        action_id: String,
+        payload_json: Option<String>,
+    },
 }
 
 /// D-Bus interface implementation for `org.shilpo.Shell`.
@@ -442,6 +452,25 @@ impl ShellDbusService {
             }
         };
         self.send_command(ShellCommand::Capture(capture_intent))
+    }
+
+    async fn invoke_action(
+        &self,
+        action_id: String,
+        payload_json: Option<String>,
+    ) -> zbus::fdo::Result<()> {
+        let _span = tracing::info_span!(
+            target: "shilpo_profile",
+            "dbus_call",
+            destination = "org.shilpo.Shell",
+            operation = "invoke_action",
+            outcome = tracing::field::Empty
+        );
+        let _enter = _span.enter();
+        self.send_command(ShellCommand::InvokeAction {
+            action_id,
+            payload_json,
+        })
     }
 
     #[zbus(signal)]

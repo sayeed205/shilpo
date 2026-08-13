@@ -29,6 +29,7 @@
         "bar_menus": [],
         "bar_widgets": [],
         "desktop_widgets": [],
+        "keyboard_shortcuts": [],
         "launcher_providers": [],
         "settings_pages": [],
         "side_panels": []
@@ -458,6 +459,13 @@
             "$ref": "#/$defs/DesktopWidgetContribution"
           }
         },
+        "keyboard_shortcuts": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/KeyboardShortcutContribution"
+          }
+        },
         "launcher_providers": {
           "type": "array",
           "default": [],
@@ -552,6 +560,33 @@
     "ExtensionId": {
       "description": "The package identity of an extension (reverse-domain notation, e.g. `io.github.alice`).",
       "type": "string"
+    },
+    "KeyboardShortcutContribution": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ContributionId"
+        },
+        "default_binding": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "id": {
+          "$ref": "#/$defs/ContributionId"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "action"
+      ]
     },
     "LauncherProviderContribution": {
       "type": "object",

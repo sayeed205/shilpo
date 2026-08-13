@@ -29,20 +29,24 @@ impl ActionDispatcher {
         }
     }
 
-    pub(crate) fn update_shortcut(&mut self, spec: &str, action: ActionId) -> Result<(), String> {
-        let shortcut = crate::actions::Shortcut::parse(spec)
-            .ok_or_else(|| format!("invalid shortcut specification: '{}'", spec))?;
-        self.keybindings.register(shortcut, action)
+    #[allow(dead_code)]
+    pub(crate) fn keybinding_manager(&self) -> &crate::actions::KeybindingManager {
+        &self.keybindings
     }
 
-    pub(crate) fn update_shortcut_with_override(
+    #[allow(dead_code)]
+    pub(crate) fn keybinding_manager_mut(&mut self) -> &mut crate::actions::KeybindingManager {
+        &mut self.keybindings
+    }
+
+    pub(crate) fn reconcile_keybindings(
         &mut self,
-        spec: &str,
-        action: ActionId,
-    ) -> Result<Option<ActionId>, String> {
-        let shortcut = crate::actions::Shortcut::parse(spec)
-            .ok_or_else(|| format!("invalid shortcut specification: '{}'", spec))?;
-        Ok(self.keybindings.register_with_override(shortcut, action))
+        user_bindings: &[crate::config::KeybindingConfig],
+        extension_shortcuts: &[ContributionDescriptor],
+    ) -> crate::actions::KeybindingReconciliationReport {
+        let builtin_actions = self.actions.all();
+        self.keybindings
+            .reconcile(user_bindings, &builtin_actions, extension_shortcuts)
     }
 
     pub(crate) fn reset_shortcuts_to_defaults(&mut self) {
@@ -63,15 +67,7 @@ impl ActionDispatcher {
     }
 
     pub(crate) fn keybinding_descriptors(&self) -> Vec<(String, String)> {
-        self.actions
-            .all()
-            .into_iter()
-            .filter_map(|desc| {
-                self.keybindings
-                    .shortcut_for(&desc.id)
-                    .map(|shortcut| (shortcut.to_spec(), desc.label))
-            })
-            .collect()
+        self.keybindings.keybinding_descriptors()
     }
 
     /// Reconciles the extension actions with the currently loaded extensions.
@@ -435,22 +431,6 @@ impl ActionDispatcher {
 }
 
 impl ShellRuntime {
-    pub fn update_shortcut(cx: &mut App, spec: &str, action: ActionId) -> Result<(), String> {
-        cx.global_mut::<Self>()
-            .action_dispatcher_mut()
-            .update_shortcut(spec, action)
-    }
-
-    pub fn update_shortcut_with_override(
-        cx: &mut App,
-        spec: &str,
-        action: ActionId,
-    ) -> Result<Option<ActionId>, String> {
-        cx.global_mut::<Self>()
-            .action_dispatcher_mut()
-            .update_shortcut_with_override(spec, action)
-    }
-
     pub fn reset_shortcuts_to_defaults(cx: &mut App) {
         if cx.has_global::<Self>() {
             cx.global_mut::<Self>()
@@ -482,6 +462,14 @@ impl ShellRuntime {
         cx.global::<Self>()
             .action_dispatcher()
             .keybinding_descriptors()
+    }
+
+    pub fn resolved_shortcuts(cx: &App) -> Vec<crate::actions::ResolvedShortcut> {
+        cx.global::<Self>()
+            .action_dispatcher()
+            .keybinding_manager()
+            .resolved_shortcuts()
+            .to_vec()
     }
 
     pub fn focus_workspace(cx: &mut App, ws_id: u64) -> Result<(), ShellError> {
@@ -517,8 +505,14 @@ mod tests {
         let mut dispatcher = ActionDispatcher::new();
         assert!(!dispatcher.action_descriptors().is_empty());
 
-        let res = dispatcher.update_shortcut("Ctrl+Shift+T", ActionId::ToggleBar);
-        assert!(res.is_ok());
+        let user_bindings = vec![crate::config::KeybindingConfig {
+            action: "builtin:toggle_bar".into(),
+            shortcut: Some("Ctrl+Shift+T".into()),
+            enabled: true,
+        }];
+
+        let report = dispatcher.reconcile_keybindings(&user_bindings, &[]);
+        assert!(report.diagnostics.is_empty());
 
         dispatcher.reset_shortcuts_to_defaults();
         assert!(!dispatcher.keybinding_descriptors().is_empty());
@@ -545,13 +539,18 @@ mod tests {
     #[test]
     fn shortcut_override_reports_the_displaced_action() {
         let mut dispatcher = ActionDispatcher::new();
-        dispatcher
-            .update_shortcut("Ctrl+Shift+T", ActionId::ToggleBar)
-            .unwrap();
-        let displaced = dispatcher
-            .update_shortcut_with_override("Ctrl+Shift+T", ActionId::ToggleOverview)
-            .unwrap();
-        assert_eq!(displaced, Some(ActionId::ToggleBar));
+        let user_bindings = vec![crate::config::KeybindingConfig {
+            action: "builtin:toggle_bar".into(),
+            shortcut: Some("Super+Space".into()),
+            enabled: true,
+        }];
+        let report = dispatcher.reconcile_keybindings(&user_bindings, &[]);
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("collides"))
+        );
     }
 
     #[test]
@@ -601,6 +600,8 @@ mod tests {
             default_size: None,
             minimum_size: None,
             bar_widget: None,
+            action: None,
+            default_binding: None,
         }]);
 
         let ids = dispatcher
@@ -627,12 +628,15 @@ mod tests {
     fn test_harness_action_dispatcher_isolated_state_transitions() {
         let mut harness = ActionDispatcherTestHarness::new_offline();
         assert!(!harness.dispatcher.action_descriptors().is_empty());
-        assert!(
-            harness
-                .dispatcher
-                .update_shortcut("Ctrl+Shift+U", ActionId::ToggleBar)
-                .is_ok()
-        );
+        let user_bindings = vec![crate::config::KeybindingConfig {
+            action: "builtin:toggle_bar".into(),
+            shortcut: Some("Ctrl+Shift+U".into()),
+            enabled: true,
+        }];
+        let report = harness
+            .dispatcher
+            .reconcile_keybindings(&user_bindings, &[]);
+        assert!(report.diagnostics.is_empty());
         harness.dispatcher.reset_shortcuts_to_defaults();
         assert!(!harness.dispatcher.keybinding_descriptors().is_empty());
     }
