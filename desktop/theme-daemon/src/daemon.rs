@@ -23,9 +23,11 @@ use zbus::names::BusName;
 
 use crate::wallpaper_cache::WallpaperAnalysisCache;
 
-pub type WallpaperExtractorFn =
+#[cfg(test)]
+pub(crate) type WallpaperExtractorFn =
     Arc<dyn Fn(&Path) -> anyhow::Result<(u32, SchemeVariant)> + Send + Sync>;
-pub type WallpaperBackendFn = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
+#[cfg(test)]
+pub(crate) type WallpaperBackendFn = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct ThemeDaemonOptions {
@@ -37,14 +39,18 @@ pub struct ThemeDaemonOptions {
     pub scheme_variant: Option<SchemeVariant>,
     pub config_path: Option<PathBuf>,
     pub state_path: Option<PathBuf>,
-    pub wallpaper_extractor: Option<WallpaperExtractorFn>,
-    pub wallpaper_backend: Option<WallpaperBackendFn>,
-    pub headless: bool,
+    #[cfg(test)]
+    pub(crate) wallpaper_extractor: Option<WallpaperExtractorFn>,
+    #[cfg(test)]
+    pub(crate) wallpaper_backend: Option<WallpaperBackendFn>,
+    #[cfg(test)]
+    pub(crate) headless: bool,
 }
 
 impl std::fmt::Debug for ThemeDaemonOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ThemeDaemonOptions")
+        let mut debug = f.debug_struct("ThemeDaemonOptions");
+        debug
             .field("provider", &self.provider)
             .field("gtk_theme_light", &self.gtk_theme_light)
             .field("gtk_theme_dark", &self.gtk_theme_dark)
@@ -52,11 +58,15 @@ impl std::fmt::Debug for ThemeDaemonOptions {
             .field("wallpaper_dir", &self.wallpaper_dir)
             .field("scheme_variant", &self.scheme_variant)
             .field("config_path", &self.config_path)
-            .field("state_path", &self.state_path)
-            .field("wallpaper_extractor", &self.wallpaper_extractor.is_some())
-            .field("wallpaper_backend", &self.wallpaper_backend.is_some())
-            .field("headless", &self.headless)
-            .finish()
+            .field("state_path", &self.state_path);
+        #[cfg(test)]
+        {
+            debug
+                .field("wallpaper_extractor", &self.wallpaper_extractor.is_some())
+                .field("wallpaper_backend", &self.wallpaper_backend.is_some())
+                .field("headless", &self.headless);
+        }
+        debug.finish()
     }
 }
 
@@ -70,7 +80,16 @@ impl PartialEq for ThemeDaemonOptions {
             && self.scheme_variant == other.scheme_variant
             && self.config_path == other.config_path
             && self.state_path == other.state_path
-            && self.headless == other.headless
+            && {
+                #[cfg(test)]
+                {
+                    self.headless == other.headless
+                }
+                #[cfg(not(test))]
+                {
+                    true
+                }
+            }
     }
 }
 
@@ -159,7 +178,9 @@ pub struct ThemeDaemon {
     wallpaper_result_rx: mpsc::UnboundedReceiver<WallpaperTaskResult>,
     current_wallpaper_op: Arc<AtomicU64>,
     wallpaper_cache: Arc<Mutex<WallpaperAnalysisCache>>,
+    #[cfg(test)]
     wallpaper_extractor: Option<WallpaperExtractorFn>,
+    #[cfg(test)]
     wallpaper_backend: Option<WallpaperBackendFn>,
     _conn: Option<Connection>,
     effects: Arc<Mutex<EffectStatus>>,
@@ -214,7 +235,11 @@ impl ThemeDaemon {
             initial_state.theme.resolved_mode,
         );
 
-        let conn = if options.headless {
+        #[cfg(test)]
+        let headless = options.headless;
+        #[cfg(not(test))]
+        let headless = false;
+        let conn = if headless {
             None
         } else {
             let conn = Connection::session().await?;
@@ -256,7 +281,9 @@ impl ThemeDaemon {
             wallpaper_result_rx: wp_rx,
             current_wallpaper_op: Arc::new(AtomicU64::new(0)),
             wallpaper_cache,
+            #[cfg(test)]
             wallpaper_extractor: options.wallpaper_extractor,
+            #[cfg(test)]
             wallpaper_backend: options.wallpaper_backend,
             _conn: conn,
             effects,
@@ -500,7 +527,9 @@ impl ThemeDaemon {
         let op_id = self.current_wallpaper_op.fetch_add(1, Ordering::SeqCst) + 1;
         let tx = self.wallpaper_result_tx.clone();
         let cache = self.wallpaper_cache.clone();
+        #[cfg(test)]
         let extractor = self.wallpaper_extractor.clone();
+        #[cfg(test)]
         let backend = self.wallpaper_backend.clone();
 
         tokio::spawn(async move {
@@ -534,11 +563,13 @@ impl ThemeDaemon {
 
                 let path_for_ext = canonical_path.clone();
                 let extraction = tokio::task::spawn_blocking(move || {
-                    if let Some(ext) = extractor {
-                        ext(&path_for_ext)
-                    } else {
-                        extract_wallpaper_seed_and_variant(&path_for_ext)
+                    #[cfg(test)]
+                    {
+                        if let Some(ext) = extractor {
+                            return ext(&path_for_ext);
+                        }
                     }
+                    extract_wallpaper_seed_and_variant(&path_for_ext)
                 })
                 .await
                 .map_err(|error| error.to_string())
@@ -571,18 +602,18 @@ impl ThemeDaemon {
 
             let path_for_backend = canonical_path.clone();
             let backend_result = tokio::task::spawn_blocking(move || {
+                #[cfg(test)]
                 if let Some(b) = backend {
-                    b(&path_for_backend)
-                } else {
-                    let status = std::process::Command::new("awww")
-                        .arg("img")
-                        .arg(&path_for_backend)
-                        .status();
-                    match status {
-                        Ok(status) if status.success() => Ok(()),
-                        Ok(status) => Err(format!("awww exited with status {status}")),
-                        Err(error) => Err(format!("Failed to execute awww: {error}")),
-                    }
+                    return b(&path_for_backend);
+                }
+                let status = std::process::Command::new("awww")
+                    .arg("img")
+                    .arg(&path_for_backend)
+                    .status();
+                match status {
+                    Ok(status) if status.success() => Ok(()),
+                    Ok(status) => Err(format!("awww exited with status {status}")),
+                    Err(error) => Err(format!("Failed to execute awww: {error}")),
                 }
             })
             .await;
@@ -1659,8 +1690,9 @@ mod tests {
     async fn test_9_analysis_cold_miss_invokes_decoder_once() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let file = tempfile::NamedTempFile::new().unwrap();
-        let path = file.path().to_path_buf();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("wallpaper.png");
+        image::RgbaImage::new(2, 2).save(&path).unwrap();
 
         let decode_count = Arc::new(AtomicUsize::new(0));
         let decode_count_clone = decode_count.clone();
@@ -1692,18 +1724,24 @@ mod tests {
     async fn test_10_analysis_second_request_hits_cache() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let file = tempfile::NamedTempFile::new().unwrap();
-        let path = file.path().to_path_buf();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("wallpaper.png");
+        image::RgbaImage::new(2, 2).save(&path).unwrap();
 
         let decode_count = Arc::new(AtomicUsize::new(0));
         let decode_count_clone = decode_count.clone();
+        let backend_count = Arc::new(AtomicUsize::new(0));
+        let backend_count_clone = backend_count.clone();
 
         let options = ThemeDaemonOptions {
             wallpaper_extractor: Some(Arc::new(move |_| {
                 decode_count_clone.fetch_add(1, Ordering::SeqCst);
                 Ok((0xff112233, SchemeVariant::Expressive))
             })),
-            wallpaper_backend: Some(Arc::new(|_| Ok(()))),
+            wallpaper_backend: Some(Arc::new(move |_| {
+                backend_count_clone.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })),
             headless: true,
             ..Default::default()
         };
@@ -1730,6 +1768,11 @@ mod tests {
             decode_count.load(Ordering::SeqCst),
             1,
             "Decoder must not be called on cache hit"
+        );
+        assert_eq!(
+            backend_count.load(Ordering::SeqCst),
+            2,
+            "The wallpaper backend must run for both misses and hits"
         );
     }
 

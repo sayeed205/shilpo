@@ -31,7 +31,16 @@ pub struct WallpaperAnalysisCache {
 }
 
 impl WallpaperAnalysisCache {
-    pub fn new(capacity: usize) -> Self {
+    fn new() -> Self {
+        Self {
+            capacity: 32,
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_capacity(capacity: usize) -> Self {
         Self {
             capacity,
             entries: HashMap::new(),
@@ -52,6 +61,9 @@ impl WallpaperAnalysisCache {
     }
 
     pub fn insert(&mut self, key: WallpaperCacheKey, analysis: WallpaperAnalysis) {
+        if self.capacity == 0 {
+            return;
+        }
         if self.entries.contains_key(&key) {
             self.entries.insert(key.clone(), analysis);
             if let Some(pos) = self.order.iter().position(|k| k == &key) {
@@ -71,26 +83,15 @@ impl WallpaperAnalysisCache {
         }
     }
 
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    fn len(&self) -> usize {
         self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    pub fn contains_key(&self, key: &WallpaperCacheKey) -> bool {
-        self.entries.contains_key(key)
-    }
-
-    pub fn oldest_key(&self) -> Option<&WallpaperCacheKey> {
-        self.order.front()
     }
 }
 
 impl Default for WallpaperAnalysisCache {
     fn default() -> Self {
-        Self::new(32)
+        Self::new()
     }
 }
 
@@ -159,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_1_exact_key_hit_returns_stored_analysis() {
-        let mut cache = WallpaperAnalysisCache::new(32);
+        let mut cache = WallpaperAnalysisCache::with_capacity(32);
         let key = WallpaperCacheKey {
             canonical_path: PathBuf::from("/tmp/wallpaper.png"),
             mtime: SystemTime::UNIX_EPOCH,
@@ -177,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_2_hit_refreshes_lru_recency() {
-        let mut cache = WallpaperAnalysisCache::new(2);
+        let mut cache = WallpaperAnalysisCache::with_capacity(2);
 
         let key1 = WallpaperCacheKey {
             canonical_path: PathBuf::from("/tmp/wp1.png"),
@@ -229,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_3_eviction_at_capacity_32() {
-        let mut cache = WallpaperAnalysisCache::new(32);
+        let mut cache = WallpaperAnalysisCache::with_capacity(32);
         let mut keys = Vec::new();
 
         for i in 0..32 {
@@ -275,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_4_variant_miss() {
-        let mut cache = WallpaperAnalysisCache::new(32);
+        let mut cache = WallpaperAnalysisCache::with_capacity(32);
         let path = PathBuf::from("/tmp/wp.png");
 
         let key1 = WallpaperCacheKey {
@@ -306,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_5_mtime_miss() {
-        let mut cache = WallpaperAnalysisCache::new(32);
+        let mut cache = WallpaperAnalysisCache::with_capacity(32);
         let path = PathBuf::from("/tmp/wp.png");
 
         let time1 = SystemTime::UNIX_EPOCH;
@@ -369,7 +370,7 @@ mod tests {
 
     #[test]
     fn test_8_poison_recovery_no_panic() {
-        let cache_mutex = Arc::new(Mutex::new(WallpaperAnalysisCache::new(32)));
+        let cache_mutex = Arc::new(Mutex::new(WallpaperAnalysisCache::default()));
 
         // Poison the lock intentionally in a thread panic
         let c = cache_mutex.clone();
