@@ -5,6 +5,7 @@ pub mod dbus;
 pub mod executors;
 pub mod persistence;
 pub mod portal;
+pub mod wallpaper_cache;
 
 pub use client::ThemeClient;
 pub use daemon::{

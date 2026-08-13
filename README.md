@@ -118,6 +118,8 @@ reduced_motion = false
 Set `transition_duration_ms = 0` or `reduced_motion = true` to apply theme changes immediately. Existing configuration
 files omit the new key safely; the default remains 300 ms.
 
+Repeated unchanged wallpaper analysis is cached in memory and invalidates on file modification or scheme-variant changes.
+
 ### Testing
 
 Run unit, integration, and property tests across the workspace:
