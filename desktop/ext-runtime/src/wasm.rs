@@ -2059,6 +2059,106 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
     }
 }
 
+#[cfg(test)]
+mod bar_menu_component_fixture_tests {
+    use super::*;
+    use crate::secrets::FakeSecretBroker;
+    use shilpo_ext_api::{
+        Alignment, BarMenuCloseReason, ContainerDirection, Justification, Overflow,
+        SemanticColorToken, ViewNode,
+    };
+
+    const FIXTURE: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/bar-menu-component/target/wasm32-wasip2/release/",
+        "bar_menu_component_fixture.wasm"
+    ));
+
+    fn loaded_fixture() -> (WasmRuntime, ExtensionId) {
+        let mut runtime =
+            WasmRuntime::with_broker(Arc::new(FakeSecretBroker::new())).expect("runtime");
+        let extension_id = ExtensionId::new("io.example.fixture").unwrap();
+        runtime
+            .load(
+                &extension_id,
+                WasmModule::from_bytes(FIXTURE),
+                RuntimeBudget::default(),
+            )
+            .expect("fixture must instantiate through the canonical component boundary");
+        (runtime, extension_id)
+    }
+
+    #[test]
+    fn guest_component_round_trips_bar_menu_tree_and_lifecycle_matrix() {
+        let (mut runtime, extension_id) = loaded_fixture();
+        let tree = runtime
+            .view(&extension_id, "menu", RuntimeBudget::default())
+            .expect("view call")
+            .expect("menu fixture view");
+
+        let ViewNode::Container(container) = tree.root else {
+            panic!("fixture root must remain a container");
+        };
+        assert_eq!(container.direction, ContainerDirection::Grid { columns: 2 });
+        assert_eq!(container.children.len(), 2);
+        assert_eq!(container.gap, Some(8.0));
+        assert_eq!(container.align_items, Some(Alignment::Center));
+        assert_eq!(container.justify_content, Some(Justification::SpaceBetween));
+        assert_eq!(container.event_id.as_deref(), Some("background"));
+        let style = container.style.expect("fixture style");
+        assert_eq!(style.padding, Some(12.0));
+        assert_eq!(style.margin, Some(2.0));
+        assert_eq!(style.corner_radius, Some(16.0));
+        assert_eq!(style.opacity, Some(0.95));
+        assert_eq!(style.color, Some(SemanticColorToken::OnSurface));
+        assert_eq!(style.background, Some(SemanticColorToken::SurfaceContainer));
+        assert_eq!(style.border_width, Some(1.0));
+        assert_eq!(style.border_color, Some(SemanticColorToken::Outline));
+        assert_eq!(style.min_width, None);
+        assert_eq!(style.max_width, None);
+        assert_eq!(style.min_height, None);
+        assert_eq!(style.max_height, None);
+        assert_eq!(style.overflow, Some(Overflow::Scroll));
+
+        let contribution_id = "io.example.fixture/menu".to_owned();
+        let instance_id = "bar:display-1:fixture".to_owned();
+        runtime
+            .dispatch(
+                &extension_id,
+                &ApiEvent::BarMenuOpened {
+                    contribution_id: contribution_id.clone(),
+                    instance_id: instance_id.clone(),
+                },
+                RuntimeBudget::default(),
+            )
+            .expect("opened event must cross WIT");
+
+        for reason in [
+            BarMenuCloseReason::SourceToggle,
+            BarMenuCloseReason::Escape,
+            BarMenuCloseReason::FocusLost,
+            BarMenuCloseReason::OutsideClick,
+            BarMenuCloseReason::OverviewOpened,
+            BarMenuCloseReason::BarClosed,
+            BarMenuCloseReason::DisplayRemoved,
+            BarMenuCloseReason::OwnerRemoved,
+            BarMenuCloseReason::SourceUnavailable,
+        ] {
+            runtime
+                .dispatch(
+                    &extension_id,
+                    &ApiEvent::BarMenuClosed {
+                        contribution_id: contribution_id.clone(),
+                        instance_id: instance_id.clone(),
+                        reason,
+                    },
+                    RuntimeBudget::default(),
+                )
+                .expect("every close reason must cross WIT");
+        }
+    }
+}
+
 fn convert_view_tree_from_wit(
     tree: self::shilpo::extension::view::ViewTree,
 ) -> Result<ApiViewTree, RuntimeError> {

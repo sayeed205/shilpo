@@ -156,6 +156,18 @@ impl ExtensionHost {
         extension_id: &ExtensionId,
         event: ExtensionEvent,
     ) {
+        #[cfg(test)]
+        self.test_inputs
+            .lock()
+            .expect("test extension input lock is not poisoned")
+            .push(ExtensionCommand::Response {
+                expected: self
+                    .extensions
+                    .as_ref()
+                    .map_or(ExtensionGeneration(0), |ext| ext.generation()),
+                extension_id: extension_id.clone(),
+                event: event.clone(),
+            });
         let Some(ext) = &self.extensions else {
             return;
         };

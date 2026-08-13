@@ -642,7 +642,10 @@ mod tests {
     use super::*;
     use crate::shell::runtime::ShellRuntime;
     use gpui::{Context, Render, TestAppContext, VisualTestContext, point};
-    use shilpo_ext_api::{ButtonNode, ContainerNode, ContributionId, ExtensionId, ViewLimits};
+    use shilpo_ext_api::{
+        ButtonNode, ContainerNode, ContributionId, ExtensionId, SliderNode, TextInputNode,
+        ToggleNode, ViewLimits,
+    };
 
     struct TestExtensionView {
         contribution: CanonicalId,
@@ -691,7 +694,7 @@ mod tests {
         }));
 
         let recorder = cx.update(|app| {
-            shilpo_ui::init_with_source(0xFF006C4C, app);
+            shilpo_ui::init(app);
             ShellRuntime::install_for_test(app);
             ShellRuntime::take_test_extension_inputs(app)
         });
@@ -713,6 +716,151 @@ mod tests {
             })
             .collect();
         assert_eq!(events, vec![("child", true)]);
+    }
+
+    fn clickable_parent(child: ViewNode) -> ViewTree {
+        ViewTree::new(ViewNode::Container(ContainerNode {
+            direction: ContainerDirection::Column,
+            children: vec![child],
+            style: Some(ViewStyle {
+                width: Some(240.0),
+                height: Some(120.0),
+                ..ViewStyle::default()
+            }),
+            gap: None,
+            align_items: None,
+            justify_content: None,
+            wrap: false,
+            event_id: Some("parent".into()),
+        }))
+    }
+
+    fn recorded_event_ids(
+        recorder: &std::sync::Arc<std::sync::Mutex<Vec<crate::extensions::ExtensionCommand>>>,
+    ) -> Vec<String> {
+        recorder
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|command| match command {
+                crate::extensions::ExtensionCommand::Input { event_id, .. } => {
+                    Some(event_id.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn add_rooted_extension_view(
+        cx: &mut TestAppContext,
+        tree: ViewTree,
+    ) -> &mut VisualTestContext {
+        let (_, visual) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|_| TestExtensionView {
+                contribution: extension_id(),
+                tree,
+            });
+            shilpo_ui::Root::new(view, window, cx)
+        });
+        visual
+    }
+
+    #[gpui::test]
+    fn rendered_container_background_dispatches_exactly_once(cx: &mut TestAppContext) {
+        let recorder = cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_test(app);
+            ShellRuntime::take_test_extension_inputs(app)
+        });
+        let (_, visual): (_, &mut VisualTestContext) =
+            cx.add_window_view(|_, _| TestExtensionView {
+                contribution: extension_id(),
+                tree: clickable_parent(ViewNode::Spacer(shilpo_ext_api::SpacerNode {
+                    size: Some(20.0),
+                })),
+            });
+        visual.simulate_click(point(px(200.0), px(90.0)), gpui::Modifiers::default());
+        assert_eq!(recorded_event_ids(&recorder), ["parent"]);
+    }
+
+    #[gpui::test]
+    fn nested_toggle_dispatches_only_its_own_event(cx: &mut TestAppContext) {
+        let recorder = cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_test(app);
+            ShellRuntime::take_test_extension_inputs(app)
+        });
+        let (_, visual): (_, &mut VisualTestContext) =
+            cx.add_window_view(|_, _| TestExtensionView {
+                contribution: extension_id(),
+                tree: clickable_parent(ViewNode::Toggle(ToggleNode {
+                    value: false,
+                    event_id: "toggle".into(),
+                    style: None,
+                })),
+            });
+        visual.simulate_click(point(px(18.0), px(10.0)), gpui::Modifiers::default());
+        assert_eq!(recorded_event_ids(&recorder), ["toggle"]);
+    }
+
+    #[gpui::test]
+    fn nested_slider_pointer_input_never_reaches_parent(cx: &mut TestAppContext) {
+        let recorder = cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_test(app);
+            ShellRuntime::take_test_extension_inputs(app)
+        });
+        let visual = add_rooted_extension_view(
+            cx,
+            clickable_parent(ViewNode::Slider(SliderNode {
+                value: 25.0,
+                min: 0.0,
+                max: 100.0,
+                event_id: "slider".into(),
+                style: Some(ViewStyle {
+                    width: Some(180.0),
+                    ..ViewStyle::default()
+                }),
+            })),
+        );
+        visual.simulate_mouse_down(
+            point(px(150.0), px(30.0)),
+            MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        visual.simulate_mouse_up(
+            point(px(150.0), px(30.0)),
+            MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        let ids = recorded_event_ids(&recorder);
+        assert!(ids.iter().all(|id| id == "slider"));
+    }
+
+    #[gpui::test]
+    fn nested_text_input_types_without_dispatching_parent(cx: &mut TestAppContext) {
+        let recorder = cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_test(app);
+            ShellRuntime::take_test_extension_inputs(app)
+        });
+        let visual = add_rooted_extension_view(
+            cx,
+            clickable_parent(ViewNode::TextInput(TextInputNode {
+                placeholder: Some("City".into()),
+                value: String::new(),
+                event_id: "input".into(),
+                style: Some(ViewStyle {
+                    width: Some(180.0),
+                    height: Some(36.0),
+                    ..ViewStyle::default()
+                }),
+            })),
+        );
+        visual.simulate_click(point(px(40.0), px(30.0)), gpui::Modifiers::default());
+        visual.simulate_keystrokes("x");
+        let ids = recorded_event_ids(&recorder);
+        assert!(ids.iter().all(|id| id == "input"));
     }
 
     #[test]
