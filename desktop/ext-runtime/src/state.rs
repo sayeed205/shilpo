@@ -830,6 +830,7 @@ impl HeedStateStore {
 #[cfg(test)]
 mod contract_tests {
     use super::*;
+    use std::sync::Arc;
 
     pub(crate) fn isolation(store: &dyn StateStore) {
         let alice = ExtensionId::new("io.github.alice.state").unwrap();
