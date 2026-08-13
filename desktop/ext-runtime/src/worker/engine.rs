@@ -885,7 +885,8 @@ fn compute_fingerprint(root: &Path, manifest: &ExtensionManifest) -> u64 {
 mod tests {
     use super::*;
     use crate::{GuestExtension, InMemoryRuntime};
-    use shilpo_ext_api::HostOperation;
+    use shilpo_ext_api::{BarMenuCloseReason, HostOperation, ImageNode, TextNode, ViewNode};
+    use std::sync::{Arc, Mutex};
 
     struct TestGuest;
     impl GuestExtension for TestGuest {
@@ -957,6 +958,29 @@ mod tests {
                 None
             }
         }
+    }
+
+    fn menu_manifest(id: &str) -> ExtensionManifest {
+        ExtensionManifest::from_toml(&format!(
+            r#"
+            id = "{id}"
+            name = "Weather"
+            version = "0.1.0"
+            schema_version = 1
+            api_version = "0.1.0"
+            min_shilpo_version = "0.1.0"
+
+            [[contributions.bar_widgets]]
+            id = "weather"
+            name = "Weather Widget"
+
+            [[contributions.bar_menus]]
+            id = "weather-menu"
+            name = "Weather Details Menu"
+            bar_widget = "weather"
+            "#
+        ))
+        .unwrap()
     }
 
     #[test]
@@ -1042,32 +1066,9 @@ mod tests {
 
     #[test]
     fn bar_menu_events_refresh_only_the_target_extension() {
-        fn manifest(id: &str) -> ExtensionManifest {
-            ExtensionManifest::from_toml(&format!(
-                r#"
-                id = "{id}"
-                name = "Weather"
-                version = "1.0.0"
-                schema_version = 1
-                api_version = "0.1.0"
-                min_shilpo_version = "0.1.0"
-
-                [[contributions.bar_widgets]]
-                id = "weather"
-                name = "Weather Widget"
-
-                [[contributions.bar_menus]]
-                id = "weather-menu"
-                name = "Weather Details Menu"
-                bar_widget = "weather"
-                "#
-            ))
-            .unwrap()
-        }
-
         let mut session = ExtensionSession::new(InMemoryRuntime::new());
-        let first = manifest("io.github.test.first");
-        let second = manifest("io.github.test.second");
+        let first = menu_manifest("io.github.test.first");
+        let second = menu_manifest("io.github.test.second");
         session
             .register(
                 first.clone(),
@@ -1093,5 +1094,110 @@ mod tests {
         });
 
         assert_eq!(changes.invalidated_views, vec![target]);
+    }
+
+    struct StatefulMenuGuest {
+        state: Arc<Mutex<&'static str>>,
+        events: Arc<Mutex<Vec<ExtensionEvent>>>,
+    }
+
+    impl GuestExtension for StatefulMenuGuest {
+        fn on_event(&mut self, event: &ExtensionEvent) -> Vec<HostOperation> {
+            self.events.lock().unwrap().push(event.clone());
+            let next = match event {
+                ExtensionEvent::BarMenuOpened { .. } => "opened",
+                ExtensionEvent::BarMenuClosed { .. } => "invalid",
+                _ => return Vec::new(),
+            };
+            *self.state.lock().unwrap() = next;
+            Vec::new()
+        }
+
+        fn view(&self, contribution_id: &str) -> Option<ViewTree> {
+            if contribution_id != "weather-menu" {
+                return None;
+            }
+            match *self.state.lock().unwrap() {
+                "invalid" => Some(ViewTree::new(ViewNode::Image(ImageNode {
+                    asset_path: "../outside-sandbox.png".into(),
+                    width: None,
+                    height: None,
+                    style: None,
+                }))),
+                label => Some(ViewTree::new(ViewNode::Text(TextNode {
+                    content: label.into(),
+                    style: None,
+                    font_size: None,
+                    bold: None,
+                }))),
+            }
+        }
+    }
+
+    #[test]
+    fn bar_menu_session_refreshes_valid_views_fails_closed_and_cleans_up_on_reload() {
+        let manifest = menu_manifest("io.github.test.lifecycle");
+        let menu = CanonicalId::new(
+            manifest.id.clone(),
+            shilpo_ext_api::ContributionId::new("weather-menu").unwrap(),
+        );
+        let state = Arc::new(Mutex::new("initial"));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let guest = || StatefulMenuGuest {
+            state: state.clone(),
+            events: events.clone(),
+        };
+        let mut session = ExtensionSession::new(InMemoryRuntime::new());
+        session
+            .register(
+                manifest.clone(),
+                Box::new(guest()),
+                manifest.capabilities.clone(),
+            )
+            .unwrap();
+
+        let opened = ExtensionEvent::BarMenuOpened {
+            contribution_id: menu.to_string(),
+            instance_id: "bar:display-1:weather".into(),
+        };
+        let changes = session.dispatch(&opened);
+        assert_eq!(changes.invalidated_views, vec![menu.clone()]);
+        assert!(matches!(
+            &session.views[&menu].root,
+            ViewNode::Text(node) if node.content == "opened"
+        ));
+
+        let closed = ExtensionEvent::BarMenuClosed {
+            contribution_id: menu.to_string(),
+            instance_id: "bar:display-1:weather".into(),
+            reason: BarMenuCloseReason::Escape,
+        };
+        let changes = session.dispatch(&closed);
+        assert!(changes.invalidated_views.is_empty());
+        assert!(matches!(
+            &session.views[&menu].root,
+            ViewNode::Text(node) if node.content == "opened"
+        ));
+        assert_eq!(events.lock().unwrap().as_slice(), &[opened, closed]);
+
+        session.clear();
+        assert!(session.manifests.is_empty());
+        assert!(session.runtime_ids.is_empty());
+        assert!(session.views.is_empty());
+        assert!(session.instances.is_empty());
+        assert!(session.state.is_empty());
+
+        *state.lock().unwrap() = "reloaded";
+        session
+            .register(
+                manifest.clone(),
+                Box::new(guest()),
+                manifest.capabilities.clone(),
+            )
+            .unwrap();
+        assert!(matches!(
+            &session.views[&menu].root,
+            ViewNode::Text(node) if node.content == "reloaded"
+        ));
     }
 }

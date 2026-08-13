@@ -1493,4 +1493,228 @@ mod tests {
             );
         });
     }
+
+    #[gpui::test]
+    fn headless_shell_persistent_menu_lifecycle_matrix(cx: &mut TestAppContext) {
+        setup(cx);
+        cx.update(|cx| {
+            let source = test_source("battery");
+            CardCoordinator::dispatch(
+                cx,
+                CardRequest::PersistentToggle {
+                    source: source.clone(),
+                },
+            );
+            CardCoordinator::dispatch(cx, CardRequest::PersistentToggle { source });
+            assert!(matches!(
+                CardCoordinator::persistent_lifecycle(cx),
+                SurfaceLifecycle::Closing { .. }
+            ));
+        });
+
+        for reason in [
+            CardDismissReason::Escape,
+            CardDismissReason::OutsideClick,
+            CardDismissReason::FocusLost,
+        ] {
+            setup(cx);
+            cx.update(|cx| {
+                let source = test_source("battery");
+                CardCoordinator::dispatch(
+                    cx,
+                    CardRequest::PersistentToggle {
+                        source: source.clone(),
+                    },
+                );
+                CardCoordinator::dispatch(
+                    cx,
+                    CardRequest::Dismiss {
+                        channel: CardChannel::Persistent,
+                        reason,
+                    },
+                );
+                assert!(matches!(
+                    CardCoordinator::persistent_lifecycle(cx),
+                    SurfaceLifecycle::Closing { .. }
+                ));
+            });
+        }
+
+        for request in [CardRequest::OverviewOpened, CardRequest::BarClosed] {
+            setup(cx);
+            cx.update(|cx| {
+                CardCoordinator::dispatch(
+                    cx,
+                    CardRequest::PersistentToggle {
+                        source: test_source("battery"),
+                    },
+                );
+                CardCoordinator::dispatch(cx, request);
+                assert!(matches!(
+                    CardCoordinator::persistent_lifecycle(cx),
+                    SurfaceLifecycle::Closing { .. }
+                ));
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn headless_shell_delivers_every_extension_menu_close_reason(cx: &mut TestAppContext) {
+        use crate::extensions::ExtensionCommand;
+        use shilpo_ext_api::{CanonicalId, ContributionId, ExtensionEvent, ExtensionId};
+
+        let cases = [
+            (
+                CardDismissReason::SourceToggle,
+                shilpo_ext_api::BarMenuCloseReason::SourceToggle,
+            ),
+            (
+                CardDismissReason::Escape,
+                shilpo_ext_api::BarMenuCloseReason::Escape,
+            ),
+            (
+                CardDismissReason::OutsideClick,
+                shilpo_ext_api::BarMenuCloseReason::OutsideClick,
+            ),
+            (
+                CardDismissReason::FocusLost,
+                shilpo_ext_api::BarMenuCloseReason::FocusLost,
+            ),
+            (
+                CardDismissReason::OverviewOpened,
+                shilpo_ext_api::BarMenuCloseReason::OverviewOpened,
+            ),
+            (
+                CardDismissReason::BarClosed,
+                shilpo_ext_api::BarMenuCloseReason::BarClosed,
+            ),
+            (
+                CardDismissReason::DisplayRemoved,
+                shilpo_ext_api::BarMenuCloseReason::DisplayRemoved,
+            ),
+            (
+                CardDismissReason::OwnerRemoved,
+                shilpo_ext_api::BarMenuCloseReason::OwnerRemoved,
+            ),
+            (
+                CardDismissReason::SourceDisappeared,
+                shilpo_ext_api::BarMenuCloseReason::SourceUnavailable,
+            ),
+        ];
+        for (reason, expected) in cases {
+            setup(cx);
+            cx.update(|cx| {
+                let menu_id = CanonicalId::new(
+                    ExtensionId::new("io.github.test.weather").unwrap(),
+                    ContributionId::new("weather-menu").unwrap(),
+                );
+                let owner = CardOwnerId::new(menu_id.to_string());
+                let source = CardSourceId::singleton(owner.clone());
+                CardCoordinator::register_extension_menu_provider(
+                    cx,
+                    Arc::new(TestProvider {
+                        owner,
+                        capabilities: super::super::model::CardCapabilities {
+                            hover: false,
+                            click: true,
+                        },
+                    }),
+                    menu_id,
+                );
+                publish_anchor(cx, &source);
+                CardCoordinator::dispatch(
+                    cx,
+                    CardRequest::PersistentToggle {
+                        source: source.clone(),
+                    },
+                );
+                CardCoordinator::dispatch(
+                    cx,
+                    CardRequest::Dismiss {
+                        channel: CardChannel::Persistent,
+                        reason,
+                    },
+                );
+                let inputs = ShellRuntime::take_test_extension_inputs(cx);
+                let inputs = inputs.lock().unwrap();
+                assert!(inputs.iter().any(|command| matches!(
+                    command,
+                    ExtensionCommand::Response {
+                        event: ExtensionEvent::BarMenuClosed { reason, .. },
+                        ..
+                    } if reason == &expected
+                )));
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn headless_shell_loss_replacement_and_global_exclusivity_matrix(cx: &mut TestAppContext) {
+        setup(cx);
+        cx.update(|cx| {
+            let first = test_source("battery");
+            let second = test_source("test-battery");
+            CardCoordinator::dispatch(
+                cx,
+                CardRequest::PersistentToggle {
+                    source: first.clone(),
+                },
+            );
+            CardCoordinator::dispatch(
+                cx,
+                CardRequest::PersistentToggle {
+                    source: second.clone(),
+                },
+            );
+            assert_eq!(
+                CardCoordinator::source_state(cx, &first),
+                CardSourceState::Idle
+            );
+            assert_eq!(
+                CardCoordinator::source_state(cx, &second),
+                CardSourceState::PersistentOpen
+            );
+        });
+
+        for request in [
+            CardRequest::AnchorRemoved {
+                source: test_source("battery"),
+            },
+            CardRequest::OwnerRemoved {
+                owner: CardOwnerId::new("battery"),
+            },
+        ] {
+            setup(cx);
+            cx.update(|cx| {
+                CardCoordinator::dispatch(
+                    cx,
+                    CardRequest::PersistentToggle {
+                        source: test_source("battery"),
+                    },
+                );
+                CardCoordinator::dispatch(cx, request);
+                assert!(matches!(
+                    CardCoordinator::persistent_lifecycle(cx),
+                    SurfaceLifecycle::Closing { .. }
+                ));
+            });
+        }
+
+        setup(cx);
+        cx.update(|cx| {
+            let source = test_source("battery");
+            let display_id = cx.displays().first().map_or(DisplayId::new(0), |d| d.id());
+            CardCoordinator::dispatch(
+                cx,
+                CardRequest::PersistentToggle {
+                    source: source.clone(),
+                },
+            );
+            CardCoordinator::dispatch(cx, CardRequest::DisplayRemoved { display_id });
+            assert!(matches!(
+                CardCoordinator::persistent_lifecycle(cx),
+                SurfaceLifecycle::Closing { .. }
+            ));
+        });
+    }
 }

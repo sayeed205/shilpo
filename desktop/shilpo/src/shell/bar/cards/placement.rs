@@ -934,6 +934,28 @@ mod tests {
     }
 
     #[test]
+    fn logical_work_area_placement_is_stable_across_output_scale_changes() {
+        let monitor = monitor_1080p();
+        let source = source_center(monitor);
+        let mut input = input(monitor, BarPosition::Top, source, compact_size(), None);
+        input.scale = Some(1.0);
+        let at_one = compute_placement(&input);
+        input.scale = Some(1.5);
+        let at_fractional = compute_placement(&input);
+
+        assert_eq!(at_fractional, at_one);
+        let PlacementResult::Placed { card_bounds, .. } = at_fractional else {
+            panic!("scaled work area should place the card");
+        };
+        assert!(card_bounds.origin.x >= monitor.origin.x + px(SAFE_INSET));
+        assert!(card_bounds.origin.y >= monitor.origin.y + input.bar_thickness);
+        assert_eq!(
+            compute_persistent_band_geometry(&input).bounds.size.height,
+            monitor.size.height - input.bar_thickness
+        );
+    }
+
+    #[test]
     fn bottom_bar_band_geometry_ends_at_bar_top() {
         let monitor = monitor_1080p();
         let source = Bounds {
