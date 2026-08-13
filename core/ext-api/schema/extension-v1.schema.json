@@ -372,6 +372,26 @@
           "required": [
             "kind"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "secrets"
+            },
+            "purposes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SecretPurpose"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "purposes"
+          ]
         }
       ]
     },
@@ -532,6 +552,9 @@
       "required": [
         "path"
       ]
+    },
+    "SecretPurpose": {
+      "type": "string"
     },
     "SettingsPageContribution": {
       "type": "object",

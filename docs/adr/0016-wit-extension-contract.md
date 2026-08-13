@@ -13,10 +13,10 @@ capability. This created security and design risks:
 
 ## Decision
 
-1. **Canonical WIT Contract (`shilpo:extension@0.3.0`)**:
+1. **Canonical WIT Contract (`shilpo:extension@0.1.0`)**:
     - The WASM component boundary is defined exclusively by typed WebAssembly Interface Type (WIT) interfaces in
       `core/ext-api/wit/extension.wit`.
-    - Manifest schema version is bumped to `2`, and API version is bumped to `0.3.0`.
+    - Manifest schema version remains `1`, and API version is `0.1.0`.
     - All guest exports (`activate`, `deactivate`, `on-event`, `view`) and host imports (`actions`, `clipboard`,
       `filesystem`, `http`, `location`, `notifications`, `state`, `secrets`, `theme`, `wallpaper`) are strictly typed
       WIT types. Zero JSON-over-string serialization is permitted across the component boundary.
@@ -33,19 +33,27 @@ capability. This created security and design risks:
     - Host operations return immediate `result<_, error>` receipts, and asynchronous completions are delivered back to
       the guest via `on-event(ExtensionEvent::HttpRequestCompleted { .. })` or `LocationReadCompleted { .. }`.
 
-4. **Internal IPC Boundary Topology**:
-    - Per [ADR-0007](0007-unified-executable-process-roles.md), the private Shell ↔ Extension-Host worker IPC channel
-      remains a versioned, length-framed JSON protocol.
-    - Zero JSON-over-string applies strictly to the sandboxed WASM component boundary inside `ext-runtime`.
+4. **Extension Secret Broker & `SecretRef` Settings Contract**:
+    - Secret persistence is provided via `secrets` WIT interface (`set`, `read`, `delete`) backed by `Oo7SecretBroker`
+      (Freedesktop Secret Service over DBus via `oo7`).
+    - Manifest capability `secrets` requires explicit `purposes` declarations (`["auth-token", "api-key"]`). Host calls
+      verify `secrets:<purpose>` capability grant dynamically on every invocation.
+    - `SecretRef` handle references are opaque, unique strings. Plaintext secret bytes and secret handles are strictly
+      redacted from logs, tracing, worker JSON, TOML config, and LMDB session stores (`SecretRef(<redacted>)`).
 
-5. **Capability Enforcement**:
-    - Capability authorization checks, runtime resource limits (fuel, memory, deadline), circuit-breaker behavior, and
-      generation validation remain strictly enforced at the host level before executing host operations.
+5. **Threat Model & Security Guarantees**:
+    - **Cross-Extension & Cross-Purpose Isolation**: Secret items in system keyring are indexed with DBus attributes
+      `shilpo:app = "shilpo"`, `shilpo:extension_id`, `shilpo:purpose`, and `shilpo:handle`. Extensions cannot read or mutate
+      secrets belonging to other extensions or ungranted purposes.
+    - **Dynamic Grant Revocation**: Granular permission checks occur on every `secrets` host call. Revoking a purpose grant
+      immediately denies subsequent host calls without restarting or reloading the Wasm runtime.
+    - **Hermetic Testing & Fallback**: `FakeSecretBroker` provides in-memory hermetic isolation for test environments.
+    - **Uninstall Secret Lifecycle Policy**: Uninstall defaults to `SecretPolicy::Retain` to prevent accidental loss, with
+      an explicit `SecretPolicy::Delete` option to purge all extension secret attributes from Secret Service.
 
 ## Consequences & Follow-ups
 
 - Extensions must compile against `shilpo:extension@0.1.0` WIT definitions.
-- Host capability stubs (`secrets`, `theme`, `wallpaper`, `clipboard` read, `filesystem` write) return typed
-  `error-kind::unsupported` errors until full service implementations land.
+- Secret Service integration is operational via `Oo7SecretBroker` for `secrets` WIT calls.
 - Follow-up tracker issues: #78 (TypeScript SDK WIT bindgen), #92 (Rust SDK WIT bindgen), #96 (hot-reload), #100 (CLI
-  scaffolding), #131 (benchmark suite), #138 (service trait integration).
+  scaffolding), #131 (benchmark suite), #138 (secret broker integration completed).

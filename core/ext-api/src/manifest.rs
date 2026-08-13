@@ -166,6 +166,8 @@ pub enum CapabilityKind {
     FilesystemWrite,
     #[serde(rename = "location:read")]
     LocationRead,
+    #[serde(rename = "secrets")]
+    Secrets,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -201,6 +203,8 @@ pub enum Capability {
     FilesystemWrite { paths: Vec<String> },
     #[serde(rename = "location:read")]
     LocationRead,
+    #[serde(rename = "secrets")]
+    Secrets { purposes: Vec<SecretPurpose> },
 }
 
 impl Capability {
@@ -219,6 +223,7 @@ impl Capability {
             Self::FilesystemRead { .. } => CapabilityKind::FilesystemRead,
             Self::FilesystemWrite { .. } => CapabilityKind::FilesystemWrite,
             Self::LocationRead => CapabilityKind::LocationRead,
+            Self::Secrets { .. } => CapabilityKind::Secrets,
         }
     }
 
@@ -434,6 +439,16 @@ fn validate_capabilities(capabilities: &[Capability]) -> Result<(), ManifestErro
             Capability::FilesystemRead { paths } | Capability::FilesystemWrite { paths } => {
                 !paths.is_empty() && paths.iter().all(|path| valid_virtual_path_pattern(path))
             }
+            Capability::Secrets { purposes } => {
+                if purposes.is_empty() {
+                    false
+                } else {
+                    let mut seen = HashSet::new();
+                    purposes.iter().all(|p| {
+                        SecretPurpose::validate(p.as_str()).is_ok() && seen.insert(p.as_str())
+                    })
+                }
+            }
         };
         if !valid {
             return Err(ManifestError::Validation(format!(
@@ -457,4 +472,121 @@ pub fn valid_virtual_path_pattern(value: &str) -> bool {
         && path
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "String", into = "String")]
+pub struct SecretPurpose(String);
+
+impl SecretPurpose {
+    pub fn new(value: impl Into<String>) -> Result<Self, ManifestError> {
+        let value = value.into();
+        Self::validate(&value)?;
+        Ok(Self(value))
+    }
+
+    pub fn parse(value: &str) -> Result<Self, ManifestError> {
+        Self::validate(value)?;
+        Ok(Self(value.to_string()))
+    }
+
+    pub fn validate(value: &str) -> Result<(), ManifestError> {
+        if value.is_empty() || value.len() > 64 {
+            return Err(ManifestError::Validation(
+                "secret purpose must be 1 to 64 bytes".into(),
+            ));
+        }
+        let bytes = value.as_bytes();
+        if !bytes[0].is_ascii_lowercase() {
+            return Err(ManifestError::Validation(
+                "secret purpose must start with a lowercase ASCII letter".into(),
+            ));
+        }
+        for &b in &bytes[1..] {
+            if !b.is_ascii_lowercase() && !b.is_ascii_digit() && b != b'-' {
+                return Err(ManifestError::Validation(format!(
+                    "invalid character '{:?}' in secret purpose",
+                    b as char
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for SecretPurpose {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Debug for SecretPurpose {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SecretPurpose({})", self.0)
+    }
+}
+
+impl std::str::FromStr for SecretPurpose {
+    type Err = ManifestError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
+impl TryFrom<String> for SecretPurpose {
+    type Error = ManifestError;
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Self::new(s)
+    }
+}
+
+impl From<SecretPurpose> for String {
+    fn from(p: SecretPurpose) -> Self {
+        p.0
+    }
+}
+
+impl AsRef<str> for SecretPurpose {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for SecretPurpose {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct SecretRef {
+    #[serde(rename = "secret_ref")]
+    pub handle: String,
+}
+
+impl SecretRef {
+    pub fn new(handle: impl Into<String>) -> Self {
+        Self {
+            handle: handle.into(),
+        }
+    }
+}
+
+impl fmt::Debug for SecretRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SecretRef")
+            .field("handle", &"<redacted>")
+            .finish()
+    }
+}
+
+impl fmt::Display for SecretRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SecretRef(<redacted>)")
+    }
 }

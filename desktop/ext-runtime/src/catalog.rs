@@ -32,6 +32,13 @@ pub struct CatalogPaths {
     pub config_dir: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SecretPolicy {
+    #[default]
+    Retain,
+    Delete,
+}
+
 impl CatalogPaths {
     pub fn new(data_dir: impl Into<PathBuf>, config_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -626,8 +633,16 @@ impl ExtensionCatalog {
         self.save_receipt(&receipt)?;
         Ok(receipt)
     }
-
     pub fn uninstall(&self, extension_id: &ExtensionId) -> Result<(), CatalogError> {
+        self.uninstall_with_secrets_policy(extension_id, SecretPolicy::Retain, None)
+    }
+
+    pub fn uninstall_with_secrets_policy(
+        &self,
+        extension_id: &ExtensionId,
+        secret_policy: SecretPolicy,
+        broker: Option<&dyn crate::secrets::SecretBroker>,
+    ) -> Result<(), CatalogError> {
         let receipt_path = self.receipt_path(extension_id);
         if !receipt_path.is_file() {
             return Err(CatalogError::NotFound(extension_id.to_string()));
@@ -656,6 +671,15 @@ impl ExtensionCatalog {
         if trash_dir.exists() {
             fs::remove_dir_all(&trash_dir).map_err(|error| io_error(&trash_dir, error))?;
         }
+
+        if let (SecretPolicy::Delete, Some(broker)) = (secret_policy, broker) {
+            broker.delete_all(extension_id).map_err(|error| {
+                CatalogError::Io(format!(
+                    "failed to delete extension secrets for {extension_id}: {error}"
+                ))
+            })?;
+        }
+
         Ok(())
     }
 

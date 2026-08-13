@@ -45,10 +45,14 @@ impl WasmModule {
     }
 }
 
+pub type GrantChecker = Arc<dyn Fn(&ExtensionId, &str) -> bool + Send + Sync>;
+
 pub struct WasmState {
     pub extension_id: ExtensionId,
     pub declared_capabilities: Vec<Capability>,
     pub granted_capabilities: Vec<Capability>,
+    pub secret_broker: Arc<dyn crate::secrets::SecretBroker>,
+    pub grant_checker: Option<GrantChecker>,
     pub limits: StoreLimits,
     pub table: ResourceTable,
     pub wasi: WasiCtx,
@@ -108,7 +112,10 @@ impl shilpo::extension::actions::Host for WasmState {
         action_id: String,
         payload: Option<shilpo::extension::types::DataValue>,
     ) -> Result<(), shilpo::extension::types::Error> {
-        let payload_json = payload.as_ref().map(data_value_to_json).map(|value| value.to_string());
+        let payload_json = payload
+            .as_ref()
+            .map(data_value_to_json)
+            .map(|value| value.to_string());
         let call_bytes = action_id.len() + payload_json.as_ref().map_or(0, String::len);
         self.charge_hostcall_bytes(call_bytes)?;
         let allowed = self.check_capability(|cap| match cap {
@@ -265,16 +272,11 @@ impl shilpo::extension::state::Host for WasmState {
         key: String,
     ) -> Result<Option<shilpo::extension::types::DataValue>, shilpo::extension::types::Error> {
         self.charge_hostcall_bytes(key.len())?;
-        Ok(self
-            .state_store
-            .get(&key)
-            .map(|value| {
-                serde_json::from_str(value)
-                    .map(|value| data_value_from_json(&value))
-                    .unwrap_or_else(|_| {
-                        shilpo::extension::types::DataValue::TextValue(value.clone())
-                    })
-            }))
+        Ok(self.state_store.get(&key).map(|value| {
+            serde_json::from_str(value)
+                .map(|value| data_value_from_json(&value))
+                .unwrap_or_else(|_| shilpo::extension::types::DataValue::TextValue(value.clone()))
+        }))
     }
 
     fn write(
@@ -284,22 +286,161 @@ impl shilpo::extension::state::Host for WasmState {
     ) -> Result<(), shilpo::extension::types::Error> {
         let value_json = data_value_to_json(&value).to_string();
         self.charge_hostcall_bytes(key.len() + value_json.len())?;
-        self.state_store
-            .insert(key, value_json);
+        self.state_store.insert(key, value_json);
         Ok(())
     }
 }
 
+impl WasmState {
+    fn check_secret_permission(&self, purpose: &shilpo_ext_api::SecretPurpose) -> bool {
+        let declared = self.declared_capabilities.iter().any(
+            |cap| matches!(cap, Capability::Secrets { purposes } if purposes.contains(purpose)),
+        );
+        if !declared {
+            return false;
+        }
+        let scope = format!("secrets:{purpose}");
+        if let Some(checker) = &self.grant_checker {
+            checker(&self.extension_id, &scope)
+        } else {
+            self.granted_capabilities.iter().any(
+                |cap| matches!(cap, Capability::Secrets { purposes } if purposes.contains(purpose)),
+            )
+        }
+    }
+}
+
+fn map_secret_broker_error(
+    err: crate::secrets::SecretBrokerError,
+) -> shilpo::extension::types::Error {
+    use crate::secrets::SecretBrokerError;
+    use shilpo::extension::types as wit_types;
+
+    match err {
+        SecretBrokerError::BackendUnavailable(msg) => wit_types::Error {
+            kind: wit_types::ErrorKind::BackendUnavailable,
+            message: msg,
+        },
+        SecretBrokerError::Locked(msg) => wit_types::Error {
+            kind: wit_types::ErrorKind::Locked,
+            message: msg,
+        },
+        SecretBrokerError::Denied(msg) => wit_types::Error {
+            kind: wit_types::ErrorKind::Denied,
+            message: msg,
+        },
+        SecretBrokerError::Cancelled(msg) => wit_types::Error {
+            kind: wit_types::ErrorKind::Cancelled,
+            message: msg,
+        },
+        SecretBrokerError::NotFound(msg) | SecretBrokerError::InvalidReference(msg) => {
+            wit_types::Error {
+                kind: wit_types::ErrorKind::NotFound,
+                message: msg,
+            }
+        }
+        SecretBrokerError::Internal(msg) => wit_types::Error {
+            kind: wit_types::ErrorKind::Internal,
+            message: msg,
+        },
+    }
+}
+
 impl shilpo::extension::secrets::Host for WasmState {
-    fn get_secret(
+    fn set(
         &mut self,
-        key: String,
-    ) -> Result<Option<shilpo::extension::secrets::SecretRef>, shilpo::extension::types::Error> {
-        self.charge_hostcall_bytes(key.len())?;
-        Err(shilpo::extension::types::Error {
-            kind: shilpo::extension::types::ErrorKind::Unsupported,
-            message: "secret service backend not implemented (#138)".into(),
+        purpose: String,
+        value: Vec<u8>,
+    ) -> Result<shilpo::extension::secrets::SecretRef, shilpo::extension::types::Error> {
+        self.charge_hostcall_bytes(purpose.len() + value.len())?;
+        let parsed_purpose = shilpo_ext_api::SecretPurpose::parse(&purpose).map_err(|err| {
+            shilpo::extension::types::Error {
+                kind: shilpo::extension::types::ErrorKind::InvalidArgument,
+                message: err.to_string(),
+            }
+        })?;
+
+        if !self.check_secret_permission(&parsed_purpose) {
+            return Err(shilpo::extension::types::Error {
+                kind: shilpo::extension::types::ErrorKind::Unauthorized,
+                message: format!(
+                    "extension '{}' missing declaration or grant for secret purpose '{}'",
+                    self.extension_id, parsed_purpose
+                ),
+            });
+        }
+
+        let reference = self
+            .secret_broker
+            .set(&self.extension_id, &parsed_purpose, &value)
+            .map_err(map_secret_broker_error)?;
+
+        Ok(shilpo::extension::secrets::SecretRef {
+            handle: reference.handle,
         })
+    }
+
+    fn read(
+        &mut self,
+        purpose: String,
+        reference: shilpo::extension::secrets::SecretRef,
+    ) -> Result<Option<Vec<u8>>, shilpo::extension::types::Error> {
+        self.charge_hostcall_bytes(purpose.len() + reference.handle.len())?;
+        let parsed_purpose = shilpo_ext_api::SecretPurpose::parse(&purpose).map_err(|err| {
+            shilpo::extension::types::Error {
+                kind: shilpo::extension::types::ErrorKind::InvalidArgument,
+                message: err.to_string(),
+            }
+        })?;
+
+        if !self.check_secret_permission(&parsed_purpose) {
+            return Err(shilpo::extension::types::Error {
+                kind: shilpo::extension::types::ErrorKind::Unauthorized,
+                message: format!(
+                    "extension '{}' missing declaration or grant for secret purpose '{}'",
+                    self.extension_id, parsed_purpose
+                ),
+            });
+        }
+
+        let api_ref = shilpo_ext_api::SecretRef::new(reference.handle);
+        let bytes = self
+            .secret_broker
+            .read(&self.extension_id, &parsed_purpose, &api_ref)
+            .map_err(map_secret_broker_error)?;
+
+        Ok(bytes)
+    }
+
+    fn delete(
+        &mut self,
+        purpose: String,
+        reference: shilpo::extension::secrets::SecretRef,
+    ) -> Result<(), shilpo::extension::types::Error> {
+        self.charge_hostcall_bytes(purpose.len() + reference.handle.len())?;
+        let parsed_purpose = shilpo_ext_api::SecretPurpose::parse(&purpose).map_err(|err| {
+            shilpo::extension::types::Error {
+                kind: shilpo::extension::types::ErrorKind::InvalidArgument,
+                message: err.to_string(),
+            }
+        })?;
+
+        if !self.check_secret_permission(&parsed_purpose) {
+            return Err(shilpo::extension::types::Error {
+                kind: shilpo::extension::types::ErrorKind::Unauthorized,
+                message: format!(
+                    "extension '{}' missing declaration or grant for secret purpose '{}'",
+                    self.extension_id, parsed_purpose
+                ),
+            });
+        }
+
+        let api_ref = shilpo_ext_api::SecretRef::new(reference.handle);
+        self.secret_broker
+            .delete(&self.extension_id, &parsed_purpose, &api_ref)
+            .map_err(map_secret_broker_error)?;
+
+        Ok(())
     }
 }
 
@@ -384,12 +525,32 @@ struct WasmInstance {
 pub struct WasmRuntime {
     engine: Engine,
     instances: HashMap<ExtensionId, WasmInstance>,
+    pub secret_broker: Arc<dyn crate::secrets::SecretBroker>,
+    pub grant_checker: Option<GrantChecker>,
     ticker_stop: Arc<AtomicBool>,
     ticker: Option<thread::JoinHandle<()>>,
 }
 
 impl WasmRuntime {
     pub fn new() -> Result<Self, RuntimeError> {
+        let broker: Arc<dyn crate::secrets::SecretBroker> =
+            match crate::secrets::Oo7SecretBroker::new() {
+                Ok(broker) => Arc::new(broker),
+                Err(_) => Arc::new(crate::secrets::FakeSecretBroker::new()),
+            };
+        Self::with_broker(broker)
+    }
+
+    pub fn with_broker(
+        secret_broker: Arc<dyn crate::secrets::SecretBroker>,
+    ) -> Result<Self, RuntimeError> {
+        Self::with_broker_and_grant_checker(secret_broker, None)
+    }
+
+    pub fn with_broker_and_grant_checker(
+        secret_broker: Arc<dyn crate::secrets::SecretBroker>,
+        grant_checker: Option<GrantChecker>,
+    ) -> Result<Self, RuntimeError> {
         let engine = configured_engine()?;
         let ticker_stop = Arc::new(AtomicBool::new(false));
         let ticker_engine = engine.clone();
@@ -412,6 +573,8 @@ impl WasmRuntime {
         Ok(Self {
             engine,
             instances: HashMap::new(),
+            secret_broker,
+            grant_checker,
             ticker_stop,
             ticker: Some(ticker),
         })
@@ -473,6 +636,8 @@ impl WasmRuntime {
             extension_id: extension_id.clone(),
             declared_capabilities,
             granted_capabilities,
+            secret_broker: self.secret_broker.clone(),
+            grant_checker: self.grant_checker.clone(),
             limits: StoreLimitsBuilder::new()
                 .memory_size(budget.max_memory_bytes)
                 .instances(16)
@@ -816,8 +981,12 @@ fn data_value_to_json(value: &self::shilpo::extension::types::DataValue) -> serd
         DataValue::FloatValue(value) => serde_json::json!(*value),
         DataValue::TextValue(value) => serde_json::Value::String(value.clone()),
         DataValue::BytesValue(value) => serde_json::Value::Array(
-            value.iter().map(|value| serde_json::json!(*value)).collect(),
+            value
+                .iter()
+                .map(|value| serde_json::json!(*value))
+                .collect(),
         ),
+        DataValue::SecretRef(s) => serde_json::json!({ "secret_ref": s.handle }),
     }
 }
 
@@ -1081,7 +1250,7 @@ fn convert_view_tree_from_wit(tree: self::shilpo::extension::view::ViewTree) -> 
         }
     }
 
-    let root = decode_node(tree.root as usize, &tree.nodes)
-        .unwrap_or(shilpo_ext_api::ViewNode::Divider);
+    let root =
+        decode_node(tree.root as usize, &tree.nodes).unwrap_or(shilpo_ext_api::ViewNode::Divider);
     ApiViewTree::new(root)
 }
