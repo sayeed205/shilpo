@@ -11,6 +11,7 @@ path = "examples/generate_distribution_schemas.rs"
 [dependencies]
 base64.workspace = true
 flate2.workspace = true
+futures-lite.workspace = true
 hex.workspace = true
 jsonschema.workspace = true
 reqwest.workspace = true

@@ -6,6 +6,9 @@ use shilpo_ext_api::{
 };
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
+
+pub type GrantChecker = Arc<dyn Fn(&ExtensionId, &str) -> bool + Send + Sync>;
 use std::time::Duration;
 
 pub trait GuestExtension: Send + Sync {
@@ -86,6 +89,10 @@ impl Default for RuntimeBudget {
 /// implement the same contract without moving policy into the guest runtime.
 pub trait ExtensionRuntime {
     type Module;
+
+    /// Install a live grant lookup used by host imports. Adapters without
+    /// host-import capability enforcement may ignore this hook.
+    fn set_grant_checker(&mut self, _checker: GrantChecker) {}
 
     /// Load a module with the manifest's declared capabilities and the user's
     /// grants available to host-import authorization. Runtimes that do not
@@ -352,11 +359,16 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             return Err(HostError::AlreadyRegistered(manifest.id));
         }
         for grant in &grants {
-            if !manifest
-                .capabilities
-                .iter()
-                .any(|requested| requested.kind() == grant.kind())
-            {
+            if !manifest.capabilities.iter().any(|requested| {
+                requested.kind() == grant.kind()
+                    && match (requested, grant) {
+                        (
+                            Capability::Secrets { purposes: declared },
+                            Capability::Secrets { purposes: granted },
+                        ) => granted.iter().all(|purpose| declared.contains(purpose)),
+                        _ => true,
+                    }
+            }) {
                 return Err(HostError::UndeclaredGrant(format!("{:?}", grant.kind())));
             }
         }
@@ -401,11 +413,16 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             return Err(HostError::NotRegistered(id));
         }
         for grant in &grants {
-            if !manifest
-                .capabilities
-                .iter()
-                .any(|requested| requested.kind() == grant.kind())
-            {
+            if !manifest.capabilities.iter().any(|requested| {
+                requested.kind() == grant.kind()
+                    && match (requested, grant) {
+                        (
+                            Capability::Secrets { purposes: declared },
+                            Capability::Secrets { purposes: granted },
+                        ) => granted.iter().all(|purpose| declared.contains(purpose)),
+                        _ => true,
+                    }
+            }) {
                 return Err(HostError::UndeclaredGrant(format!("{:?}", grant.kind())));
             }
         }

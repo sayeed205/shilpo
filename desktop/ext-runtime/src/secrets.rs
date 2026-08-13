@@ -2,6 +2,7 @@ use shilpo_ext_api::{ExtensionId, SecretPurpose, SecretRef};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::RwLock;
+use std::time::Instant;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SecretBrokerError {
@@ -36,6 +37,7 @@ pub trait SecretBroker: Send + Sync {
         extension_id: &ExtensionId,
         purpose: &SecretPurpose,
         value: &[u8],
+        deadline: Instant,
     ) -> Result<SecretRef, SecretBrokerError>;
 
     fn read(
@@ -43,6 +45,7 @@ pub trait SecretBroker: Send + Sync {
         extension_id: &ExtensionId,
         purpose: &SecretPurpose,
         reference: &SecretRef,
+        deadline: Instant,
     ) -> Result<Option<Vec<u8>>, SecretBrokerError>;
 
     fn delete(
@@ -50,9 +53,14 @@ pub trait SecretBroker: Send + Sync {
         extension_id: &ExtensionId,
         purpose: &SecretPurpose,
         reference: &SecretRef,
+        deadline: Instant,
     ) -> Result<(), SecretBrokerError>;
 
-    fn delete_all(&self, extension_id: &ExtensionId) -> Result<(), SecretBrokerError>;
+    fn delete_all(
+        &self,
+        extension_id: &ExtensionId,
+        deadline: Instant,
+    ) -> Result<(), SecretBrokerError>;
 }
 
 /// Hermetic in-memory secret broker for unit tests and local testing.
@@ -88,11 +96,16 @@ impl SecretBroker for FakeSecretBroker {
         extension_id: &ExtensionId,
         purpose: &SecretPurpose,
         value: &[u8],
+        deadline: Instant,
     ) -> Result<SecretRef, SecretBrokerError> {
+        ensure_deadline(deadline)?;
         self.check_simulated_error()?;
         let handle = format!("fake-handle-{}", uuid::Uuid::new_v4());
         let reference = SecretRef::new(handle.clone());
         let mut map = self.storage.write().unwrap();
+        map.retain(|(stored_extension, stored_purpose, _), _| {
+            stored_extension != extension_id || stored_purpose != purpose
+        });
         map.insert(
             (extension_id.clone(), purpose.clone(), handle),
             value.to_vec(),
@@ -105,7 +118,10 @@ impl SecretBroker for FakeSecretBroker {
         extension_id: &ExtensionId,
         purpose: &SecretPurpose,
         reference: &SecretRef,
+        deadline: Instant,
     ) -> Result<Option<Vec<u8>>, SecretBrokerError> {
+        ensure_deadline(deadline)?;
+        validate_reference(reference)?;
         self.check_simulated_error()?;
         let map = self.storage.read().unwrap();
         let key = (
@@ -121,7 +137,10 @@ impl SecretBroker for FakeSecretBroker {
         extension_id: &ExtensionId,
         purpose: &SecretPurpose,
         reference: &SecretRef,
+        deadline: Instant,
     ) -> Result<(), SecretBrokerError> {
+        ensure_deadline(deadline)?;
+        validate_reference(reference)?;
         self.check_simulated_error()?;
         let mut map = self.storage.write().unwrap();
         let key = (
@@ -133,10 +152,25 @@ impl SecretBroker for FakeSecretBroker {
         Ok(())
     }
 
-    fn delete_all(&self, extension_id: &ExtensionId) -> Result<(), SecretBrokerError> {
+    fn delete_all(
+        &self,
+        extension_id: &ExtensionId,
+        deadline: Instant,
+    ) -> Result<(), SecretBrokerError> {
+        ensure_deadline(deadline)?;
         self.check_simulated_error()?;
         let mut map = self.storage.write().unwrap();
         map.retain(|(ext_id, _, _), _| ext_id != extension_id);
+        Ok(())
+    }
+}
+
+fn validate_reference(reference: &SecretRef) -> Result<(), SecretBrokerError> {
+    if reference.handle.is_empty() || reference.handle.len() > 256 {
+        Err(SecretBrokerError::InvalidReference(
+            "secret reference is malformed".into(),
+        ))
+    } else {
         Ok(())
     }
 }
@@ -148,13 +182,71 @@ pub struct Oo7SecretBroker {
 
 impl Oo7SecretBroker {
     pub fn new() -> Result<Self, SecretBrokerError> {
-        // Initialize oo7 keyring connection or return BackendUnavailable if Secret Service is absent
-        Ok(Self {})
+        smol::block_on(async { oo7::Keyring::new().await })
+            .map(|_| Self {})
+            .map_err(map_oo7_error)
     }
 }
 
-fn block_on_oo7<F: std::future::Future>(future: F) -> F::Output {
-    smol::block_on(future)
+fn map_oo7_error(error: oo7::Error) -> SecretBrokerError {
+    match error {
+        oo7::Error::File(oo7::file::Error::Locked) => {
+            SecretBrokerError::Locked("secret storage is locked".into())
+        }
+        oo7::Error::DBus(oo7::dbus::Error::Dismissed) => {
+            SecretBrokerError::Denied("secret-service prompt was dismissed".into())
+        }
+        oo7::Error::DBus(oo7::dbus::Error::Service(oo7::dbus::ServiceError::IsLocked(_))) => {
+            SecretBrokerError::Locked("secret storage is locked".into())
+        }
+        oo7::Error::DBus(oo7::dbus::Error::Service(oo7::dbus::ServiceError::NoSuchObject(_))) => {
+            SecretBrokerError::NotFound("secret item no longer exists".into())
+        }
+        oo7::Error::DBus(oo7::dbus::Error::ZBus(_)) => {
+            SecretBrokerError::BackendUnavailable("Secret Service connection failed".into())
+        }
+        oo7::Error::DBus(oo7::dbus::Error::Service(_))
+        | oo7::Error::DBus(oo7::dbus::Error::Deleted)
+        | oo7::Error::DBus(oo7::dbus::Error::NotFound(_))
+        | oo7::Error::DBus(oo7::dbus::Error::IO(_))
+        | oo7::Error::DBus(oo7::dbus::Error::Crypto(_)) => {
+            SecretBrokerError::Internal("Secret Service operation failed".into())
+        }
+        oo7::Error::File(_) => {
+            SecretBrokerError::Internal("secret storage operation failed".into())
+        }
+    }
+}
+
+fn ensure_deadline(deadline: Instant) -> Result<(), SecretBrokerError> {
+    if Instant::now() >= deadline {
+        Err(SecretBrokerError::Cancelled(
+            "secret operation deadline expired".into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn block_on_oo7<F, T>(future: F, deadline: Instant) -> Result<T, SecretBrokerError>
+where
+    F: std::future::Future<Output = Result<T, SecretBrokerError>>,
+{
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(SecretBrokerError::Cancelled(
+            "secret operation deadline expired".into(),
+        ));
+    }
+    smol::block_on(async move {
+        futures_lite::future::race(future, async move {
+            smol::Timer::after(remaining).await;
+            Err(SecretBrokerError::Cancelled(
+                "secret operation deadline expired".into(),
+            ))
+        })
+        .await
+    })
 }
 
 impl SecretBroker for Oo7SecretBroker {
@@ -163,40 +255,41 @@ impl SecretBroker for Oo7SecretBroker {
         extension_id: &ExtensionId,
         purpose: &SecretPurpose,
         value: &[u8],
+        deadline: Instant,
     ) -> Result<SecretRef, SecretBrokerError> {
         let handle = format!("secret-{}", uuid::Uuid::new_v4());
         let label = format!("shilpo:secret:{extension_id}:{purpose}");
 
-        let result = block_on_oo7(async {
-            let keyring = oo7::Keyring::new().await.map_err(|err| {
-                SecretBrokerError::BackendUnavailable(format!(
-                    "Secret Service connection failed: {err}"
-                ))
-            })?;
+        let result = block_on_oo7(
+            async {
+                let keyring = oo7::Keyring::new().await.map_err(map_oo7_error)?;
 
-            let mut attributes = HashMap::new();
-            attributes.insert("shilpo:app", "shilpo");
-            attributes.insert("shilpo:extension_id", extension_id.as_str());
-            attributes.insert("shilpo:purpose", purpose.as_str());
-            attributes.insert("shilpo:handle", handle.as_str());
+                let mut attributes = HashMap::new();
+                attributes.insert("shilpo:app", "shilpo");
+                attributes.insert("shilpo:extension_id", extension_id.as_str());
+                attributes.insert("shilpo:purpose", purpose.as_str());
+                attributes.insert("shilpo:handle", handle.as_str());
 
-            keyring
-                .create_item(&label, &attributes, value, true)
-                .await
-                .map_err(|err| {
-                    let msg = err.to_string();
-                    let msg_lower = msg.to_lowercase();
-                    if msg_lower.contains("locked") {
-                        SecretBrokerError::Locked(msg)
-                    } else if msg_lower.contains("denied") || msg_lower.contains("dismissed") {
-                        SecretBrokerError::Denied(msg)
-                    } else if msg_lower.contains("cancel") {
-                        SecretBrokerError::Cancelled(msg)
-                    } else {
-                        SecretBrokerError::Internal(msg)
-                    }
-                })
-        });
+                let previous = keyring
+                    .search_items(&[
+                        ("shilpo:app", "shilpo"),
+                        ("shilpo:extension_id", extension_id.as_str()),
+                        ("shilpo:purpose", purpose.as_str()),
+                    ])
+                    .await
+                    .map_err(map_oo7_error)?;
+
+                keyring
+                    .create_item(&label, &attributes, value, true)
+                    .await
+                    .map_err(map_oo7_error)?;
+                for item in previous {
+                    item.delete().await.map_err(map_oo7_error)?;
+                }
+                Ok(())
+            },
+            deadline,
+        );
 
         match result {
             Ok(_) => Ok(SecretRef::new(handle)),
@@ -209,33 +302,32 @@ impl SecretBroker for Oo7SecretBroker {
         extension_id: &ExtensionId,
         purpose: &SecretPurpose,
         reference: &SecretRef,
+        deadline: Instant,
     ) -> Result<Option<Vec<u8>>, SecretBrokerError> {
-        block_on_oo7(async {
-            let keyring = oo7::Keyring::new().await.map_err(|err| {
-                SecretBrokerError::BackendUnavailable(format!(
-                    "Secret Service connection failed: {err}"
-                ))
-            })?;
-            let items = keyring
-                .search_items(&[
-                    ("shilpo:app", "shilpo"),
-                    ("shilpo:extension_id", extension_id.as_str()),
-                    ("shilpo:purpose", purpose.as_str()),
-                    ("shilpo:handle", reference.handle.as_str()),
-                ])
-                .await
-                .map_err(|err| SecretBrokerError::Internal(err.to_string()))?;
-
-            if let Some(item) = items.first() {
-                let secret = item
-                    .secret()
+        ensure_deadline(deadline)?;
+        validate_reference(reference)?;
+        block_on_oo7(
+            async {
+                let keyring = oo7::Keyring::new().await.map_err(map_oo7_error)?;
+                let items = keyring
+                    .search_items(&[
+                        ("shilpo:app", "shilpo"),
+                        ("shilpo:extension_id", extension_id.as_str()),
+                        ("shilpo:purpose", purpose.as_str()),
+                        ("shilpo:handle", reference.handle.as_str()),
+                    ])
                     .await
-                    .map_err(|err| SecretBrokerError::Internal(err.to_string()))?;
-                Ok(Some(secret.to_vec()))
-            } else {
-                Ok(None)
-            }
-        })
+                    .map_err(map_oo7_error)?;
+
+                if let Some(item) = items.first() {
+                    let secret = item.secret().await.map_err(map_oo7_error)?;
+                    Ok(Some(secret.to_vec()))
+                } else {
+                    Ok(None)
+                }
+            },
+            deadline,
+        )
     }
 
     fn delete(
@@ -243,56 +335,65 @@ impl SecretBroker for Oo7SecretBroker {
         extension_id: &ExtensionId,
         purpose: &SecretPurpose,
         reference: &SecretRef,
+        deadline: Instant,
     ) -> Result<(), SecretBrokerError> {
-        block_on_oo7(async {
-            let keyring = oo7::Keyring::new().await.map_err(|err| {
-                SecretBrokerError::BackendUnavailable(format!(
-                    "Secret Service connection failed: {err}"
-                ))
-            })?;
-            let items = keyring
-                .search_items(&[
-                    ("shilpo:app", "shilpo"),
-                    ("shilpo:extension_id", extension_id.as_str()),
-                    ("shilpo:purpose", purpose.as_str()),
-                    ("shilpo:handle", reference.handle.as_str()),
-                ])
-                .await
-                .map_err(|err| SecretBrokerError::Internal(err.to_string()))?;
+        ensure_deadline(deadline)?;
+        validate_reference(reference)?;
+        block_on_oo7(
+            async {
+                let keyring = oo7::Keyring::new().await.map_err(map_oo7_error)?;
+                let items = keyring
+                    .search_items(&[
+                        ("shilpo:app", "shilpo"),
+                        ("shilpo:extension_id", extension_id.as_str()),
+                        ("shilpo:purpose", purpose.as_str()),
+                        ("shilpo:handle", reference.handle.as_str()),
+                    ])
+                    .await
+                    .map_err(map_oo7_error)?;
 
-            for item in items {
-                let _ = item.delete().await;
-            }
-            Ok(())
-        })
+                for item in items {
+                    item.delete().await.map_err(map_oo7_error)?;
+                }
+                Ok(())
+            },
+            deadline,
+        )
     }
 
-    fn delete_all(&self, extension_id: &ExtensionId) -> Result<(), SecretBrokerError> {
-        block_on_oo7(async {
-            let keyring = oo7::Keyring::new().await.map_err(|err| {
-                SecretBrokerError::BackendUnavailable(format!(
-                    "Secret Service connection failed: {err}"
-                ))
-            })?;
-            let items = keyring
-                .search_items(&[
-                    ("shilpo:app", "shilpo"),
-                    ("shilpo:extension_id", extension_id.as_str()),
-                ])
-                .await
-                .map_err(|err| SecretBrokerError::Internal(err.to_string()))?;
+    fn delete_all(
+        &self,
+        extension_id: &ExtensionId,
+        deadline: Instant,
+    ) -> Result<(), SecretBrokerError> {
+        block_on_oo7(
+            async {
+                let keyring = oo7::Keyring::new().await.map_err(map_oo7_error)?;
+                let items = keyring
+                    .search_items(&[
+                        ("shilpo:app", "shilpo"),
+                        ("shilpo:extension_id", extension_id.as_str()),
+                    ])
+                    .await
+                    .map_err(map_oo7_error)?;
 
-            for item in items {
-                let _ = item.delete().await;
-            }
-            Ok(())
-        })
+                for item in items {
+                    item.delete().await.map_err(map_oo7_error)?;
+                }
+                Ok(())
+            },
+            deadline,
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn deadline() -> Instant {
+        Instant::now() + std::time::Duration::from_secs(5)
+    }
 
     pub fn assert_secret_broker_contract(broker: &dyn SecretBroker) {
         let ext_a = ExtensionId::new("io.github.alice.secrets").unwrap();
@@ -301,45 +402,87 @@ mod tests {
         let purpose_2 = SecretPurpose::parse("refresh-token").unwrap();
 
         // 1. set and read
-        let ref_a1 = broker.set(&ext_a, &purpose_1, b"super-secret-1").unwrap();
-        let read_a1 = broker.read(&ext_a, &purpose_1, &ref_a1).unwrap();
+        let ref_a1 = broker
+            .set(&ext_a, &purpose_1, b"super-secret-1", deadline())
+            .unwrap();
+        let read_a1 = broker
+            .read(&ext_a, &purpose_1, &ref_a1, deadline())
+            .unwrap();
         assert_eq!(read_a1.as_deref(), Some(&b"super-secret-1"[..]));
 
         // 2. replace
         let ref_a1_new = broker
-            .set(&ext_a, &purpose_1, b"super-secret-1-updated")
+            .set(&ext_a, &purpose_1, b"super-secret-1-updated", deadline())
             .unwrap();
-        let read_a1_new = broker.read(&ext_a, &purpose_1, &ref_a1_new).unwrap();
+        let read_a1_new = broker
+            .read(&ext_a, &purpose_1, &ref_a1_new, deadline())
+            .unwrap();
         assert_eq!(read_a1_new.as_deref(), Some(&b"super-secret-1-updated"[..]));
 
         // 3. unique opaque handles
         assert_ne!(ref_a1.handle, ref_a1_new.handle);
 
         // 4. cross-purpose isolation
-        let read_wrong_purpose = broker.read(&ext_a, &purpose_2, &ref_a1_new).unwrap();
+        let read_wrong_purpose = broker
+            .read(&ext_a, &purpose_2, &ref_a1_new, deadline())
+            .unwrap();
         assert_eq!(read_wrong_purpose, None);
 
         // 5. cross-extension isolation
-        let read_wrong_ext = broker.read(&ext_b, &purpose_1, &ref_a1_new).unwrap();
+        let read_wrong_ext = broker
+            .read(&ext_b, &purpose_1, &ref_a1_new, deadline())
+            .unwrap();
         assert_eq!(read_wrong_ext, None);
 
         // 6. delete and missing read
-        broker.delete(&ext_a, &purpose_1, &ref_a1_new).unwrap();
-        let read_deleted = broker.read(&ext_a, &purpose_1, &ref_a1_new).unwrap();
+        broker
+            .delete(&ext_a, &purpose_1, &ref_a1_new, deadline())
+            .unwrap();
+        let read_deleted = broker
+            .read(&ext_a, &purpose_1, &ref_a1_new, deadline())
+            .unwrap();
         assert_eq!(read_deleted, None);
 
         // 7. idempotent delete
-        assert!(broker.delete(&ext_a, &purpose_1, &ref_a1_new).is_ok());
+        assert!(
+            broker
+                .delete(&ext_a, &purpose_1, &ref_a1_new, deadline())
+                .is_ok()
+        );
 
         // 8. delete_all
-        let ref_b1 = broker.set(&ext_b, &purpose_1, b"bob-secret").unwrap();
-        let ref_b2 = broker.set(&ext_b, &purpose_2, b"bob-refresh").unwrap();
-        assert!(broker.read(&ext_b, &purpose_1, &ref_b1).unwrap().is_some());
-        assert!(broker.read(&ext_b, &purpose_2, &ref_b2).unwrap().is_some());
+        let ref_b1 = broker
+            .set(&ext_b, &purpose_1, b"bob-secret", deadline())
+            .unwrap();
+        let ref_b2 = broker
+            .set(&ext_b, &purpose_2, b"bob-refresh", deadline())
+            .unwrap();
+        assert!(
+            broker
+                .read(&ext_b, &purpose_1, &ref_b1, deadline())
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            broker
+                .read(&ext_b, &purpose_2, &ref_b2, deadline())
+                .unwrap()
+                .is_some()
+        );
 
-        broker.delete_all(&ext_b).unwrap();
-        assert_eq!(broker.read(&ext_b, &purpose_1, &ref_b1).unwrap(), None);
-        assert_eq!(broker.read(&ext_b, &purpose_2, &ref_b2).unwrap(), None);
+        broker.delete_all(&ext_b, deadline()).unwrap();
+        assert_eq!(
+            broker
+                .read(&ext_b, &purpose_1, &ref_b1, deadline())
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            broker
+                .read(&ext_b, &purpose_2, &ref_b2, deadline())
+                .unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -358,25 +501,25 @@ mod tests {
             "daemon down".into(),
         )));
         assert!(matches!(
-            fake.set(&ext, &purpose, b"val"),
+            fake.set(&ext, &purpose, b"val", deadline()),
             Err(SecretBrokerError::BackendUnavailable(_))
         ));
 
         fake.set_simulated_error(Some(SecretBrokerError::Locked("keyring locked".into())));
         assert!(matches!(
-            fake.read(&ext, &purpose, &SecretRef::new("h1")),
+            fake.read(&ext, &purpose, &SecretRef::new("h1"), deadline()),
             Err(SecretBrokerError::Locked(_))
         ));
 
         fake.set_simulated_error(Some(SecretBrokerError::Denied("user denied".into())));
         assert!(matches!(
-            fake.delete(&ext, &purpose, &SecretRef::new("h1")),
+            fake.delete(&ext, &purpose, &SecretRef::new("h1"), deadline()),
             Err(SecretBrokerError::Denied(_))
         ));
 
         fake.set_simulated_error(Some(SecretBrokerError::Cancelled("timeout".into())));
         assert!(matches!(
-            fake.delete_all(&ext),
+            fake.delete_all(&ext, deadline()),
             Err(SecretBrokerError::Cancelled(_))
         ));
     }
@@ -387,10 +530,10 @@ mod tests {
             Ok(broker) => {
                 let ext = ExtensionId::new("io.github.test.oo7check").unwrap();
                 let purpose = SecretPurpose::parse("check").unwrap();
-                match broker.set(&ext, &purpose, b"test-probe") {
+                match broker.set(&ext, &purpose, b"test-probe", deadline()) {
                     Ok(reference) => {
-                        let _ = broker.delete(&ext, &purpose, &reference);
-                        let _ = broker.delete_all(&ext);
+                        let _ = broker.delete(&ext, &purpose, &reference, deadline());
+                        let _ = broker.delete_all(&ext, deadline());
                         assert_secret_broker_contract(&broker);
                     }
                     Err(SecretBrokerError::BackendUnavailable(msg)) => {

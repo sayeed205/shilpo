@@ -1,4 +1,6 @@
-use crate::adapter::{ExtensionRuntime, RuntimeBudget, RuntimeError, RuntimeFailureKind};
+use crate::adapter::{
+    ExtensionRuntime, GrantChecker, RuntimeBudget, RuntimeError, RuntimeFailureKind,
+};
 use shilpo_ext_api::{
     Capability, ExtensionEvent as ApiEvent, ExtensionId, HostOperation, ViewTree as ApiViewTree,
     wildcard_matches,
@@ -12,6 +14,7 @@ use std::sync::{
 };
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -45,8 +48,6 @@ impl WasmModule {
     }
 }
 
-pub type GrantChecker = Arc<dyn Fn(&ExtensionId, &str) -> bool + Send + Sync>;
-
 pub struct WasmState {
     pub extension_id: ExtensionId,
     pub declared_capabilities: Vec<Capability>,
@@ -60,6 +61,7 @@ pub struct WasmState {
     pub state_store: HashMap<String, String>,
     pub hostcall_bytes: usize,
     pub max_hostcall_bytes: usize,
+    pub secret_deadline: Instant,
 }
 
 impl WasiView for WasmState {
@@ -112,10 +114,16 @@ impl shilpo::extension::actions::Host for WasmState {
         action_id: String,
         payload: Option<shilpo::extension::types::DataValue>,
     ) -> Result<(), shilpo::extension::types::Error> {
-        let payload_json = payload
-            .as_ref()
-            .map(data_value_to_json)
-            .map(|value| value.to_string());
+        let payload_json = match payload.as_ref() {
+            Some(shilpo::extension::types::DataValue::SecretRef(_)) => {
+                return Err(shilpo::extension::types::Error {
+                    kind: shilpo::extension::types::ErrorKind::InvalidArgument,
+                    message: "secret references cannot cross the action effect boundary".into(),
+                });
+            }
+            Some(value) => Some(data_value_to_json(value).to_string()),
+            None => None,
+        };
         let call_bytes = action_id.len() + payload_json.as_ref().map_or(0, String::len);
         self.charge_hostcall_bytes(call_bytes)?;
         let allowed = self.check_capability(|cap| match cap {
@@ -372,7 +380,12 @@ impl shilpo::extension::secrets::Host for WasmState {
 
         let reference = self
             .secret_broker
-            .set(&self.extension_id, &parsed_purpose, &value)
+            .set(
+                &self.extension_id,
+                &parsed_purpose,
+                &value,
+                self.secret_deadline,
+            )
             .map_err(map_secret_broker_error)?;
 
         Ok(shilpo::extension::secrets::SecretRef {
@@ -406,7 +419,12 @@ impl shilpo::extension::secrets::Host for WasmState {
         let api_ref = shilpo_ext_api::SecretRef::new(reference.handle);
         let bytes = self
             .secret_broker
-            .read(&self.extension_id, &parsed_purpose, &api_ref)
+            .read(
+                &self.extension_id,
+                &parsed_purpose,
+                &api_ref,
+                self.secret_deadline,
+            )
             .map_err(map_secret_broker_error)?;
 
         Ok(bytes)
@@ -437,7 +455,12 @@ impl shilpo::extension::secrets::Host for WasmState {
 
         let api_ref = shilpo_ext_api::SecretRef::new(reference.handle);
         self.secret_broker
-            .delete(&self.extension_id, &parsed_purpose, &api_ref)
+            .delete(
+                &self.extension_id,
+                &parsed_purpose,
+                &api_ref,
+                self.secret_deadline,
+            )
             .map_err(map_secret_broker_error)?;
 
         Ok(())
@@ -534,10 +557,12 @@ pub struct WasmRuntime {
 impl WasmRuntime {
     pub fn new() -> Result<Self, RuntimeError> {
         let broker: Arc<dyn crate::secrets::SecretBroker> =
-            match crate::secrets::Oo7SecretBroker::new() {
-                Ok(broker) => Arc::new(broker),
-                Err(_) => Arc::new(crate::secrets::FakeSecretBroker::new()),
-            };
+            Arc::new(crate::secrets::Oo7SecretBroker::new().map_err(|error| {
+                RuntimeError::with_kind(
+                    RuntimeFailureKind::Unavailable,
+                    format!("failed to initialize Secret Service: {error}"),
+                )
+            })?);
         Self::with_broker(broker)
     }
 
@@ -650,6 +675,7 @@ impl WasmRuntime {
             state_store: HashMap::new(),
             hostcall_bytes: 0,
             max_hostcall_bytes: budget.max_hostcall_bytes,
+            secret_deadline: Instant::now() + budget.deadline,
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
@@ -698,6 +724,7 @@ fn configure_store(
     })?;
     store.data_mut().hostcall_bytes = 0;
     store.data_mut().max_hostcall_bytes = budget.max_hostcall_bytes;
+    store.data_mut().secret_deadline = Instant::now() + budget.deadline;
     let ticks = budget
         .deadline
         .as_nanos()
@@ -709,6 +736,13 @@ fn configure_store(
 
 impl ExtensionRuntime for WasmRuntime {
     type Module = WasmModule;
+
+    fn set_grant_checker(
+        &mut self,
+        checker: Arc<dyn Fn(&ExtensionId, &str) -> bool + Send + Sync>,
+    ) {
+        self.grant_checker = Some(checker);
+    }
 
     fn load_with_capabilities(
         &mut self,
@@ -968,6 +1002,17 @@ fn data_value_from_json(value: &serde_json::Value) -> self::shilpo::extension::t
             .or_else(|| value.as_f64().map(DataValue::FloatValue))
             .unwrap_or_else(|| DataValue::TextValue(value.to_string())),
         serde_json::Value::String(value) => DataValue::TextValue(value.clone()),
+        serde_json::Value::Object(object)
+            if object.len() == 1
+                && object
+                    .get("secret_ref")
+                    .and_then(|value| value.as_str())
+                    .is_some() =>
+        {
+            DataValue::SecretRef(self::shilpo::extension::types::SecretRef {
+                handle: object["secret_ref"].as_str().unwrap().to_owned(),
+            })
+        }
         value => DataValue::BytesValue(value.to_string().into_bytes()),
     }
 }

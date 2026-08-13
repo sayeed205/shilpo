@@ -53,6 +53,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tar::Archive;
 
@@ -632,7 +633,7 @@ mod tests {
 
         let valid_component_bytes = test_component_bytes(VALID_CORE_WAT);
         let id = ExtensionId::new("io.github.test.wasm").unwrap();
-        let mut runtime = WasmRuntime::new().unwrap();
+        let mut runtime = WasmRuntime::with_broker(Arc::new(FakeSecretBroker::new())).unwrap();
         runtime
             .load(
                 &id,
@@ -674,7 +675,7 @@ mod tests {
     fn wasm_adapter_accepts_typed_component_with_runtime_budgets() {
         let runaway_bytes = test_component_bytes(RUNAWAY_CORE_WAT);
         let id = ExtensionId::new("io.github.test.runaway").unwrap();
-        let mut runtime = WasmRuntime::new().unwrap();
+        let mut runtime = WasmRuntime::with_broker(Arc::new(FakeSecretBroker::new())).unwrap();
         let budget = RuntimeBudget {
             fuel: RuntimeBudget::default().fuel,
             deadline: Duration::from_secs(1),
@@ -1024,15 +1025,39 @@ mod tests {
         let broker = FakeSecretBroker::new();
         let purpose = SecretPurpose::parse("auth-token").unwrap();
         let secret_ref = broker
-            .set(&ext_id, &purpose, b"secret-pass-phrase")
+            .set(
+                &ext_id,
+                &purpose,
+                b"secret-pass-phrase",
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+            )
             .unwrap();
 
         // 1. Uninstall with Retain policy
         catalog
             .uninstall_with_secrets_policy(&ext_id, SecretPolicy::Retain, Some(&broker))
             .unwrap();
-        let read_back = broker.read(&ext_id, &purpose, &secret_ref).unwrap();
+        let read_back = broker
+            .read(
+                &ext_id,
+                &purpose,
+                &secret_ref,
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+            )
+            .unwrap();
         assert_eq!(read_back.as_deref(), Some(&b"secret-pass-phrase"[..]));
+
+        // Secret deletion failures must leave the installation intact.
+        broker.set_simulated_error(Some(SecretBrokerError::BackendUnavailable(
+            "test backend unavailable".into(),
+        )));
+        fs::create_dir_all(receipt_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(&ext_dir).unwrap();
+        let failed =
+            catalog.uninstall_with_secrets_policy(&ext_id, SecretPolicy::Delete, Some(&broker));
+        assert!(failed.is_err());
+        assert!(receipt_path.is_file());
+        broker.set_simulated_error(None);
 
         // Re-create receipt for Delete test
         fs::create_dir_all(receipt_path.parent().unwrap()).unwrap();
@@ -1043,7 +1068,14 @@ mod tests {
         catalog
             .uninstall_with_secrets_policy(&ext_id, SecretPolicy::Delete, Some(&broker))
             .unwrap();
-        let read_deleted = broker.read(&ext_id, &purpose, &secret_ref).unwrap();
+        let read_deleted = broker
+            .read(
+                &ext_id,
+                &purpose,
+                &secret_ref,
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+            )
+            .unwrap();
         assert_eq!(
             read_deleted, None,
             "Delete policy must delete all extension secrets"

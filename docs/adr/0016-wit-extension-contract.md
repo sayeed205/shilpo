@@ -47,13 +47,14 @@ capability. This created security and design risks:
       secrets belonging to other extensions or ungranted purposes.
     - **Dynamic Grant Revocation**: Granular permission checks occur on every `secrets` host call. Revoking a purpose grant
       immediately denies subsequent host calls without restarting or reloading the Wasm runtime.
-    - **Hermetic Testing & Fallback**: `FakeSecretBroker` provides in-memory hermetic isolation for test environments.
+    - **Hermetic Testing**: `FakeSecretBroker` provides in-memory hermetic isolation only when explicitly injected by tests.
     - **Uninstall Secret Lifecycle Policy**: Uninstall defaults to `SecretPolicy::Retain` to prevent accidental loss, with
       an explicit `SecretPolicy::Delete` option to purge all extension secret attributes from Secret Service.
 
 ## Consequences & Follow-ups
 
 - Extensions must compile against `shilpo:extension@0.1.0` WIT definitions.
-- Secret Service integration is operational via `Oo7SecretBroker` for `secrets` WIT calls.
+- Secret Service integration is operational via `Oo7SecretBroker` for `secrets` WIT calls. Runtime initialization fails
+  closed when Secret Service is unavailable; there is no production plaintext or in-memory fallback.
 - Follow-up tracker issues: #78 (TypeScript SDK WIT bindgen), #92 (Rust SDK WIT bindgen), #96 (hot-reload), #100 (CLI
-  scaffolding), #131 (benchmark suite), #138 (secret broker integration completed).
+  scaffolding), and #131 (benchmark suite).
