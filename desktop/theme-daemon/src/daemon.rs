@@ -21,7 +21,15 @@ use tracing::{debug, info};
 use zbus::Connection;
 use zbus::names::BusName;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+use crate::wallpaper_cache::WallpaperAnalysisCache;
+
+#[cfg(test)]
+pub(crate) type WallpaperExtractorFn =
+    Arc<dyn Fn(&Path) -> anyhow::Result<(u32, SchemeVariant)> + Send + Sync>;
+#[cfg(test)]
+pub(crate) type WallpaperBackendFn = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
+
+#[derive(Clone, Default)]
 pub struct ThemeDaemonOptions {
     pub provider: Option<String>,
     pub gtk_theme_light: Option<String>,
@@ -31,7 +39,61 @@ pub struct ThemeDaemonOptions {
     pub scheme_variant: Option<SchemeVariant>,
     pub config_path: Option<PathBuf>,
     pub state_path: Option<PathBuf>,
+    #[cfg(test)]
+    pub(crate) wallpaper_extractor: Option<WallpaperExtractorFn>,
+    #[cfg(test)]
+    pub(crate) wallpaper_backend: Option<WallpaperBackendFn>,
+    #[cfg(test)]
+    pub(crate) headless: bool,
 }
+
+impl std::fmt::Debug for ThemeDaemonOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_struct("ThemeDaemonOptions");
+        debug
+            .field("provider", &self.provider)
+            .field("gtk_theme_light", &self.gtk_theme_light)
+            .field("gtk_theme_dark", &self.gtk_theme_dark)
+            .field("custom_adapter_cmd", &self.custom_adapter_cmd)
+            .field("wallpaper_dir", &self.wallpaper_dir)
+            .field("scheme_variant", &self.scheme_variant)
+            .field("config_path", &self.config_path)
+            .field("state_path", &self.state_path);
+        #[cfg(test)]
+        {
+            debug
+                .field("wallpaper_extractor", &self.wallpaper_extractor.is_some())
+                .field("wallpaper_backend", &self.wallpaper_backend.is_some())
+                .field("headless", &self.headless);
+        }
+        debug.finish()
+    }
+}
+
+impl PartialEq for ThemeDaemonOptions {
+    fn eq(&self, other: &Self) -> bool {
+        self.provider == other.provider
+            && self.gtk_theme_light == other.gtk_theme_light
+            && self.gtk_theme_dark == other.gtk_theme_dark
+            && self.custom_adapter_cmd == other.custom_adapter_cmd
+            && self.wallpaper_dir == other.wallpaper_dir
+            && self.scheme_variant == other.scheme_variant
+            && self.config_path == other.config_path
+            && self.state_path == other.state_path
+            && {
+                #[cfg(test)]
+                {
+                    self.headless == other.headless
+                }
+                #[cfg(not(test))]
+                {
+                    true
+                }
+            }
+    }
+}
+
+impl Eq for ThemeDaemonOptions {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DaemonState {
@@ -115,7 +177,12 @@ pub struct ThemeDaemon {
     wallpaper_result_tx: mpsc::UnboundedSender<WallpaperTaskResult>,
     wallpaper_result_rx: mpsc::UnboundedReceiver<WallpaperTaskResult>,
     current_wallpaper_op: Arc<AtomicU64>,
-    _conn: Connection,
+    wallpaper_cache: Arc<Mutex<WallpaperAnalysisCache>>,
+    #[cfg(test)]
+    wallpaper_extractor: Option<WallpaperExtractorFn>,
+    #[cfg(test)]
+    wallpaper_backend: Option<WallpaperBackendFn>,
+    _conn: Option<Connection>,
     effects: Arc<Mutex<EffectStatus>>,
 }
 
@@ -168,28 +235,39 @@ impl ThemeDaemon {
             initial_state.theme.resolved_mode,
         );
 
-        let conn = Connection::session().await?;
-        use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
-        let dbus = DBusProxy::new(&conn).await?;
-        let reply = dbus
-            .request_name(
-                "org.shilpo.Theme".try_into()?,
-                RequestNameFlags::DoNotQueue.into(),
-            )
-            .await?;
-        if reply != RequestNameReply::PrimaryOwner {
-            eprintln!("org.shilpo.Theme is already owned by another process");
-            std::process::exit(1);
-        }
+        #[cfg(test)]
+        let headless = options.headless;
+        #[cfg(not(test))]
+        let headless = false;
+        let conn = if headless {
+            None
+        } else {
+            let conn = Connection::session().await?;
+            use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
+            let dbus = DBusProxy::new(&conn).await?;
+            let reply = dbus
+                .request_name(
+                    "org.shilpo.Theme".try_into()?,
+                    RequestNameFlags::DoNotQueue.into(),
+                )
+                .await?;
+            if reply != RequestNameReply::PrimaryOwner {
+                eprintln!("org.shilpo.Theme is already owned by another process");
+                std::process::exit(1);
+            }
 
-        let service = ThemeDbusService::new(actor_tx, effects.clone());
-        conn.object_server()
-            .at("/org/shilpo/Theme", service)
-            .await?;
+            let service = ThemeDbusService::new(actor_tx, effects.clone());
+            conn.object_server()
+                .at("/org/shilpo/Theme", service)
+                .await?;
 
-        info!("shilpo-themed registered D-Bus name org.shilpo.Theme at /org/shilpo/Theme");
+            info!("shilpo-themed registered D-Bus name org.shilpo.Theme at /org/shilpo/Theme");
 
-        PortalObserver::start(portal_tx).await;
+            PortalObserver::start(portal_tx).await;
+            Some(conn)
+        };
+
+        let wallpaper_cache = Arc::new(Mutex::new(WallpaperAnalysisCache::default()));
 
         let daemon = Self {
             state: initial_state,
@@ -202,7 +280,12 @@ impl ThemeDaemon {
             wallpaper_result_tx: wp_tx,
             wallpaper_result_rx: wp_rx,
             current_wallpaper_op: Arc::new(AtomicU64::new(0)),
-            _conn: conn.clone(),
+            wallpaper_cache,
+            #[cfg(test)]
+            wallpaper_extractor: options.wallpaper_extractor,
+            #[cfg(test)]
+            wallpaper_backend: options.wallpaper_backend,
+            _conn: conn,
             effects,
         };
 
@@ -214,7 +297,9 @@ impl ThemeDaemon {
             state: daemon.state.clone(),
             change_kind: ChangeKind::full(),
         };
-        if let Ok(raw_update) = serde_json::to_string(&startup_update) {
+        if let Some(conn) = &daemon._conn
+            && let Ok(raw_update) = serde_json::to_string(&startup_update)
+        {
             let _ = conn
                 .emit_signal(
                     Option::<BusName>::None,
@@ -429,68 +514,124 @@ impl ThemeDaemon {
         path: PathBuf,
         reply: tokio::sync::oneshot::Sender<Result<DaemonState, String>>,
     ) {
-        if !path.exists() {
-            let _ = reply.send(Err(format!(
-                "Wallpaper path does not exist: {}",
-                path.display()
-            )));
-            return;
-        }
-        let op_id = self.current_wallpaper_op.fetch_add(1, Ordering::SeqCst) + 1;
-        let tx = self.wallpaper_result_tx.clone();
-
-        tokio::spawn(async move {
-            info!(op_id, path = %path.display(), "Starting background wallpaper processing");
-
-            let extraction = tokio::task::spawn_blocking({
-                let path = path.clone();
-                move || extract_wallpaper_seed_and_variant(&path)
-            })
-            .await
-            .map_err(|error| error.to_string())
-            .and_then(|result| result.map_err(|error| error.to_string()));
-
-            let (seed, detected_variant) = match extraction {
-                Ok((seed, variant)) => (seed, variant),
+        let active_variant = self.state.theme.scheme_variant;
+        let (canonical_path, key) =
+            match crate::wallpaper_cache::create_wallpaper_cache_key(&path, active_variant) {
+                Ok(pair) => pair,
                 Err(error) => {
-                    let _ = tx.send(WallpaperTaskResult {
-                        op_id,
-                        path,
-                        seed: 0,
-                        detected_variant: SchemeVariant::Auto,
-                        error: Some(error),
-                        reply,
-                    });
+                    let _ = reply.send(Err(error));
                     return;
                 }
             };
 
-            let awww_result = tokio::task::spawn_blocking({
-                let path = path.clone();
-                move || {
-                    std::process::Command::new("awww")
-                        .arg("img")
-                        .arg(&path)
-                        .status()
+        let op_id = self.current_wallpaper_op.fetch_add(1, Ordering::SeqCst) + 1;
+        let tx = self.wallpaper_result_tx.clone();
+        let cache = self.wallpaper_cache.clone();
+        #[cfg(test)]
+        let extractor = self.wallpaper_extractor.clone();
+        #[cfg(test)]
+        let backend = self.wallpaper_backend.clone();
+
+        tokio::spawn(async move {
+            info!(op_id, path = %canonical_path.display(), "Starting background wallpaper processing");
+
+            let cached_analysis = crate::wallpaper_cache::with_cache(&cache, |c| c.get(&key));
+
+            let (seed, detected_variant) = if let Some(analysis) = cached_analysis {
+                let _span = tracing::info_span!(
+                    target: "shilpo_profile",
+                    "wallpaper_analysis",
+                    operation = "wallpaper_analysis",
+                    cache = "hit",
+                    outcome = "success",
+                    scheme_variant = ?active_variant,
+                );
+                let _enter = _span.enter();
+                debug!(op_id, path = %canonical_path.display(), "Wallpaper analysis cache hit");
+                (analysis.seed, analysis.detected_variant)
+            } else {
+                let span = tracing::info_span!(
+                    target: "shilpo_profile",
+                    "wallpaper_analysis",
+                    operation = "wallpaper_analysis",
+                    cache = "miss",
+                    outcome = tracing::field::Empty,
+                    scheme_variant = ?active_variant,
+                );
+                let _enter = span.enter();
+                debug!(op_id, path = %canonical_path.display(), "Wallpaper analysis cache miss");
+
+                let path_for_ext = canonical_path.clone();
+                let extraction = tokio::task::spawn_blocking(move || {
+                    #[cfg(test)]
+                    {
+                        if let Some(ext) = extractor {
+                            return ext(&path_for_ext);
+                        }
+                    }
+                    extract_wallpaper_seed_and_variant(&path_for_ext)
+                })
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result.map_err(|error| error.to_string()));
+
+                match extraction {
+                    Ok((seed, variant)) => {
+                        span.record("outcome", "success");
+                        let analysis = crate::wallpaper_cache::WallpaperAnalysis {
+                            seed,
+                            detected_variant: variant,
+                        };
+                        crate::wallpaper_cache::with_cache(&cache, |c| c.insert(key, analysis));
+                        (seed, variant)
+                    }
+                    Err(error) => {
+                        span.record("outcome", "failed");
+                        let _ = tx.send(WallpaperTaskResult {
+                            op_id,
+                            path: canonical_path,
+                            seed: 0,
+                            detected_variant: SchemeVariant::Auto,
+                            error: Some(error),
+                            reply,
+                        });
+                        return;
+                    }
+                }
+            };
+
+            let path_for_backend = canonical_path.clone();
+            let backend_result = tokio::task::spawn_blocking(move || {
+                #[cfg(test)]
+                if let Some(b) = backend {
+                    return b(&path_for_backend);
+                }
+                let status = std::process::Command::new("awww")
+                    .arg("img")
+                    .arg(&path_for_backend)
+                    .status();
+                match status {
+                    Ok(status) if status.success() => Ok(()),
+                    Ok(status) => Err(format!("awww exited with status {status}")),
+                    Err(error) => Err(format!("Failed to execute awww: {error}")),
                 }
             })
             .await;
 
-            let error = match awww_result {
-                Ok(Ok(status)) if status.success() => None,
-                Ok(Ok(status)) => Some(format!("awww exited with status {status}")),
-                Ok(Err(error)) => Some(format!("Failed to execute awww: {error}")),
-                Err(error) => Some(format!("Wallpaper backend task failed: {error}")),
+            let error = match backend_result {
+                Ok(Ok(())) => None,
+                Ok(Err(err_msg)) => Some(err_msg),
+                Err(task_err) => Some(format!("Wallpaper backend task failed: {task_err}")),
             };
 
             debug!(
                 op_id,
                 success = error.is_none(),
-                "Wallpaper awww invocation completed"
+                "Wallpaper backend invocation completed"
             );
             let _ = tx.send(WallpaperTaskResult {
                 op_id,
-                path,
+                path: canonical_path,
                 seed,
                 detected_variant,
                 error,
@@ -539,16 +680,17 @@ impl ThemeDaemon {
                 change_kind: outcome.change_kind,
             };
             let raw_update = serde_json::to_string(&update).map_err(|error| error.to_string())?;
-            let _ = self
-                ._conn
-                .emit_signal(
-                    Option::<BusName>::None,
-                    "/org/shilpo/Theme",
-                    "org.shilpo.Theme",
-                    "StateChanged",
-                    &raw_update,
-                )
-                .await;
+            if let Some(conn) = &self._conn {
+                let _ = conn
+                    .emit_signal(
+                        Option::<BusName>::None,
+                        "/org/shilpo/Theme",
+                        "org.shilpo.Theme",
+                        "StateChanged",
+                        &raw_update,
+                    )
+                    .await;
+            }
 
             self.persistence_executor.enqueue(self.state.clone())?;
             self.refresh_effect_status();
@@ -1542,5 +1684,477 @@ mod tests {
 
         assert_eq!(state.theme.scheme_variant, SchemeVariant::TonalSpot);
         assert_eq!(state.theme.resolved_variant, SchemeVariant::TonalSpot);
+    }
+
+    #[tokio::test]
+    async fn test_9_analysis_cold_miss_invokes_decoder_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("wallpaper.png");
+        image::RgbaImage::new(2, 2).save(&path).unwrap();
+
+        let decode_count = Arc::new(AtomicUsize::new(0));
+        let decode_count_clone = decode_count.clone();
+
+        let options = ThemeDaemonOptions {
+            wallpaper_extractor: Some(Arc::new(move |_| {
+                decode_count_clone.fetch_add(1, Ordering::SeqCst);
+                Ok((0xff112233, SchemeVariant::Expressive))
+            })),
+            wallpaper_backend: Some(Arc::new(|_| Ok(()))),
+            headless: true,
+            ..Default::default()
+        };
+
+        let mut daemon = ThemeDaemon::with_options(options).await.unwrap();
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), reply_tx);
+
+        let res = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res).await;
+
+        let state = reply_rx.await.unwrap().unwrap();
+        assert_eq!(state.wallpaper_seed, Some(0xff112233));
+        assert_eq!(decode_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_10_analysis_second_request_hits_cache() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("wallpaper.png");
+        image::RgbaImage::new(2, 2).save(&path).unwrap();
+
+        let decode_count = Arc::new(AtomicUsize::new(0));
+        let decode_count_clone = decode_count.clone();
+        let backend_count = Arc::new(AtomicUsize::new(0));
+        let backend_count_clone = backend_count.clone();
+
+        let options = ThemeDaemonOptions {
+            wallpaper_extractor: Some(Arc::new(move |_| {
+                decode_count_clone.fetch_add(1, Ordering::SeqCst);
+                Ok((0xff112233, SchemeVariant::Expressive))
+            })),
+            wallpaper_backend: Some(Arc::new(move |_| {
+                backend_count_clone.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })),
+            headless: true,
+            ..Default::default()
+        };
+
+        let mut daemon = ThemeDaemon::with_options(options).await.unwrap();
+
+        // 1st request (miss)
+        let (tx1, rx1) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), tx1);
+        let res1 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res1).await;
+        let _ = rx1.await.unwrap().unwrap();
+
+        assert_eq!(decode_count.load(Ordering::SeqCst), 1);
+
+        // 2nd request (hit)
+        let (tx2, rx2) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), tx2);
+        let res2 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res2).await;
+        let _ = rx2.await.unwrap().unwrap();
+
+        assert_eq!(
+            decode_count.load(Ordering::SeqCst),
+            1,
+            "Decoder must not be called on cache hit"
+        );
+        assert_eq!(
+            backend_count.load(Ordering::SeqCst),
+            2,
+            "The wallpaper backend must run for both misses and hits"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_11_analysis_mtime_invalidation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::SystemTime;
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_path_buf();
+
+        let decode_count = Arc::new(AtomicUsize::new(0));
+        let decode_count_clone = decode_count.clone();
+
+        let options = ThemeDaemonOptions {
+            wallpaper_extractor: Some(Arc::new(move |_| {
+                let count = decode_count_clone.fetch_add(1, Ordering::SeqCst);
+                if count == 0 {
+                    Ok((0xff111111, SchemeVariant::Expressive))
+                } else {
+                    Ok((0xff222222, SchemeVariant::Fidelity))
+                }
+            })),
+            wallpaper_backend: Some(Arc::new(|_| Ok(()))),
+            headless: true,
+            ..Default::default()
+        };
+
+        let mut daemon = ThemeDaemon::with_options(options).await.unwrap();
+
+        // Request 1
+        let (tx1, rx1) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), tx1);
+        let res1 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res1).await;
+        let state1 = rx1.await.unwrap().unwrap();
+        assert_eq!(state1.wallpaper_seed, Some(0xff111111));
+        assert_eq!(decode_count.load(Ordering::SeqCst), 1);
+
+        // Modify file mtime deterministically without sleep
+        let f = std::fs::File::open(&path).unwrap();
+        let new_mtime = SystemTime::now() + std::time::Duration::from_secs(100);
+        let _ = f.set_modified(new_mtime);
+
+        // Request 2 (mtime changed -> miss)
+        let (tx2, rx2) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), tx2);
+        let res2 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res2).await;
+        let state2 = rx2.await.unwrap().unwrap();
+        assert_eq!(state2.wallpaper_seed, Some(0xff222222));
+        assert_eq!(decode_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_12_analysis_variant_change_invalidation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_path_buf();
+
+        let decode_count = Arc::new(AtomicUsize::new(0));
+        let decode_count_clone = decode_count.clone();
+
+        let options = ThemeDaemonOptions {
+            wallpaper_extractor: Some(Arc::new(move |_| {
+                decode_count_clone.fetch_add(1, Ordering::SeqCst);
+                Ok((0xff112233, SchemeVariant::Expressive))
+            })),
+            wallpaper_backend: Some(Arc::new(|_| Ok(()))),
+            headless: true,
+            ..Default::default()
+        };
+
+        let mut daemon = ThemeDaemon::with_options(options).await.unwrap();
+
+        // Request 1 under default variant (Auto)
+        let (tx1, rx1) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), tx1);
+        let res1 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res1).await;
+        let _ = rx1.await.unwrap().unwrap();
+        assert_eq!(decode_count.load(Ordering::SeqCst), 1);
+
+        // Change scheme variant on daemon
+        let _ = daemon
+            .process_command(DaemonCommand::Theme(ThemeCommand::SetSchemeVariant(
+                SchemeVariant::Fidelity,
+            )))
+            .await;
+
+        // Request 2 under new variant -> miss
+        let (tx2, rx2) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), tx2);
+        let res2 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res2).await;
+        let _ = rx2.await.unwrap().unwrap();
+        assert_eq!(
+            decode_count.load(Ordering::SeqCst),
+            2,
+            "Variant change must invalidate cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_13_analysis_failure_not_cached() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_path_buf();
+
+        let decode_count = Arc::new(AtomicUsize::new(0));
+        let decode_count_clone = decode_count.clone();
+
+        let options = ThemeDaemonOptions {
+            wallpaper_extractor: Some(Arc::new(move |_| {
+                let count = decode_count_clone.fetch_add(1, Ordering::SeqCst);
+                if count == 0 {
+                    Err(anyhow::anyhow!("Analysis failed"))
+                } else {
+                    Ok((0xff999999, SchemeVariant::TonalSpot))
+                }
+            })),
+            wallpaper_backend: Some(Arc::new(|_| Ok(()))),
+            headless: true,
+            ..Default::default()
+        };
+
+        let mut daemon = ThemeDaemon::with_options(options).await.unwrap();
+
+        // Request 1 fails
+        let (tx1, rx1) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), tx1);
+        let res1 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res1).await;
+        let err1 = rx1.await.unwrap();
+        assert!(err1.is_err());
+        assert_eq!(decode_count.load(Ordering::SeqCst), 1);
+
+        // Request 2 retries decoder and succeeds
+        let (tx2, rx2) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), tx2);
+        let res2 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res2).await;
+        let state2 = rx2.await.unwrap().unwrap();
+        assert_eq!(state2.wallpaper_seed, Some(0xff999999));
+        assert_eq!(decode_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_14_backend_failure_retains_cached_analysis() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_path_buf();
+
+        let decode_count = Arc::new(AtomicUsize::new(0));
+        let decode_count_clone = decode_count.clone();
+        let backend_fail = Arc::new(AtomicBool::new(true));
+        let backend_fail_clone = backend_fail.clone();
+
+        let options = ThemeDaemonOptions {
+            wallpaper_extractor: Some(Arc::new(move |_| {
+                decode_count_clone.fetch_add(1, Ordering::SeqCst);
+                Ok((0xff334455, SchemeVariant::TonalSpot))
+            })),
+            wallpaper_backend: Some(Arc::new(move |_| {
+                if backend_fail_clone.load(Ordering::SeqCst) {
+                    Err("awww failed".into())
+                } else {
+                    Ok(())
+                }
+            })),
+            headless: true,
+            ..Default::default()
+        };
+
+        let mut daemon = ThemeDaemon::with_options(options).await.unwrap();
+
+        // Request 1: analysis succeeds, backend fails
+        let (tx1, rx1) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), tx1);
+        let res1 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res1).await;
+        let err1 = rx1.await.unwrap();
+        assert!(err1.is_err());
+        assert_eq!(decode_count.load(Ordering::SeqCst), 1);
+
+        // Fix backend failure
+        backend_fail.store(false, Ordering::SeqCst);
+
+        // Request 2: analysis hits cache, backend succeeds
+        let (tx2, rx2) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), tx2);
+        let res2 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res2).await;
+        let state2 = rx2.await.unwrap().unwrap();
+        assert_eq!(state2.wallpaper_seed, Some(0xff334455));
+        assert_eq!(
+            decode_count.load(Ordering::SeqCst),
+            1,
+            "Cached analysis retained despite backend error"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_15_cache_hit_produces_identical_state() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_path_buf();
+
+        let options = ThemeDaemonOptions {
+            wallpaper_extractor: Some(Arc::new(|_| Ok((0xff778899, SchemeVariant::Expressive)))),
+            wallpaper_backend: Some(Arc::new(|_| Ok(()))),
+            headless: true,
+            ..Default::default()
+        };
+
+        let mut daemon = ThemeDaemon::with_options(options).await.unwrap();
+
+        let (tx1, rx1) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), tx1);
+        let res1 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res1).await;
+        let state1 = rx1.await.unwrap().unwrap();
+
+        let (tx2, rx2) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), tx2);
+        let res2 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res2).await;
+        let state2 = rx2.await.unwrap().unwrap();
+
+        assert_eq!(state1.wallpaper_seed, state2.wallpaper_seed);
+        assert_eq!(
+            state1.wallpaper_detected_variant,
+            state2.wallpaper_detected_variant
+        );
+        assert_eq!(state1.theme.light, state2.theme.light);
+        assert_eq!(state1.theme.dark, state2.theme.dark);
+    }
+
+    #[tokio::test]
+    async fn test_16_superseded_request_populates_cache_without_state_mutation() {
+        let file1 = tempfile::NamedTempFile::new().unwrap();
+        let file2 = tempfile::NamedTempFile::new().unwrap();
+        let path1 = file1.path().to_path_buf();
+        let path2 = file2.path().to_path_buf();
+
+        let options = ThemeDaemonOptions {
+            wallpaper_extractor: Some(Arc::new(|p| {
+                if p.to_string_lossy().contains("tmp") {
+                    Ok((0xff111111, SchemeVariant::Expressive))
+                } else {
+                    Ok((0xff222222, SchemeVariant::TonalSpot))
+                }
+            })),
+            wallpaper_backend: Some(Arc::new(|_| Ok(()))),
+            headless: true,
+            ..Default::default()
+        };
+
+        let mut daemon = ThemeDaemon::with_options(options).await.unwrap();
+
+        let (tx1, rx1) = tokio::sync::oneshot::channel();
+        let (tx2, rx2) = tokio::sync::oneshot::channel();
+
+        // Spawn op 1, then op 2 (superseding op 1)
+        daemon.spawn_wallpaper_task(path1.clone(), tx1);
+        daemon.spawn_wallpaper_task(path2.clone(), tx2);
+
+        // Receive completions
+        let r1 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        let r2 = daemon.wallpaper_result_rx.recv().await.unwrap();
+
+        let (res1, res2) = if r1.op_id < r2.op_id {
+            (r1, r2)
+        } else {
+            (r2, r1)
+        };
+
+        // Op 1 completed task, but op_id (1) < current_op (2)
+        daemon.handle_wallpaper_completion(res1).await;
+        let err1 = rx1.await.unwrap();
+        assert!(err1.is_err());
+        assert_eq!(err1.unwrap_err(), "Wallpaper request superseded");
+
+        // Op 2 completes
+        daemon.handle_wallpaper_completion(res2).await;
+        let state2 = rx2.await.unwrap().unwrap();
+        assert_eq!(state2.wallpaper_path, Some(path2.clone()));
+
+        // Op 1 path should be cached despite being superseded!
+        let (canonical1, key1) = crate::wallpaper_cache::create_wallpaper_cache_key(
+            &path1,
+            daemon.state.theme.scheme_variant,
+        )
+        .unwrap();
+        let cached = crate::wallpaper_cache::with_cache(&daemon.wallpaper_cache, |c| c.get(&key1));
+        assert!(
+            cached.is_some(),
+            "Superseded op analysis must be present in cache"
+        );
+        assert_eq!(canonical1, key1.canonical_path);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn wallpaper_cache_cold_vs_hit_benchmark() {
+        use image::{Rgba, RgbaImage};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Instant;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let img_path = temp_dir.path().join("bench_wallpaper.png");
+
+        let mut img = RgbaImage::new(1920, 1080);
+        for (x, y, pixel) in img.enumerate_pixels_mut() {
+            let r = (x % 256) as u8;
+            let g = (y % 256) as u8;
+            let b = ((x + y) % 256) as u8;
+            *pixel = Rgba([r, g, b, 255]);
+        }
+        img.save(&img_path).unwrap();
+
+        let decode_count = Arc::new(AtomicUsize::new(0));
+        let decode_count_clone = decode_count.clone();
+
+        let options = ThemeDaemonOptions {
+            wallpaper_extractor: Some(Arc::new(move |p| {
+                decode_count_clone.fetch_add(1, Ordering::SeqCst);
+                extract_wallpaper_seed_and_variant(p)
+            })),
+            wallpaper_backend: Some(Arc::new(|_| Ok(()))),
+            headless: true,
+            ..Default::default()
+        };
+
+        let mut daemon = ThemeDaemon::with_options(options).await.unwrap();
+
+        // 1. Cold analysis
+        let cold_start = Instant::now();
+        let (tx_cold, rx_cold) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(img_path.clone(), tx_cold);
+        let res_cold = daemon.wallpaper_result_rx.recv().await.unwrap();
+        daemon.handle_wallpaper_completion(res_cold).await;
+        let _ = rx_cold.await.unwrap().unwrap();
+        let cold_duration = cold_start.elapsed();
+
+        assert_eq!(
+            decode_count.load(Ordering::SeqCst),
+            1,
+            "Decoder should run exactly once during cold analysis"
+        );
+
+        // 2. 100 Cache hit lookups
+        let hit_start = Instant::now();
+        let hit_count = 100;
+        for _ in 0..hit_count {
+            let (tx_hit, rx_hit) = tokio::sync::oneshot::channel();
+            daemon.spawn_wallpaper_task(img_path.clone(), tx_hit);
+            let res_hit = daemon.wallpaper_result_rx.recv().await.unwrap();
+            daemon.handle_wallpaper_completion(res_hit).await;
+            let _ = rx_hit.await.unwrap().unwrap();
+        }
+        let hit_duration = hit_start.elapsed();
+        let mean_hit_duration = hit_duration / hit_count;
+        let ratio = cold_duration.as_secs_f64() / mean_hit_duration.as_secs_f64();
+
+        assert_eq!(
+            decode_count.load(Ordering::SeqCst),
+            1,
+            "Decoder count must remain 1 after 100 hits"
+        );
+
+        println!("\n=== Wallpaper Cache Cold vs Hit Benchmark Results ===");
+        println!("Cold duration:      {:?}", cold_duration);
+        println!("Total hit duration: {:?}", hit_duration);
+        println!("Mean hit duration:  {:?}", mean_hit_duration);
+        println!("Speedup ratio:      {:.2}x", ratio);
+        println!(
+            "Decoder invocations: {}",
+            decode_count.load(Ordering::SeqCst)
+        );
+        println!("====================================================\n");
     }
 }

@@ -111,6 +111,46 @@ fn merge_items(
     text: &str,
     provenance: &mut ConfigProvenance,
 ) {
+    if let (Item::Value(toml_edit::Value::InlineTable(acc_table)), Item::Table(new_table)) =
+        (&*acc, new_item)
+    {
+        let converted = acc_table
+            .iter()
+            .map(|(key, value)| (key.to_owned(), value.clone()))
+            .collect::<Vec<_>>();
+        *acc = Item::Table(Table::new());
+        if let Item::Table(acc_table) = acc {
+            for (key, value) in converted {
+                acc_table.insert(&key, Item::Value(value));
+            }
+            merge_tables(acc_table, new_table, prefix, source, text, provenance);
+        }
+        return;
+    }
+    if let (Item::Table(acc_table), Item::Value(toml_edit::Value::InlineTable(new_table))) =
+        (&mut *acc, new_item)
+    {
+        let converted = new_table
+            .iter()
+            .map(|(key, value)| (key.to_owned(), value.clone()))
+            .collect::<Vec<_>>();
+        let converted_table =
+            converted
+                .into_iter()
+                .fold(Table::new(), |mut table, (key, value)| {
+                    table.insert(&key, Item::Value(value));
+                    table
+                });
+        merge_tables(
+            acc_table,
+            &converted_table,
+            prefix,
+            source,
+            text,
+            provenance,
+        );
+        return;
+    }
     match (acc, new_item) {
         (Item::Table(acc_table), Item::Table(new_table)) => {
             merge_tables(acc_table, new_table, prefix, source, text, provenance);
@@ -143,6 +183,47 @@ fn merge_items(
             *acc_item = new_val.clone();
             record_provenance_tree(new_val, prefix, &loc, provenance);
         }
+    }
+}
+
+#[cfg(test)]
+mod inline_table_regression {
+    use super::*;
+
+    #[test]
+    fn empty_regular_table_preserves_inline_table_leaves_and_provenance() {
+        let base: DocumentMut = "v = { a = false }".parse().unwrap();
+        let overlay: DocumentMut = "[v]".parse().unwrap();
+        let source = ConfigSource::Primary {
+            path: "base.toml".into(),
+        };
+        let overlay_source = ConfigSource::Overrides {
+            path: "overlay.toml".into(),
+        };
+        let mut provenance = ConfigProvenance::new();
+        record_provenance_tree(
+            base.as_item(),
+            "",
+            &SourceLocation {
+                source: source.clone(),
+                line: None,
+                column: None,
+            },
+            &mut provenance,
+        );
+        let mut merged = base.clone();
+        merge_document(
+            &mut merged,
+            &mut provenance,
+            &overlay_source,
+            &overlay,
+            &overlay.to_string(),
+        );
+        assert_eq!(merged["v"]["a"].as_bool(), Some(false));
+        assert_eq!(
+            provenance.get("v.a").map(|location| &location.source),
+            Some(&source)
+        );
     }
 }
 
