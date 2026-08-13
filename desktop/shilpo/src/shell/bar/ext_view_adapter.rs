@@ -640,7 +640,80 @@ pub fn create_showcase_view_tree() -> ViewTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shilpo_ext_api::ViewLimits;
+    use crate::shell::runtime::ShellRuntime;
+    use gpui::{Context, Render, TestAppContext, VisualTestContext, point};
+    use shilpo_ext_api::{ButtonNode, ContainerNode, ContributionId, ExtensionId, ViewLimits};
+
+    struct TestExtensionView {
+        contribution: CanonicalId,
+        tree: ViewTree,
+    }
+
+    impl Render for TestExtensionView {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            render_ext_view_tree(&self.contribution, None, &self.tree, window, cx)
+        }
+    }
+
+    fn extension_id() -> CanonicalId {
+        CanonicalId::new(
+            ExtensionId::new("io.example.test").unwrap(),
+            ContributionId::new("widget").unwrap(),
+        )
+    }
+
+    #[gpui::test]
+    fn rendered_clickable_container_dispatches_without_bubbling_nested_button(
+        cx: &mut TestAppContext,
+    ) {
+        let id = extension_id();
+        let tree = ViewTree::new(ViewNode::Container(ContainerNode {
+            direction: ContainerDirection::Column,
+            children: vec![ViewNode::Button(ButtonNode {
+                label: "child".into(),
+                event_id: "child".into(),
+                style: Some(ViewStyle {
+                    width: Some(120.0),
+                    height: Some(40.0),
+                    ..ViewStyle::default()
+                }),
+            })],
+            style: Some(ViewStyle {
+                width: Some(200.0),
+                height: Some(100.0),
+                ..ViewStyle::default()
+            }),
+            gap: None,
+            align_items: None,
+            justify_content: None,
+            wrap: false,
+            event_id: Some("parent".into()),
+        }));
+
+        let recorder = cx.update(|app| {
+            shilpo_ui::init_with_source(0xFF006C4C, app);
+            ShellRuntime::install_for_test(app);
+            ShellRuntime::take_test_extension_inputs(app)
+        });
+        let (_, visual): (_, &mut VisualTestContext) =
+            cx.add_window_view(|_, _| TestExtensionView {
+                contribution: id,
+                tree,
+            });
+        visual.simulate_click(point(px(20.0), px(20.0)), gpui::Modifiers::default());
+
+        let inputs = recorder.lock().unwrap();
+        let events: Vec<_> = inputs
+            .iter()
+            .filter_map(|command| match command {
+                crate::extensions::ExtensionCommand::Input {
+                    event_id, value, ..
+                } => Some((event_id.as_str(), value.is_none())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(events, vec![("child", true)]);
+    }
 
     #[test]
     fn pure_mapping_descriptors_cover_all_branches() {

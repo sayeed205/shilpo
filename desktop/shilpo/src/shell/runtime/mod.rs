@@ -21,6 +21,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[cfg(test)]
+use crate::extensions::ExtensionCommand;
 use crate::{
     extensions::ExtensionCoordinator,
     shell::dbus::{ShellCommand, ShellDbusService, ShellStatus, ShellTelemetry},
@@ -59,6 +61,13 @@ pub struct ShellRuntime {
 impl Global for ShellRuntime {}
 
 impl ShellRuntime {
+    #[cfg(test)]
+    pub(crate) fn take_test_extension_inputs(
+        cx: &App,
+    ) -> std::sync::Arc<std::sync::Mutex<Vec<ExtensionCommand>>> {
+        cx.global::<Self>().extension_host.test_inputs()
+    }
+
     #[cfg(test)]
     pub(crate) fn install_for_test(cx: &mut App) -> tokio::sync::mpsc::Sender<ShellCommand> {
         let root = std::env::temp_dir().join(format!(
