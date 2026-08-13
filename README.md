@@ -118,6 +118,21 @@ reduced_motion = false
 Set `transition_duration_ms = 0` or `reduced_motion = true` to apply theme changes immediately. Existing configuration
 files omit the new key safely; the default remains 300 ms.
 
+### Testing
+
+Run unit, integration, and property tests across the workspace:
+
+```bash
+cargo nextest run --workspace
+```
+
+- **Hermetic D-Bus P2P Harness**: D-Bus tests use an in-memory `UnixStream::pair()` harness and never connect to a system or session D-Bus daemon.
+- **Property-Based Testing**: `proptest` validates OKLCH color math, extension identity parsing/serde, and layered TOML config merge associativity.
+- **Failure Reproduction**: On failure, `proptest` writes the minimized case to a `proptest-regressions/*.txt` file beside the tested source. Keep that file and rerun the same test command; the persisted case runs before newly generated cases. To replay a reported RNG seed directly, use `PROPTEST_RNG_SEED`:
+
+```bash
+PROPTEST_RNG_SEED="0123456789abcdef..." cargo test -p shilpo-theme
+```
 
 ---
 

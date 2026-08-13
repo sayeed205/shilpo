@@ -34,6 +34,7 @@ shilpo-theme-daemon = { path = "desktop/theme-daemon" }
 shilpo-observability = { path = "desktop/observability" }
 tracing-chrome = "0.7"
 arc-swap = "1"
+roxmltree = "0.21"
 
 niri-ipc = "26"
 zbus = { version = "5", features = ["p2p"] }
@@ -116,6 +117,7 @@ wasmtime-wasi = { version = "47.0.2", default-features = false, features = ["p2"
 libpulse-binding = "2"
 ddc = "0.2"
 ddc-i2c = { version = "0.2", features = ["i2c-linux"] }
+proptest = "1"
 heed = "0.22"
 
 [workspace.dependencies.windows]

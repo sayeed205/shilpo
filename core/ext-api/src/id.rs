@@ -263,4 +263,118 @@ mod tests {
         let deserialized: CanonicalId = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, canonical);
     }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn is_valid_extension_id_oracle(s: &str) -> bool {
+            let parts: Vec<&str> = s.split('.').collect();
+            if parts.len() < 3 {
+                return false;
+            }
+            parts.iter().all(|seg| {
+                if seg.is_empty() {
+                    return false;
+                }
+                let first = seg.as_bytes()[0];
+                if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
+                    return false;
+                }
+                seg.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            })
+        }
+
+        fn is_valid_contribution_id_oracle(s: &str) -> bool {
+            if s.is_empty() {
+                return false;
+            }
+            let first = s.as_bytes()[0];
+            if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
+                return false;
+            }
+            s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+        }
+
+        fn is_valid_canonical_id_oracle(s: &str) -> bool {
+            let parts: Vec<&str> = s.split('/').collect();
+            if parts.len() != 2 {
+                return false;
+            }
+            is_valid_extension_id_oracle(parts[0]) && is_valid_contribution_id_oracle(parts[1])
+        }
+
+        proptest! {
+            #[test]
+            fn test_extension_id_round_trip_and_oracle(
+                segments in prop::collection::vec("[a-z0-9][a-z0-9-]{0,6}", 3..=6)
+            ) {
+                let s = segments.join(".");
+                prop_assert!(is_valid_extension_id_oracle(&s));
+                let id = ExtensionId::new(&s).expect("valid extension id");
+                prop_assert_eq!(id.as_str(), s.as_str());
+                prop_assert_eq!(id.to_string(), s.as_str());
+
+                let reconstructed = ExtensionId::new(id.to_string()).expect("reconstructed extension id");
+                prop_assert_eq!(&id, &reconstructed);
+
+                let json = serde_json::to_string(&id).expect("json serialize");
+                let deserialized: ExtensionId = serde_json::from_str(&json).expect("json deserialize");
+                prop_assert_eq!(id, deserialized);
+            }
+
+            #[test]
+            fn test_contribution_id_round_trip_and_oracle(
+                s in "[a-z0-9][a-z0-9_-]{0,12}"
+            ) {
+                prop_assert!(is_valid_contribution_id_oracle(&s));
+                let id = ContributionId::new(&s).expect("valid contribution id");
+                prop_assert_eq!(id.as_str(), s.as_str());
+                prop_assert_eq!(id.to_string(), s.as_str());
+
+                let reconstructed = ContributionId::new(id.to_string()).expect("reconstructed contribution id");
+                prop_assert_eq!(&id, &reconstructed);
+
+                let json = serde_json::to_string(&id).expect("json serialize");
+                let deserialized: ContributionId = serde_json::from_str(&json).expect("json deserialize");
+                prop_assert_eq!(id, deserialized);
+            }
+
+            #[test]
+            fn test_canonical_id_round_trip_and_oracle(
+                ext_s in "[a-z0-9][a-z0-9-]{0,6}\\.[a-z0-9][a-z0-9-]{0,6}\\.[a-z0-9][a-z0-9-]{0,6}",
+                contrib_s in "[a-z0-9][a-z0-9_-]{0,12}",
+            ) {
+                let combined = format!("{ext_s}/{contrib_s}");
+                prop_assert!(is_valid_canonical_id_oracle(&combined));
+
+                let ext = ExtensionId::new(&ext_s).unwrap();
+                let contrib = ContributionId::new(&contrib_s).unwrap();
+                let canonical = CanonicalId::new(ext, contrib);
+
+                prop_assert_eq!(canonical.to_string(), combined.as_str());
+
+                let parsed: CanonicalId = combined.parse().expect("parse canonical id");
+                prop_assert_eq!(&canonical, &parsed);
+
+                let json = serde_json::to_string(&canonical).expect("json serialize");
+                let deserialized: CanonicalId = serde_json::from_str(&json).expect("json deserialize");
+                prop_assert_eq!(canonical, deserialized);
+            }
+
+            #[test]
+            fn test_arbitrary_string_parsing_no_panic(s in "\\PC{0,96}") {
+                let ext_res = ExtensionId::new(&s);
+                prop_assert_eq!(ext_res.is_ok(), is_valid_extension_id_oracle(&s));
+
+                let contrib_res = ContributionId::new(&s);
+                prop_assert_eq!(contrib_res.is_ok(), is_valid_contribution_id_oracle(&s));
+
+                let canonical_res: Result<CanonicalId, _> = s.parse();
+                prop_assert_eq!(canonical_res.is_ok(), is_valid_canonical_id_oracle(&s));
+            }
+        }
+    }
 }

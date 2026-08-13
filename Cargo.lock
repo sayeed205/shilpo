@@ -3181,7 +3181,7 @@ dependencies = [
  "pollster 0.4.0",
  "postage",
  "profiling",
- "proptest",
+ "proptest 1.10.0",
  "rand 0.9.5",
  "raw-window-handle",
  "refineable",
@@ -6480,6 +6480,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "proptest"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
+dependencies = [
+ "bit-set 0.8.0",
+ "bit-vec 0.8.0",
+ "bitflags 2.13.1",
+ "num-traits",
+ "rand 0.9.5",
+ "rand_chacha 0.9.0",
+ "rand_xorshift",
+ "regex-syntax",
+ "rusty-fork",
+ "tempfile",
+ "unarray",
+]
+
+[[package]]
 name = "proptest-macro"
 version = "0.5.0"
 source = "git+https://github.com/proptest-rs/proptest?rev=3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b#3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b"
@@ -7856,7 +7875,9 @@ dependencies = [
  "log",
  "niri-ipc",
  "notify",
+ "proptest 1.11.0",
  "resvg 0.48.1",
+ "roxmltree 0.21.1",
  "rust-embed",
  "schemars",
  "semver",
@@ -7902,6 +7923,7 @@ dependencies = [
 name = "shilpo-ext-api"
 version = "0.1.0"
 dependencies = [
+ "proptest 1.11.0",
  "schemars",
  "semver",
  "serde",
@@ -8008,6 +8030,7 @@ name = "shilpo-theme"
 version = "0.1.0"
 dependencies = [
  "mcu-material-color",
+ "proptest 1.11.0",
  "schemars",
  "serde",
  "serde_json",

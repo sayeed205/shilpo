@@ -167,7 +167,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
                 if target_colors == start_colors {
                     TRANSITION_GATE.supersede();
                     shilpo_ui::Theme::global_mut(cx).apply_state(&state);
-                    CURRENT_REVISION.store(state.revision, Ordering::SeqCst);
+                    TRANSITION_GATE.commit_revision(state.revision);
                     return None;
                 }
 
