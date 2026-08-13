@@ -489,7 +489,36 @@ fn action_id(id: BuiltinActionId) -> ActionId {
     }
 }
 
-/// Representation of a parsed key combination shortcut (e.g. "super+space").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShortcutOrigin {
+    User,
+    BuiltinDefault,
+    ExtensionDefault,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedShortcut {
+    pub action_id: ActionId,
+    pub shortcut: Shortcut,
+    pub origin: ShortcutOrigin,
+    pub extension_id: Option<shilpo_ext_api::ExtensionId>,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeybindingDiagnostic {
+    pub action_id: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeybindingReconciliationReport {
+    pub resolved: Vec<ResolvedShortcut>,
+    pub diagnostics: Vec<KeybindingDiagnostic>,
+}
+
+/// Representation of a parsed key combination shortcut (e.g. "Super+Space").
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Shortcut {
     pub modifiers: Vec<String>,
@@ -498,16 +527,13 @@ pub struct Shortcut {
 
 impl Shortcut {
     pub fn parse(spec: &str) -> Option<Self> {
-        let parts: Vec<&str> = spec.split('+').map(|s| s.trim()).collect();
-        if parts.is_empty() || parts.iter().any(|p| p.is_empty()) {
-            return None;
-        }
-        let key = parts.last()?.to_lowercase();
-        let mut modifiers: Vec<String> = parts[..parts.len() - 1]
+        let canonical = shilpo_ext_api::manifest::validate_shortcut_spec(spec).ok()?;
+        let parts: Vec<&str> = canonical.split('+').collect();
+        let key = parts.last()?.to_string();
+        let modifiers = parts[..parts.len() - 1]
             .iter()
-            .map(|m| m.to_lowercase())
+            .map(|s| s.to_string())
             .collect();
-        modifiers.sort();
         Some(Self { modifiers, key })
     }
 
@@ -521,93 +547,219 @@ impl Shortcut {
 }
 
 /// Global lifecycle manager for shell keybindings and shortcut dispatch.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct KeybindingManager {
-    bindings: std::collections::HashMap<Shortcut, ActionId>,
-}
-
-impl Default for KeybindingManager {
-    fn default() -> Self {
-        Self::with_defaults()
-    }
+    bindings_by_shortcut: std::collections::HashMap<Shortcut, ActionId>,
+    resolved: Vec<ResolvedShortcut>,
 }
 
 impl KeybindingManager {
     pub fn new() -> Self {
-        Self {
-            bindings: std::collections::HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn with_defaults() -> Self {
         let mut mgr = Self::new();
-        let defaults = [
-            ("super+space", ActionId::ToggleOverview),
-            ("super+b", ActionId::ToggleBar),
-            ("super+shift+r", ActionId::ReloadConfig),
-            ("super+shift+q", ActionId::Quit),
-        ];
-
-        for (spec, action) in defaults {
-            if let Some(shortcut) = Shortcut::parse(spec) {
-                let _ = mgr.register(shortcut, action);
-            }
-        }
+        mgr.reconcile(&[], &ActionRegistry::default().all(), &[]);
         mgr
     }
 
-    pub fn register(&mut self, shortcut: Shortcut, action: ActionId) -> Result<(), String> {
-        if let Some(existing) = self.bindings.get(&shortcut)
-            && *existing != action
-        {
-            return Err(format!(
-                "shortcut conflict for '{}': already bound to '{:?}'",
-                shortcut.to_spec(),
-                existing
-            ));
+    pub fn reconcile(
+        &mut self,
+        user_bindings: &[crate::config::KeybindingConfig],
+        builtin_actions: &[ActionDescriptor],
+        extension_shortcuts: &[shilpo_ext_runtime::worker::protocol::ContributionDescriptor],
+    ) -> KeybindingReconciliationReport {
+        let mut report = KeybindingReconciliationReport::default();
+        let previous_resolved = self.resolved.clone();
+        let previous_bindings = self.bindings_by_shortcut.clone();
+        let mut invalid_user_binding = false;
+        let mut candidates: Vec<(
+            u8,
+            ActionId,
+            Shortcut,
+            ShortcutOrigin,
+            String,
+            Option<shilpo_ext_api::ExtensionId>,
+        )> = Vec::new();
+        let mut disabled_actions: std::collections::HashSet<ActionId> =
+            std::collections::HashSet::new();
+
+        // 1. Explicit user bindings (Precedence: User)
+        for kb in user_bindings {
+            let Ok(action_id) = kb.action.parse::<ActionId>() else {
+                invalid_user_binding = true;
+                report.diagnostics.push(KeybindingDiagnostic {
+                    action_id: kb.action.clone(),
+                    message: format!("user keybinding action ID '{}' is malformed", kb.action),
+                });
+                continue;
+            };
+
+            let is_known = builtin_actions.iter().any(|b| b.id == action_id)
+                || extension_shortcuts.iter().any(|s| {
+                    s.action
+                        .as_ref()
+                        .is_some_and(|target| ActionId::extension(target.clone()) == action_id)
+                });
+            if !is_known {
+                report.diagnostics.push(KeybindingDiagnostic {
+                    action_id: action_id.to_string(),
+                    message: format!(
+                        "user keybinding action '{action_id}' is currently unavailable"
+                    ),
+                });
+                continue;
+            }
+
+            if !kb.enabled {
+                disabled_actions.insert(action_id);
+            } else if let Some(spec) = &kb.shortcut
+                && let Some(shortcut) = Shortcut::parse(spec)
+            {
+                let name = builtin_actions
+                    .iter()
+                    .find(|b| b.id == action_id)
+                    .map(|b| b.label.clone())
+                    .or_else(|| {
+                        extension_shortcuts
+                            .iter()
+                            .find(|s| {
+                                s.action.as_ref().is_some_and(|target| {
+                                    ActionId::extension(target.clone()) == action_id
+                                })
+                            })
+                            .map(|s| s.name.clone())
+                    })
+                    .unwrap_or_else(|| action_id.name().to_string());
+
+                let ext_id = action_id.extension_id().map(|c| c.extension_id);
+                candidates.push((0, action_id, shortcut, ShortcutOrigin::User, name, ext_id));
+            } else if kb.enabled {
+                invalid_user_binding = true;
+            }
         }
-        self.bindings.insert(shortcut, action);
-        Ok(())
+
+        // Built-in defaults mapping
+        let builtin_defaults: &[(&str, ActionId)] = &[
+            ("Super+Space", ActionId::ToggleOverview),
+            ("Super+B", ActionId::ToggleBar),
+            ("Super+Shift+R", ActionId::ReloadConfig),
+            ("Super+Shift+Q", ActionId::Quit),
+        ];
+
+        // 2. Built-in defaults (Precedence: BuiltinDefault)
+        for (spec, action_id) in builtin_defaults {
+            if disabled_actions.contains(action_id)
+                || candidates.iter().any(|(_, id, ..)| id == action_id)
+            {
+                continue;
+            }
+            if let Some(desc) = builtin_actions.iter().find(|b| b.id == *action_id)
+                && let Some(shortcut) = Shortcut::parse(spec)
+            {
+                candidates.push((
+                    1,
+                    action_id.clone(),
+                    shortcut,
+                    ShortcutOrigin::BuiltinDefault,
+                    desc.label.clone(),
+                    None,
+                ));
+            }
+        }
+
+        // 3. Extension-recommended defaults (Precedence: ExtensionDefault)
+        for desc in extension_shortcuts {
+            if desc.surface != shilpo_ext_runtime::worker::protocol::ContributionSurface::Shortcut {
+                continue;
+            }
+            let Some(target_canonical) = &desc.action else {
+                continue;
+            };
+            let action_id = ActionId::extension(target_canonical.clone());
+            if disabled_actions.contains(&action_id)
+                || candidates.iter().any(|(_, id, ..)| id == &action_id)
+            {
+                continue;
+            }
+            if let Some(spec) = &desc.default_binding
+                && let Some(shortcut) = Shortcut::parse(spec)
+            {
+                candidates.push((
+                    2,
+                    action_id,
+                    shortcut,
+                    ShortcutOrigin::ExtensionDefault,
+                    desc.name.clone(),
+                    Some(target_canonical.extension_id.clone()),
+                ));
+            }
+        }
+
+        // 4. Resolve conflicts deterministically
+        let mut used_shortcuts: std::collections::HashMap<Shortcut, ActionId> =
+            std::collections::HashMap::new();
+        let mut resolved_list = Vec::new();
+
+        candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        for (_, action_id, shortcut, origin, name, ext_id) in candidates {
+            if let Some(existing_action_id) = used_shortcuts.get(&shortcut) {
+                report.diagnostics.push(KeybindingDiagnostic {
+                    action_id: action_id.to_string(),
+                    message: format!(
+                        "shortcut '{}' for action '{action_id}' ({origin:?}) collides with higher-precedence binding for action '{existing_action_id}'",
+                        shortcut.to_spec()
+                    ),
+                });
+            } else {
+                used_shortcuts.insert(shortcut.clone(), action_id.clone());
+                resolved_list.push(ResolvedShortcut {
+                    action_id,
+                    shortcut,
+                    origin,
+                    extension_id: ext_id,
+                    name,
+                });
+            }
+        }
+
+        if invalid_user_binding {
+            self.bindings_by_shortcut = previous_bindings;
+            self.resolved = previous_resolved.clone();
+            report.resolved = previous_resolved;
+        } else {
+            self.bindings_by_shortcut = used_shortcuts;
+            self.resolved = resolved_list.clone();
+            report.resolved = resolved_list;
+        }
+        report
     }
 
-    pub fn unregister(&mut self, shortcut: &Shortcut) -> Option<ActionId> {
-        self.bindings.remove(shortcut)
+    pub fn resolved_shortcuts(&self) -> &[ResolvedShortcut] {
+        &self.resolved
     }
 
     pub fn action_for(&self, shortcut: &Shortcut) -> Option<ActionId> {
-        self.bindings.get(shortcut).cloned()
+        self.bindings_by_shortcut.get(shortcut).cloned()
     }
 
-    pub fn register_with_override(
-        &mut self,
-        shortcut: Shortcut,
-        action: ActionId,
-    ) -> Option<ActionId> {
-        self.bindings.insert(shortcut, action)
+    pub fn shortcut_for(&self, action: &ActionId) -> Option<Shortcut> {
+        self.resolved
+            .iter()
+            .find(|r| r.action_id == *action)
+            .map(|r| r.shortcut.clone())
     }
 
-    pub fn find_conflict(&self, shortcut: &Shortcut, action: ActionId) -> Option<ActionId> {
-        if let Some(existing) = self.bindings.get(shortcut)
-            && existing != &action
-        {
-            Some(existing.clone())
-        } else {
-            None
-        }
+    pub fn keybinding_descriptors(&self) -> Vec<(String, String)> {
+        self.resolved
+            .iter()
+            .map(|r| (r.shortcut.to_spec(), r.name.clone()))
+            .collect()
     }
 
     pub fn reset_to_defaults(&mut self) {
         *self = Self::with_defaults();
-    }
-
-    pub fn bindings(&self) -> &std::collections::HashMap<Shortcut, ActionId> {
-        &self.bindings
-    }
-
-    pub fn shortcut_for(&self, action: &ActionId) -> Option<Shortcut> {
-        self.bindings
-            .iter()
-            .find_map(|(s, a)| (a == action).then(|| s.clone()))
     }
 }
 
@@ -862,42 +1014,96 @@ mod tests {
 
     #[test]
     fn shortcut_parsing_and_keybinding_defaults() {
-        let sc = Shortcut::parse("Super + Space").unwrap();
-        assert_eq!(sc.modifiers, vec!["super"]);
-        assert_eq!(sc.key, "space");
-        assert_eq!(sc.to_spec(), "super+space");
+        let sc = Shortcut::parse("Super+Space").unwrap();
+        assert_eq!(sc.modifiers, vec!["Super"]);
+        assert_eq!(sc.key, "Space");
+        assert_eq!(sc.to_spec(), "Super+Space");
 
         let mgr = KeybindingManager::with_defaults();
         assert_eq!(mgr.action_for(&sc), Some(ActionId::ToggleOverview));
 
-        let sc_bar = Shortcut::parse("super+b").unwrap();
+        let sc_bar = Shortcut::parse("Super+B").unwrap();
         assert_eq!(mgr.action_for(&sc_bar), Some(ActionId::ToggleBar));
     }
 
     #[test]
-    fn shortcut_conflict_detection() {
+    fn shortcut_conflict_detection_and_precedence() {
         let mut mgr = KeybindingManager::new();
-        let sc = Shortcut::parse("super+b").unwrap();
-        assert!(mgr.register(sc.clone(), ActionId::ToggleBar).is_ok());
+        let user_bindings = vec![crate::config::KeybindingConfig {
+            action: "builtin:toggle_bar".into(),
+            shortcut: Some("Super+Space".into()),
+            enabled: true,
+        }];
+        let builtin_actions = ActionRegistry::default().all();
 
-        // Conflict registration should fail with diagnostic
-        let err = mgr.register(sc, ActionId::Quit).unwrap_err();
-        assert!(err.contains("conflict"));
+        let report = mgr.reconcile(&user_bindings, &builtin_actions, &[]);
+        let sc_space = Shortcut::parse("Super+Space").unwrap();
+
+        // User binding for toggle_bar overrides built-in default for toggle_overview
+        assert_eq!(mgr.action_for(&sc_space), Some(ActionId::ToggleBar));
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("collides"))
+        );
     }
 
     #[test]
-    fn shortcut_conflict_query_and_reset_to_defaults() {
-        let mut mgr = KeybindingManager::with_defaults();
-        let sc = Shortcut::parse("super+space").unwrap();
+    fn user_extension_binding_beats_builtin_and_extension_defaults() {
+        let extension_id = shilpo_ext_api::ExtensionId::new("io.example.shortcuts").unwrap();
+        let contribution = shilpo_ext_api::ContributionId::new("open").unwrap();
+        let canonical = shilpo_ext_api::CanonicalId::new(extension_id, contribution);
+        let action_id = ActionId::extension(canonical.clone());
+        let descriptor = shilpo_ext_runtime::worker::protocol::ContributionDescriptor {
+            id: canonical.clone(),
+            extension_name: "Example".into(),
+            name: "Open panel".into(),
+            surface: shilpo_ext_runtime::worker::protocol::ContributionSurface::Shortcut,
+            settings_schema: None,
+            default_size: None,
+            minimum_size: None,
+            bar_widget: None,
+            action: Some(canonical),
+            default_binding: Some("Super+Space".into()),
+        };
+        let mut manager = KeybindingManager::new();
+        let user = vec![crate::config::KeybindingConfig {
+            action: action_id.to_string(),
+            shortcut: Some("Super+Space".into()),
+            enabled: true,
+        }];
+        let report = manager.reconcile(&user, &ActionRegistry::default().all(), &[descriptor]);
+        assert_eq!(
+            manager.action_for(&Shortcut::parse("Super+Space").unwrap()),
+            Some(action_id)
+        );
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("collides"))
+        );
+    }
 
-        let conflict = mgr.find_conflict(&sc, ActionId::Quit);
-        assert_eq!(conflict, Some(ActionId::ToggleOverview));
+    #[test]
+    fn shortcut_reset_to_defaults() {
+        let mut mgr = KeybindingManager::new();
+        let user_bindings = vec![crate::config::KeybindingConfig {
+            action: "builtin:toggle_overview".into(),
+            shortcut: Some("Super+A".into()),
+            enabled: true,
+        }];
+        let builtin_actions = ActionRegistry::default().all();
+        mgr.reconcile(&user_bindings, &builtin_actions, &[]);
 
-        let _ = mgr.unregister(&sc);
-        assert_eq!(mgr.action_for(&sc), None);
+        let sc_a = Shortcut::parse("Super+A").unwrap();
+        assert_eq!(mgr.action_for(&sc_a), Some(ActionId::ToggleOverview));
 
         mgr.reset_to_defaults();
-        assert_eq!(mgr.action_for(&sc), Some(ActionId::ToggleOverview));
+        assert_eq!(mgr.action_for(&sc_a), None);
+        let sc_space = Shortcut::parse("Super+Space").unwrap();
+        assert_eq!(mgr.action_for(&sc_space), Some(ActionId::ToggleOverview));
     }
 
     #[test]

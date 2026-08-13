@@ -622,6 +622,59 @@ start = ["builtin:workspaces"]
     }
 
     #[test]
+    fn keybindings_config_validation_and_parsing() {
+        let mut config = ShellConfig::default();
+        config.keybindings.push(KeybindingConfig {
+            action: "ext:io.github.alice.weather/toggle-weather".into(),
+            shortcut: Some("Super+W".into()),
+            enabled: true,
+        });
+        config.keybindings.push(KeybindingConfig {
+            action: "builtin:toggle_bar".into(),
+            shortcut: None,
+            enabled: false,
+        });
+        assert!(config.validate().is_ok());
+
+        // Enabled keybinding missing shortcut
+        let mut invalid_1 = ShellConfig::default();
+        invalid_1.keybindings.push(KeybindingConfig {
+            action: "builtin:toggle_bar".into(),
+            shortcut: None,
+            enabled: true,
+        });
+        assert!(invalid_1.validate().is_err());
+
+        // Duplicate action entries
+        let mut invalid_2 = ShellConfig::default();
+        invalid_2.keybindings.push(KeybindingConfig {
+            action: "builtin:toggle_bar".into(),
+            shortcut: Some("Super+B".into()),
+            enabled: true,
+        });
+        invalid_2.keybindings.push(KeybindingConfig {
+            action: "builtin:toggle_bar".into(),
+            shortcut: Some("Super+Shift+B".into()),
+            enabled: true,
+        });
+        assert!(invalid_2.validate().is_err());
+
+        // Duplicate shortcut bindings
+        let mut invalid_3 = ShellConfig::default();
+        invalid_3.keybindings.push(KeybindingConfig {
+            action: "builtin:toggle_bar".into(),
+            shortcut: Some("Super+W".into()),
+            enabled: true,
+        });
+        invalid_3.keybindings.push(KeybindingConfig {
+            action: "builtin:toggle_overview".into(),
+            shortcut: Some("super+w".into()),
+            enabled: true,
+        });
+        assert!(invalid_3.validate().is_err());
+    }
+
+    #[test]
     fn per_output_config_overrides_and_disabled() {
         let toml_text = r##"
 version = 1

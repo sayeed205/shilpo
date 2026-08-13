@@ -739,6 +739,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_size: None,
                     minimum_size: None,
                     bar_widget: None,
+                    action: None,
+                    default_binding: None,
                 });
             }
             for contrib in &m.contributions.bar_menus {
@@ -751,6 +753,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_size: None,
                     minimum_size: None,
                     bar_widget: Some(CanonicalId::new(ext_id.clone(), contrib.bar_widget.clone())),
+                    action: None,
+                    default_binding: None,
                 });
             }
             for contrib in &m.contributions.desktop_widgets {
@@ -771,6 +775,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_size,
                     minimum_size,
                     bar_widget: None,
+                    action: None,
+                    default_binding: None,
                 });
             }
             for contrib in &m.contributions.settings_pages {
@@ -790,6 +796,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_size: None,
                     minimum_size: None,
                     bar_widget: None,
+                    action: None,
+                    default_binding: None,
                 });
             }
             for contrib in &m.contributions.side_panels {
@@ -802,6 +810,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_size: None,
                     minimum_size: None,
                     bar_widget: None,
+                    action: None,
+                    default_binding: None,
                 });
             }
             for contrib in &m.contributions.launcher_providers {
@@ -814,6 +824,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_size: None,
                     minimum_size: None,
                     bar_widget: None,
+                    action: None,
+                    default_binding: None,
                 });
             }
             for contrib in &m.contributions.actions {
@@ -826,6 +838,22 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_size: None,
                     minimum_size: None,
                     bar_widget: None,
+                    action: None,
+                    default_binding: None,
+                });
+            }
+            for contrib in &m.contributions.keyboard_shortcuts {
+                descriptors.push(ContributionDescriptor {
+                    id: CanonicalId::new(ext_id.clone(), contrib.id.clone()),
+                    extension_name: m.name.clone(),
+                    name: contrib.name.clone(),
+                    surface: ContributionSurface::Shortcut,
+                    settings_schema: None,
+                    default_size: None,
+                    minimum_size: None,
+                    bar_widget: None,
+                    action: Some(CanonicalId::new(ext_id.clone(), contrib.action.clone())),
+                    default_binding: contrib.default_binding.clone(),
                 });
             }
             for contrib in &m.contributions.background_tasks {
@@ -838,6 +866,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_size: None,
                     minimum_size: None,
                     bar_widget: None,
+                    action: None,
+                    default_binding: None,
                 });
             }
         }
@@ -1199,5 +1229,116 @@ mod tests {
             &session.views[&menu].root,
             ViewNode::Text(node) if node.content == "reloaded"
         ));
+    }
+
+    #[test]
+    fn shortcut_worker_snapshot_metadata_and_isolation() {
+        let manifest_toml_1 = r#"
+            id = "io.github.alice.weather"
+            name = "Alice Weather"
+            version = "1.0.0"
+
+            [[contributions.actions]]
+            id = "toggle-action"
+            name = "Toggle Weather Action"
+
+            [[contributions.keyboard_shortcuts]]
+            id = "toggle-shortcut"
+            name = "Toggle Weather Shortcut"
+            action = "toggle-action"
+            default_binding = "Super+Shift+W"
+        "#;
+        let manifest_toml_2 = r#"
+            id = "io.github.bob.clock"
+            name = "Bob Clock"
+            version = "1.0.0"
+
+            [[contributions.actions]]
+            id = "toggle-action"
+            name = "Toggle Clock Action"
+
+            [[contributions.keyboard_shortcuts]]
+            id = "toggle-shortcut"
+            name = "Toggle Clock Shortcut"
+            action = "toggle-action"
+            default_binding = "Super+Shift+C"
+        "#;
+
+        let m1 = ExtensionManifest::from_toml(manifest_toml_1).unwrap();
+        let m2 = ExtensionManifest::from_toml(manifest_toml_2).unwrap();
+
+        let temp_dir = std::env::temp_dir();
+        let mut engine = ExtensionEngine::new(
+            InMemoryRuntime::new(),
+            CatalogPaths::new(&temp_dir, &temp_dir),
+        )
+        .unwrap();
+
+        engine.active_sources.insert(
+            m1.id.clone(),
+            ActiveSource {
+                manifest: m1.clone(),
+                root: PathBuf::from("/tmp/alice"),
+                grants: Vec::new(),
+                fingerprint: 1,
+            },
+        );
+        engine.active_sources.insert(
+            m2.id.clone(),
+            ActiveSource {
+                manifest: m2.clone(),
+                root: PathBuf::from("/tmp/bob"),
+                grants: Vec::new(),
+                fingerprint: 2,
+            },
+        );
+
+        let snapshot = engine.build_snapshot(false);
+        let shortcuts: Vec<_> = snapshot
+            .descriptors
+            .iter()
+            .filter(|d| d.surface == ContributionSurface::Shortcut)
+            .collect();
+
+        assert_eq!(shortcuts.len(), 2);
+
+        let alice_sc = shortcuts
+            .iter()
+            .find(|d| d.id.extension_id.as_str() == "io.github.alice.weather")
+            .unwrap();
+        assert_eq!(
+            alice_sc.id.to_string(),
+            "io.github.alice.weather/toggle-shortcut"
+        );
+        assert_eq!(
+            alice_sc.action.as_ref().map(ToString::to_string),
+            Some("io.github.alice.weather/toggle-action".into())
+        );
+        assert_eq!(alice_sc.default_binding.as_deref(), Some("Super+Shift+W"));
+
+        let bob_sc = shortcuts
+            .iter()
+            .find(|d| d.id.extension_id.as_str() == "io.github.bob.clock")
+            .unwrap();
+        assert_eq!(bob_sc.id.to_string(), "io.github.bob.clock/toggle-shortcut");
+        assert_eq!(
+            bob_sc.action.as_ref().map(ToString::to_string),
+            Some("io.github.bob.clock/toggle-action".into())
+        );
+        assert_eq!(bob_sc.default_binding.as_deref(), Some("Super+Shift+C"));
+
+        // Unload bob: remove from active_sources
+        engine.active_sources.remove(&m2.id);
+        let snapshot_after_unload = engine.build_snapshot(false);
+        let shortcuts_after_unload: Vec<_> = snapshot_after_unload
+            .descriptors
+            .iter()
+            .filter(|d| d.surface == ContributionSurface::Shortcut)
+            .collect();
+        assert_eq!(shortcuts_after_unload.len(), 1);
+        assert_eq!(
+            shortcuts_after_unload[0].id.to_string(),
+            "io.github.alice.weather/toggle-shortcut"
+        );
     }
 }

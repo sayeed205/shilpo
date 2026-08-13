@@ -11,4 +11,5 @@
 - **ViewTree (`ViewTree`)**: Declarative UI tree family emitted by extensions for UI contributions.
 - **Bar Menu**: A `ViewTree` supplementary surface linked to one bar-widget contribution and projected by the Shell into
   the persistent card channel. Its geometry is host-measured and host-bounded, not declared by the extension.
+- **Keyboard Shortcut Contribution (`KeyboardShortcutContribution`)**: Recommended default shortcut binding targeting an action contribution within the same extension.
 - **WIT Interface (`extension.wit`)**: Canonical WIT interface definition (`shilpo:extension@0.1.0`) defining the guest/host component boundary.

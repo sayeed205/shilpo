@@ -30,6 +30,11 @@ pub trait Shell {
     async fn get_status(&self) -> zbus::Result<ShellStatus>;
     async fn get_telemetry(&self) -> zbus::Result<ShellTelemetry>;
     async fn capture(&self, intent: String) -> zbus::Result<()>;
+    async fn invoke_action(
+        &self,
+        action_id: String,
+        payload_json: Option<String>,
+    ) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn shell_started(&self, instance_id: String, pid: u32) -> zbus::Result<()>;

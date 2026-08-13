@@ -101,6 +101,8 @@ pub struct Contributions {
     #[serde(default)]
     pub actions: Vec<ActionContribution>,
     #[serde(default)]
+    pub keyboard_shortcuts: Vec<KeyboardShortcutContribution>,
+    #[serde(default)]
     pub background_tasks: Vec<BackgroundTaskContribution>,
 }
 
@@ -134,6 +136,16 @@ named_contribution!(SidePanelContribution {});
 named_contribution!(LauncherProviderContribution {});
 named_contribution!(ActionContribution {});
 named_contribution!(BackgroundTaskContribution {});
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct KeyboardShortcutContribution {
+    pub id: ContributionId,
+    pub name: String,
+    pub action: ContributionId,
+    #[serde(default)]
+    pub default_binding: Option<String>,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
 #[serde(deny_unknown_fields)]
@@ -299,6 +311,11 @@ impl Contributions {
                     .map(|entry| (&entry.id, entry.name.as_str())),
             )
             .chain(
+                self.keyboard_shortcuts
+                    .iter()
+                    .map(|entry| (&entry.id, entry.name.as_str())),
+            )
+            .chain(
                 self.background_tasks
                     .iter()
                     .map(|entry| (&entry.id, entry.name.as_str())),
@@ -307,6 +324,99 @@ impl Contributions {
 
     pub fn contains(&self, id: &ContributionId) -> bool {
         self.entries().any(|(candidate, _)| candidate == id)
+    }
+}
+
+pub fn validate_shortcut_spec(spec: &str) -> Result<String, String> {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+        return Err("shortcut specification cannot be empty".into());
+    }
+    let parts: Vec<&str> = trimmed.split('+').map(|s| s.trim()).collect();
+    if parts.iter().any(|p| p.is_empty()) {
+        return Err("shortcut contains an empty key or modifier".into());
+    }
+
+    let mut super_mod = false;
+    let mut ctrl_mod = false;
+    let mut alt_mod = false;
+    let mut shift_mod = false;
+    let mut non_modifiers = Vec::new();
+
+    for part in parts {
+        match part.to_lowercase().as_str() {
+            "super" | "mod" | "meta" => {
+                if super_mod {
+                    return Err("duplicate modifier 'Super'".into());
+                }
+                super_mod = true;
+            }
+            "ctrl" | "control" => {
+                if ctrl_mod {
+                    return Err("duplicate modifier 'Ctrl'".into());
+                }
+                ctrl_mod = true;
+            }
+            "alt" => {
+                if alt_mod {
+                    return Err("duplicate modifier 'Alt'".into());
+                }
+                alt_mod = true;
+            }
+            "shift" => {
+                if shift_mod {
+                    return Err("duplicate modifier 'Shift'".into());
+                }
+                shift_mod = true;
+            }
+            _ => {
+                non_modifiers.push(part);
+            }
+        }
+    }
+
+    if non_modifiers.len() != 1 {
+        return Err(format!(
+            "shortcut must have exactly one main key, found {}",
+            non_modifiers.len()
+        ));
+    }
+
+    let mut canonical_mods = Vec::new();
+    if super_mod {
+        canonical_mods.push("Super");
+    }
+    if ctrl_mod {
+        canonical_mods.push("Ctrl");
+    }
+    if alt_mod {
+        canonical_mods.push("Alt");
+    }
+    if shift_mod {
+        canonical_mods.push("Shift");
+    }
+
+    let key = non_modifiers[0];
+    if key
+        .chars()
+        .any(|c| matches!(c, '"' | '\\' | '\n' | '\r' | '{' | '}' | ';'))
+    {
+        return Err("shortcut key contains a character unsafe for compositor projection".into());
+    }
+    let canonical_key = if key.len() == 1 {
+        key.to_uppercase()
+    } else {
+        let mut chars = key.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        }
+    };
+
+    if canonical_mods.is_empty() {
+        Ok(canonical_key)
+    } else {
+        Ok(format!("{}+{}", canonical_mods.join("+"), canonical_key))
     }
 }
 
@@ -392,6 +502,27 @@ impl ExtensionManifest {
                     "desktop widget '{}' default height is below its minimum",
                     widget.id
                 )));
+            }
+        }
+        for shortcut in &self.contributions.keyboard_shortcuts {
+            let target_exists = self
+                .contributions
+                .actions
+                .iter()
+                .any(|action| action.id == shortcut.action);
+            if !target_exists {
+                return Err(ManifestError::Validation(format!(
+                    "keyboard shortcut '{}' targets unknown action '{}'",
+                    shortcut.id, shortcut.action
+                )));
+            }
+            if let Some(binding) = &shortcut.default_binding {
+                validate_shortcut_spec(binding).map_err(|err| {
+                    ManifestError::Validation(format!(
+                        "keyboard shortcut '{}' default binding is invalid: {err}",
+                        shortcut.id
+                    ))
+                })?;
             }
         }
 
@@ -736,5 +867,106 @@ mod tests {
         "#;
         let err = ExtensionManifest::from_toml(toml).unwrap_err();
         assert!(matches!(err, ManifestError::ParseError(_)));
+    }
+
+    #[test]
+    fn test_valid_keyboard_shortcut_manifest() {
+        let toml = r#"
+            id = "org.shilpo.weather"
+            name = "Weather App"
+            version = "1.0.0"
+
+            [[contributions.actions]]
+            id = "toggle-weather"
+            name = "Toggle Weather"
+
+            [[contributions.keyboard_shortcuts]]
+            id = "toggle-weather-shortcut"
+            name = "Toggle Weather Shortcut"
+            action = "toggle-weather"
+            default_binding = "Super+Shift+W"
+
+            [[contributions.keyboard_shortcuts]]
+            id = "unbound-shortcut"
+            name = "Unbound Shortcut"
+            action = "toggle-weather"
+        "#;
+        let manifest = ExtensionManifest::from_toml(toml).unwrap();
+        assert_eq!(manifest.contributions.keyboard_shortcuts.len(), 2);
+        assert_eq!(
+            manifest.contributions.keyboard_shortcuts[0].id.as_str(),
+            "toggle-weather-shortcut"
+        );
+        assert_eq!(
+            manifest.contributions.keyboard_shortcuts[0].action.as_str(),
+            "toggle-weather"
+        );
+        assert_eq!(
+            manifest.contributions.keyboard_shortcuts[0]
+                .default_binding
+                .as_deref(),
+            Some("Super+Shift+W")
+        );
+        assert_eq!(
+            manifest.contributions.keyboard_shortcuts[1].default_binding,
+            None
+        );
+    }
+
+    #[test]
+    fn test_keyboard_shortcut_missing_target_action_fails() {
+        let toml = r#"
+            id = "org.shilpo.weather"
+            name = "Weather App"
+            version = "1.0.0"
+
+            [[contributions.keyboard_shortcuts]]
+            id = "shortcut-1"
+            name = "Shortcut 1"
+            action = "nonexistent-action"
+            default_binding = "Super+W"
+        "#;
+        let err = ExtensionManifest::from_toml(toml).unwrap_err();
+        assert!(err.to_string().contains("targets unknown action"));
+    }
+
+    #[test]
+    fn test_keyboard_shortcut_duplicate_contribution_id_fails() {
+        let toml = r#"
+            id = "org.shilpo.weather"
+            name = "Weather App"
+            version = "1.0.0"
+
+            [[contributions.actions]]
+            id = "toggle-weather"
+            name = "Toggle Weather"
+
+            [[contributions.keyboard_shortcuts]]
+            id = "toggle-weather"
+            name = "Shortcut with same ID as action"
+            action = "toggle-weather"
+        "#;
+        let err = ExtensionManifest::from_toml(toml).unwrap_err();
+        assert!(err.to_string().contains("duplicate contribution ID"));
+    }
+
+    #[test]
+    fn test_shortcut_spec_validation_and_canonicalization() {
+        assert_eq!(
+            validate_shortcut_spec("shift+super+w").unwrap(),
+            "Super+Shift+W"
+        );
+        assert_eq!(
+            validate_shortcut_spec("ctrl+alt+space").unwrap(),
+            "Ctrl+Alt+Space"
+        );
+        assert_eq!(validate_shortcut_spec("super+b").unwrap(), "Super+B");
+
+        assert!(validate_shortcut_spec("").is_err());
+        assert!(validate_shortcut_spec("Super+").is_err());
+        assert!(validate_shortcut_spec("Super+Ctrl").is_err());
+        assert!(validate_shortcut_spec("Super+Super+A").is_err());
+        assert!(validate_shortcut_spec("Super+A+B").is_err());
+        assert!(validate_shortcut_spec("Super+bad\"key").is_err());
     }
 }

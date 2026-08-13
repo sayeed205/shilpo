@@ -3,8 +3,8 @@ use shilpo::cli::adapters::{
     self, DoctorChecker, ExtAdapter, IpcAdapter, SystemdAdapter, ThemeAdapter,
 };
 use shilpo::cli::args::{
-    BrightnessCommands, CaptureAction, Cli, Commands, ConfigCommands, ExtCommands, ModeValue,
-    ProfileCommands, ShellCommands, ThemeCommands, ThemeModeAction, ThemeSeedAction,
+    ActionCommands, BrightnessCommands, CaptureAction, Cli, Commands, ConfigCommands, ExtCommands,
+    ModeValue, ProfileCommands, ShellCommands, ThemeCommands, ThemeModeAction, ThemeSeedAction,
     ThemeWallpaperAction, VisibilityAction, WindowCommands, WorkspaceCommands,
 };
 use shilpo::cli::output::{CliOutput, EXIT_FAILURE, EXIT_INVALID_ARGS, EXIT_SUCCESS};
@@ -283,6 +283,22 @@ async fn main() {
                 match ipc.telemetry() {
                     Ok(health) => output.success("shell.telemetry", &health, Some(&format!("Service Health & Broker Telemetry:\n  Compositor Connected: {}\n  Compositor State: {}\n  Compositor Revision: {}\n  Uptime: {}s", health.compositor_connected, health.compositor_state, health.compositor_revision, health.uptime_seconds)), Vec::new()),
                     Err((code, msg)) => output.error("shell.telemetry", "telemetry_failed", &msg, None, Vec::new(), code),
+                }
+            }
+        },
+        Commands::Action { command } => match command {
+            ActionCommands::Invoke { action_id, payload } => {
+                let ipc = IpcAdapter::new();
+                match ipc.action_invoke(action_id.clone(), payload) {
+                    Ok(()) => output.success(
+                        "action.invoke",
+                        &serde_json::json!({ "action_id": action_id }),
+                        Some(&format!("Action '{action_id}' invoked")),
+                        Vec::new(),
+                    ),
+                    Err((code, msg)) => {
+                        output.error("action.invoke", "ipc_failed", &msg, None, Vec::new(), code)
+                    }
                 }
             }
         },

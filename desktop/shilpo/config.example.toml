@@ -50,3 +50,13 @@ end = ["builtin:sysinfo", "builtin:network", "builtin:bluetooth", "builtin:caffe
 screenshot_dir = "~/Pictures/Screenshots"
 show_pointer = true
 default_selection = "rectangle"
+
+# Keyboard shortcut overrides and extension keybindings
+# [[keybindings]]
+# action = "ext:io.github.alice.weather/toggle-weather"
+# shortcut = "Super+Shift+W"
+# enabled = true
+#
+# [[keybindings]]
+# action = "builtin:toggle_bar"
+# enabled = false

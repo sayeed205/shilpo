@@ -180,6 +180,20 @@ impl IpcAdapter {
                 .map_err(map_dbus_error)
         })
     }
+
+    pub fn action_invoke(
+        &self,
+        action_id: String,
+        payload: Option<String>,
+    ) -> Result<(), (i32, String)> {
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            proxy
+                .invoke_action(action_id, payload)
+                .await
+                .map_err(map_dbus_error)
+        })
+    }
 }
 
 fn map_command_result(res: CommandResult) -> Result<(), (i32, String)> {

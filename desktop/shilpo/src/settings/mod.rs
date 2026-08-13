@@ -7,6 +7,9 @@ use shilpo_ui::{
     NavigationRailMenuButton, Selectable, StyledExt, h_flex, v_flex,
 };
 
+pub mod keybindings_page;
+pub mod quick_page;
+
 /// Settings App Navigation Category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsCategory {
@@ -17,6 +20,7 @@ pub enum SettingsCategory {
     Bar,
     Desktop,
     Interface,
+    Keybindings,
     Storage,
 }
 
@@ -29,6 +33,7 @@ impl SettingsCategory {
             Self::Bar => "Bar",
             Self::Desktop => "Desktop",
             Self::Interface => "Interface",
+            Self::Keybindings => "Keybindings",
             Self::Storage => "Storage",
         }
     }
@@ -59,6 +64,7 @@ impl SettingsCategory {
                     IconName::BottomAppBar
                 }
             }
+            Self::Keybindings => IconName::InstantMix,
             Self::Storage => IconName::Storage,
         }
     }
@@ -70,6 +76,7 @@ impl SettingsCategory {
         Self::Bar,
         Self::Desktop,
         Self::Interface,
+        Self::Keybindings,
         Self::Storage,
     ];
 }
@@ -101,8 +108,6 @@ impl SettingsPageRegistry {
         &self.pages
     }
 }
-
-mod quick_page;
 
 /// Standalone Settings Application View.
 pub struct SettingsView {
@@ -314,6 +319,8 @@ impl Render for SettingsView {
                                     cx,
                                 )
                                     .into_any_element()
+                            } else if active == SettingsCategory::Keybindings {
+                                keybindings_page::KeybindingsPage::render(_window, cx).into_any_element()
                             } else {
                                 v_flex()
                                     .flex_1()
@@ -581,11 +588,12 @@ mod tests {
 
     #[test]
     fn test_settings_categories() {
-        assert_eq!(SettingsCategory::ALL.len(), 7);
+        assert_eq!(SettingsCategory::ALL.len(), 8);
         assert_eq!(SettingsCategory::Quick.label(), "Quick");
         assert_eq!(SettingsCategory::Network.label(), "Network");
         assert_eq!(SettingsCategory::Bluetooth.label(), "Bluetooth");
         assert_eq!(SettingsCategory::Bar.label(), "Bar");
+        assert_eq!(SettingsCategory::Keybindings.label(), "Keybindings");
         assert_eq!(SettingsCategory::Desktop.label(), "Desktop");
         assert_eq!(SettingsCategory::Interface.label(), "Interface");
         assert_eq!(SettingsCategory::Storage.label(), "Storage");

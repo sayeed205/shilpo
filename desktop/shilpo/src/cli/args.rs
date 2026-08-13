@@ -43,6 +43,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: ShellCommands,
     },
+    /// Shell action invocation
+    Action {
+        #[command(subcommand)]
+        command: ActionCommands,
+    },
     /// Workspace overview visibility
     Overview {
         #[command(subcommand)]
@@ -363,5 +368,18 @@ pub enum ProfileCommands {
         /// Optional path to completed trace file (discovers newest completed trace if omitted)
         #[arg(short, long)]
         source: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ActionCommands {
+    /// Invoke an action by ID
+    Invoke {
+        /// The action ID to invoke (e.g. builtin:toggle_overview or ext:io.github.alice.weather/toggle-weather)
+        action_id: String,
+
+        /// Optional JSON payload string
+        #[arg(long)]
+        payload: Option<String>,
     },
 }
