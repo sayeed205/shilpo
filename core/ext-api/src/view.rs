@@ -694,6 +694,59 @@ mod tests {
     }
 
     #[test]
+    fn every_new_numeric_field_rejects_all_non_finite_and_negative_values() {
+        let invalid_values = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0];
+        for value in invalid_values {
+            for style in [
+                ViewStyle {
+                    border_width: Some(value),
+                    ..ViewStyle::default()
+                },
+                ViewStyle {
+                    min_width: Some(value),
+                    ..ViewStyle::default()
+                },
+                ViewStyle {
+                    max_width: Some(value),
+                    ..ViewStyle::default()
+                },
+                ViewStyle {
+                    min_height: Some(value),
+                    ..ViewStyle::default()
+                },
+                ViewStyle {
+                    max_height: Some(value),
+                    ..ViewStyle::default()
+                },
+            ] {
+                let tree = ViewTree::new(ViewNode::Container(ContainerNode {
+                    direction: ContainerDirection::Row,
+                    children: vec![],
+                    style: Some(style),
+                    gap: None,
+                    align_items: None,
+                    justify_content: None,
+                    wrap: false,
+                    event_id: None,
+                }));
+                assert!(tree.validate(ViewLimits::default()).is_err());
+            }
+
+            let tree = ViewTree::new(ViewNode::Container(ContainerNode {
+                direction: ContainerDirection::Row,
+                children: vec![],
+                style: None,
+                gap: Some(value),
+                align_items: None,
+                justify_content: None,
+                wrap: false,
+                event_id: None,
+            }));
+            assert!(tree.validate(ViewLimits::default()).is_err());
+        }
+    }
+
+    #[test]
     fn min_max_and_exact_size_contradictions_are_rejected() {
         // min_width > max_width
         let tree1 = ViewTree::new(ViewNode::Container(ContainerNode {

@@ -1,7 +1,7 @@
 use crate::runtime::ShellRuntime;
 use gpui::{
-    App, AppContext, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement,
-    Styled, Window, div, px,
+    App, AppContext, InteractiveElement, IntoElement, MouseButton, ParentElement,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 use shilpo_ext_api::{
     Alignment, CanonicalId, ContainerDirection, Justification, Overflow, SemanticColorToken,
@@ -321,7 +321,10 @@ fn render_view_node(
                 }
             })
             .detach();
-            let mut base = div().w_full().child(Slider::new(&state));
+            let mut base = div()
+                .w_full()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(Slider::new(&state));
             if let Some(style) = &s.style {
                 base = apply_view_style(base, style, cx);
             }
@@ -351,7 +354,10 @@ fn render_view_node(
                 }
             })
             .detach();
-            let mut base = div().w_full().child(Input::new(&state));
+            let mut base = div()
+                .w_full()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(Input::new(&state));
             if let Some(style) = &input.style {
                 base = apply_view_style(base, style, cx);
             }

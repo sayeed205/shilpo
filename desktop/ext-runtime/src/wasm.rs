@@ -2229,6 +2229,68 @@ mod wit_conversion_tests {
     }
 
     #[test]
+    fn convert_view_tree_preserves_all_directions_and_grid_boundaries() {
+        let directions = [
+            (
+                wit_view::ContainerDirection::Row,
+                shilpo_ext_api::ContainerDirection::Row,
+            ),
+            (
+                wit_view::ContainerDirection::Column,
+                shilpo_ext_api::ContainerDirection::Column,
+            ),
+            (
+                wit_view::ContainerDirection::Stack,
+                shilpo_ext_api::ContainerDirection::Stack,
+            ),
+        ];
+        for (wit_direction, api_direction) in directions {
+            let tree = wit_view::ViewTree {
+                nodes: vec![wit_view::ViewNode::Container(wit_view::ContainerNode {
+                    direction: wit_direction,
+                    children: vec![],
+                    style: None,
+                    gap: None,
+                    align_items: None,
+                    justify_content: None,
+                    wrap: false,
+                    event_id: None,
+                })],
+                root: 0,
+            };
+            let converted = convert_view_tree_from_wit(tree).unwrap();
+            let shilpo_ext_api::ViewNode::Container(container) = converted.root else {
+                panic!("root must be container");
+            };
+            assert_eq!(container.direction, api_direction);
+        }
+
+        for columns in [1, 64] {
+            let tree = wit_view::ViewTree {
+                nodes: vec![wit_view::ViewNode::Container(wit_view::ContainerNode {
+                    direction: wit_view::ContainerDirection::Grid(columns),
+                    children: vec![],
+                    style: None,
+                    gap: None,
+                    align_items: None,
+                    justify_content: None,
+                    wrap: false,
+                    event_id: None,
+                })],
+                root: 0,
+            };
+            let converted = convert_view_tree_from_wit(tree).unwrap();
+            let shilpo_ext_api::ViewNode::Container(container) = converted.root else {
+                panic!("root must be container");
+            };
+            assert_eq!(
+                container.direction,
+                shilpo_ext_api::ContainerDirection::Grid { columns }
+            );
+        }
+    }
+
+    #[test]
     fn invalid_root_index_fails_closed() {
         let wit_tree = wit_view::ViewTree {
             nodes: vec![],
