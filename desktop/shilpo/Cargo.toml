@@ -53,4 +53,5 @@ niri-ipc.workspace = true
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 tempfile = "3"
+roxmltree.workspace = true
 proptest = { workspace = true }

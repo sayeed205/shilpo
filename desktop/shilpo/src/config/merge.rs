@@ -288,6 +288,7 @@ pub fn record_provenance_tree(
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::collections::BTreeMap;
     use toml_edit::{DocumentMut, Item, Value};
 
     fn arb_key() -> impl Strategy<Value = String> {
@@ -310,6 +311,13 @@ mod tests {
                 arb_scalar_value().prop_map(Item::Value),
                 prop::collection::vec(arb_scalar_value(), 0..=3)
                     .prop_map(|v| Item::Value(Value::Array(v.into_iter().collect()))),
+                prop::collection::btree_map(arb_key(), arb_scalar_value(), 0..=3).prop_map(|map| {
+                    let mut table = toml_edit::InlineTable::new();
+                    for (key, value) in map {
+                        table.insert(&key, value);
+                    }
+                    Item::Value(Value::InlineTable(table))
+                }),
                 arb_table_item(depth - 1),
             ]
             .boxed()
@@ -368,6 +376,70 @@ mod tests {
         let overlay_text = overlay.to_string();
         merge_document(&mut acc, &mut prov, overlay_src, overlay, &overlay_text);
         (acc, prov)
+    }
+
+    fn remove_owned_prefix(owners: &mut BTreeMap<String, ConfigSource>, prefix: &str) {
+        let dotted = format!("{prefix}.");
+        let indexed = format!("{prefix}[");
+        owners.retain(|path, _| {
+            path != prefix && !path.starts_with(&dotted) && !path.starts_with(&indexed)
+        });
+    }
+
+    fn record_reference_owners(
+        value: &toml::Value,
+        prefix: &str,
+        source: &ConfigSource,
+        owners: &mut BTreeMap<String, ConfigSource>,
+    ) {
+        match value {
+            toml::Value::Table(table) => {
+                for (key, child) in table {
+                    let path = format_key(prefix, key);
+                    record_reference_owners(child, &path, source, owners);
+                }
+            }
+            toml::Value::Array(values) => {
+                if !prefix.is_empty() {
+                    owners.insert(prefix.to_owned(), source.clone());
+                }
+                for (index, child) in values.iter().enumerate() {
+                    record_reference_owners(child, &format!("{prefix}[{index}]"), source, owners);
+                }
+            }
+            _ if !prefix.is_empty() => {
+                owners.insert(prefix.to_owned(), source.clone());
+            }
+            _ => {}
+        }
+    }
+
+    fn reference_merge(
+        base: &mut toml::Value,
+        overlay: &toml::Value,
+        prefix: &str,
+        source: &ConfigSource,
+        owners: &mut BTreeMap<String, ConfigSource>,
+    ) {
+        match (base, overlay) {
+            (toml::Value::Table(base), toml::Value::Table(overlay)) => {
+                for (key, value) in overlay {
+                    let path = format_key(prefix, key);
+                    if let Some(current) = base.get_mut(key) {
+                        reference_merge(current, value, &path, source, owners);
+                    } else {
+                        base.insert(key.clone(), value.clone());
+                        remove_owned_prefix(owners, &path);
+                        record_reference_owners(value, &path, source, owners);
+                    }
+                }
+            }
+            (base, overlay) => {
+                *base = overlay.clone();
+                remove_owned_prefix(owners, prefix);
+                record_reference_owners(overlay, prefix, source, owners);
+            }
+        }
     }
 
     proptest! {
@@ -462,19 +534,19 @@ mod tests {
 
             let (merged, prov) = do_merge(&base, &overlay, &src1, &src2);
 
-            let mut expected_prov = ConfigProvenance::new();
-            let loc1 = SourceLocation { source: src1.clone(), line: None, column: None };
-            record_provenance_tree(base.as_item(), "", &loc1, &mut expected_prov);
-            let overlay_text = overlay.to_string();
-            let mut acc_test = base.clone();
-            merge_document(&mut acc_test, &mut expected_prov, &src2, &overlay, &overlay_text);
+            let mut expected = doc_to_toml_val(&base);
+            let overlay_value = doc_to_toml_val(&overlay);
+            let mut expected_owners = BTreeMap::new();
+            record_reference_owners(&expected, "", &src1, &mut expected_owners);
+            reference_merge(&mut expected, &overlay_value, "", &src2, &mut expected_owners);
 
-            for (path, loc) in expected_prov.map.iter() {
-                let actual_loc = prov.get(path);
-                prop_assert_eq!(actual_loc.map(|l| &l.source), Some(&loc.source));
-            }
-
-            prop_assert_eq!(doc_to_toml_val(&merged), doc_to_toml_val(&acc_test));
+            let actual_owners = prov
+                .map
+                .iter()
+                .map(|(path, location)| (path.clone(), location.source.clone()))
+                .collect::<BTreeMap<_, _>>();
+            prop_assert_eq!(actual_owners, expected_owners);
+            prop_assert_eq!(doc_to_toml_val(&merged), expected);
         }
     }
 }

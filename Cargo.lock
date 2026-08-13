@@ -7877,6 +7877,7 @@ dependencies = [
  "notify",
  "proptest 1.11.0",
  "resvg 0.48.1",
+ "roxmltree 0.21.1",
  "rust-embed",
  "schemars",
  "semver",

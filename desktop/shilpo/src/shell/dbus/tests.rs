@@ -1,10 +1,16 @@
 use super::{
     DebugDbusService, ShellCommand, ShellDbusService, ShellStatus, ShellTelemetry,
-    test_harness::TestDbusHarness,
+    test_harness::{TestDbusHarness, wait_for},
 };
 use futures_lite::stream::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
+
+macro_rules! bounded {
+    ($label:literal, $future:expr) => {
+        wait_for($label, $future).await
+    };
+}
 
 fn assert_method_error(error: zbus::Error, expected_name: &str) {
     match error {
@@ -15,75 +21,187 @@ fn assert_method_error(error: zbus::Error, expected_name: &str) {
     }
 }
 
+type ArgContract<'a> = (Option<&'a str>, &'a str, Option<&'a str>);
+
+fn assert_interface_contract(
+    document: &roxmltree::Document<'_>,
+    interface_name: &str,
+    element_name: &str,
+    expected: &[(&str, &[ArgContract<'_>])],
+) {
+    let interface = document
+        .descendants()
+        .find(|node| {
+            node.has_tag_name("interface") && node.attribute("name") == Some(interface_name)
+        })
+        .unwrap_or_else(|| panic!("missing interface {interface_name}"));
+    let members = interface
+        .children()
+        .filter(|node| node.has_tag_name(element_name))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        members.len(),
+        expected.len(),
+        "unexpected {element_name} count"
+    );
+
+    for (member_name, expected_args) in expected {
+        let member = members
+            .iter()
+            .find(|node| node.attribute("name") == Some(*member_name))
+            .unwrap_or_else(|| panic!("missing {element_name} {member_name}"));
+        let actual_args = member
+            .children()
+            .filter(|node| node.has_tag_name("arg"))
+            .map(|node| {
+                (
+                    node.attribute("name"),
+                    node.attribute("type").expect("argument type"),
+                    node.attribute("direction"),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            &actual_args, expected_args,
+            "wrong contract for {member_name}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_introspection_exact_contract() {
     let harness = TestDbusHarness::new().await;
     let xml = harness.introspect_xml().await;
+    let node_start = xml.find("<node>").expect("introspection node element");
+    let document = roxmltree::Document::parse(&xml[node_start..]).expect("valid introspection XML");
 
-    assert!(xml.contains("interface name=\"org.shilpo.Shell\""));
-    assert!(xml.contains("interface name=\"org.shilpo.Debug\""));
-
-    // 18 org.shilpo.Shell methods
-    for method in [
-        "ReloadConfig",
-        "ShowBar",
-        "HideBar",
-        "ToggleBar",
-        "ShowOverview",
-        "HideOverview",
-        "ToggleOverview",
-        "FocusWorkspace",
-        "CreateWorkspace",
-        "FocusWindow",
-        "FocusPreviousWindow",
-        "CloseWindow",
-        "MoveWindowToWorkspace",
-        "SetBrightness",
-        "SetDisplayBrightness",
-        "GetStatus",
-        "GetTelemetry",
-        "Capture",
-    ] {
-        assert!(
-            xml.contains(&format!("method name=\"{method}\"")),
-            "missing method {method} in introspection XML"
-        );
-    }
-
-    // 5 org.shilpo.Shell signals
-    for signal in [
-        "ShellStarted",
-        "ShellStopping",
-        "WorkspaceChanged",
-        "ThemeChanged",
-        "ConfigReloaded",
-    ] {
-        assert!(
-            xml.contains(&format!("signal name=\"{signal}\"")),
-            "missing signal {signal} in introspection XML"
-        );
-    }
-
-    // 3 org.shilpo.Debug methods
-    for debug_method in ["SetLogFilter", "GetLogFilter", "EmitTestNotification"] {
-        assert!(
-            xml.contains(&format!("method name=\"{debug_method}\"")),
-            "missing debug method {debug_method} in introspection XML"
-        );
-    }
+    assert_interface_contract(
+        &document,
+        "org.shilpo.Shell",
+        "method",
+        &[
+            ("ReloadConfig", &[]),
+            ("ShowBar", &[]),
+            ("HideBar", &[]),
+            ("ToggleBar", &[]),
+            ("ShowOverview", &[]),
+            ("HideOverview", &[]),
+            ("ToggleOverview", &[]),
+            (
+                "FocusWorkspace",
+                &[
+                    (Some("workspace_id"), "t", Some("in")),
+                    (None, "(sttstt)", Some("out")),
+                ],
+            ),
+            ("CreateWorkspace", &[(None, "(sttstt)", Some("out"))]),
+            (
+                "FocusWindow",
+                &[
+                    (Some("window_id"), "t", Some("in")),
+                    (None, "(sttstt)", Some("out")),
+                ],
+            ),
+            ("FocusPreviousWindow", &[(None, "(sttstt)", Some("out"))]),
+            (
+                "CloseWindow",
+                &[
+                    (Some("window_id"), "t", Some("in")),
+                    (None, "(sttstt)", Some("out")),
+                ],
+            ),
+            (
+                "MoveWindowToWorkspace",
+                &[
+                    (Some("window_id"), "t", Some("in")),
+                    (Some("workspace_id"), "t", Some("in")),
+                    (None, "(sttstt)", Some("out")),
+                ],
+            ),
+            ("SetBrightness", &[(Some("percentage"), "y", Some("in"))]),
+            (
+                "SetDisplayBrightness",
+                &[
+                    (Some("display_id"), "s", Some("in")),
+                    (Some("percentage"), "y", Some("in")),
+                ],
+            ),
+            ("GetStatus", &[(None, "(bsussb)", Some("out"))]),
+            (
+                "GetTelemetry",
+                &[(None, "(bsttusbssbssbssbssbssbssbts)", Some("out"))],
+            ),
+            ("Capture", &[(Some("intent"), "s", Some("in"))]),
+        ],
+    );
+    assert_interface_contract(
+        &document,
+        "org.shilpo.Shell",
+        "signal",
+        &[
+            (
+                "ShellStarted",
+                &[(Some("instance_id"), "s", None), (Some("pid"), "u", None)],
+            ),
+            ("ShellStopping", &[(Some("instance_id"), "s", None)]),
+            (
+                "WorkspaceChanged",
+                &[
+                    (Some("workspace_id"), "t", None),
+                    (Some("owner_generation"), "t", None),
+                    (Some("revision"), "t", None),
+                ],
+            ),
+            (
+                "ThemeChanged",
+                &[
+                    (Some("mode"), "s", None),
+                    (Some("scheme_variant"), "s", None),
+                ],
+            ),
+            (
+                "ConfigReloaded",
+                &[
+                    (Some("success"), "b", None),
+                    (Some("changed_components"), "as", None),
+                    (Some("diagnostic_count"), "u", None),
+                ],
+            ),
+        ],
+    );
+    assert_interface_contract(
+        &document,
+        "org.shilpo.Debug",
+        "method",
+        &[
+            ("SetLogFilter", &[(Some("filter"), "s", Some("in"))]),
+            ("GetLogFilter", &[(None, "s", Some("out"))]),
+            (
+                "EmitTestNotification",
+                &[
+                    (Some("title"), "s", Some("in")),
+                    (Some("body"), "s", Some("in")),
+                ],
+            ),
+        ],
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_mailbox_command_delivery_and_fifo() {
     let mut harness = TestDbusHarness::new().await;
 
-    harness.shell_proxy.reload_config().await.unwrap();
-    harness.shell_proxy.show_bar().await.unwrap();
-    harness.shell_proxy.set_brightness(42).await.unwrap();
+    bounded!("ReloadConfig response", harness.shell_proxy.reload_config()).unwrap();
+    bounded!("ShowBar response", harness.shell_proxy.show_bar()).unwrap();
+    bounded!(
+        "SetBrightness response",
+        harness.shell_proxy.set_brightness(42)
+    )
+    .unwrap();
 
-    let cmd1 = harness.mailbox_rx.recv().await.unwrap();
-    let cmd2 = harness.mailbox_rx.recv().await.unwrap();
-    let cmd3 = harness.mailbox_rx.recv().await.unwrap();
+    let cmd1 = bounded!("first mailbox command", harness.mailbox_rx.recv()).unwrap();
+    let cmd2 = bounded!("second mailbox command", harness.mailbox_rx.recv()).unwrap();
+    let cmd3 = bounded!("third mailbox command", harness.mailbox_rx.recv()).unwrap();
 
     assert_eq!(cmd1, ShellCommand::ReloadConfig);
     assert_eq!(cmd2, ShellCommand::ShowBar);
@@ -95,66 +213,78 @@ async fn test_boundary_error_handling() {
     let mut harness = TestDbusHarness::new().await;
 
     // Invalid brightness (>100) -> InvalidArgs
-    let err = harness.shell_proxy.set_brightness(101).await.unwrap_err();
+    let err = bounded!(
+        "invalid brightness response",
+        harness.shell_proxy.set_brightness(101)
+    )
+    .unwrap_err();
     assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
     // Invalid display brightness (empty display_id or >100) -> InvalidArgs
-    let err = harness
-        .shell_proxy
-        .set_display_brightness("".into(), 50)
-        .await
-        .unwrap_err();
+    let err = bounded!(
+        "empty display response",
+        harness.shell_proxy.set_display_brightness("".into(), 50)
+    )
+    .unwrap_err();
     assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
-    let err = harness
-        .shell_proxy
-        .set_display_brightness("DP-1".into(), 101)
-        .await
-        .unwrap_err();
+    let err = bounded!(
+        "invalid display brightness response",
+        harness
+            .shell_proxy
+            .set_display_brightness("DP-1".into(), 101)
+    )
+    .unwrap_err();
     assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
     // Invalid capture intent -> InvalidArgs
-    let err = harness
-        .shell_proxy
-        .capture("invalid_intent".into())
-        .await
-        .unwrap_err();
+    let err = bounded!(
+        "invalid capture response",
+        harness.shell_proxy.capture("invalid_intent".into())
+    )
+    .unwrap_err();
     assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
     // Invalid debug inputs -> InvalidArgs
-    let err = harness
-        .debug_proxy
-        .set_log_filter("   ".into())
-        .await
-        .unwrap_err();
+    let err = bounded!(
+        "empty filter response",
+        harness.debug_proxy.set_log_filter("   ".into())
+    )
+    .unwrap_err();
     assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
-    let err = harness
-        .debug_proxy
-        .set_log_filter("invalid[[syntax".into())
-        .await
-        .unwrap_err();
+    let err = bounded!(
+        "invalid filter response",
+        harness.debug_proxy.set_log_filter("invalid[[syntax".into())
+    )
+    .unwrap_err();
     assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
-    let err = harness
-        .debug_proxy
-        .emit_test_notification("".into(), "body".into())
-        .await
-        .unwrap_err();
+    let err = bounded!(
+        "empty notification title response",
+        harness
+            .debug_proxy
+            .emit_test_notification("".into(), "body".into())
+    )
+    .unwrap_err();
     assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
-    let err = harness
-        .debug_proxy
-        .emit_test_notification("a".repeat(257), "body".into())
-        .await
-        .unwrap_err();
+    let err = bounded!(
+        "oversized notification title response",
+        harness
+            .debug_proxy
+            .emit_test_notification("a".repeat(257), "body".into())
+    )
+    .unwrap_err();
     assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
-    let err = harness
-        .debug_proxy
-        .emit_test_notification("title".into(), "b".repeat(4097))
-        .await
-        .unwrap_err();
+    let err = bounded!(
+        "oversized notification body response",
+        harness
+            .debug_proxy
+            .emit_test_notification("title".into(), "b".repeat(4097))
+    )
+    .unwrap_err();
     assert_method_error(err, "org.freedesktop.DBus.Error.InvalidArgs");
 
     // Mailbox rejected calls enqueue nothing
@@ -162,13 +292,15 @@ async fn test_boundary_error_handling() {
 
     // Mailbox overflow -> LimitsExceeded
     for _ in 0..128 {
-        harness.shell_proxy.show_bar().await.unwrap();
+        bounded!("mailbox fill response", harness.shell_proxy.show_bar()).unwrap();
     }
-    let overflow_err = harness
-        .debug_proxy
-        .emit_test_notification("Overflow".into(), "Mailbox".into())
-        .await
-        .unwrap_err();
+    let overflow_err = bounded!(
+        "mailbox overflow response",
+        harness
+            .debug_proxy
+            .emit_test_notification("Overflow".into(), "Mailbox".into())
+    )
+    .unwrap_err();
     assert_method_error(overflow_err, "org.freedesktop.DBus.Error.LimitsExceeded");
 }
 
@@ -187,21 +319,27 @@ async fn test_closed_mailbox_and_unavailable_controller() {
     let harness =
         TestDbusHarness::new_with_services(shell_service, debug_service, mpsc::channel(1).1).await;
 
-    let err = harness.debug_proxy.get_log_filter().await.unwrap_err();
+    let err = bounded!(
+        "unavailable filter response",
+        harness.debug_proxy.get_log_filter()
+    )
+    .unwrap_err();
     assert_method_error(err, "org.freedesktop.DBus.Error.Failed");
 
-    let err = harness
-        .debug_proxy
-        .set_log_filter("info".into())
-        .await
-        .unwrap_err();
+    let err = bounded!(
+        "unavailable filter update response",
+        harness.debug_proxy.set_log_filter("info".into())
+    )
+    .unwrap_err();
     assert_method_error(err, "org.freedesktop.DBus.Error.Failed");
 
-    let err = harness
-        .debug_proxy
-        .emit_test_notification("Title".into(), "Body".into())
-        .await
-        .unwrap_err();
+    let err = bounded!(
+        "closed mailbox response",
+        harness
+            .debug_proxy
+            .emit_test_notification("Title".into(), "Body".into())
+    )
+    .unwrap_err();
     assert_method_error(err, "org.freedesktop.DBus.Error.Failed");
 }
 
@@ -219,7 +357,7 @@ async fn test_atomic_status_and_telemetry_snapshots() {
     };
     harness.update_status(custom_status.clone());
 
-    let status = harness.shell_proxy.get_status().await.unwrap();
+    let status = bounded!("status response", harness.shell_proxy.get_status()).unwrap();
     assert_eq!(status, custom_status);
 
     let custom_telemetry = ShellTelemetry {
@@ -232,7 +370,7 @@ async fn test_atomic_status_and_telemetry_snapshots() {
     };
     harness.update_telemetry(custom_telemetry.clone());
 
-    let telemetry = harness.shell_proxy.get_telemetry().await.unwrap();
+    let telemetry = bounded!("telemetry response", harness.shell_proxy.get_telemetry()).unwrap();
     assert_eq!(telemetry, custom_telemetry);
 }
 
@@ -240,16 +378,28 @@ async fn test_atomic_status_and_telemetry_snapshots() {
 async fn test_lifecycle_signals() {
     let harness = TestDbusHarness::new().await;
 
-    let mut started_stream = harness.shell_proxy.receive_shell_started().await.unwrap();
-    let mut stopping_stream = harness.shell_proxy.receive_shell_stopping().await.unwrap();
+    let mut started_stream = bounded!(
+        "ShellStarted subscription",
+        harness.shell_proxy.receive_shell_started()
+    )
+    .unwrap();
+    let mut stopping_stream = bounded!(
+        "ShellStopping subscription",
+        harness.shell_proxy.receive_shell_stopping()
+    )
+    .unwrap();
 
     let emitter = harness.signal_emitter().await;
-    ShellDbusService::shell_started(&emitter, "inst-42", 1234)
-        .await
-        .unwrap();
-    ShellDbusService::shell_stopping(&emitter, "inst-42")
-        .await
-        .unwrap();
+    bounded!(
+        "ShellStarted emission",
+        ShellDbusService::shell_started(&emitter, "inst-42", 1234)
+    )
+    .unwrap();
+    bounded!(
+        "ShellStopping emission",
+        ShellDbusService::shell_stopping(&emitter, "inst-42")
+    )
+    .unwrap();
 
     let started_sig = tokio::time::timeout(Duration::from_secs(2), started_stream.next())
         .await
@@ -270,27 +420,31 @@ async fn test_lifecycle_signals() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_workspace_changed_dedup_semantics() {
     let harness = TestDbusHarness::new().await;
-    let mut stream = harness
-        .shell_proxy
-        .receive_workspace_changed()
-        .await
-        .unwrap();
+    let mut stream = bounded!(
+        "WorkspaceChanged subscription",
+        harness.shell_proxy.receive_workspace_changed()
+    )
+    .unwrap();
     let emitter = harness.signal_emitter().await;
 
     // Prime workspace 1 (initial priming emits nothing)
     harness.shell_service.prime_workspace(1);
 
     // Repeated workspace 1 emits nothing
-    harness
-        .shell_service
-        .emit_workspace_changed_if_needed(&emitter, 1, 10, 100)
-        .await;
+    bounded!(
+        "equal workspace emission",
+        harness
+            .shell_service
+            .emit_workspace_changed_if_needed(&emitter, 1, 10, 100)
+    );
 
     // Change to workspace 2 emits once
-    harness
-        .shell_service
-        .emit_workspace_changed_if_needed(&emitter, 2, 10, 101)
-        .await;
+    bounded!(
+        "changed workspace emission",
+        harness
+            .shell_service
+            .emit_workspace_changed_if_needed(&emitter, 2, 10, 101)
+    );
 
     let sig = tokio::time::timeout(Duration::from_secs(2), stream.next())
         .await
@@ -302,10 +456,12 @@ async fn test_workspace_changed_dedup_semantics() {
     assert_eq!(args.revision, 101);
 
     // Repeat workspace 2 with updated generation/revision emits nothing
-    harness
-        .shell_service
-        .emit_workspace_changed_if_needed(&emitter, 2, 11, 102)
-        .await;
+    bounded!(
+        "repeated workspace emission",
+        harness
+            .shell_service
+            .emit_workspace_changed_if_needed(&emitter, 2, 11, 102)
+    );
 
     let no_sig = tokio::time::timeout(Duration::from_millis(100), stream.next()).await;
     assert!(no_sig.is_err(), "expected no signal for repeated workspace");
@@ -314,20 +470,28 @@ async fn test_workspace_changed_dedup_semantics() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_theme_changed_dedup_semantics() {
     let harness = TestDbusHarness::new().await;
-    let mut stream = harness.shell_proxy.receive_theme_changed().await.unwrap();
+    let mut stream = bounded!(
+        "ThemeChanged subscription",
+        harness.shell_proxy.receive_theme_changed()
+    )
+    .unwrap();
     let emitter = harness.signal_emitter().await;
 
     // First call populates initial state and emits nothing
-    harness
-        .shell_service
-        .emit_theme_changed_if_needed(&emitter, "dark", "Expressive")
-        .await;
+    bounded!(
+        "initial theme emission",
+        harness
+            .shell_service
+            .emit_theme_changed_if_needed(&emitter, "dark", "Expressive")
+    );
 
     // Changed mode emits once
-    harness
-        .shell_service
-        .emit_theme_changed_if_needed(&emitter, "light", "Expressive")
-        .await;
+    bounded!(
+        "changed theme emission",
+        harness
+            .shell_service
+            .emit_theme_changed_if_needed(&emitter, "light", "Expressive")
+    );
 
     let sig = tokio::time::timeout(Duration::from_secs(2), stream.next())
         .await
@@ -338,10 +502,12 @@ async fn test_theme_changed_dedup_semantics() {
     assert_eq!(args.scheme_variant, "Expressive");
 
     // Equal repeat emits nothing
-    harness
-        .shell_service
-        .emit_theme_changed_if_needed(&emitter, "light", "Expressive")
-        .await;
+    bounded!(
+        "repeated theme emission",
+        harness
+            .shell_service
+            .emit_theme_changed_if_needed(&emitter, "light", "Expressive")
+    );
 
     let no_sig = tokio::time::timeout(Duration::from_millis(100), stream.next()).await;
     assert!(no_sig.is_err(), "expected no signal for repeated theme");
@@ -350,14 +516,23 @@ async fn test_theme_changed_dedup_semantics() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_config_reloaded_signal_semantics() {
     let harness = TestDbusHarness::new().await;
-    let mut stream = harness.shell_proxy.receive_config_reloaded().await.unwrap();
+    let mut stream = bounded!(
+        "ConfigReloaded subscription",
+        harness.shell_proxy.receive_config_reloaded()
+    )
+    .unwrap();
     let emitter = harness.signal_emitter().await;
 
     // Successful reload sorts component names
-    harness
-        .shell_service
-        .emit_config_reloaded(&emitter, true, vec!["theme".into(), "bar".into()], 0)
-        .await;
+    bounded!(
+        "successful ConfigReloaded emission",
+        harness.shell_service.emit_config_reloaded(
+            &emitter,
+            true,
+            vec!["theme".into(), "bar".into()],
+            0
+        )
+    );
 
     let sig1 = tokio::time::timeout(Duration::from_secs(2), stream.next())
         .await
@@ -369,10 +544,15 @@ async fn test_config_reloaded_signal_semantics() {
     assert_eq!(args1.diagnostic_count, 0);
 
     // Failed reload clears component list but preserves diagnostic count
-    harness
-        .shell_service
-        .emit_config_reloaded(&emitter, false, vec!["bar".into(), "theme".into()], 5)
-        .await;
+    bounded!(
+        "failed ConfigReloaded emission",
+        harness.shell_service.emit_config_reloaded(
+            &emitter,
+            false,
+            vec!["bar".into(), "theme".into()],
+            5
+        )
+    );
 
     let sig2 = tokio::time::timeout(Duration::from_secs(2), stream.next())
         .await
@@ -387,6 +567,10 @@ async fn test_config_reloaded_signal_semantics() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_clean_lifecycle_drop() {
     let harness = TestDbusHarness::new().await;
-    harness.shell_proxy.get_status().await.unwrap();
+    bounded!(
+        "clean-lifecycle status response",
+        harness.shell_proxy.get_status()
+    )
+    .unwrap();
     drop(harness);
 }

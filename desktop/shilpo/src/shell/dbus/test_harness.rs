@@ -7,8 +7,16 @@ use super::{
 use shilpo_observability::LogFilterController;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 use tokio::sync::mpsc;
+
+pub const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub async fn wait_for<T>(label: &str, future: impl Future<Output = T>) -> T {
+    tokio::time::timeout(TEST_TIMEOUT, future)
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {label}"))
+}
 
 pub struct TestDbusHarness {
     pub server_conn: zbus::Connection,
@@ -56,23 +64,31 @@ impl TestDbusHarness {
 
         let client_builder = zbus::connection::Builder::unix_stream(client_stream).p2p();
 
-        let (server_conn, client_conn) =
+        let (server_conn, client_conn) = wait_for("P2P connection build", async {
             tokio::try_join!(server_builder.build(), client_builder.build())
-                .expect("build p2p connections");
+        })
+        .await
+        .expect("build p2p connections");
 
-        let shell_proxy = ShellProxy::builder(&client_conn)
-            .destination("org.shilpo.Shell")
-            .expect("shell proxy destination")
-            .build()
-            .await
-            .expect("build ShellProxy");
+        let shell_proxy = wait_for(
+            "ShellProxy build",
+            ShellProxy::builder(&client_conn)
+                .destination("org.shilpo.Shell")
+                .expect("shell proxy destination")
+                .build(),
+        )
+        .await
+        .expect("build ShellProxy");
 
-        let debug_proxy = DebugProxy::builder(&client_conn)
-            .destination("org.shilpo.Shell")
-            .expect("debug proxy destination")
-            .build()
-            .await
-            .expect("build DebugProxy");
+        let debug_proxy = wait_for(
+            "DebugProxy build",
+            DebugProxy::builder(&client_conn)
+                .destination("org.shilpo.Shell")
+                .expect("debug proxy destination")
+                .build(),
+        )
+        .await
+        .expect("build DebugProxy");
 
         Self {
             server_conn,
@@ -86,12 +102,14 @@ impl TestDbusHarness {
     }
 
     pub async fn signal_emitter(&self) -> zbus::object_server::SignalEmitter<'_> {
-        let iface = self
-            .server_conn
-            .object_server()
-            .interface::<_, ShellDbusService>("/org/shilpo/Shell")
-            .await
-            .expect("find interface /org/shilpo/Shell");
+        let iface = wait_for(
+            "ShellDbusService lookup",
+            self.server_conn
+                .object_server()
+                .interface::<_, ShellDbusService>("/org/shilpo/Shell"),
+        )
+        .await
+        .expect("find interface /org/shilpo/Shell");
         iface.signal_emitter().clone()
     }
 
@@ -104,18 +122,20 @@ impl TestDbusHarness {
     }
 
     pub async fn introspect_xml(&self) -> String {
-        let introspect = zbus::fdo::IntrospectableProxy::builder(&self.client_conn)
-            .destination("org.shilpo.Shell")
-            .expect("introspect destination")
-            .path("/org/shilpo/Shell")
-            .expect("introspect path")
-            .build()
-            .await
-            .expect("build IntrospectableProxy");
+        let introspect = wait_for(
+            "IntrospectableProxy build",
+            zbus::fdo::IntrospectableProxy::builder(&self.client_conn)
+                .destination("org.shilpo.Shell")
+                .expect("introspect destination")
+                .path("/org/shilpo/Shell")
+                .expect("introspect path")
+                .build(),
+        )
+        .await
+        .expect("build IntrospectableProxy");
 
-        tokio::time::timeout(Duration::from_secs(5), introspect.introspect())
+        wait_for("introspection response", introspect.introspect())
             .await
-            .expect("introspect timeout")
             .expect("introspect response")
     }
 }

@@ -309,8 +309,9 @@ mod tests {
         proptest! {
             #[test]
             fn test_extension_id_round_trip_and_oracle(
-                s in "[a-z0-9][a-z0-9-]{0,6}\\.[a-z0-9][a-z0-9-]{0,6}\\.[a-z0-9][a-z0-9-]{0,6}"
+                segments in prop::collection::vec("[a-z0-9][a-z0-9-]{0,6}", 3..=6)
             ) {
+                let s = segments.join(".");
                 prop_assert!(is_valid_extension_id_oracle(&s));
                 let id = ExtensionId::new(&s).expect("valid extension id");
                 prop_assert_eq!(id.as_str(), s.as_str());
@@ -364,7 +365,7 @@ mod tests {
             }
 
             #[test]
-            fn test_arbitrary_string_parsing_no_panic(s in "\\PC*") {
+            fn test_arbitrary_string_parsing_no_panic(s in "\\PC{0,96}") {
                 let ext_res = ExtensionId::new(&s);
                 prop_assert_eq!(ext_res.is_ok(), is_valid_extension_id_oracle(&s));
 
