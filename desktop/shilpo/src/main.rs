@@ -139,6 +139,7 @@ async fn main() {
                         .map(shilpo_ui::theme::SchemeVariant::from_str),
                     config_path: Some(config_path),
                     state_path: Some(shilpo::config::state_dir().join("colors.json")),
+                    ..Default::default()
                 },
                 Err(_) => shilpo_theme_daemon::ThemeDaemonOptions::default(),
             };

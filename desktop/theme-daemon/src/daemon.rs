@@ -1817,7 +1817,7 @@ mod tests {
         // Change scheme variant on daemon
         let _ = daemon
             .process_command(DaemonCommand::Theme(ThemeCommand::SetSchemeVariant(
-                SchemeVariant::Expressive,
+                SchemeVariant::Fidelity,
             )))
             .await;
 
@@ -1999,11 +1999,17 @@ mod tests {
         daemon.spawn_wallpaper_task(path1.clone(), tx1);
         daemon.spawn_wallpaper_task(path2.clone(), tx2);
 
-        // Receive completions in order
-        let res1 = daemon.wallpaper_result_rx.recv().await.unwrap();
-        let res2 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        // Receive completions
+        let r1 = daemon.wallpaper_result_rx.recv().await.unwrap();
+        let r2 = daemon.wallpaper_result_rx.recv().await.unwrap();
 
-        // Op 1 completed task first, but op_id is 1 < current_op (2)
+        let (res1, res2) = if r1.op_id < r2.op_id {
+            (r1, r2)
+        } else {
+            (r2, r1)
+        };
+
+        // Op 1 completed task, but op_id (1) < current_op (2)
         daemon.handle_wallpaper_completion(res1).await;
         let err1 = rx1.await.unwrap();
         assert!(err1.is_err());
@@ -2015,9 +2021,11 @@ mod tests {
         assert_eq!(state2.wallpaper_path, Some(path2.clone()));
 
         // Op 1 path should be cached despite being superseded!
-        let (canonical1, key1) =
-            crate::wallpaper_cache::create_wallpaper_cache_key(&path1, SchemeVariant::Auto)
-                .unwrap();
+        let (canonical1, key1) = crate::wallpaper_cache::create_wallpaper_cache_key(
+            &path1,
+            daemon.state.theme.scheme_variant,
+        )
+        .unwrap();
         let cached = crate::wallpaper_cache::with_cache(&daemon.wallpaper_cache, |c| c.get(&key1));
         assert!(
             cached.is_some(),
