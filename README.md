@@ -91,16 +91,19 @@ the later runtime-control work.
 
 ### Shell D-Bus control
 
-The running shell owns `org.shilpo.Shell` on the user session bus at `/org/shilpo/Shell`. Inspect the typed interface with:
+The running shell owns `org.shilpo.Shell` on the user session bus at `/org/shilpo/Shell`. Inspect the typed interfaces (`org.shilpo.Shell` and `org.shilpo.Debug`) with:
 
 ```bash
 busctl --user introspect org.shilpo.Shell /org/shilpo/Shell
 busctl --user call org.shilpo.Shell /org/shilpo/Shell org.shilpo.Shell GetStatus
 busctl --user call org.shilpo.Shell /org/shilpo/Shell org.shilpo.Shell ToggleBar
+busctl --user call org.shilpo.Shell /org/shilpo/Shell org.shilpo.Debug GetLogFilter
+busctl --user call org.shilpo.Shell /org/shilpo/Shell org.shilpo.Debug SetLogFilter s "info,shilpo=debug"
+busctl --user call org.shilpo.Shell /org/shilpo/Shell org.shilpo.Debug EmitTestNotification ss "Test Title" "Test Body"
 ```
 
-The `shilpo shell`, workspace, window, capture, brightness, and config commands use this interface; no shell socket or
-lock file is required.
+The `shilpo shell`, workspace, window, capture, brightness, and config commands use this interface; debug operations are
+available through the `busctl` calls above. No shell socket or lock file is required.
 
 
 ---

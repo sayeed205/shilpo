@@ -22,12 +22,12 @@ library at its core.
 
 ### Linux Desktop (`desktop/`)
 
-- **Shilpo** (`desktop/shilpo`) — Consolidated desktop product package. Contains Shell daemon (`shell`), Settings app (`settings`), public CLI dispatch (`cli`), and declarative TOML configuration/validation (`config`). Exposes the `org.shilpo.Shell` D-Bus control plane ([ADR-0014](docs/adr/0014-dbus-shell-control-plane.md)). Produces the single installed executable binary target (`shilpo`).
+- **Shilpo** (`desktop/shilpo`) — Consolidated desktop product package. Contains Shell daemon (`shell`), Settings app (`settings`), public CLI dispatch (`cli`), and declarative TOML configuration/validation (`config`). Exposes the `org.shilpo.Shell` and `org.shilpo.Debug` D-Bus control plane ([ADR-0014](docs/adr/0014-dbus-shell-control-plane.md), [ADR-0015](docs/adr/0015-runtime-debug-control.md)). Produces the single installed executable binary target (`shilpo`).
 - **Device** (`desktop/device`) — Presentation-neutral versioned device domain protocol (`protocol`) and typed DBus client (`client`) with degraded/reconnect projections and client-side debounce.
 - **Services** (`desktop/services`) — Linux system integration services. Device daemon (`DeviceDaemonService`), Wayland/Niri compositor IPC, audio, bluetooth, brightness, caffeine, clipboard, location, media, network, night light, notifications, power profile, screen capture domain (`capture`), tray, upower, app scanning, and LMDB session store.
 - **Extension Runtime** (`desktop/ext-runtime`) — Wasmtime-sandboxed extension runtime. Capability authorization, package catalog/registry index, WASI component-model host, worker process protocol (`shilpo extension-host`).
 - **Theme Daemon** (`desktop/theme-daemon`) — Linux theme system integration. DBus service (`org.shilpo.Theme`), XDG portal appearance sync, wallpaper watching, atomic JSON persistence, theme adapters for third-party tools (GTK, Foot, Alacritty, Kitty, Hyprland).
-- **Observability** (`desktop/observability`) — Internal process observability crate. Standardized subscriber initialization, opt-in Chrome trace generation (`SHILPO_PROFILE`), collision-resistant trace path management, trace discovery/export (`shilpo profile export`), and local telemetry summary inventory (`shilpo doctor --telemetry`).
+- **Observability** (`desktop/observability`) — Internal process observability crate. Standardized subscriber initialization with reloadable filter controller (`LogFilterController`), opt-in Chrome trace generation (`SHILPO_PROFILE`), collision-resistant trace path management, trace discovery/export (`shilpo profile export`), and local telemetry summary inventory (`shilpo doctor --telemetry`).
 
 ### Applications (`apps/`)
 

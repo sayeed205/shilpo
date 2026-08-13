@@ -60,7 +60,7 @@ impl Global for ShellRuntime {}
 
 impl ShellRuntime {
     #[cfg(test)]
-    pub(crate) fn install_for_test(cx: &mut App) {
+    pub(crate) fn install_for_test(cx: &mut App) -> tokio::sync::mpsc::Sender<ShellCommand> {
         let root = std::env::temp_dir().join(format!(
             "shilpo-shell-surface-test-{}",
             uuid::Uuid::new_v4()
@@ -70,7 +70,7 @@ impl ShellRuntime {
         let status = Arc::new(arc_swap::ArcSwap::from_pointee(ShellStatus::default()));
         let telemetry = Arc::new(arc_swap::ArcSwap::from_pointee(ShellTelemetry::default()));
         let dbus_service = Arc::new(ShellDbusService::new(
-            tx,
+            tx.clone(),
             compositor_broker.clone(),
             status.clone(),
             telemetry.clone(),
@@ -98,6 +98,12 @@ impl ShellRuntime {
             _wallpaper_preview_changed: None,
             _drain_task: gpui::Task::ready(()),
         });
+        tx
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_service_hub_for_test(cx: &mut App, service_hub: ServiceHub) {
+        cx.global_mut::<Self>().service_hub = Some(service_hub);
     }
 
     pub(crate) fn readiness(&self) -> shilpo_services::ReadinessState {

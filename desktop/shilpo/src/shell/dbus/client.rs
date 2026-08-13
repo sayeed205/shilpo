@@ -56,3 +56,14 @@ pub trait Shell {
         diagnostic_count: u32,
     ) -> zbus::Result<()>;
 }
+
+#[zbus::proxy(
+    interface = "org.shilpo.Debug",
+    default_service = "org.shilpo.Shell",
+    default_path = "/org/shilpo/Shell"
+)]
+pub trait Debug {
+    async fn set_log_filter(&self, filter: String) -> zbus::Result<()>;
+    async fn get_log_filter(&self) -> zbus::Result<String>;
+    async fn emit_test_notification(&self, title: String, body: String) -> zbus::Result<()>;
+}

@@ -19,6 +19,7 @@ pub enum ShellCommand {
     SetBrightness(u8),
     SetDisplayBrightness { display_id: String, percentage: u8 },
     Capture(shilpo_services::capture::CaptureIntent),
+    EmitTestNotification { title: String, body: String },
 }
 
 /// D-Bus interface implementation for `org.shilpo.Shell`.
