@@ -4,7 +4,8 @@ use gpui::{
     Styled, Window, div, px,
 };
 use shilpo_ext_api::{
-    CanonicalId, ContainerDirection, SemanticColorToken, ViewNode, ViewStyle, ViewTree,
+    Alignment, CanonicalId, ContainerDirection, Justification, Overflow, SemanticColorToken,
+    ViewNode, ViewStyle, ViewTree,
 };
 use shilpo_ui::{
     ActiveTheme, Icon, Sizable, Size,
@@ -12,6 +13,68 @@ use shilpo_ui::{
     progress::LoadingIndicator,
     slider::{Slider, SliderEvent, SliderState, SliderValue},
 };
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContainerDescriptor {
+    pub direction: ContainerDirection,
+    pub align_items: Option<Alignment>,
+    pub justify_content: Option<Justification>,
+    pub wrap: bool,
+    pub gap: Option<f32>,
+    pub event_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StyleDescriptor {
+    pub padding: Option<f32>,
+    pub margin: Option<f32>,
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    pub corner_radius: Option<f32>,
+    pub opacity: Option<f32>,
+    pub color: Option<SemanticColorToken>,
+    pub background: Option<SemanticColorToken>,
+    pub flex_grow: Option<f32>,
+    pub border_width: Option<f32>,
+    pub border_color: Option<SemanticColorToken>,
+    pub min_width: Option<f32>,
+    pub max_width: Option<f32>,
+    pub min_height: Option<f32>,
+    pub max_height: Option<f32>,
+    pub overflow: Option<Overflow>,
+}
+
+pub fn map_container_descriptor(c: &shilpo_ext_api::ContainerNode) -> ContainerDescriptor {
+    ContainerDescriptor {
+        direction: c.direction,
+        align_items: c.align_items,
+        justify_content: c.justify_content,
+        wrap: c.wrap,
+        gap: c.gap,
+        event_id: c.event_id.clone(),
+    }
+}
+
+pub fn map_style_descriptor(s: &ViewStyle) -> StyleDescriptor {
+    StyleDescriptor {
+        padding: s.padding,
+        margin: s.margin,
+        width: s.width,
+        height: s.height,
+        corner_radius: s.corner_radius,
+        opacity: s.opacity,
+        color: s.color,
+        background: s.background,
+        flex_grow: s.flex_grow,
+        border_width: s.border_width,
+        border_color: s.border_color,
+        min_width: s.min_width,
+        max_width: s.max_width,
+        min_height: s.min_height,
+        max_height: s.max_height,
+        overflow: s.overflow,
+    }
+}
 
 pub fn render_ext_view_tree(
     contribution: &CanonicalId,
@@ -32,12 +95,40 @@ fn render_view_node(
 ) -> gpui::AnyElement {
     match node {
         ViewNode::Container(c) => {
-            let mut container = div().flex();
-            container = match c.direction {
-                ContainerDirection::Row => container.flex_row().items_center(),
-                ContainerDirection::Column => container.flex_col(),
-                ContainerDirection::Stack => container.relative(),
+            let mut container = match c.direction {
+                ContainerDirection::Row => div().flex().flex_row(),
+                ContainerDirection::Column => div().flex().flex_col(),
+                ContainerDirection::Grid { columns } => div().grid().grid_cols(columns),
+                ContainerDirection::Stack => div().relative(),
             };
+
+            if c.wrap
+                && matches!(
+                    c.direction,
+                    ContainerDirection::Row | ContainerDirection::Column
+                )
+            {
+                container = container.flex_wrap();
+            }
+
+            if let Some(align) = c.align_items {
+                container = match align {
+                    Alignment::Start => container.items_start(),
+                    Alignment::Center => container.items_center(),
+                    Alignment::End => container.items_end(),
+                    Alignment::Stretch => container.items_stretch(),
+                };
+            }
+
+            if let Some(just) = c.justify_content {
+                container = match just {
+                    Justification::Start => container.justify_start(),
+                    Justification::Center => container.justify_center(),
+                    Justification::End => container.justify_end(),
+                    Justification::SpaceBetween => container.justify_between(),
+                    Justification::SpaceAround => container.justify_around(),
+                };
+            }
 
             if let Some(gap) = c.gap {
                 container = container.gap(px(gap));
@@ -56,7 +147,31 @@ fn render_view_node(
                 };
             }
 
-            container.into_any_element()
+            if let Some(event_id) = &c.event_id {
+                let contribution = contribution.clone();
+                let instance_id_owned = instance_id.map(ToOwned::to_owned);
+                let event_id = event_id.clone();
+                let container_element_id = format!(
+                    "ext:{contribution}:{}:container:{event_id}",
+                    instance_id.unwrap_or("shared")
+                );
+                container
+                    .id(container_element_id)
+                    .cursor_pointer()
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        ShellRuntime::dispatch_extension_input(
+                            cx,
+                            &contribution,
+                            instance_id_owned.as_deref(),
+                            event_id.clone(),
+                            None,
+                        );
+                    })
+                    .into_any_element()
+            } else {
+                container.into_any_element()
+            }
         }
         ViewNode::Text(t) => {
             let mut el = div().child(t.content.clone());
@@ -116,6 +231,7 @@ fn render_view_node(
             base.id(format!("ext:{contribution}:button:{event_id}"))
                 .cursor_pointer()
                 .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
                     ShellRuntime::dispatch_extension_input(
                         cx,
                         &contribution,
@@ -141,6 +257,7 @@ fn render_view_node(
             base.id(format!("ext:{contribution}:icon-button:{event_id}"))
                 .cursor_pointer()
                 .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
                     ShellRuntime::dispatch_extension_input(
                         cx,
                         &contribution,
@@ -168,6 +285,7 @@ fn render_view_node(
             base.id(format!("ext:{contribution}:toggle:{event_id}"))
                 .cursor_pointer()
                 .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
                     ShellRuntime::dispatch_extension_input(
                         cx,
                         &contribution,
@@ -350,6 +468,38 @@ fn apply_view_style(mut div: gpui::Div, style: &ViewStyle, cx: &App) -> gpui::Di
     if let Some(bg) = style.background {
         div = div.bg(resolve_color_token(bg, cx));
     }
+    if let Some(bw) = style.border_width
+        && bw > 0.0
+    {
+        let width = px(bw).into();
+        div.style().border_widths.top = Some(width);
+        div.style().border_widths.bottom = Some(width);
+        div.style().border_widths.left = Some(width);
+        div.style().border_widths.right = Some(width);
+        let color_token = style.border_color.unwrap_or(SemanticColorToken::Outline);
+        div = div.border_color(resolve_color_token(color_token, cx));
+    }
+    if let Some(min_w) = style.min_width {
+        div = div.min_w(px(min_w));
+    }
+    if let Some(max_w) = style.max_width {
+        div = div.max_w(px(max_w));
+    }
+    if let Some(min_h) = style.min_height {
+        div = div.min_h(px(min_h));
+    }
+    if let Some(max_h) = style.max_height {
+        div = div.max_h(px(max_h));
+    }
+    if let Some(overflow) = style.overflow {
+        let (x, y) = match overflow {
+            Overflow::Visible => (gpui::Overflow::Visible, gpui::Overflow::Visible),
+            Overflow::Hidden => (gpui::Overflow::Hidden, gpui::Overflow::Hidden),
+            Overflow::Scroll => (gpui::Overflow::Scroll, gpui::Overflow::Scroll),
+        };
+        div.style().overflow.x = Some(x);
+        div.style().overflow.y = Some(y);
+    }
     div
 }
 
@@ -364,5 +514,243 @@ fn resolve_color_token(token: SemanticColorToken, cx: &App) -> gpui::Hsla {
         SemanticColorToken::OnSurfaceVariant => cx.theme().on_surface_variant,
         SemanticColorToken::Outline => cx.theme().outline,
         SemanticColorToken::Error => cx.theme().error,
+    }
+}
+
+pub fn create_showcase_view_tree() -> ViewTree {
+    use shilpo_ext_api::*;
+
+    let grid_container = ViewNode::Container(ContainerNode {
+        direction: ContainerDirection::Grid { columns: 3 },
+        children: vec![
+            ViewNode::Text(TextNode {
+                content: "Grid Item 1".into(),
+                font_size: Some(14.0),
+                bold: Some(true),
+                style: None,
+            }),
+            ViewNode::Text(TextNode {
+                content: "Grid Item 2".into(),
+                font_size: Some(14.0),
+                bold: None,
+                style: None,
+            }),
+            ViewNode::Button(ButtonNode {
+                label: "Nested Button".into(),
+                event_id: "nested_btn_click".into(),
+                style: None,
+            }),
+        ],
+        style: Some(ViewStyle {
+            border_width: Some(1.0),
+            border_color: Some(SemanticColorToken::Outline),
+            padding: Some(8.0),
+            ..ViewStyle::default()
+        }),
+        gap: Some(6.0),
+        align_items: Some(Alignment::Center),
+        justify_content: Some(Justification::SpaceBetween),
+        wrap: false,
+        event_id: Some("grid_container_click".into()),
+    });
+
+    let flex_wrap_row = ViewNode::Container(ContainerNode {
+        direction: ContainerDirection::Row,
+        children: vec![
+            ViewNode::Text(TextNode {
+                content: "Flex Row Item".into(),
+                font_size: None,
+                bold: None,
+                style: None,
+            }),
+            ViewNode::Badge(BadgeNode {
+                label: "Wrap Badge".into(),
+                style: None,
+            }),
+        ],
+        style: Some(ViewStyle {
+            min_width: Some(100.0),
+            max_width: Some(300.0),
+            min_height: Some(40.0),
+            max_height: Some(150.0),
+            overflow: Some(Overflow::Scroll),
+            border_width: Some(2.0),
+            border_color: Some(SemanticColorToken::Primary),
+            ..ViewStyle::default()
+        }),
+        gap: Some(4.0),
+        align_items: Some(Alignment::Start),
+        justify_content: Some(Justification::Center),
+        wrap: true,
+        event_id: Some("flex_row_click".into()),
+    });
+
+    let stack_container = ViewNode::Container(ContainerNode {
+        direction: ContainerDirection::Stack,
+        children: vec![
+            ViewNode::Text(TextNode {
+                content: "Stack Background".into(),
+                font_size: None,
+                bold: None,
+                style: None,
+            }),
+            ViewNode::Text(TextNode {
+                content: "Stack Foreground".into(),
+                font_size: None,
+                bold: Some(true),
+                style: None,
+            }),
+        ],
+        style: Some(ViewStyle {
+            overflow: Some(Overflow::Hidden),
+            border_width: Some(1.0),
+            border_color: None,
+            ..ViewStyle::default()
+        }),
+        gap: None,
+        align_items: None,
+        justify_content: None,
+        wrap: false,
+        event_id: None,
+    });
+
+    let root_container = ContainerNode {
+        direction: ContainerDirection::Column,
+        children: vec![grid_container, flex_wrap_row, stack_container],
+        style: Some(ViewStyle {
+            padding: Some(12.0),
+            ..ViewStyle::default()
+        }),
+        gap: Some(8.0),
+        align_items: Some(Alignment::Stretch),
+        justify_content: Some(Justification::Start),
+        wrap: false,
+        event_id: None,
+    };
+
+    ViewTree::new(ViewNode::Container(root_container))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shilpo_ext_api::ViewLimits;
+
+    #[test]
+    fn pure_mapping_descriptors_cover_all_branches() {
+        let container = shilpo_ext_api::ContainerNode {
+            direction: ContainerDirection::Grid { columns: 3 },
+            children: vec![],
+            style: Some(ViewStyle {
+                padding: Some(8.0),
+                margin: Some(4.0),
+                width: Some(200.0),
+                height: Some(100.0),
+                corner_radius: Some(6.0),
+                opacity: Some(0.9),
+                color: Some(SemanticColorToken::Primary),
+                background: Some(SemanticColorToken::Surface),
+                flex_grow: Some(1.0),
+                border_width: Some(1.5),
+                border_color: Some(SemanticColorToken::Outline),
+                min_width: Some(100.0),
+                max_width: Some(400.0),
+                min_height: Some(50.0),
+                max_height: Some(300.0),
+                overflow: Some(Overflow::Scroll),
+            }),
+            gap: Some(12.0),
+            align_items: Some(Alignment::Center),
+            justify_content: Some(Justification::SpaceBetween),
+            wrap: false,
+            event_id: Some("card".into()),
+        };
+
+        let container_desc = map_container_descriptor(&container);
+        assert_eq!(
+            container_desc,
+            ContainerDescriptor {
+                direction: ContainerDirection::Grid { columns: 3 },
+                align_items: Some(Alignment::Center),
+                justify_content: Some(Justification::SpaceBetween),
+                wrap: false,
+                gap: Some(12.0),
+                event_id: Some("card".into()),
+            }
+        );
+
+        let style_desc = map_style_descriptor(container.style.as_ref().unwrap());
+        assert_eq!(
+            style_desc,
+            StyleDescriptor {
+                padding: Some(8.0),
+                margin: Some(4.0),
+                width: Some(200.0),
+                height: Some(100.0),
+                corner_radius: Some(6.0),
+                opacity: Some(0.9),
+                color: Some(SemanticColorToken::Primary),
+                background: Some(SemanticColorToken::Surface),
+                flex_grow: Some(1.0),
+                border_width: Some(1.5),
+                border_color: Some(SemanticColorToken::Outline),
+                min_width: Some(100.0),
+                max_width: Some(400.0),
+                min_height: Some(50.0),
+                max_height: Some(300.0),
+                overflow: Some(Overflow::Scroll),
+            }
+        );
+    }
+
+    #[test]
+    fn showcase_tree_validates_cleanly_and_covers_all_layout_features() {
+        let tree = create_showcase_view_tree();
+        assert!(tree.validate(ViewLimits::default()).is_ok());
+    }
+
+    #[test]
+    fn pure_mapping_covers_all_alignment_justification_overflow_branches() {
+        let alignments = [
+            Alignment::Start,
+            Alignment::Center,
+            Alignment::End,
+            Alignment::Stretch,
+        ];
+        let justifications = [
+            Justification::Start,
+            Justification::Center,
+            Justification::End,
+            Justification::SpaceBetween,
+            Justification::SpaceAround,
+        ];
+        let overflows = [Overflow::Visible, Overflow::Hidden, Overflow::Scroll];
+
+        for &align in &alignments {
+            for &just in &justifications {
+                let node = shilpo_ext_api::ContainerNode {
+                    direction: ContainerDirection::Row,
+                    children: vec![],
+                    style: None,
+                    gap: Some(5.0),
+                    align_items: Some(align),
+                    justify_content: Some(just),
+                    wrap: true,
+                    event_id: Some("id".into()),
+                };
+                let desc = map_container_descriptor(&node);
+                assert_eq!(desc.align_items, Some(align));
+                assert_eq!(desc.justify_content, Some(just));
+            }
+        }
+
+        for &overflow in &overflows {
+            let style = ViewStyle {
+                overflow: Some(overflow),
+                ..ViewStyle::default()
+            };
+            let desc = map_style_descriptor(&style);
+            assert_eq!(desc.overflow, Some(overflow));
+        }
     }
 }

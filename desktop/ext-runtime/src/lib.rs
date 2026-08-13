@@ -608,6 +608,10 @@ mod tests {
                 children: vec![child],
                 style: None,
                 gap: None,
+                align_items: None,
+                justify_content: None,
+                wrap: false,
+                event_id: None,
             })
         });
         assert!(

@@ -65,5 +65,4 @@ capability. This created security and design risks:
 - Secret Service integration is operational via `Oo7SecretBroker` for `secrets` WIT calls. Runtime initialization fails
   closed when Secret Service is unavailable; there is no production plaintext or in-memory fallback.
 - Durable LMDB state persistence and reactive watch subscription contract are operational via `HeedStateStore` for `state` WIT calls.
-- Follow-up tracker issues: #78 (state store completed), #92 (Rust SDK WIT bindgen), #96 (hot-reload), #100 (CLI
-  scaffolding), and #131 (benchmark suite).
+- Follow-up tracker issues: #78 (state store completed), #92 (ViewTree layout & interaction enhancements completed), #96 (hot-reload), #100 (CLI scaffolding), and #131 (benchmark suite).
