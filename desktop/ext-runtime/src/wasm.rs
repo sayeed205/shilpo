@@ -1140,6 +1140,36 @@ mod secret_host_tests {
         );
         assert!(state.operations.is_empty());
     }
+
+    #[test]
+    fn secret_ref_state_round_trip_stays_typed_and_opaque() {
+        let reference = shilpo::extension::types::SecretRef {
+            handle: "opaque-handle".into(),
+        };
+        let value = shilpo::extension::types::DataValue::SecretRef(reference.clone());
+        let json = data_value_to_json(&value);
+        assert_eq!(json, serde_json::json!({ "secret_ref": "opaque-handle" }));
+        assert!(matches!(
+            data_value_from_json(&json),
+            shilpo::extension::types::DataValue::SecretRef(value) if value.handle == reference.handle
+        ));
+
+        let mut state = state(true, None);
+        <WasmState as shilpo::extension::state::Host>::write(
+            &mut state,
+            "credential".into(),
+            value,
+        )
+        .unwrap();
+        let stored =
+            <WasmState as shilpo::extension::state::Host>::read(&mut state, "credential".into())
+                .unwrap();
+        assert!(matches!(
+            stored,
+            Some(shilpo::extension::types::DataValue::SecretRef(value))
+                if value.handle == "opaque-handle"
+        ));
+    }
 }
 
 fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::ExtensionEvent {

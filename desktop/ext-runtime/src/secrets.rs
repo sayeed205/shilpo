@@ -522,6 +522,32 @@ mod tests {
             fake.delete_all(&ext, deadline()),
             Err(SecretBrokerError::Cancelled(_))
         ));
+
+        fake.set_simulated_error(Some(SecretBrokerError::NotFound("missing".into())));
+        assert!(matches!(
+            fake.read(&ext, &purpose, &SecretRef::new("h1"), deadline()),
+            Err(SecretBrokerError::NotFound(_))
+        ));
+
+        fake.set_simulated_error(Some(SecretBrokerError::Internal("broken".into())));
+        assert!(matches!(
+            fake.set(&ext, &purpose, b"val", deadline()),
+            Err(SecretBrokerError::Internal(_))
+        ));
+        fake.set_simulated_error(None);
+        assert!(matches!(
+            fake.read(&ext, &purpose, &SecretRef::new(""), deadline()),
+            Err(SecretBrokerError::InvalidReference(_))
+        ));
+        assert!(matches!(
+            fake.read(
+                &ext,
+                &purpose,
+                &SecretRef::new("h1"),
+                Instant::now() - std::time::Duration::from_secs(1),
+            ),
+            Err(SecretBrokerError::Cancelled(_))
+        ));
     }
 
     #[test]
