@@ -1,10 +1,456 @@
 package shilpo:extension@0.1.0;
 
-world extension {
-    /// Receives one JSON-encoded `ExtensionEvent` and returns a JSON-encoded
-    /// list of `HostEffect` values.
-    export on-event: func(event-json: string) -> string;
+/// Shared data structures, identity shapes, envelopes, errors, and deadlines across the extension ABI boundary.
+interface types {
+    /// Opaque string identifier for an extension (e.g., "org.shilpo.weather").
+    record extension-id {
+        value: string,
+    }
 
-    /// Returns a JSON-encoded `Option<ViewTree>` for a contribution.
-    export view: func(contribution-id: string) -> string;
+    /// Opaque string identifier for a single contribution within an extension (e.g., "bar_widget").
+    record contribution-id {
+        value: string,
+    }
+
+    /// Canonical combined identity ("extension_id/contribution_id").
+    record canonical-id {
+        extension-id: string,
+        contribution-id: string,
+    }
+
+    /// Request correlation identifier for asynchronous host import operations.
+    type request-id = string;
+
+    /// Monotonic activation correlation identifier.
+    type activation-id = string;
+
+    /// Monotonic deadline represented as remaining milliseconds.
+    record deadline {
+        remaining-ms: u64,
+    }
+
+    /// Classification of typed errors returned by host imports.
+    enum error-kind {
+        unauthorized,
+        invalid-argument,
+        not-found,
+        rate-limited,
+        unsupported,
+        internal,
+    }
+
+    /// Standard error payload returned by host imports.
+    record error {
+        kind: error-kind,
+        message: string,
+    }
+
+    /// Typed scalar data value used for extension settings, input, state, and
+    /// action payloads. It is not a JSON string at the component boundary.
+    variant data-value {
+        none,
+        bool-value(bool),
+        int-value(s64),
+        float-value(f64),
+        text-value(string),
+        bytes-value(list<u8>),
+    }
+
+    record activation-input {
+        contribution-id: option<string>,
+        event-id: option<string>,
+        value: option<data-value>,
+    }
+
+    record caller {
+        id: string,
+        kind: string,
+    }
+
+    /// Explicit trigger origin for component activation.
+    variant activation-origin {
+        shell-startup,
+        contribution-mount,
+        user-input,
+        event-dispatch,
+        system-resume,
+    }
+
+    /// Enclosing context provided during component activation/start.
+    record activation {
+        id: activation-id,
+        origin: activation-origin,
+        extension-id: string,
+        contribution-id: option<string>,
+        input: option<activation-input>,
+        caller: option<caller>,
+        deadline: option<deadline>,
+    }
+
+    /// Reason for orderly guest component deactivation.
+    enum deactivate-reason {
+        user-requested,
+        shell-shutdown,
+        reload,
+        error-quarantine,
+    }
+}
+
+/// Inbound lifecycle, environment, and contribution interaction events dispatched to guest extensions.
+interface events {
+    use types.{canonical-id, request-id, data-value};
+
+    /// High-level event category names for capability filtering.
+    enum event-kind {
+        outputs-changed,
+        theme-changed,
+        palette-generated,
+        wallpaper-changed,
+        network-changed,
+        media-changed,
+        power-changed,
+        timer-fired,
+    }
+
+    /// Inbound events dispatched into guest components.
+    variant extension-event {
+        shell-started,
+        shell-stopping,
+        outputs-changed,
+        theme-changed(theme-event),
+        palette-generated(palette-event),
+        wallpaper-changed(wallpaper-event),
+        network-changed(network-event),
+        media-changed(media-event),
+        power-changed(power-event),
+        timer-fired(timer-event),
+        contribution-mounted(mounted-event),
+        contribution-unmounted(unmounted-event),
+        contribution-resized(resized-event),
+        contribution-settings-changed(settings-event),
+        input(input-event),
+        state-value(state-event),
+        http-response(http-response-event),
+        location-response(location-response-event),
+    }
+
+    record theme-event { mode: string }
+    record palette-event { accent: string }
+    record wallpaper-event { path: string }
+    record network-event { connected: bool }
+    record media-event { title: option<string>, artist: option<string>, playing: bool }
+    record power-event { percentage: option<f32>, charging: bool }
+    record timer-event { name: string }
+    record mounted-event { contribution-id: string, instance-id: option<string>, width: f32, height: f32 }
+    record unmounted-event { contribution-id: string, instance-id: option<string> }
+    record resized-event { contribution-id: string, instance-id: option<string>, width: f32, height: f32 }
+    record settings-event { contribution-id: string, instance-id: option<string>, settings: data-value }
+    record input-event { contribution-id: string, instance-id: option<string>, event-id: string, value: option<data-value> }
+    record state-event { key: string, value: option<data-value> }
+    record http-response-event { request-id: string, status: option<u16>, body: string, error: option<string> }
+    record location-response-event { latitude: option<f64>, longitude: option<f64>, accuracy-meters: option<f64>, error: option<string> }
+}
+
+/// Declarative ViewTree UI component family produced by extensions for rendering.
+interface view {
+    enum container-direction {
+        row,
+        column,
+        stack,
+    }
+
+    enum semantic-color-token {
+        primary,
+        on-primary,
+        secondary,
+        surface,
+        surface-container,
+        on-surface,
+        on-surface-variant,
+        outline,
+        error,
+    }
+
+    record view-style {
+        padding: option<f32>,
+        margin: option<f32>,
+        width: option<f32>,
+        height: option<f32>,
+        corner-radius: option<f32>,
+        opacity: option<f32>,
+        color: option<semantic-color-token>,
+        background: option<semantic-color-token>,
+        flex-grow: option<f32>,
+    }
+
+    variant view-node {
+        container(container-node),
+        text(text-node),
+        icon(icon-node),
+        image(image-node),
+        button(button-node),
+        icon-button(icon-button-node),
+        toggle(toggle-node),
+        slider(slider-node),
+        text-input(text-input-node),
+        %list(list-node),
+        spacer(spacer-node),
+        divider,
+        badge(badge-node),
+        progress(progress-node),
+        loading-indicator(loading-indicator-node),
+    }
+
+    record container-node {
+        direction: container-direction,
+        children: list<u32>,
+        style: option<view-style>,
+        gap: option<f32>,
+    }
+
+    record text-node {
+        content: string,
+        font-size: option<f32>,
+        bold: option<bool>,
+        style: option<view-style>,
+    }
+
+    record icon-node {
+        name: string,
+        size: option<f32>,
+        style: option<view-style>,
+    }
+
+    record image-node {
+        asset-path: string,
+        width: option<f32>,
+        height: option<f32>,
+        style: option<view-style>,
+    }
+
+    record button-node {
+        label: string,
+        event-id: string,
+        style: option<view-style>,
+    }
+
+    record icon-button-node {
+        icon-name: string,
+        event-id: string,
+        style: option<view-style>,
+    }
+
+    record toggle-node {
+        value: bool,
+        event-id: string,
+        style: option<view-style>,
+    }
+
+    record slider-node {
+        value: f32,
+        min: f32,
+        max: f32,
+        event-id: string,
+        style: option<view-style>,
+    }
+
+    record text-input-node {
+        placeholder: option<string>,
+        value: string,
+        event-id: string,
+        style: option<view-style>,
+    }
+
+    record list-node {
+        items: list<u32>,
+        style: option<view-style>,
+    }
+
+    record spacer-node {
+        size: option<f32>,
+    }
+
+    record badge-node {
+        label: string,
+        style: option<view-style>,
+    }
+
+    record progress-node {
+        value: f32,
+        style: option<view-style>,
+    }
+
+    record loading-indicator-node {
+        size: option<f32>,
+        color: option<semantic-color-token>,
+        style: option<view-style>,
+    }
+
+    record view-tree {
+        nodes: list<view-node>,
+        root: u32,
+    }
+}
+
+/// Host import for invoking registered system actions.
+/// Required capability scope: `actions:invoke`.
+interface actions {
+    use types.{error, data-value};
+
+    /// Invokes a desktop shell action with optional payload.
+    invoke: func(action-id: string, payload: option<data-value>) -> result<_, error>;
+}
+
+/// Host import for system clipboard access.
+/// Required capability scopes: `clipboard:read`, `clipboard:write`.
+interface clipboard {
+    use types.{error};
+
+    /// Reads current plain text from system clipboard.
+    read: func() -> result<string, error>;
+
+    /// Writes plain text to system clipboard.
+    write: func(text: string) -> result<_, error>;
+}
+
+/// Host import for virtual path filesystem access (`assets/`, `data/`, `user/`).
+/// Required capability scopes: `filesystem:read`, `filesystem:write`.
+interface filesystem {
+    use types.{error};
+
+    /// Reads binary content from a virtual file path.
+    read-file: func(path: string) -> result<list<u8>, error>;
+
+    /// Writes binary content to a virtual file path.
+    write-file: func(path: string, contents: list<u8>) -> result<_, error>;
+}
+
+/// Host import for outbound HTTPS network requests.
+/// Required capability scope: `network:http`.
+interface http {
+    use types.{request-id, deadline, error};
+
+    /// Network request description.
+    record http-request {
+        request-id: request-id,
+        url: string,
+        method: string,
+        headers: list<tuple<string, string>>,
+        body: option<list<u8>>,
+        deadline: option<deadline>,
+    }
+
+    /// Enqueues an asynchronous HTTP request; response delivered via `events.http-response`.
+    request: func(req: http-request) -> result<request-id, error>;
+
+    /// Cancels an in-flight HTTP request by ID.
+    cancel: func(req-id: request-id) -> result<_, error>;
+}
+
+/// Host import for geolocation reading.
+/// Required capability scope: `location:read`.
+interface location {
+    use types.{request-id, error};
+
+    /// Requests current device location; result delivered via `events.location-response`.
+    read: func() -> result<request-id, error>;
+}
+
+/// Host import for desktop notification display.
+/// Required capability scope: `notifications:show`.
+interface notifications {
+    use types.{error};
+
+    record notification-request {
+        title: string,
+        body: string,
+        icon: option<string>,
+    }
+
+    /// Displays a desktop notification.
+    show: func(req: notification-request) -> result<_, error>;
+}
+
+/// Host import for extension-scoped key-value state (seam for #78).
+interface state {
+    use types.{error, data-value};
+
+    /// Reads stored value for key.
+    read: func(key: string) -> result<option<data-value>, error>;
+
+    /// Writes value for key.
+    write: func(key: string, value: data-value) -> result<_, error>;
+}
+
+/// Host import for encrypted secret storage (seam for #138).
+interface secrets {
+    use types.{error};
+
+    /// Opaque handle; the secret value never crosses this ABI.
+    record secret-ref { handle: string }
+
+    /// Retrieves secret value (plaintext never logged/cached).
+    get-secret: func(key: string) -> result<option<secret-ref>, error>;
+}
+
+/// Host import for system theme inspection and accent setting.
+/// Required capability scopes: `theme:read`, `theme:set_source`.
+interface theme {
+    use types.{error};
+
+    record theme-info {
+        mode: string,
+        accent: string,
+    }
+
+    /// Reads current desktop theme state.
+    read: func() -> result<theme-info, error>;
+
+    /// Sets custom accent seed color hex.
+    set-source-color: func(color: string) -> result<_, error>;
+}
+
+/// Host import for wallpaper reading and setting.
+/// Required capability scopes: `wallpaper:read`, `wallpaper:set`.
+interface wallpaper {
+    use types.{error};
+
+    enum wallpaper-source {
+        extension-asset,
+        local-file,
+        remote,
+    }
+
+    record wallpaper-info {
+        path: string,
+    }
+
+    /// Sets system wallpaper path and source.
+    set: func(path: string, source: wallpaper-source) -> result<_, error>;
+
+    /// Reads current system wallpaper info.
+    read: func() -> result<wallpaper-info, error>;
+}
+
+/// Canonical Shilpo extension component world.
+world extension {
+    use types.{activation, deactivate-reason, error};
+    use events.{extension-event};
+    use view.{view-tree};
+
+    import actions;
+    import clipboard;
+    import filesystem;
+    import http;
+    import location;
+    import notifications;
+    import state;
+    import secrets;
+    import theme;
+    import wallpaper;
+
+    export activate: func(act: activation) -> result<_, error>;
+    export deactivate: func(reason: deactivate-reason) -> result<_, error>;
+    export on-event: func(event: extension-event) -> result<_, error>;
+    export view: func(contribution-id: string) -> result<option<view-tree>, error>;
 }

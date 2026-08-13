@@ -9,7 +9,7 @@ use std::fmt;
 use std::path::{Component, Path};
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
-pub const SUPPORTED_API_VERSION: &str = "0.2.0";
+pub const SUPPORTED_API_VERSION: &str = "0.1.0";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ManifestError {
@@ -160,8 +160,6 @@ pub enum CapabilityKind {
     ActionsInvoke,
     #[serde(rename = "network:http")]
     NetworkHttp,
-    #[serde(rename = "process:exec")]
-    ProcessExec,
     #[serde(rename = "filesystem:read")]
     FilesystemRead,
     #[serde(rename = "filesystem:write")]
@@ -197,12 +195,6 @@ pub enum Capability {
         #[serde(default)]
         paths: Vec<String>,
     },
-    #[serde(rename = "process:exec")]
-    ProcessExec {
-        command: String,
-        #[serde(default)]
-        args: Vec<String>,
-    },
     #[serde(rename = "filesystem:read")]
     FilesystemRead { paths: Vec<String> },
     #[serde(rename = "filesystem:write")]
@@ -224,7 +216,6 @@ impl Capability {
             Self::ClipboardWrite => CapabilityKind::ClipboardWrite,
             Self::ActionsInvoke { .. } => CapabilityKind::ActionsInvoke,
             Self::NetworkHttp { .. } => CapabilityKind::NetworkHttp,
-            Self::ProcessExec { .. } => CapabilityKind::ProcessExec,
             Self::FilesystemRead { .. } => CapabilityKind::FilesystemRead,
             Self::FilesystemWrite { .. } => CapabilityKind::FilesystemWrite,
             Self::LocationRead => CapabilityKind::LocationRead,
@@ -260,22 +251,6 @@ pub fn wildcard_matches(pattern: &str, value: &str) -> bool {
         pattern_index += 1;
     }
     pattern_index == pattern.len()
-}
-
-pub fn arguments_match(patterns: &[String], arguments: &[String]) -> bool {
-    if patterns.last().is_some_and(|pattern| pattern == "**") {
-        arguments.len() >= patterns.len().saturating_sub(1)
-            && patterns[..patterns.len() - 1]
-                .iter()
-                .zip(arguments)
-                .all(|(pattern, argument)| wildcard_matches(pattern, argument))
-    } else {
-        patterns.len() == arguments.len()
-            && patterns
-                .iter()
-                .zip(arguments)
-                .all(|(pattern, argument)| wildcard_matches(pattern, argument))
-    }
 }
 
 impl Contributions {
@@ -455,11 +430,6 @@ fn validate_capabilities(capabilities: &[Capability]) -> Result<(), ManifestErro
                         !host.trim().is_empty() && !host.contains('/') && !host.contains("://")
                     })
                     && paths.iter().all(|path| path.starts_with('/'))
-            }
-            Capability::ProcessExec { command, args } => {
-                !command.trim().is_empty()
-                    && !command.contains('*')
-                    && args.iter().all(|arg| !arg.is_empty())
             }
             Capability::FilesystemRead { paths } | Capability::FilesystemWrite { paths } => {
                 !paths.is_empty() && paths.iter().all(|path| valid_virtual_path_pattern(path))

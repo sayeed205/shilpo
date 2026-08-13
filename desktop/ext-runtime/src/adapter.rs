@@ -1,15 +1,15 @@
-use crate::effects::{AuthorizedHostEffect, capability_allows_effect};
+use crate::effects::{AuthorizedHostOperation, capability_allows_operation};
 use crate::{CircuitBreaker, DiagnosticCode, ExtensionDiagnostic};
 use shilpo_ext_api::{
     CanonicalId, Capability, ContributionId, ExtensionEvent, ExtensionId, ExtensionManifest,
-    HostEffect, IdError, ManifestError, ViewLimits, ViewTree, ViewValidationError,
+    HostOperation, IdError, ManifestError, ViewLimits, ViewTree, ViewValidationError,
 };
 use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
 pub trait GuestExtension: Send + Sync {
-    fn on_event(&mut self, event: &ExtensionEvent) -> Vec<HostEffect>;
+    fn on_event(&mut self, event: &ExtensionEvent) -> Vec<HostOperation>;
     fn view(&self, contribution_id: &str) -> Option<ViewTree>;
 }
 
@@ -87,6 +87,33 @@ impl Default for RuntimeBudget {
 pub trait ExtensionRuntime {
     type Module;
 
+    /// Load a module with the manifest's declared capabilities and the user's
+    /// grants available to host-import authorization. Runtimes that do not
+    /// expose host imports may use the default implementation.
+    fn load_with_capabilities(
+        &mut self,
+        extension_id: &ExtensionId,
+        module: Self::Module,
+        budget: RuntimeBudget,
+        _declared_capabilities: Vec<Capability>,
+        _granted_capabilities: Vec<Capability>,
+    ) -> Result<(), RuntimeError> {
+        self.load(extension_id, module, budget)
+    }
+
+    /// Replace a module while preserving the manifest/grant context used by
+    /// host-import authorization.
+    fn replace_with_capabilities(
+        &mut self,
+        extension_id: &ExtensionId,
+        module: Self::Module,
+        budget: RuntimeBudget,
+        _declared_capabilities: Vec<Capability>,
+        _granted_capabilities: Vec<Capability>,
+    ) -> Result<(), RuntimeError> {
+        self.replace(extension_id, module, budget)
+    }
+
     fn load(
         &mut self,
         extension_id: &ExtensionId,
@@ -107,7 +134,7 @@ pub trait ExtensionRuntime {
         extension_id: &ExtensionId,
         event: &ExtensionEvent,
         budget: RuntimeBudget,
-    ) -> Result<Vec<HostEffect>, RuntimeError>;
+    ) -> Result<Vec<HostOperation>, RuntimeError>;
     fn view(
         &mut self,
         extension_id: &ExtensionId,
@@ -176,7 +203,7 @@ impl ExtensionRuntime for InMemoryRuntime {
         extension_id: &ExtensionId,
         event: &ExtensionEvent,
         _budget: RuntimeBudget,
-    ) -> Result<Vec<HostEffect>, RuntimeError> {
+    ) -> Result<Vec<HostOperation>, RuntimeError> {
         self.guests
             .get_mut(extension_id)
             .map(|guest| guest.on_event(event))
@@ -260,8 +287,8 @@ struct Registration {
 
 #[derive(Debug, Default, PartialEq)]
 pub struct DispatchResult {
-    pub accepted: Vec<AuthorizedHostEffect>,
-    pub rejected: Vec<HostEffect>,
+    pub accepted: Vec<AuthorizedHostOperation>,
+    pub rejected: Vec<HostOperation>,
 }
 
 pub struct ExtensionHost<R> {
@@ -335,7 +362,13 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
         }
 
         let id = manifest.id.clone();
-        if let Err(error) = self.runtime.load(&id, module, self.runtime_budget) {
+        if let Err(error) = self.runtime.load_with_capabilities(
+            &id,
+            module,
+            self.runtime_budget,
+            manifest.capabilities.clone(),
+            grants.clone(),
+        ) {
             self.record_runtime_failure(&id, &error);
             return Err(error.into());
         }
@@ -377,11 +410,14 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             }
         }
 
-        // The runtime stages and validates the new instance before swapping it
-        // into the active slot, so a malformed replacement leaves the old one
-        // available for dispatch and rendering.
         self.runtime
-            .replace(&id, module, self.runtime_budget)
+            .replace_with_capabilities(
+                &id,
+                module,
+                self.runtime_budget,
+                manifest.capabilities.clone(),
+                grants.clone(),
+            )
             .map_err(HostError::Runtime)?;
         self.registrations
             .insert(id, Registration { manifest, grants });
@@ -436,19 +472,19 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             }
         }
 
-        let effects = match self
+        let operations = match self
             .runtime
             .dispatch(extension_id, event, self.runtime_budget)
         {
-            Ok(effects) => effects,
+            Ok(ops) => ops,
             Err(error) => {
                 self.record_runtime_failure(extension_id, &error);
                 return Err(error.into());
             }
         };
         let mut result = DispatchResult::default();
-        for effect in effects {
-            match authorize_effect(effect, registration) {
+        for op in operations {
+            match authorize_operation(op, registration) {
                 Ok(authorized) => result.accepted.push(authorized),
                 Err(rejected) => result.rejected.push(rejected),
             }
@@ -460,7 +496,7 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
                 extension_id,
                 DiagnosticCode::CapabilityDenied,
                 format!(
-                    "rejected {} effect(s) outside the extension's declared and granted capabilities",
+                    "rejected {} operation(s) outside the extension's declared and granted capabilities",
                     result.rejected.len()
                 ),
             );
@@ -544,17 +580,6 @@ impl Default for ExtensionHost<InMemoryRuntime> {
     }
 }
 
-fn effect_is_unprivileged(effect: &HostEffect, manifest: &ExtensionManifest) -> bool {
-    match effect {
-        HostEffect::InvalidateView { contribution_id } => {
-            ContributionId::new(contribution_id.clone())
-                .is_ok_and(|id| manifest.contributions.contains(&id))
-        }
-        HostEffect::StateRead { .. } | HostEffect::StateWrite { .. } => true,
-        _ => false,
-    }
-}
-
 fn diagnostic_code(kind: RuntimeFailureKind) -> DiagnosticCode {
     match kind {
         RuntimeFailureKind::Load | RuntimeFailureKind::Unavailable => DiagnosticCode::RuntimeLoad,
@@ -566,12 +591,12 @@ fn diagnostic_code(kind: RuntimeFailureKind) -> DiagnosticCode {
     }
 }
 
-fn authorize_effect(
-    effect: HostEffect,
+fn authorize_operation(
+    operation: HostOperation,
     registration: &Registration,
-) -> Result<AuthorizedHostEffect, HostEffect> {
-    match effect {
-        HostEffect::HttpRequest {
+) -> Result<AuthorizedHostOperation, HostOperation> {
+    match operation {
+        HostOperation::HttpRequest {
             request_id,
             url,
             method,
@@ -579,7 +604,7 @@ fn authorize_effect(
             let target = match crate::effects::CanonicalHttpTarget::parse(&url, &method) {
                 Some(target) => target,
                 None => {
-                    return Err(HostEffect::HttpRequest {
+                    return Err(HostOperation::HttpRequest {
                         request_id,
                         url,
                         method,
@@ -596,30 +621,29 @@ fn authorize_effect(
                 .iter()
                 .any(|capability| crate::capability_allows_http_target(capability, &target));
             if declared && granted {
-                Ok(AuthorizedHostEffect::http_request(request_id, target))
+                Ok(AuthorizedHostOperation::http_request(request_id, target))
             } else {
-                Err(HostEffect::HttpRequest {
+                Err(HostOperation::HttpRequest {
                     request_id,
                     url,
                     method,
                 })
             }
         }
-        effect => {
-            let allowed = effect_is_unprivileged(&effect, &registration.manifest)
-                || (registration
-                    .manifest
-                    .capabilities
+        operation => {
+            let allowed = registration
+                .manifest
+                .capabilities
+                .iter()
+                .any(|capability| capability_allows_operation(capability, &operation))
+                && registration
+                    .grants
                     .iter()
-                    .any(|capability| capability_allows_effect(capability, &effect))
-                    && registration
-                        .grants
-                        .iter()
-                        .any(|capability| capability_allows_effect(capability, &effect)));
+                    .any(|capability| capability_allows_operation(capability, &operation));
             if allowed {
-                AuthorizedHostEffect::non_http(effect)
+                AuthorizedHostOperation::non_http(operation)
             } else {
-                Err(effect)
+                Err(operation)
             }
         }
     }

@@ -72,14 +72,14 @@ pub(crate) async fn build_response_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shilpo_ext_api::{Capability, ExtensionManifest, HostEffect, ViewTree};
+    use shilpo_ext_api::{Capability, ExtensionManifest, HostOperation, ViewTree};
     use shilpo_ext_runtime::{
-        AuthorizedHostEffectKind, ExtensionHost, GuestExtension, InMemoryRuntime,
+        AuthorizedHostOperationKind, ExtensionHost, GuestExtension, InMemoryRuntime,
     };
 
-    struct TestGuest(HostEffect);
+    struct TestGuest(HostOperation);
     impl GuestExtension for TestGuest {
-        fn on_event(&mut self, _: &ExtensionEvent) -> Vec<HostEffect> {
+        fn on_event(&mut self, _: &ExtensionEvent) -> Vec<HostOperation> {
             vec![self.0.clone()]
         }
 
@@ -107,7 +107,7 @@ mod tests {
         let mut host = ExtensionHost::<InMemoryRuntime>::default();
         host.register(
             manifest.clone(),
-            Box::new(TestGuest(HostEffect::HttpRequest {
+            Box::new(TestGuest(HostOperation::HttpRequest {
                 request_id: "test1".into(),
                 url: "https://api.example.com/clock/current".into(),
                 method: "GET".into(),
@@ -124,7 +124,7 @@ mod tests {
             .unwrap();
         assert_eq!(result.accepted.len(), 1);
 
-        let AuthorizedHostEffectKind::HttpRequest(auth_req) = result.accepted[0].kind() else {
+        let AuthorizedHostOperationKind::HttpRequest(auth_req) = result.accepted[0].kind() else {
             panic!("expected AuthorizedHttpRequest");
         };
 

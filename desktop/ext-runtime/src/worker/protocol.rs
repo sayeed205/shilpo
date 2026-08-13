@@ -1,4 +1,4 @@
-use crate::effects::AuthorizedHostEffect;
+use crate::effects::AuthorizedHostOperation;
 use serde::{Deserialize, Serialize};
 use shilpo_ext_api::{CanonicalId, ExtensionId, ViewTree};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
@@ -59,7 +59,7 @@ pub struct ExtensionSnapshot {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExtensionChanges {
-    pub effects: Vec<(ExtensionId, AuthorizedHostEffect)>,
+    pub effects: Vec<(ExtensionId, AuthorizedHostOperation)>,
     pub invalidated_views: Vec<CanonicalId>,
     pub catalog_changed: bool,
 }
@@ -122,6 +122,6 @@ pub struct ExtensionUpdate {
     pub host_generation: super::process::HostGeneration,
     pub generation: ExtensionGeneration,
     pub snapshot: Option<ExtensionSnapshot>,
-    pub effects: Vec<(ExtensionId, AuthorizedHostEffect)>,
+    pub effects: Vec<(ExtensionId, AuthorizedHostOperation)>,
     pub invalidated_views: Vec<CanonicalId>,
 }
