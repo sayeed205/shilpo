@@ -14,10 +14,10 @@ use semver::Version;
 use shilpo_ext_api::{CapabilityKind, ContributionId, ExtensionId, ViewLimits};
 
 use crate::CatalogPaths;
-use crate::worker::protocol::{ContributionSurface, ExtensionRuntimeKind};
 use crate::worker::protocol::{
     ContributionDescriptor, ExtensionGeneration, ExtensionSnapshot, ScriptExtensionStatus,
 };
+use crate::worker::protocol::{ContributionSurface, ExtensionRuntimeKind};
 
 use super::manager::{ScriptClock, ScriptRuntime};
 use super::manifest::{
@@ -196,10 +196,8 @@ fn script_manifest_numeric_boundaries_duplicates_and_symlink_escape_are_exact() 
 
 #[test]
 fn checked_in_script_schema_matches_generator() {
-    let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../schema/script-manifest-v1.schema.json"
-    ))
-    .unwrap();
+    let expected: serde_json::Value =
+        serde_json::from_str(include_str!("../../schema/script-manifest-v1.schema.json")).unwrap();
     let generated = serde_json::to_value(schemars::schema_for!(ScriptManifest)).unwrap();
     assert_eq!(expected, generated);
 }
@@ -266,7 +264,8 @@ fn record_decoding_handles_view_and_text_shorthand_and_enforces_read_only() {
     assert!(decode_and_validate_record(invalid_icon.as_bytes(), &manifest).is_err());
     let unknown_field = r#"{"schema_version":1,"contribution":"temperature","kind":"text","text":"45°C","surprise":true}"#;
     assert!(decode_and_validate_record(unknown_field.as_bytes(), &manifest).is_err());
-    let trailing_value = r#"{"schema_version":1,"contribution":"temperature","kind":"text","text":"45°C"} {}"#;
+    let trailing_value =
+        r#"{"schema_version":1,"contribution":"temperature","kind":"text","text":"45°C"} {}"#;
     assert!(decode_and_validate_record(trailing_value.as_bytes(), &manifest).is_err());
 }
 
@@ -840,11 +839,10 @@ fn wasm_guest_isolation_security_regression_assertion() {
         "WIT extension contract must contain no process execution functions"
     );
 
-    let capability_schema = serde_json::to_string(&schemars::schema_for!(
-        shilpo_ext_api::Capability
-    ))
-    .unwrap()
-    .to_lowercase();
+    let capability_schema =
+        serde_json::to_string(&schemars::schema_for!(shilpo_ext_api::Capability))
+            .unwrap()
+            .to_lowercase();
     assert!(!capability_schema.contains("process:exec"));
     assert!(!capability_schema.contains("execprocess"));
 }
@@ -908,7 +906,10 @@ fn script_descriptor_view_and_status_survive_worker_snapshot_round_trip() {
     };
     let encoded = serde_json::to_vec(&snapshot).unwrap();
     let decoded: ExtensionSnapshot = serde_json::from_slice(&encoded).unwrap();
-    assert_eq!(decoded.descriptors[0].runtime_kind, ExtensionRuntimeKind::TrustedLocalScript);
+    assert_eq!(
+        decoded.descriptors[0].runtime_kind,
+        ExtensionRuntimeKind::TrustedLocalScript
+    );
     assert_eq!(decoded.views.len(), 1);
     assert_eq!(decoded.script_extensions[0].status, "ready");
 }
