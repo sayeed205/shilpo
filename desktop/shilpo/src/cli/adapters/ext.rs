@@ -519,7 +519,7 @@ impl ExtAdapter {
         op_res
     }
 
-    pub fn uninstall(&self, id_str: &str) -> ExtOpResult {
+    pub fn uninstall(&self, id_str: &str, delete_secrets: bool, delete_state: bool) -> ExtOpResult {
         let Ok(id) = ExtensionId::new(id_str) else {
             return ExtOpResult {
                 success: false,
@@ -529,7 +529,33 @@ impl ExtAdapter {
                 exit_code: 2,
             };
         };
-        let cli_res = ExtensionCli::uninstall(&id, &self.catalog);
+        let secret_policy = if delete_secrets {
+            shilpo_ext_runtime::SecretPolicy::Delete
+        } else {
+            shilpo_ext_runtime::SecretPolicy::Retain
+        };
+        let state_policy = if delete_state {
+            shilpo_ext_runtime::StatePolicy::Delete
+        } else {
+            shilpo_ext_runtime::StatePolicy::Retain
+        };
+        let broker = shilpo_ext_runtime::Oo7SecretBroker::new().ok().map(|b| {
+            std::sync::Arc::new(b) as std::sync::Arc<dyn shilpo_ext_runtime::SecretBroker>
+        });
+        let store = shilpo_ext_runtime::HeedStateStore::open(&self.catalog.paths().data_dir)
+            .ok()
+            .map(|s| std::sync::Arc::new(s) as std::sync::Arc<dyn shilpo_ext_runtime::StateStore>);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+
+        let cli_res = ExtensionCli::uninstall_with_policies(
+            &id,
+            &self.catalog,
+            secret_policy,
+            broker.as_deref(),
+            state_policy,
+            store.as_deref(),
+            deadline,
+        );
         let mut op_res = ExtOpResult {
             success: cli_res.success,
             data: serde_json::json!({

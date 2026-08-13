@@ -840,7 +840,11 @@ async fn main() {
                 ExtCommands::Disable { id } => ext.disable(&id),
                 ExtCommands::Approve { id, grant_all } => ext.approve(&id, grant_all),
                 ExtCommands::Rollback { id } => ext.rollback(&id),
-                ExtCommands::Uninstall { id } => ext.uninstall(&id),
+                ExtCommands::Uninstall {
+                    id,
+                    delete_secrets,
+                    delete_state,
+                } => ext.uninstall(&id, delete_secrets, delete_state),
                 ExtCommands::CheckUpdates => ext.check_updates(),
                 ExtCommands::Channel { id, channel } => ext.channel(&id, channel.as_deref()),
                 ExtCommands::Source { args } => ext.source(&args),

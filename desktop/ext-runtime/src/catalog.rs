@@ -634,7 +634,14 @@ impl ExtensionCatalog {
         Ok(receipt)
     }
     pub fn uninstall(&self, extension_id: &ExtensionId) -> Result<(), CatalogError> {
-        self.uninstall_with_secrets_policy(extension_id, SecretPolicy::Retain, None)
+        self.uninstall_with_policies(
+            extension_id,
+            SecretPolicy::Retain,
+            None,
+            crate::state::StatePolicy::Retain,
+            None,
+            Instant::now() + Duration::from_secs(30),
+        )
     }
 
     pub fn uninstall_with_secrets_policy(
@@ -643,44 +650,94 @@ impl ExtensionCatalog {
         secret_policy: SecretPolicy,
         broker: Option<&dyn crate::secrets::SecretBroker>,
     ) -> Result<(), CatalogError> {
+        self.uninstall_with_policies(
+            extension_id,
+            secret_policy,
+            broker,
+            crate::state::StatePolicy::Retain,
+            None,
+            Instant::now() + Duration::from_secs(30),
+        )
+    }
+
+    pub fn uninstall_with_policies(
+        &self,
+        extension_id: &ExtensionId,
+        secret_policy: SecretPolicy,
+        broker: Option<&dyn crate::secrets::SecretBroker>,
+        state_policy: crate::state::StatePolicy,
+        state_store: Option<&dyn crate::state::StateStore>,
+        deadline: Instant,
+    ) -> Result<(), CatalogError> {
         let receipt_path = self.receipt_path(extension_id);
         if !receipt_path.is_file() {
             return Err(CatalogError::NotFound(extension_id.to_string()));
         }
+
         if let (SecretPolicy::Delete, Some(broker)) = (secret_policy, broker) {
             broker
-                .delete_all(extension_id, Instant::now() + Duration::from_secs(30))
+                .delete_all(extension_id, deadline)
                 .map_err(|error| {
                     CatalogError::Io(format!(
                         "failed to delete extension secrets for {extension_id}: {error}"
                     ))
                 })?;
         }
+
         let package_dir = self.extension_dir(extension_id);
+        let grants_path = self.grants_path(extension_id);
         let trash_dir = self.paths.staging_dir().join(format!(
             "uninstall-{}-{}",
             extension_id,
             unique_suffix()
         ));
-        fs::create_dir_all(self.paths.staging_dir())
-            .map_err(|error| io_error(&self.paths.staging_dir(), error))?;
+        fs::create_dir_all(&trash_dir).map_err(|error| io_error(&trash_dir, error))?;
+
+        let staged_package = trash_dir.join("installed");
+        let staged_receipt = trash_dir.join("receipt.toml");
+        let staged_grants = trash_dir.join("grants.toml");
+
         if package_dir.exists() {
-            fs::rename(&package_dir, &trash_dir).map_err(|error| io_error(&package_dir, error))?;
+            fs::rename(&package_dir, &staged_package).map_err(|error| io_error(&package_dir, error))?;
         }
-        if let Err(error) = fs::remove_file(&receipt_path) {
-            if trash_dir.exists() {
-                let _ = fs::rename(&trash_dir, &package_dir);
+        if receipt_path.exists() {
+            let res = fs::rename(&receipt_path, &staged_receipt);
+            if let Err(error) = res {
+                if staged_package.exists() {
+                    let _ = fs::rename(&staged_package, &package_dir);
+                }
+                let _ = fs::remove_dir_all(&trash_dir);
+                return Err(io_error(&receipt_path, error));
             }
-            return Err(io_error(&receipt_path, error));
         }
-        let grants_path = self.grants_path(extension_id);
         if grants_path.exists() {
-            let _ = fs::remove_file(grants_path);
-        }
-        if trash_dir.exists() {
-            fs::remove_dir_all(&trash_dir).map_err(|error| io_error(&trash_dir, error))?;
+            let _ = fs::rename(&grants_path, &staged_grants);
         }
 
+        let should_delete_state = state_policy == crate::state::StatePolicy::Delete;
+        if should_delete_state {
+            let state_result = match state_store {
+                Some(store) => store.delete_all(extension_id),
+                None => Ok(()),
+            };
+            if let Err(error) = state_result {
+                if staged_package.exists() {
+                    let _ = fs::rename(&staged_package, &package_dir);
+                }
+                if staged_receipt.exists() {
+                    let _ = fs::rename(&staged_receipt, &receipt_path);
+                }
+                if staged_grants.exists() {
+                    let _ = fs::rename(&staged_grants, &grants_path);
+                }
+                let _ = fs::remove_dir_all(&trash_dir);
+                return Err(CatalogError::Io(format!(
+                    "failed to delete extension state for {extension_id}: {error}"
+                )));
+            }
+        }
+
+        let _ = fs::remove_dir_all(&trash_dir);
         Ok(())
     }
 

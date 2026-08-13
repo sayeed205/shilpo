@@ -51,10 +51,19 @@ capability. This created security and design risks:
     - **Uninstall Secret Lifecycle Policy**: Uninstall defaults to `SecretPolicy::Retain` to prevent accidental loss, with
       an explicit `SecretPolicy::Delete` option to purge all extension secret attributes from Secret Service.
 
+6. **Durable Extension State Store & Reactive Watch Contract**:
+    - Extension state is stored in a durable, per-extension-namespaced LMDB environment at `<CatalogPaths.data_dir>/extensions/state.lmdb` managed by `HeedStateStore` in `shilpo-ext-runtime`.
+    - Typed WIT interface `state` (`read`, `write`, `delete`, `watch`, `unwatch`) supports synchronous KV operations with atomic watch registration snapshots (`watch-registration { watch-id, snapshot }`) closing read/watch races.
+    - Persisted state enforces quotas (max 256 keys, max 64 KiB value, max 4 MiB total) and monotonic per-extension revisions in a single LMDB transaction.
+    - `SecretRef` values are rejected on state write/read. State values never cross diagnostic, worker JSON IPC, tracing, or TOML boundaries.
+    - Reactive watches deliver ordered `ExtensionEvent::StateValue` events deferred until host calls return, coalescing updates under backpressure.
+    - Uninstall supports explicit `StatePolicy::{Retain, Delete}` with rollback-safe artifact staging.
+
 ## Consequences & Follow-ups
 
 - Extensions must compile against `shilpo:extension@0.1.0` WIT definitions.
 - Secret Service integration is operational via `Oo7SecretBroker` for `secrets` WIT calls. Runtime initialization fails
   closed when Secret Service is unavailable; there is no production plaintext or in-memory fallback.
-- Follow-up tracker issues: #78 (TypeScript SDK WIT bindgen), #92 (Rust SDK WIT bindgen), #96 (hot-reload), #100 (CLI
+- Durable LMDB state persistence and reactive watch subscription contract are operational via `HeedStateStore` for `state` WIT calls.
+- Follow-up tracker issues: #78 (state store completed), #92 (Rust SDK WIT bindgen), #96 (hot-reload), #100 (CLI
   scaffolding), and #131 (benchmark suite).

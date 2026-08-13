@@ -4,6 +4,7 @@ pub mod circuit_breaker;
 pub mod cli;
 pub mod effects;
 pub mod secrets;
+pub mod state;
 pub mod wasm;
 pub mod worker;
 
@@ -39,6 +40,10 @@ pub use worker::{
     WorkerPayload, read_frame, recv_host_message, recv_worker_message,
     recv_worker_message_nonblocking, run_extension_host, send_host_message, send_worker_message,
     write_frame,
+};
+pub use state::{
+    FakeStateStore, HeedStateStore, StateMutation, StatePolicy, StateSnapshot, StateStore,
+    StateStoreError, StateValue,
 };
 
 #[cfg(test)]
@@ -84,28 +89,75 @@ mod tests {
         paths = ["/clock/*"]
     "#;
 
-    const VALID_CORE_WAT: &str = r#"
-        (module
-          (memory (export "memory") 1)
-          (global $heap (mut i32) (i32.const 4096))
-          (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32)
-            global.get $heap
-            global.get $heap
-            local.get 3
-            i32.add
-            global.set $heap)
-          (func (export "activate") (param i32) (result i32)
-            i32.const 0)
-          (func (export "deactivate") (param i32) (result i32)
-            i32.const 0)
-          (func (export "on-event") (param i32 i32 i64 i32 i64 i64 i64 i64 i32 i32 i64 i32) (result i32)
-            i32.const 0)
-          (func (export "view") (param i32 i32) (result i32)
-            i32.const 0))
-    "#;
+    /// Computes the canonical core-WASM parameter types of the world's exported
+    /// `on-event` and `view` functions, so the dummy test components stay valid
+    /// when the WIT evolves.
+    fn event_export_signatures() -> (Vec<String>, Vec<String>) {
+        let wit_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/ext-api/wit");
+        let mut resolve = wit_parser::Resolve::default();
+        let (pkg_id, _) = resolve
+            .push_dir(&wit_path)
+            .expect("WIT package must resolve");
+        let world_id = resolve
+            .select_world(&[pkg_id], Some("extension"))
+            .expect("world extension must exist");
+        let world = &resolve.worlds[world_id];
+        let signature = |name: &str| {
+            let mut found = None;
+            for (key, item) in world.exports.iter() {
+                match item {
+                    wit_parser::WorldItem::Function(func) => {
+                        if key_name(key) == name {
+                            found = Some(func);
+                        }
+                    }
+                    wit_parser::WorldItem::Interface { id, .. } => {
+                        let interface = &resolve.interfaces[*id];
+                        if let Some((_, func)) = interface
+                            .functions
+                            .iter()
+                            .find(|(func_name, _)| *func_name == name)
+                        {
+                            found = Some(func);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let func = found.unwrap_or_else(|| panic!("world export {name} must exist"));
+            let signature = resolve.wasm_signature(wit_parser::abi::AbiVariant::GuestExport, func);
+            signature
+                .params
+                .iter()
+                .map(|ty| match ty {
+                    wit_parser::abi::WasmType::I32
+                    | wit_parser::abi::WasmType::Pointer
+                    | wit_parser::abi::WasmType::Length => "i32",
+                    wit_parser::abi::WasmType::I64 | wit_parser::abi::WasmType::PointerOrI64 => {
+                        "i64"
+                    }
+                    wit_parser::abi::WasmType::F32 => "f32",
+                    wit_parser::abi::WasmType::F64 => "f64",
+                })
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        fn key_name(key: &wit_parser::WorldKey) -> &str {
+            match key {
+                wit_parser::WorldKey::Name(name) => name.as_str(),
+                wit_parser::WorldKey::Interface(_) => "",
+            }
+        }
+        (signature("on-event"), signature("view"))
+    }
 
-    const RUNAWAY_CORE_WAT: &str = r#"
-        (module
+    /// Builds the dummy core module for the given `on-event` body.
+    fn dummy_component_wat(on_event_body: &str) -> String {
+        let (on_event_params, _) = event_export_signatures();
+        let on_event = on_event_params.join(" ");
+        format!(
+            r#"(module
           (memory (export "memory") 1)
           (global $heap (mut i32) (i32.const 4096))
           (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32)
@@ -118,13 +170,25 @@ mod tests {
             i32.const 0)
           (func (export "deactivate") (param i32) (result i32)
             i32.const 0)
-          (func (export "on-event") (param i32 i32 i64 i32 i64 i64 i64 i64 i32 i32 i64 i32) (result i32)
-            (loop $forever
-              br $forever)
-            unreachable)
+          (func (export "on-event") (param {on_event}) (result i32)
+            {on_event_body})
           (func (export "view") (param i32 i32) (result i32)
             i32.const 0))
-    "#;
+        "#
+        )
+    }
+
+    fn valid_component_wat() -> String {
+        dummy_component_wat("i32.const 0")
+    }
+
+    fn runaway_component_wat() -> String {
+        dummy_component_wat(
+            "(loop $forever
+              br $forever)
+             unreachable",
+        )
+    }
 
     fn test_component_bytes(core_wat: &str) -> Vec<u8> {
         let mut core_wasm = wat::parse_str(core_wat).expect("core WAT must parse");
@@ -631,7 +695,7 @@ mod tests {
         let error = WasmRuntime::validate_module(b"not-a-wasm").unwrap_err();
         assert_eq!(error.kind(), RuntimeFailureKind::Load);
 
-        let valid_component_bytes = test_component_bytes(VALID_CORE_WAT);
+        let valid_component_bytes = test_component_bytes(&valid_component_wat());
         let id = ExtensionId::new("io.github.test.wasm").unwrap();
         let mut runtime = WasmRuntime::with_broker(Arc::new(FakeSecretBroker::new())).unwrap();
         runtime
@@ -673,7 +737,7 @@ mod tests {
 
     #[test]
     fn wasm_adapter_accepts_typed_component_with_runtime_budgets() {
-        let runaway_bytes = test_component_bytes(RUNAWAY_CORE_WAT);
+        let runaway_bytes = test_component_bytes(&runaway_component_wat());
         let id = ExtensionId::new("io.github.test.runaway").unwrap();
         let mut runtime = WasmRuntime::with_broker(Arc::new(FakeSecretBroker::new())).unwrap();
         let budget = RuntimeBudget {
@@ -813,7 +877,7 @@ mod tests {
         fs::write(extension_dir.join("extension.toml"), manifest_content).unwrap();
         fs::write(
             extension_dir.join("extension.wasm"),
-            test_component_bytes(VALID_CORE_WAT),
+            test_component_bytes(&valid_component_wat()),
         )
         .unwrap();
         fs::write(
@@ -1053,6 +1117,7 @@ mod tests {
         )));
         fs::create_dir_all(receipt_path.parent().unwrap()).unwrap();
         fs::create_dir_all(&ext_dir).unwrap();
+        fs::write(&receipt_path, format!("id = \"{ext_id}\"\nschema_version = 1\n[active]\nversion = \"1.0.0\"\npackage_hash = \"hash\"\ninstalled_at = \"2026-08-13T00:00:00Z\"\n")).unwrap();
         let failed =
             catalog.uninstall_with_secrets_policy(&ext_id, SecretPolicy::Delete, Some(&broker));
         assert!(failed.is_err());

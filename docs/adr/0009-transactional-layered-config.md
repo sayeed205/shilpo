@@ -24,7 +24,8 @@ Declarative configuration (`ShellConfig`) represents human-authored user intent 
 
 Operational and session projections (`ShellSessionState`, LMDB session stores, clipboard history, audio/device state) are explicitly separated from declarative configuration:
 - `ShellSessionState` is stored independently (`session.json`).
-- Operational storage is owned by `desktop/services` (LMDB heed store).
+- Operational storage for desktop services is owned by `desktop/services` (LMDB heed store).
+- Extension-scoped operational state is owned strictly by `shilpo-ext-runtime` (`state.lmdb`), separate from declarative TOML intent and from `desktop/services` session LMDB.
 - The `ConfigResolver` never ingests, publishes, or records provenance for operational/session keys.
 
 ### 2. Source Precedence and Deep-Merge Rules
