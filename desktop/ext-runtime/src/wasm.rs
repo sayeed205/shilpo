@@ -106,9 +106,10 @@ impl shilpo::extension::actions::Host for WasmState {
     fn invoke(
         &mut self,
         action_id: String,
-        payload: Option<Vec<u8>>,
+        payload: Option<shilpo::extension::types::DataValue>,
     ) -> Result<(), shilpo::extension::types::Error> {
-        let call_bytes = action_id.len() + payload.as_ref().map_or(0, Vec::len);
+        let payload_json = payload.as_ref().map(data_value_to_json).map(|value| value.to_string());
+        let call_bytes = action_id.len() + payload_json.as_ref().map_or(0, String::len);
         self.charge_hostcall_bytes(call_bytes)?;
         let allowed = self.check_capability(|cap| match cap {
             Capability::ActionsInvoke { actions } => actions
@@ -121,7 +122,7 @@ impl shilpo::extension::actions::Host for WasmState {
         }
         self.operations.push(HostOperation::InvokeAction {
             action_id,
-            payload_json: payload.map(|value| String::from_utf8_lossy(&value).into_owned()),
+            payload_json,
         });
         Ok(())
     }
@@ -259,22 +260,32 @@ impl shilpo::extension::notifications::Host for WasmState {
 }
 
 impl shilpo::extension::state::Host for WasmState {
-    fn read(&mut self, key: String) -> Result<Option<Vec<u8>>, shilpo::extension::types::Error> {
+    fn read(
+        &mut self,
+        key: String,
+    ) -> Result<Option<shilpo::extension::types::DataValue>, shilpo::extension::types::Error> {
         self.charge_hostcall_bytes(key.len())?;
         Ok(self
             .state_store
             .get(&key)
-            .map(|value| value.as_bytes().to_vec()))
+            .map(|value| {
+                serde_json::from_str(value)
+                    .map(|value| data_value_from_json(&value))
+                    .unwrap_or_else(|_| {
+                        shilpo::extension::types::DataValue::TextValue(value.clone())
+                    })
+            }))
     }
 
     fn write(
         &mut self,
         key: String,
-        value: Vec<u8>,
+        value: shilpo::extension::types::DataValue,
     ) -> Result<(), shilpo::extension::types::Error> {
-        self.charge_hostcall_bytes(key.len() + value.len())?;
+        let value_json = data_value_to_json(&value).to_string();
+        self.charge_hostcall_bytes(key.len() + value_json.len())?;
         self.state_store
-            .insert(key, String::from_utf8_lossy(&value).into_owned());
+            .insert(key, value_json);
         Ok(())
     }
 }
@@ -283,7 +294,7 @@ impl shilpo::extension::secrets::Host for WasmState {
     fn get_secret(
         &mut self,
         key: String,
-    ) -> Result<Option<Vec<u8>>, shilpo::extension::types::Error> {
+    ) -> Result<Option<shilpo::extension::secrets::SecretRef>, shilpo::extension::types::Error> {
         self.charge_hostcall_bytes(key.len())?;
         Err(shilpo::extension::types::Error {
             kind: shilpo::extension::types::ErrorKind::Unsupported,
@@ -751,6 +762,14 @@ fn validate_component_type(engine: &Engine, component: &Component) -> Result<(),
             ));
         }
     }
+    for export in ["activate", "deactivate", "on-event", "view"] {
+        if component_type.get_export(engine, export).is_none() {
+            return Err(RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                format!("missing required component export '{export}'"),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -771,6 +790,35 @@ fn classify_wasmtime_error(context: &str, error: wasmtime::Error) -> RuntimeErro
         _ => RuntimeFailureKind::Trap,
     };
     RuntimeError::with_kind(kind, format!("{context}: {message}"))
+}
+
+fn data_value_from_json(value: &serde_json::Value) -> self::shilpo::extension::types::DataValue {
+    use self::shilpo::extension::types::DataValue;
+    match value {
+        serde_json::Value::Null => DataValue::None,
+        serde_json::Value::Bool(value) => DataValue::BoolValue(*value),
+        serde_json::Value::Number(value) => value
+            .as_i64()
+            .map(DataValue::IntValue)
+            .or_else(|| value.as_f64().map(DataValue::FloatValue))
+            .unwrap_or_else(|| DataValue::TextValue(value.to_string())),
+        serde_json::Value::String(value) => DataValue::TextValue(value.clone()),
+        value => DataValue::BytesValue(value.to_string().into_bytes()),
+    }
+}
+
+fn data_value_to_json(value: &self::shilpo::extension::types::DataValue) -> serde_json::Value {
+    use self::shilpo::extension::types::DataValue;
+    match value {
+        DataValue::None => serde_json::Value::Null,
+        DataValue::BoolValue(value) => serde_json::Value::Bool(*value),
+        DataValue::IntValue(value) => serde_json::json!(*value),
+        DataValue::FloatValue(value) => serde_json::json!(*value),
+        DataValue::TextValue(value) => serde_json::Value::String(value.clone()),
+        DataValue::BytesValue(value) => serde_json::Value::Array(
+            value.iter().map(|value| serde_json::json!(*value)).collect(),
+        ),
+    }
 }
 
 fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::ExtensionEvent {
@@ -852,7 +900,7 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
         } => wit_events::ExtensionEvent::ContributionSettingsChanged(wit_events::SettingsEvent {
             contribution_id: contribution_id.clone(),
             instance_id: instance_id.clone(),
-            settings: settings.to_string().into_bytes(),
+            settings: data_value_from_json(settings),
         }),
         ApiEvent::Input {
             contribution_id,
@@ -863,12 +911,12 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
             contribution_id: contribution_id.clone(),
             instance_id: instance_id.clone(),
             event_id: event_id.clone(),
-            value: value.as_ref().map(|v| v.to_string().into_bytes()),
+            value: value.as_ref().map(data_value_from_json),
         }),
         ApiEvent::StateValue { key, value } => {
             wit_events::ExtensionEvent::StateValue(wit_events::StateEvent {
                 key: key.clone(),
-                value: value.as_ref().map(|v| v.to_string().into_bytes()),
+                value: value.as_ref().map(data_value_from_json),
             })
         }
         ApiEvent::HttpResponse {

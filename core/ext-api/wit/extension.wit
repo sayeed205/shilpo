@@ -45,6 +45,28 @@ interface types {
         message: string,
     }
 
+    /// Typed scalar data value used for extension settings, input, state, and
+    /// action payloads. It is not a JSON string at the component boundary.
+    variant data-value {
+        none,
+        bool-value(bool),
+        int-value(s64),
+        float-value(f64),
+        text-value(string),
+        bytes-value(list<u8>),
+    }
+
+    record activation-input {
+        contribution-id: option<string>,
+        event-id: option<string>,
+        value: option<data-value>,
+    }
+
+    record caller {
+        id: string,
+        kind: string,
+    }
+
     /// Explicit trigger origin for component activation.
     variant activation-origin {
         shell-startup,
@@ -60,8 +82,8 @@ interface types {
         origin: activation-origin,
         extension-id: string,
         contribution-id: option<string>,
-        input: option<string>,
-        caller-id: option<string>,
+        input: option<activation-input>,
+        caller: option<caller>,
         deadline: option<deadline>,
     }
 
@@ -76,7 +98,7 @@ interface types {
 
 /// Inbound lifecycle, environment, and contribution interaction events dispatched to guest extensions.
 interface events {
-    use types.{canonical-id, request-id};
+    use types.{canonical-id, request-id, data-value};
 
     /// High-level event category names for capability filtering.
     enum event-kind {
@@ -122,9 +144,9 @@ interface events {
     record mounted-event { contribution-id: string, instance-id: option<string>, width: f32, height: f32 }
     record unmounted-event { contribution-id: string, instance-id: option<string> }
     record resized-event { contribution-id: string, instance-id: option<string>, width: f32, height: f32 }
-    record settings-event { contribution-id: string, instance-id: option<string>, settings: list<u8> }
-    record input-event { contribution-id: string, instance-id: option<string>, event-id: string, value: option<list<u8>> }
-    record state-event { key: string, value: option<list<u8>> }
+    record settings-event { contribution-id: string, instance-id: option<string>, settings: data-value }
+    record input-event { contribution-id: string, instance-id: option<string>, event-id: string, value: option<data-value> }
+    record state-event { key: string, value: option<data-value> }
     record http-response-event { request-id: string, status: option<u16>, body: string, error: option<string> }
     record location-response-event { latitude: option<f64>, longitude: option<f64>, accuracy-meters: option<f64>, error: option<string> }
 }
@@ -273,10 +295,10 @@ interface view {
 /// Host import for invoking registered system actions.
 /// Required capability scope: `actions:invoke`.
 interface actions {
-    use types.{error};
+    use types.{error, data-value};
 
     /// Invokes a desktop shell action with optional payload.
-    invoke: func(action-id: string, payload: option<list<u8>>) -> result<_, error>;
+    invoke: func(action-id: string, payload: option<data-value>) -> result<_, error>;
 }
 
 /// Host import for system clipboard access.
@@ -351,21 +373,24 @@ interface notifications {
 
 /// Host import for extension-scoped key-value state (seam for #78).
 interface state {
-    use types.{error};
+    use types.{error, data-value};
 
     /// Reads stored value for key.
-    read: func(key: string) -> result<option<list<u8>>, error>;
+    read: func(key: string) -> result<option<data-value>, error>;
 
     /// Writes value for key.
-    write: func(key: string, value: list<u8>) -> result<_, error>;
+    write: func(key: string, value: data-value) -> result<_, error>;
 }
 
 /// Host import for encrypted secret storage (seam for #138).
 interface secrets {
     use types.{error};
 
+    /// Opaque handle; the secret value never crosses this ABI.
+    record secret-ref { handle: string }
+
     /// Retrieves secret value (plaintext never logged/cached).
-    get-secret: func(key: string) -> result<option<list<u8>>, error>;
+    get-secret: func(key: string) -> result<option<secret-ref>, error>;
 }
 
 /// Host import for system theme inspection and accent setting.

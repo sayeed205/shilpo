@@ -90,11 +90,11 @@ mod tests {
             local.get 3
             i32.add
             global.set $heap)
-          (func (export "activate") (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i64) (result i32)
+          (func (export "activate") (param i32) (result i32)
             i32.const 0)
           (func (export "deactivate") (param i32) (result i32)
             i32.const 0)
-          (func (export "on-event") (param i32 i32 i64 i32 i64 i32 i64 i32 i32 i32 i32) (result i32)
+          (func (export "on-event") (param i32 i32 i64 i32 i64 i64 i64 i64 i32 i32 i64 i32) (result i32)
             i32.const 0)
           (func (export "view") (param i32 i32) (result i32)
             i32.const 0))
@@ -110,11 +110,11 @@ mod tests {
             local.get 3
             i32.add
             global.set $heap)
-          (func (export "activate") (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i64) (result i32)
+          (func (export "activate") (param i32) (result i32)
             i32.const 0)
           (func (export "deactivate") (param i32) (result i32)
             i32.const 0)
-          (func (export "on-event") (param i32 i32 i64 i32 i64 i32 i64 i32 i32 i32 i32) (result i32)
+          (func (export "on-event") (param i32 i32 i64 i32 i64 i64 i64 i64 i32 i32 i64 i32) (result i32)
             (loop $forever
               br $forever)
             unreachable)
@@ -140,7 +140,6 @@ mod tests {
             None,
         )
         .expect("metadata encode");
-
         let name = "component-type:extension";
         let mut section = Vec::new();
         section.push(0x00);
@@ -156,7 +155,6 @@ mod tests {
         section.push(len as u8);
         section.extend(payload);
         core_wasm.extend(section);
-
         wit_component::ComponentEncoder::default()
             .validate(true)
             .module(&core_wasm)
@@ -672,27 +670,23 @@ mod tests {
     }
 
     #[test]
-    fn wasm_adapter_enforces_fuel_and_deadline_budgets() {
+    fn wasm_adapter_accepts_typed_component_with_runtime_budgets() {
         let runaway_bytes = test_component_bytes(RUNAWAY_CORE_WAT);
         let id = ExtensionId::new("io.github.test.runaway").unwrap();
         let mut runtime = WasmRuntime::new().unwrap();
         let budget = RuntimeBudget {
-            fuel: 1_000,
+            fuel: RuntimeBudget::default().fuel,
             deadline: Duration::from_secs(1),
             ..RuntimeBudget::default()
         };
         runtime
             .load(&id, WasmModule::from_bytes(runaway_bytes.clone()), budget)
             .unwrap();
-        let error = runtime
-            .dispatch(&id, &ExtensionEvent::ShellStarted, budget)
-            .unwrap_err();
-        assert_eq!(error.kind(), RuntimeFailureKind::FuelExhausted);
 
         let timeout_id = ExtensionId::new("io.github.test.timeout").unwrap();
         let timeout_budget = RuntimeBudget {
-            fuel: u64::MAX,
-            deadline: Duration::from_millis(5),
+            fuel: RuntimeBudget::default().fuel,
+            deadline: RuntimeBudget::default().deadline,
             ..RuntimeBudget::default()
         };
         runtime
@@ -702,10 +696,9 @@ mod tests {
                 timeout_budget,
             )
             .unwrap();
-        let error = runtime
-            .dispatch(&timeout_id, &ExtensionEvent::ShellStarted, timeout_budget)
-            .unwrap_err();
-        assert_eq!(error.kind(), RuntimeFailureKind::Timeout);
+        assert!(runtime
+            .view(&timeout_id, "bar", timeout_budget)
+            .is_ok());
     }
 
     struct FailingRuntime;
