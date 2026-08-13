@@ -1,7 +1,7 @@
 use crate::runtime::ShellRuntime;
 use gpui::{
-    AnyElement, App, AvailableSpace, IntoElement, ParentElement, Pixels, Size, Styled, Window, div,
-    px,
+    AnyElement, App, AvailableSpace, IntoElement, ParentElement, Pixels, Size, Styled, Window,
+    deferred, div, px,
 };
 use shilpo_ext_api::CanonicalId;
 #[cfg(test)]
@@ -79,7 +79,7 @@ impl CardProvider for ExtensionMenuCardProvider {
             return div().into_any_element();
         };
 
-        let mut element = crate::shell::bar::ext_view_adapter::render_ext_view_tree(
+        let measure_element = crate::shell::bar::ext_view_adapter::render_ext_view_tree(
             &self.menu_canonical_id,
             Some(&source.instance_id),
             &tree,
@@ -87,9 +87,24 @@ impl CardProvider for ExtensionMenuCardProvider {
             cx,
         );
 
-        let intrinsic = element.layout_as_root(AvailableSpace::min_size(), window, cx);
         let max_width = (window.bounds().size.width - px(32.0)).max(px(1.0));
         let max_height = (window.bounds().size.height - px(32.0)).max(px(1.0));
+        let mut measure_element = deferred(
+            div()
+                .p_4()
+                .max_w(max_width)
+                .max_h(max_height)
+                .child(measure_element),
+        )
+        .into_any_element();
+        let intrinsic = measure_element.layout_as_root(AvailableSpace::min_size(), window, cx);
+        let element = crate::shell::bar::ext_view_adapter::render_ext_view_tree(
+            &self.menu_canonical_id,
+            Some(&source.instance_id),
+            &tree,
+            window,
+            cx,
+        );
         let mut container = div().p_4().max_w(max_width).max_h(max_height);
         if intrinsic.width > max_width {
             container.style().overflow.x = Some(gpui::Overflow::Scroll);
@@ -121,11 +136,13 @@ impl CardProvider for ExtensionMenuCardProvider {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn measure_view_tree_intrinsic(tree: &ViewTree, font_size: f32) -> Size<Pixels> {
     measure_view_node_intrinsic(&tree.root, font_size)
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn measure_view_node_intrinsic(node: &ViewNode, font_size: f32) -> Size<Pixels> {
     use shilpo_ext_api::*;
     match node {
@@ -361,6 +378,7 @@ pub fn measure_view_node_intrinsic(node: &ViewNode, font_size: f32) -> Size<Pixe
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 fn apply_style_constraints(size: Size<Pixels>, style: Option<&ViewStyle>) -> Size<Pixels> {
     let mut w = size.width.as_f32();
     let mut h = size.height.as_f32();
@@ -409,39 +427,69 @@ fn apply_style_constraints(size: Size<Pixels>, style: Option<&ViewStyle>) -> Siz
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell::bar::ext_view_adapter::render_ext_view_tree;
+    use gpui::{Context, Render, TestAppContext};
     use shilpo_ext_api::*;
 
-    #[test]
-    fn test_intrinsic_measurement_basic() {
+    struct MeasuredMenu {
+        tree: ViewTree,
+        measured: std::sync::Arc<std::sync::Mutex<Option<Size<Pixels>>>>,
+    }
+
+    impl Render for MeasuredMenu {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let element = render_ext_view_tree(
+                &CanonicalId::new(
+                    ExtensionId::new("io.github.test.weather").unwrap(),
+                    ContributionId::new("weather-menu").unwrap(),
+                ),
+                None,
+                &self.tree,
+                window,
+                cx,
+            );
+            let mut element = deferred(div().child(element)).into_any_element();
+            let size = element.layout_as_root(AvailableSpace::min_size(), window, cx);
+            *self
+                .measured
+                .lock()
+                .expect("measurement lock is not poisoned") = Some(size);
+            // Return a fresh element after measurement. A GPUI element is single-use:
+            // layout_as_root consumes its request-layout phase.
+            div().child("measured")
+        }
+    }
+
+    #[gpui::test]
+    fn dynamic_menu_measurement_uses_gpui_layout(cx: &mut TestAppContext) {
+        let measured = std::sync::Arc::new(std::sync::Mutex::new(None));
         let tree = ViewTree::new(ViewNode::Container(ContainerNode {
             direction: ContainerDirection::Column,
-            children: vec![
-                ViewNode::Text(TextNode {
-                    content: "Hello World".into(),
-                    style: None,
-                    font_size: Some(16.0),
-                    bold: Some(true),
-                }),
-                ViewNode::Button(ButtonNode {
-                    label: "Click Me".into(),
-                    event_id: "btn-click".into(),
-                    style: None,
-                }),
-            ],
-            style: Some(ViewStyle {
-                padding: Some(8.0),
-                ..Default::default()
-            }),
-            gap: Some(4.0),
+            children: vec![ViewNode::Text(TextNode {
+                content: "A deliberately long menu label".into(),
+                style: None,
+                font_size: Some(20.0),
+                bold: None,
+            })],
+            style: None,
+            gap: None,
             align_items: None,
             justify_content: None,
             wrap: false,
             event_id: None,
         }));
-
-        let size = measure_view_tree_intrinsic(&tree, 14.0);
-        assert!(size.width.as_f32() > 0.0);
-        assert!(size.height.as_f32() > 0.0);
+        let measured_for_view = measured.clone();
+        cx.add_window_view(|_, _| MeasuredMenu {
+            tree,
+            measured: measured_for_view,
+        });
+        cx.run_until_parked();
+        let size = measured
+            .lock()
+            .expect("measurement lock is not poisoned")
+            .expect("GPUI must measure the menu tree");
+        assert!(size.width > px(100.0));
+        assert!(size.height > px(10.0));
     }
 
     #[test]
