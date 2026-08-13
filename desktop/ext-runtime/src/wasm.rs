@@ -1035,6 +1035,113 @@ fn data_value_to_json(value: &self::shilpo::extension::types::DataValue) -> serd
     }
 }
 
+#[cfg(test)]
+mod secret_host_tests {
+    use super::*;
+    use crate::secrets::FakeSecretBroker;
+    use shilpo_ext_api::{Capability, ExtensionId, SecretPurpose};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn state(granted: bool, checker: Option<GrantChecker>) -> WasmState {
+        let extension_id = ExtensionId::new("io.github.test.secret-host").unwrap();
+        let purpose = SecretPurpose::parse("api-token").unwrap();
+        WasmState {
+            extension_id,
+            declared_capabilities: vec![Capability::Secrets {
+                purposes: vec![purpose.clone()],
+            }],
+            granted_capabilities: if granted {
+                vec![Capability::Secrets {
+                    purposes: vec![purpose],
+                }]
+            } else {
+                Vec::new()
+            },
+            secret_broker: Arc::new(FakeSecretBroker::new()),
+            grant_checker: checker,
+            limits: StoreLimitsBuilder::new().build(),
+            table: ResourceTable::new(),
+            wasi: WasiCtxBuilder::new().build(),
+            operations: Vec::new(),
+            state_store: HashMap::new(),
+            hostcall_bytes: 0,
+            max_hostcall_bytes: 1024 * 1024,
+            secret_deadline: Instant::now() + Duration::from_secs(5),
+        }
+    }
+
+    #[test]
+    fn generated_secret_host_set_read_delete_uses_injected_broker() {
+        let mut state = state(true, None);
+        let reference = <WasmState as shilpo::extension::secrets::Host>::set(
+            &mut state,
+            "api-token".into(),
+            b"sentinel-secret".to_vec(),
+        )
+        .unwrap();
+        let value = <WasmState as shilpo::extension::secrets::Host>::read(
+            &mut state,
+            "api-token".into(),
+            reference.clone(),
+        )
+        .unwrap();
+        assert_eq!(value, Some(b"sentinel-secret".to_vec()));
+        <WasmState as shilpo::extension::secrets::Host>::delete(
+            &mut state,
+            "api-token".into(),
+            reference,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn generated_secret_host_observes_live_revocation() {
+        let allowed = Arc::new(AtomicBool::new(true));
+        let checker_allowed = allowed.clone();
+        let checker: GrantChecker = Arc::new(move |_, scope| {
+            scope == "secrets:api-token" && checker_allowed.load(Ordering::Relaxed)
+        });
+        let mut state = state(true, Some(checker));
+        <WasmState as shilpo::extension::secrets::Host>::set(
+            &mut state,
+            "api-token".into(),
+            b"before-revocation".to_vec(),
+        )
+        .unwrap();
+        allowed.store(false, Ordering::Relaxed);
+        let error = <WasmState as shilpo::extension::secrets::Host>::set(
+            &mut state,
+            "api-token".into(),
+            b"after-revocation".to_vec(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.kind,
+            shilpo::extension::types::ErrorKind::Unauthorized
+        );
+    }
+
+    #[test]
+    fn secret_refs_cannot_enter_action_effects() {
+        let mut state = state(true, None);
+        let error = <WasmState as shilpo::extension::actions::Host>::invoke(
+            &mut state,
+            "test-action".into(),
+            Some(shilpo::extension::types::DataValue::SecretRef(
+                shilpo::extension::types::SecretRef {
+                    handle: "opaque-handle".into(),
+                },
+            )),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.kind,
+            shilpo::extension::types::ErrorKind::InvalidArgument
+        );
+        assert!(state.operations.is_empty());
+    }
+}
+
 fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::ExtensionEvent {
     use self::shilpo::extension::events as wit_events;
     match event {
