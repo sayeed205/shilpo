@@ -484,6 +484,12 @@
             "null"
           ],
           "default": null
+        },
+        "transition_duration_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 300
         }
       },
       "additionalProperties": false,

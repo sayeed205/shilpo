@@ -8081,6 +8081,7 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "shilpo-macros",
+ "shilpo-theme",
  "smallvec",
  "smol",
  "tracing",

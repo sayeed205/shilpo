@@ -101,6 +101,7 @@ gpui = { workspace = true }
 gpui_macros.workspace = true
 reqwest.workspace = true
 shilpo-macros = { workspace = true }
+shilpo-theme = { workspace = true }
 mcu-material-color.workspace = true
 notify.workspace = true
 ropey.workspace = true

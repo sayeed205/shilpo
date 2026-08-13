@@ -331,8 +331,14 @@ pub struct ThemeConfig {
     pub gtk_theme_dark: Option<String>,
     #[serde(default)]
     pub custom_adapter_cmd: Option<Vec<String>>,
+    #[serde(default = "default_transition_duration_ms")]
+    pub transition_duration_ms: u64,
     #[serde(default)]
     pub scheme_variant: Option<String>,
+}
+
+fn default_transition_duration_ms() -> u64 {
+    300
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -590,6 +596,7 @@ impl Default for ThemeConfig {
             gtk_theme_light: None,
             gtk_theme_dark: None,
             custom_adapter_cmd: None,
+            transition_duration_ms: 300,
             scheme_variant: None,
         }
     }
@@ -815,6 +822,12 @@ impl ShellConfig {
             d.push(ConfigDiagnostic::new(
                 "theme.corner_radius_scale",
                 "must be finite and between 0.0 and 4.0",
+            ));
+        }
+        if self.theme.transition_duration_ms > 5000 {
+            d.push(ConfigDiagnostic::new(
+                "theme.transition_duration_ms",
+                "must be at most 5000",
             ));
         }
         self.bar.validate("bar", &mut d);
@@ -1054,5 +1067,35 @@ impl ShellSessionState {
     pub fn purge_usage_history(&mut self) {
         self.recent_apps.clear();
         self.launch_counts.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_transition_duration_ms_default_and_validation() {
+        let mut config = ShellConfig::default();
+        assert_eq!(config.theme.transition_duration_ms, 300);
+        assert!(config.validate().is_ok());
+
+        config.theme.transition_duration_ms = 0;
+        assert!(config.validate().is_ok());
+
+        config.theme.transition_duration_ms = 5000;
+        assert!(config.validate().is_ok());
+
+        config.theme.transition_duration_ms = 5001;
+        let err = config.validate().unwrap_err();
+        if let ConfigError::Validation { diagnostics } = err {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.path == "theme.transition_duration_ms")
+            );
+        } else {
+            panic!("expected validation error");
+        }
     }
 }
