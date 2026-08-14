@@ -24,7 +24,8 @@
     "extensions": {
       "$ref": "#/$defs/ExtensionsConfig",
       "default": {
-        "settings": {}
+        "settings": {},
+        "wallpaper_provider": null
       }
     },
     "outputs": {
@@ -369,9 +370,25 @@
           "type": "object",
           "additionalProperties": true,
           "default": {}
+        },
+        "wallpaper_provider": {
+          "description": "Configured canonical ID for the active wallpaper provider.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CanonicalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "additionalProperties": false
+    },
+    "CanonicalId": {
+      "description": "The composed, globally-unique address of a contribution (`extension/contribution`).\n\nLookups and addressing across the system are keyed on this canonical identifier.",
+      "type": "string"
     },
     "OutputConfig": {
       "type": "object",

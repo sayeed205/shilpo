@@ -35,6 +35,7 @@ pub trait Shell {
         action_id: String,
         payload_json: Option<String>,
     ) -> zbus::Result<()>;
+    async fn next_wallpaper(&self) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn shell_started(&self, instance_id: String, pid: u32) -> zbus::Result<()>;

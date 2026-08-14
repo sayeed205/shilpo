@@ -871,6 +871,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     bar_widget: None,
                     action: None,
                     default_binding: None,
+                    wallpaper_modes: None,
+                    wallpaper_targets: None,
                 });
             }
             for contrib in &m.contributions.bar_menus {
@@ -886,6 +888,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     bar_widget: Some(CanonicalId::new(ext_id.clone(), contrib.bar_widget.clone())),
                     action: None,
                     default_binding: None,
+                    wallpaper_modes: None,
+                    wallpaper_targets: None,
                 });
             }
             for contrib in &m.contributions.desktop_widgets {
@@ -909,6 +913,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     bar_widget: None,
                     action: None,
                     default_binding: None,
+                    wallpaper_modes: None,
+                    wallpaper_targets: None,
                 });
             }
             for contrib in &m.contributions.settings_pages {
@@ -931,6 +937,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     bar_widget: None,
                     action: None,
                     default_binding: None,
+                    wallpaper_modes: None,
+                    wallpaper_targets: None,
                 });
             }
             for contrib in &m.contributions.side_panels {
@@ -946,6 +954,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     bar_widget: None,
                     action: None,
                     default_binding: None,
+                    wallpaper_modes: None,
+                    wallpaper_targets: None,
                 });
             }
             for contrib in &m.contributions.search_providers {
@@ -961,6 +971,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     bar_widget: None,
                     action: None,
                     default_binding: None,
+                    wallpaper_modes: None,
+                    wallpaper_targets: None,
                 });
             }
             for contrib in &m.contributions.actions {
@@ -976,6 +988,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     bar_widget: None,
                     action: None,
                     default_binding: None,
+                    wallpaper_modes: None,
+                    wallpaper_targets: None,
                 });
             }
             for contrib in &m.contributions.keyboard_shortcuts {
@@ -991,6 +1005,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     bar_widget: None,
                     action: Some(CanonicalId::new(ext_id.clone(), contrib.action.clone())),
                     default_binding: contrib.default_binding.clone(),
+                    wallpaper_modes: None,
+                    wallpaper_targets: None,
                 });
             }
             for contrib in &m.contributions.background_tasks {
@@ -1006,6 +1022,25 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     bar_widget: None,
                     action: None,
                     default_binding: None,
+                    wallpaper_modes: None,
+                    wallpaper_targets: None,
+                });
+            }
+            for contrib in &m.contributions.wallpaper_providers {
+                descriptors.push(ContributionDescriptor {
+                    id: CanonicalId::new(ext_id.clone(), contrib.id.clone()),
+                    extension_name: m.name.clone(),
+                    name: contrib.name.clone(),
+                    surface: ContributionSurface::Wallpaper,
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
+                    settings_schema: None,
+                    default_size: None,
+                    minimum_size: None,
+                    bar_widget: None,
+                    action: None,
+                    default_binding: None,
+                    wallpaper_modes: Some(contrib.modes.clone()),
+                    wallpaper_targets: Some(contrib.targets.clone()),
                 });
             }
         }

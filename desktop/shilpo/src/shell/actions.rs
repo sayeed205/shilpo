@@ -1067,6 +1067,8 @@ mod tests {
             bar_widget: None,
             action: Some(canonical),
             default_binding: Some("Super+Space".into()),
+            wallpaper_modes: None,
+            wallpaper_targets: None,
         };
         let mut manager = KeybindingManager::new();
         let user = vec![crate::config::KeybindingConfig {

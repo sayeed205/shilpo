@@ -891,6 +891,8 @@ fn script_descriptor_view_and_status_survive_worker_snapshot_round_trip() {
             bar_widget: None,
             action: None,
             default_binding: None,
+            wallpaper_modes: None,
+            wallpaper_targets: None,
         }]),
         views: Arc::new(BTreeMap::from([(canonical, view)])),
         script_extensions: Arc::from([ScriptExtensionStatus {

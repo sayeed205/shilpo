@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WallpaperSettings",
+  "type": "object",
+  "required": ["wallpaper_paths"],
+  "properties": {
+    "wallpaper_paths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "uniqueItems": true,
+      "default": ["~/Pictures/Wallpapers/example.png"]
+    },
+    "slideshow_enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "slideshow_interval_seconds": {
+      "type": "integer",
+      "default": 300,
+      "minimum": 30
+    },
+    "workspace_map": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 },
+      "default": {}
+    }
+  },
+  "additionalProperties": false
+}

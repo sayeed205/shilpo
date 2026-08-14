@@ -139,6 +139,7 @@ async fn test_introspection_exact_contract() {
                     (Some("payload_json"), "ms", Some("in")),
                 ],
             ),
+            ("NextWallpaper", &[]),
         ],
     );
     assert_interface_contract(

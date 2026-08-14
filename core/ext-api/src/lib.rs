@@ -13,14 +13,18 @@ pub mod bindings {
 }
 
 pub use effects::{HostOperation, WallpaperSource};
-pub use events::{BarMenuCloseReason, EventKind, ExtensionEvent};
+pub use events::{
+    BarMenuCloseReason, EventKind, ExtensionEvent, WallpaperRequest, WallpaperRequestReason,
+    WallpaperTarget, WorkspaceTarget,
+};
 pub use id::{CanonicalId, ContributionId, ExtensionId, IdError};
 pub use manifest::{
     ActionContribution, BackgroundTaskContribution, BarMenuContribution, BarWidgetContribution,
     Capability, CapabilityKind, Contributions, DesktopWidgetContribution, ExtensionManifest,
     LibraryConfig, ManifestError, SUPPORTED_API_VERSION, SUPPORTED_SCHEMA_VERSION,
     SearchProviderContribution, SecretPurpose, SecretRef, SettingsPageContribution,
-    SidePanelContribution, Subscription, valid_virtual_path_pattern, wildcard_matches,
+    SidePanelContribution, Subscription, WallpaperMode, WallpaperProviderContribution,
+    WallpaperTargetKind, valid_virtual_path_pattern, wildcard_matches,
 };
 pub use view::{
     Alignment, BadgeNode, ButtonNode, ContainerDirection, ContainerNode, IconButtonNode, IconNode,
@@ -117,11 +121,15 @@ mod contract_tests {
         assert!(schema_str.contains("SearchProviderContribution"));
         assert!(!schema_str.contains(&legacy_provider_field));
         assert!(!schema_str.contains(&legacy_provider_type));
+        assert!(schema_str.contains("wallpaper_providers"));
+        assert!(schema_str.contains("WallpaperProviderContribution"));
 
         assert!(fixture_str.contains("search_providers"));
         assert!(fixture_str.contains("SearchProviderContribution"));
         assert!(!fixture_str.contains(&legacy_provider_field));
         assert!(!fixture_str.contains(&legacy_provider_type));
+        assert!(fixture_str.contains("wallpaper_providers"));
+        assert!(fixture_str.contains("WallpaperProviderContribution"));
     }
 
     #[test]
@@ -237,5 +245,70 @@ mod contract_tests {
             "Display output must not leak handle"
         );
         assert!(display_str.contains("<redacted>"));
+    }
+
+    #[test]
+    fn wallpaper_provider_validation_accepts_valid_and_rejects_invalid() {
+        let valid_manifest = r#"
+            id = "org.shilpo.wallpaper"
+            name = "Wallpaper"
+            version = "0.1.0"
+            schema_version = 1
+            api_version = "0.1.0"
+
+            [[contributions.wallpaper_providers]]
+            id = "provider"
+            name = "Wallpaper Provider"
+            modes = ["manual", "slideshow"]
+            targets = ["global", "workspace"]
+        "#;
+        let manifest = ExtensionManifest::from_toml(valid_manifest).unwrap();
+        assert_eq!(manifest.contributions.wallpaper_providers.len(), 1);
+        let wp = &manifest.contributions.wallpaper_providers[0];
+        assert_eq!(wp.id.as_str(), "provider");
+        assert_eq!(
+            wp.modes,
+            vec![WallpaperMode::Manual, WallpaperMode::Slideshow]
+        );
+        assert_eq!(
+            wp.targets,
+            vec![WallpaperTargetKind::Global, WallpaperTargetKind::Workspace]
+        );
+
+        // Empty modes
+        let empty_modes =
+            valid_manifest.replace(r#"modes = ["manual", "slideshow"]"#, r#"modes = []"#);
+        assert!(matches!(
+            ExtensionManifest::from_toml(&empty_modes),
+            Err(ManifestError::Validation(msg)) if msg.contains("at least one mode")
+        ));
+
+        // Duplicate modes
+        let dup_modes = valid_manifest.replace(
+            r#"modes = ["manual", "slideshow"]"#,
+            r#"modes = ["manual", "manual"]"#,
+        );
+        assert!(matches!(
+            ExtensionManifest::from_toml(&dup_modes),
+            Err(ManifestError::Validation(msg)) if msg.contains("duplicate mode")
+        ));
+
+        // Empty targets
+        let empty_targets =
+            valid_manifest.replace(r#"targets = ["global", "workspace"]"#, r#"targets = []"#);
+        assert!(matches!(
+            ExtensionManifest::from_toml(&empty_targets),
+            Err(ManifestError::Validation(msg)) if msg.contains("at least one target")
+        ));
+
+        // Duplicate targets
+        let dup_targets = valid_manifest.replace(
+            r#"targets = ["global", "workspace"]"#,
+            r#"targets = ["global", "global"]"#,
+        );
+        assert!(matches!(
+            ExtensionManifest::from_toml(&dup_targets),
+            Err(ManifestError::Validation(msg)) if msg.contains("duplicate target")
+        ));
     }
 }

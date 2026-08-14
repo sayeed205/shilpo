@@ -309,6 +309,13 @@ The runtime supplies a closed WASI context only for the standard Rust component 
 environment variables, arguments, terminal streams, or network access. Privileged work still goes through host effects
 and capability checks.
 
+### Wallpaper Provider Contributions
+
+Wallpaper providers are sandboxed WASM contributions. The host owns provider selection, scheduling, workspace context,
+request correlation, cancellation, and last-valid wallpaper state; the theme daemon only validates and applies a path.
+Providers must use the explicit `wallpaper:set` capability, and local paths/assets are validated fail-closed before any
+theme-daemon call. Trusted Local Scripts cannot provide wallpapers.
+
 ### Capabilities
 
 Only declare capabilities the extension needs.

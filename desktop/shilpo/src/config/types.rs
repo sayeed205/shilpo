@@ -57,6 +57,9 @@ pub struct ExtensionsConfig {
     /// Surface-specific placement and geometry remain owned by their surface.
     #[serde(default)]
     pub settings: HashMap<String, serde_json::Value>,
+    /// Configured canonical ID for the active wallpaper provider.
+    #[serde(default)]
+    pub wallpaper_provider: Option<CanonicalId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]

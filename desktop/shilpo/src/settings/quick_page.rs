@@ -154,7 +154,6 @@ impl QuickPage {
         current_mode: ThemeMode,
         cx: &App,
     ) -> impl IntoElement {
-        let client_random = theme_client.clone();
         let client_light = theme_client.clone();
         let client_dark = theme_client.clone();
         let current_variant = cx.theme().scheme_variant;
@@ -232,11 +231,13 @@ impl QuickPage {
                             .label("Random Wallpaper")
                             .outline()
                             .small()
-                            .on_click(move |_, _, _| {
-                                let client = client_random.clone();
-                                ThemeClient::spawn_task(async move {
-                                    let _ = client.set_random_wallpaper().await;
-                                });
+                            .on_click(move |_, _, cx| {
+                                if cx.has_global::<crate::shell::runtime::ShellRuntime>() {
+                                    crate::shell::runtime::ShellRuntime::request_next_wallpaper(cx);
+                                } else {
+                                    let _ = crate::cli::adapters::ipc::IpcAdapter::new()
+                                        .next_wallpaper();
+                                }
                             }),
                     )
                     // Light / Dark mode ButtonGroup with M3 Expressive morphing

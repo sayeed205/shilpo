@@ -455,12 +455,12 @@ impl ThemeDaemon {
                 };
                 self.respond_after_durable(reply, result);
             }
-            ActorMessage::SetRandomWallpaper(reply) => match self.pick_random_wallpaper() {
-                Ok(path) => self.spawn_wallpaper_task(path, reply),
-                Err(error) => {
-                    let _ = reply.send(Err(error));
-                }
-            },
+            ActorMessage::SetRandomWallpaper(reply) => {
+                let _ = reply.send(Err(
+                    "Wallpaper selection is managed by host-supervised wallpaper provider extensions"
+                        .to_string(),
+                ));
+            }
         }
     }
 
@@ -727,37 +727,6 @@ impl ThemeDaemon {
                 self.state.wallpaper_dir = config_dir;
             }
         }
-    }
-
-    fn pick_random_wallpaper(&mut self) -> Result<PathBuf, String> {
-        self.sync_wallpaper_dir_from_config();
-        let mut wallpapers = Vec::new();
-        let entries = std::fs::read_dir(&self.state.wallpaper_dir).map_err(|error| {
-            format!(
-                "Cannot read wallpaper directory {}: {error}",
-                self.state.wallpaper_dir.display()
-            )
-        })?;
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_file()
-                && p.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
-                    matches!(ext.to_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp")
-                })
-            {
-                wallpapers.push(p);
-            }
-        }
-        if wallpapers.is_empty() {
-            return Err(format!(
-                "No supported wallpapers found in {} (expected png, jpg, jpeg, or webp)",
-                self.state.wallpaper_dir.display()
-            ));
-        }
-
-        let idx = (chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default() as usize)
-            % wallpapers.len();
-        Ok(wallpapers[idx].clone())
     }
 }
 

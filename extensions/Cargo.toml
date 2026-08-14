@@ -1,5 +1,5 @@
 [workspace]
-members = ["weather"]
+members = ["wallpaper", "weather"]
 resolver = "2"
 
 [workspace.package]

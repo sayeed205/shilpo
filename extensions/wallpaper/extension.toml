@@ -1,0 +1,36 @@
+id = "org.shilpo.wallpaper"
+name = "Wallpaper"
+version = "0.1.0"
+schema_version = 1
+api_version = "0.1.0"
+min_shilpo_version = "0.1.0"
+authors = ["Shilpo contributors"]
+description = "Official host-supervised wallpaper provider for Shilpo."
+repository = "https://github.com/sayeed205/shilpo"
+license = "MIT"
+
+[library]
+path = "extension.wasm"
+
+[[contributions.wallpaper_providers]]
+id = "provider"
+name = "Wallpaper Provider"
+description = "Official wallpaper rotation and workspace synchronization provider."
+modes = ["manual", "slideshow"]
+targets = ["global", "workspace"]
+
+[[contributions.settings_pages]]
+id = "settings"
+name = "Wallpaper"
+schema = "settings.schema.json"
+
+[[subscriptions]]
+event = "workspace_changed"
+
+[[capabilities]]
+kind = "events:subscribe"
+events = ["workspace_changed"]
+
+[[capabilities]]
+kind = "wallpaper:set"
+sources = ["local_file"]

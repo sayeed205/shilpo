@@ -680,11 +680,10 @@ impl shilpo::extension::wallpaper::Host for WasmState {
 
     fn set(
         &mut self,
-        path: String,
-        source: shilpo::extension::wallpaper::WallpaperSource,
+        req: shilpo::extension::wallpaper::WallpaperSetRequest,
     ) -> Result<(), shilpo::extension::types::Error> {
-        self.charge_hostcall_bytes(path.len())?;
-        let api_source = match source {
+        self.charge_hostcall_bytes(req.path.len())?;
+        let api_source = match req.source {
             shilpo::extension::wallpaper::WallpaperSource::ExtensionAsset => {
                 shilpo_ext_api::WallpaperSource::ExtensionAsset
             }
@@ -702,9 +701,48 @@ impl shilpo::extension::wallpaper::Host for WasmState {
         if !allowed {
             return Err(unauthorized_error("wallpaper:set capability denied"));
         }
+        match api_source {
+            shilpo_ext_api::WallpaperSource::ExtensionAsset => {
+                let p = Path::new(&req.path);
+                if p.is_absolute()
+                    || req.path.contains("..")
+                    || p.components()
+                        .any(|c| matches!(c, std::path::Component::ParentDir))
+                {
+                    return Err(shilpo::extension::types::Error {
+                        kind: shilpo::extension::types::ErrorKind::InvalidArgument,
+                        message: "extension_asset path must be relative without traversal".into(),
+                    });
+                }
+            }
+            shilpo_ext_api::WallpaperSource::LocalFile => {
+                // The Shell validates and expands local paths immediately before
+                // handing them to the theme daemon. The runtime must not reject
+                // valid host paths such as `~/Pictures/...` in the guest adapter.
+            }
+            shilpo_ext_api::WallpaperSource::Remote => {
+                return Err(shilpo::extension::types::Error {
+                    kind: shilpo::extension::types::ErrorKind::Unsupported,
+                    message: "remote wallpaper source is not supported without a host-owned bounded downloader".into(),
+                });
+            }
+        }
+        let api_target = req.target.map(|t| match t {
+            shilpo::extension::wallpaper::WallpaperTarget::Global => {
+                shilpo_ext_api::WallpaperTarget::Global
+            }
+            shilpo::extension::wallpaper::WallpaperTarget::Workspace(w) => {
+                shilpo_ext_api::WallpaperTarget::Workspace(shilpo_ext_api::WorkspaceTarget {
+                    workspace_id: w.workspace_id,
+                    output_name: w.output_name,
+                })
+            }
+        });
         self.operations.push(HostOperation::SetWallpaper {
-            path,
+            path: req.path,
             source: api_source,
+            request_id: req.request_id,
+            target: api_target,
         });
         Ok(())
     }
@@ -2072,6 +2110,73 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
             latitude: *latitude,
             longitude: *longitude,
             accuracy_meters: *accuracy_meters,
+            error: error.clone(),
+        }),
+        ApiEvent::WorkspaceChanged {
+            workspace_id,
+            workspace_name,
+            output_name,
+        } => wit_events::ExtensionEvent::WorkspaceChanged(wit_events::WorkspaceEvent {
+            workspace_id: workspace_id.clone(),
+            workspace_name: workspace_name.clone(),
+            output_name: output_name.clone(),
+        }),
+        ApiEvent::WallpaperRequest(req) => {
+            let reason = match req.reason {
+                shilpo_ext_api::WallpaperRequestReason::Activate => {
+                    self::shilpo::extension::wallpaper::WallpaperRequestReason::Activate
+                }
+                shilpo_ext_api::WallpaperRequestReason::UserNext => {
+                    self::shilpo::extension::wallpaper::WallpaperRequestReason::UserNext
+                }
+                shilpo_ext_api::WallpaperRequestReason::SlideshowTick => {
+                    self::shilpo::extension::wallpaper::WallpaperRequestReason::SlideshowTick
+                }
+                shilpo_ext_api::WallpaperRequestReason::WorkspaceChanged => {
+                    self::shilpo::extension::wallpaper::WallpaperRequestReason::WorkspaceChanged
+                }
+                shilpo_ext_api::WallpaperRequestReason::SettingsChanged => {
+                    self::shilpo::extension::wallpaper::WallpaperRequestReason::SettingsChanged
+                }
+            };
+            let mode = match req.mode {
+                shilpo_ext_api::WallpaperMode::Manual => {
+                    self::shilpo::extension::wallpaper::WallpaperMode::Manual
+                }
+                shilpo_ext_api::WallpaperMode::Slideshow => {
+                    self::shilpo::extension::wallpaper::WallpaperMode::Slideshow
+                }
+            };
+            let target = match &req.target {
+                shilpo_ext_api::WallpaperTarget::Global => {
+                    self::shilpo::extension::wallpaper::WallpaperTarget::Global
+                }
+                shilpo_ext_api::WallpaperTarget::Workspace(w) => {
+                    self::shilpo::extension::wallpaper::WallpaperTarget::Workspace(
+                        self::shilpo::extension::wallpaper::WorkspaceTarget {
+                            workspace_id: w.workspace_id.clone(),
+                            output_name: w.output_name.clone(),
+                        },
+                    )
+                }
+            };
+            wit_events::ExtensionEvent::WallpaperRequest(
+                self::shilpo::extension::wallpaper::WallpaperRequest {
+                    request_id: req.request_id.clone(),
+                    contribution_id: req.contribution_id.clone(),
+                    reason,
+                    mode,
+                    target,
+                },
+            )
+        }
+        ApiEvent::WallpaperResult {
+            request_id,
+            success,
+            error,
+        } => wit_events::ExtensionEvent::WallpaperResult(wit_events::WallpaperResultEvent {
+            request_id: request_id.clone(),
+            success: *success,
             error: error.clone(),
         }),
     }

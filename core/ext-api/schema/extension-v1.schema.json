@@ -32,7 +32,8 @@
         "keyboard_shortcuts": [],
         "search_providers": [],
         "settings_pages": [],
-        "side_panels": []
+        "side_panels": [],
+        "wallpaper_providers": []
       }
     },
     "description": {
@@ -486,6 +487,13 @@
           "items": {
             "$ref": "#/$defs/SidePanelContribution"
           }
+        },
+        "wallpaper_providers": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WallpaperProviderContribution"
+          }
         }
       },
       "additionalProperties": false
@@ -554,7 +562,8 @@
         "network_changed",
         "media_changed",
         "power_changed",
-        "timer_fired"
+        "timer_fired",
+        "workspace_changed"
       ]
     },
     "ExtensionId": {
@@ -667,12 +676,63 @@
         "event"
       ]
     },
+    "WallpaperMode": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "slideshow"
+      ]
+    },
+    "WallpaperProviderContribution": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "id": {
+          "$ref": "#/$defs/ContributionId"
+        },
+        "modes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WallpaperMode"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WallpaperTargetKind"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "modes",
+        "targets"
+      ]
+    },
     "WallpaperSource": {
       "type": "string",
       "enum": [
         "extension_asset",
         "local_file",
         "remote"
+      ]
+    },
+    "WallpaperTargetKind": {
+      "type": "string",
+      "enum": [
+        "global",
+        "workspace"
       ]
     }
   }

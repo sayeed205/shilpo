@@ -104,6 +104,8 @@ pub struct Contributions {
     pub keyboard_shortcuts: Vec<KeyboardShortcutContribution>,
     #[serde(default)]
     pub background_tasks: Vec<BackgroundTaskContribution>,
+    #[serde(default)]
+    pub wallpaper_providers: Vec<WallpaperProviderContribution>,
 }
 
 macro_rules! named_contribution {
@@ -136,6 +138,35 @@ named_contribution!(SidePanelContribution {});
 named_contribution!(SearchProviderContribution {});
 named_contribution!(ActionContribution {});
 named_contribution!(BackgroundTaskContribution {});
+
+#[derive(
+    Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WallpaperMode {
+    Manual,
+    Slideshow,
+}
+
+#[derive(
+    Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WallpaperTargetKind {
+    Global,
+    Workspace,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WallpaperProviderContribution {
+    pub id: ContributionId,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub modes: Vec<WallpaperMode>,
+    pub targets: Vec<WallpaperTargetKind>,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -317,6 +348,11 @@ impl Contributions {
             )
             .chain(
                 self.background_tasks
+                    .iter()
+                    .map(|entry| (&entry.id, entry.name.as_str())),
+            )
+            .chain(
+                self.wallpaper_providers
                     .iter()
                     .map(|entry| (&entry.id, entry.name.as_str())),
             )
@@ -523,6 +559,38 @@ impl ExtensionManifest {
                         shortcut.id
                     ))
                 })?;
+            }
+        }
+        for provider in &self.contributions.wallpaper_providers {
+            if provider.modes.is_empty() {
+                return Err(ManifestError::Validation(format!(
+                    "wallpaper provider '{}' must declare at least one mode",
+                    provider.id
+                )));
+            }
+            let mut seen_modes = HashSet::new();
+            for mode in &provider.modes {
+                if !seen_modes.insert(*mode) {
+                    return Err(ManifestError::Validation(format!(
+                        "wallpaper provider '{}' has duplicate mode '{mode:?}'",
+                        provider.id
+                    )));
+                }
+            }
+            if provider.targets.is_empty() {
+                return Err(ManifestError::Validation(format!(
+                    "wallpaper provider '{}' must declare at least one target",
+                    provider.id
+                )));
+            }
+            let mut seen_targets = HashSet::new();
+            for target in &provider.targets {
+                if !seen_targets.insert(*target) {
+                    return Err(ManifestError::Validation(format!(
+                        "wallpaper provider '{}' has duplicate target '{target:?}'",
+                        provider.id
+                    )));
+                }
             }
         }
 

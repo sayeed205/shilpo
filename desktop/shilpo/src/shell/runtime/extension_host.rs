@@ -1,6 +1,6 @@
 use shilpo_ext_api::{CanonicalId, ExtensionEvent, ExtensionId, HostOperation, ViewTree};
 use shilpo_ext_runtime::{AuthorizedHostOperation, AuthorizedHostOperationKind};
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, fs, path::PathBuf};
 
 use crate::{
     actions::{ActionId, ActionInvocation},
@@ -396,6 +396,18 @@ impl ExtensionHost {
             cx.global_mut::<ShellRuntime>()
                 .extension_host_mut()
                 .retain_tasks_for_generation(active_gen);
+
+            let config = ShellRuntime::active_config(cx).extensions;
+            let descriptors = snapshot.descriptors.clone();
+            let event_to_send = cx
+                .global_mut::<ShellRuntime>()
+                .wallpaper_coordinator_mut()
+                .sync_active_provider(&config, &descriptors, active_gen);
+            if let Some((ext_id, event)) = event_to_send {
+                cx.global::<ShellRuntime>()
+                    .extension_host()
+                    .send_event_to_extension(&ext_id, event);
+            }
         }
 
         if update.snapshot.is_some() || !update.invalidated_views.is_empty() {
@@ -502,11 +514,135 @@ impl ExtensionHost {
                         .await;
                 });
             }
-            AuthorizedHostOperationKind::NonHttp(HostOperation::SetWallpaper { path, .. }) => {
-                shilpo_theme_daemon::ThemeClient::spawn_task(async move {
-                    let client = shilpo_theme_daemon::ThemeClient::new().await;
-                    let _ = client.set_wallpaper(&path).await;
-                });
+            AuthorizedHostOperationKind::NonHttp(HostOperation::SetWallpaper {
+                path,
+                source,
+                request_id,
+                target,
+            }) => {
+                let validated_target = cx
+                    .global_mut::<ShellRuntime>()
+                    .wallpaper_coordinator_mut()
+                    .validate_wallpaper_effect(
+                        &path,
+                        source,
+                        &request_id,
+                        target,
+                        extension_id,
+                        generation,
+                    );
+                match validated_target {
+                    Ok(target) => {
+                        let resolved_path = match source {
+                            shilpo_ext_api::WallpaperSource::ExtensionAsset => {
+                                let canonical = cx
+                                    .global::<ShellRuntime>()
+                                    .wallpaper_coordinator()
+                                    .active_provider()
+                                    .filter(|id| id.extension_id == *extension_id)
+                                    .ok_or_else(|| {
+                                        "wallpaper provider is no longer active".to_owned()
+                                    });
+                                canonical.and_then(|id| {
+                                    cx.global::<ShellRuntime>()
+                                        .extension_host()
+                                        .asset_path(id, &path)
+                                        .map(|p| p.to_string_lossy().to_string())
+                                })
+                            }
+                            shilpo_ext_api::WallpaperSource::LocalFile => {
+                                let local_path =
+                                    crate::config::expand_home_path(std::path::Path::new(&path));
+                                match fs::metadata(&local_path) {
+                                    Ok(metadata) if metadata.is_file() => {
+                                        Ok(local_path.to_string_lossy().into_owned())
+                                    }
+                                    Ok(_) => {
+                                        Err("wallpaper local path is not a regular file".into())
+                                    }
+                                    Err(error) => {
+                                        Err(format!("wallpaper local file is unavailable: {error}"))
+                                    }
+                                }
+                            }
+                            shilpo_ext_api::WallpaperSource::Remote => {
+                                unreachable!("validated above")
+                            }
+                        };
+                        let resolved_path = match resolved_path {
+                            Ok(path) => path,
+                            Err(error) => {
+                                Self::send_wallpaper_result(
+                                    cx,
+                                    extension_id,
+                                    request_id,
+                                    Some(error),
+                                );
+                                return;
+                            }
+                        };
+                        let ext_id = extension_id.clone();
+                        let request_generation = generation;
+                        let req_id_opt = request_id;
+                        let path_clone = resolved_path.clone();
+                        let target_clone = target;
+                        cx.spawn(async move |cx| {
+                            let client = shilpo_theme_daemon::ThemeClient::new().await;
+                            let result = client.set_wallpaper(&path_clone).await;
+                            cx.update(|cx: &mut App| {
+                                if !cx.has_global::<ShellRuntime>() {
+                                    return;
+                                }
+                                if !cx
+                                    .global::<ShellRuntime>()
+                                    .wallpaper_coordinator()
+                                    .accepts_result(&ext_id, request_generation)
+                                {
+                                    return;
+                                }
+                                let (success, error) = match result {
+                                    Ok(_) => {
+                                        cx.global_mut::<ShellRuntime>()
+                                            .wallpaper_coordinator_mut()
+                                            .record_successful_wallpaper(target_clone, path_clone);
+                                        (true, None)
+                                    }
+                                    Err(err) => (false, Some(err.to_string())),
+                                };
+                                if let Some(req_id) = req_id_opt {
+                                    cx.global::<ShellRuntime>()
+                                        .extension_host()
+                                        .send_event_to_extension(
+                                            &ext_id,
+                                            shilpo_ext_api::ExtensionEvent::WallpaperResult {
+                                                request_id: req_id,
+                                                success,
+                                                error,
+                                            },
+                                        );
+                                }
+                            });
+                        })
+                        .detach();
+                    }
+                    Err(Some(error_msg)) => {
+                        if let Some(req_id) = request_id {
+                            cx.global::<ShellRuntime>()
+                                .extension_host()
+                                .send_event_to_extension(
+                                    extension_id,
+                                    shilpo_ext_api::ExtensionEvent::WallpaperResult {
+                                        request_id: req_id,
+                                        success: false,
+                                        error: Some(error_msg),
+                                    },
+                                );
+                        }
+                    }
+                    Err(None) => {
+                        // Stale or superseded request, quietly drop
+                    }
+                }
             }
             AuthorizedHostOperationKind::NonHttp(HostOperation::ClipboardWrite { text }) => {
                 let result = cx
@@ -615,6 +751,26 @@ impl ExtensionHost {
             }
         }
     }
+
+    fn send_wallpaper_result(
+        cx: &mut App,
+        extension_id: &ExtensionId,
+        request_id: Option<String>,
+        error: Option<String>,
+    ) {
+        if let Some(request_id) = request_id {
+            cx.global::<ShellRuntime>()
+                .extension_host()
+                .send_event_to_extension(
+                    extension_id,
+                    ExtensionEvent::WallpaperResult {
+                        request_id,
+                        success: false,
+                        error,
+                    },
+                );
+        }
+    }
 }
 
 impl ShellRuntime {
@@ -710,6 +866,15 @@ impl ShellRuntime {
 
     pub(super) fn drain_extensions(cx: &mut App) {
         ExtensionHost::drain(cx);
+        let event_to_send = cx
+            .global_mut::<ShellRuntime>()
+            .wallpaper_coordinator_mut()
+            .on_wallpaper_tick(std::time::Instant::now());
+        if let Some((extension_id, event)) = event_to_send {
+            cx.global::<ShellRuntime>()
+                .extension_host()
+                .send_event_to_extension(&extension_id, event);
+        }
     }
 }
 

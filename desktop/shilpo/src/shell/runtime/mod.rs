@@ -5,6 +5,7 @@ pub mod service_hub;
 pub mod session;
 pub mod shell_surfaces;
 pub mod theme_manager;
+pub(crate) mod wallpaper_coordinator;
 pub(crate) mod wallpaper_preview;
 
 pub use action_dispatcher::ActionDispatcher;
@@ -12,6 +13,7 @@ pub use extension_host::ExtensionHost;
 pub use service_hub::ServiceHub;
 pub use session::SessionContext;
 pub use shell_surfaces::{ShellSurfaces, SurfaceRequest, SurfaceSnapshot};
+pub use wallpaper_coordinator::WallpaperCoordinator;
 pub(crate) use wallpaper_preview::{WallpaperPreviewResource, WallpaperPreviewSnapshot};
 
 use shell_surfaces::WindowClosedOutcome;
@@ -24,7 +26,7 @@ use std::{
 #[cfg(test)]
 use crate::extensions::ExtensionCommand;
 use crate::{
-    extensions::ExtensionCoordinator,
+    extensions::{ContributionSurface, ExtensionCoordinator},
     shell::dbus::{ShellCommand, ShellDbusService, ShellStatus, ShellTelemetry},
 };
 use gpui::{App, AppContext, Entity, Global, Subscription};
@@ -47,6 +49,7 @@ pub struct ShellRuntime {
     shell_surfaces: ShellSurfaces,
     action_dispatcher: ActionDispatcher,
     extension_host: ExtensionHost,
+    wallpaper_coordinator: WallpaperCoordinator,
     wallpaper_preview: Entity<WallpaperPreviewResource>,
     service_hub: Option<ServiceHub>,
     session_state: crate::config::ShellSessionState,
@@ -97,6 +100,7 @@ impl ShellRuntime {
             shell_surfaces: ShellSurfaces::new(Arc::new(CompositorSnapshot::default())),
             action_dispatcher: ActionDispatcher::new(),
             extension_host: ExtensionHost::new(None),
+            wallpaper_coordinator: WallpaperCoordinator::new(),
             wallpaper_preview,
             service_hub: None,
             session_state: crate::config::ShellSessionState::default(),
@@ -159,6 +163,30 @@ impl ShellRuntime {
         &mut self.extension_host
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn wallpaper_coordinator(&self) -> &WallpaperCoordinator {
+        &self.wallpaper_coordinator
+    }
+
+    pub(crate) fn wallpaper_coordinator_mut(&mut self) -> &mut WallpaperCoordinator {
+        &mut self.wallpaper_coordinator
+    }
+
+    pub(crate) fn request_next_wallpaper(cx: &mut App) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let event_to_send = cx
+            .global_mut::<Self>()
+            .wallpaper_coordinator_mut()
+            .request_next_wallpaper();
+        if let Some((ext_id, event)) = event_to_send {
+            cx.global::<Self>()
+                .extension_host()
+                .send_event_to_extension(&ext_id, event);
+        }
+    }
+
     pub(crate) fn wallpaper_preview(cx: &App) -> Entity<WallpaperPreviewResource> {
         cx.global::<Self>().wallpaper_preview.clone()
     }
@@ -194,6 +222,59 @@ impl ShellRuntime {
     pub(crate) fn set_active_config(cx: &mut App, config: &crate::config::ShellConfig) {
         if cx.has_global::<Self>() {
             cx.global_mut::<Self>().active_config = config.clone();
+            Self::sync_wallpaper_provider(cx);
+            let settings_event = {
+                let runtime = cx.global::<Self>();
+                runtime
+                    .wallpaper_coordinator()
+                    .active_provider()
+                    .and_then(|provider| {
+                        runtime
+                            .active_config
+                            .extensions
+                            .settings
+                            .get(provider.extension_id.as_str())
+                            .cloned()
+                            .map(|settings| (provider.clone(), settings))
+                    })
+            };
+            if let Some((provider, settings)) = settings_event {
+                cx.global::<Self>()
+                    .extension_host()
+                    .send_event_to_extension(
+                        &provider.extension_id,
+                        shilpo_ext_api::ExtensionEvent::ContributionSettingsChanged {
+                            contribution_id: provider.contribution_id.to_string(),
+                            instance_id: None,
+                            settings,
+                        },
+                    );
+            }
+        }
+    }
+
+    pub(crate) fn sync_wallpaper_provider(cx: &mut App) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let (config, descriptors, generation) = {
+            let runtime = cx.global::<Self>();
+            (
+                runtime.active_config.extensions.clone(),
+                runtime
+                    .extension_host()
+                    .descriptors_for(ContributionSurface::Wallpaper),
+                runtime.extension_host().generation().unwrap_or_default(),
+            )
+        };
+        let event = cx
+            .global_mut::<Self>()
+            .wallpaper_coordinator_mut()
+            .sync_active_provider(&config, &descriptors, generation);
+        if let Some((extension_id, event)) = event {
+            cx.global::<Self>()
+                .extension_host()
+                .send_event_to_extension(&extension_id, event);
         }
     }
 
@@ -236,6 +317,7 @@ impl ShellRuntime {
             shell_surfaces,
             action_dispatcher,
             extension_host,
+            wallpaper_coordinator: WallpaperCoordinator::new(),
             wallpaper_preview: wallpaper_preview.clone(),
             service_hub: Some(hub),
             session_state: session.session_state,
@@ -359,6 +441,24 @@ impl ShellRuntime {
         };
         let service = cx.global::<Self>().dbus_service.clone();
         let workspace_id = snapshot.focused_workspace_id.unwrap_or(0);
+        let ws_str = workspace_id.to_string();
+        cx.global::<Self>().extension_host().send_event(
+            shilpo_ext_api::ExtensionEvent::WorkspaceChanged {
+                workspace_id: ws_str.clone(),
+                workspace_name: None,
+                output_name: None,
+            },
+        );
+        let event_to_send = cx
+            .global_mut::<Self>()
+            .wallpaper_coordinator_mut()
+            .on_workspace_changed(&ws_str, None);
+        if let Some((ext_id, event)) = event_to_send {
+            cx.global::<Self>()
+                .extension_host()
+                .send_event_to_extension(&ext_id, event);
+        }
+
         let owner_gen = snapshot.version.owner_generation;
         let rev = snapshot.version.revision;
         cx.spawn(async move |_| {

@@ -29,6 +29,7 @@ The system must support:
 - side-panel pages;
 - extension-owned settings pages;
 - search providers and shell actions;
+- wallpaper providers with host-supervised rotation and workspace synchronization;
 - background behavior reacting to typed shell events;
 - privileged effects such as changing wallpaper only after an explicit capability grant;
 - development, installation, update, disable, recovery, and uninstall workflows.
