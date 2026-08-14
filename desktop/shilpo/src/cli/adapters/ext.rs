@@ -246,7 +246,7 @@ impl ExtAdapter {
         path: Option<&Path>,
         json: bool,
         quiet: bool,
-        _timeout: std::time::Duration,
+        timeout: std::time::Duration,
     ) -> ExtOpResult {
         let target_dir = path.unwrap_or_else(|| Path::new("."));
         let canonical_root = match target_dir.canonicalize() {
@@ -309,7 +309,7 @@ impl ExtAdapter {
             );
         }
 
-        let initial_build = ExtensionCli::build(&canonical_root, false);
+        let initial_build = ExtensionCli::build_with_timeout(&canonical_root, false, timeout);
         if !initial_build.success {
             if json {
                 println!(
@@ -340,6 +340,36 @@ impl ExtAdapter {
                 exit_code: 1,
             };
         }
+
+        let initial_artifact = match initial_build.artifact.clone() {
+            Some(path) => path,
+            None => {
+                let message = "build succeeded without an artifact".to_string();
+                return ExtOpResult {
+                    success: false,
+                    data: serde_json::json!({ "error": message }),
+                    human_message: message,
+                    warnings: Vec::new(),
+                    exit_code: 1,
+                };
+            }
+        };
+        let artifact_relative = match initial_artifact.strip_prefix(&canonical_root) {
+            Ok(path) if !path.as_os_str().is_empty() => path.to_string_lossy().into_owned(),
+            _ => {
+                let message = format!(
+                    "build artifact '{}' is outside the extension root",
+                    initial_artifact.display()
+                );
+                return ExtOpResult {
+                    success: false,
+                    data: serde_json::json!({ "error": message }),
+                    human_message: message,
+                    warnings: Vec::new(),
+                    exit_code: 1,
+                };
+            }
+        };
 
         if json {
             println!(
@@ -403,9 +433,17 @@ impl ExtAdapter {
             let mut build_sequence: u64 = 1;
 
             // Step 3: Initial Reload
-            let reload_res = shell_proxy
-                .reload_dev_session(session_id.clone(), build_sequence, "extension.wasm".into())
-                .await;
+            let reload_res = tokio::time::timeout(
+                timeout,
+                shell_proxy.reload_dev_session(
+                    session_id.clone(),
+                    build_sequence,
+                    artifact_relative.clone(),
+                    timeout.as_millis().min(u64::MAX as u128) as u64,
+                ),
+            )
+            .await
+            .map_err(|_| format!("reload timed out after {timeout:?}"))?;
 
             match reload_res {
                 Ok(res) => {
@@ -476,7 +514,7 @@ impl ExtAdapter {
             }
 
             // Step 4: File watcher setup
-            let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
             let root_for_watcher = canonical_root.clone();
 
             let mut watcher = match notify::RecommendedWatcher::new(
@@ -488,7 +526,7 @@ impl ExtAdapter {
                     {
                         let relevant = event.paths.iter().any(|p| !should_ignore_path(p, &root_for_watcher));
                         if relevant {
-                            let _ = event_tx.send(());
+                            let _ = event_tx.try_send(());
                         }
                     }
                 },
@@ -538,7 +576,7 @@ impl ExtAdapter {
 
                         let root_clone = canonical_root.clone();
                         let build_res = tokio::task::spawn_blocking(move || {
-                            ExtensionCli::build(&root_clone, false)
+                            ExtensionCli::build_with_timeout(&root_clone, false, timeout)
                         }).await.map_err(|e| format!("build task join error: {e}"))?;
 
                         if !build_res.success {
@@ -563,6 +601,23 @@ impl ExtAdapter {
                             continue;
                         }
 
+                        let artifact = match build_res.artifact.clone() {
+                            Some(path) => path,
+                            None => {
+                                eprintln!("Build #{} succeeded without an artifact", build_sequence);
+                                continue;
+                            }
+                        };
+                        let artifact_relative = match artifact.strip_prefix(&canonical_root) {
+                            Ok(path) if !path.as_os_str().is_empty() => {
+                                path.to_string_lossy().into_owned()
+                            }
+                            _ => {
+                                eprintln!("Build #{} produced an artifact outside the project root", build_sequence);
+                                continue;
+                            }
+                        };
+
                         if json {
                             println!(
                                 "{}",
@@ -575,9 +630,17 @@ impl ExtAdapter {
                             );
                         }
 
-                        let reload_res = shell_proxy
-                            .reload_dev_session(session_id.clone(), build_sequence, "extension.wasm".into())
-                            .await;
+                        let reload_res = tokio::time::timeout(
+                            timeout,
+                            shell_proxy.reload_dev_session(
+                                session_id.clone(),
+                                build_sequence,
+                                artifact_relative,
+                                timeout.as_millis().min(u64::MAX as u128) as u64,
+                            ),
+                        )
+                        .await
+                        .map_err(|_| format!("reload timed out after {timeout:?}"))?;
 
                         match reload_res {
                             Ok(res) => {

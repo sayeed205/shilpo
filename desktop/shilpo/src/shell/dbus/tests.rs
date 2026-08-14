@@ -154,6 +154,7 @@ async fn test_introspection_exact_contract() {
                     (Some("session_id"), "s", Some("in")),
                     (Some("build_sequence"), "t", Some("in")),
                     (Some("artifact_path"), "s", Some("in")),
+                    (Some("timeout_ms"), "t", Some("in")),
                     (None, "(sttss)", Some("out")),
                 ],
             ),
@@ -645,9 +646,12 @@ async fn test_dev_session_start_reload_end_flow() {
     // 2. Reload Dev Session
     let res = bounded!(
         "ReloadDevSession",
-        harness
-            .shell_proxy
-            .reload_dev_session(session_id.clone(), 1, "extension.wasm".into())
+        harness.shell_proxy.reload_dev_session(
+            session_id.clone(),
+            1,
+            "extension.wasm".into(),
+            10_000
+        )
     )
     .expect("reload call must succeed");
 

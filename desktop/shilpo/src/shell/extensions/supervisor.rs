@@ -6,7 +6,7 @@ use shilpo_ext_runtime::{
     recv_worker_message_nonblocking, send_host_message,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -177,6 +177,8 @@ pub struct ExtensionSupervisor {
     stop_signal: Arc<AtomicBool>,
     _worker_thread: Option<JoinHandle<()>>,
     pending_replaceable: Arc<Mutex<Option<ReplaceableEvent>>>,
+    cancelled_reloads: Arc<Mutex<HashSet<(String, u64)>>>,
+    latest_dev_reloads: Arc<Mutex<HashMap<String, ExtensionCommand>>>,
 }
 
 impl Default for ExtensionSupervisor {
@@ -203,6 +205,8 @@ impl ExtensionSupervisor {
         let (command_tx, command_rx) = mpsc::sync_channel(MAX_QUEUE_SIZE);
         let (update_tx, update_rx) = mpsc::sync_channel(MAX_QUEUE_SIZE);
         let pending_replaceable = Arc::new(Mutex::new(None));
+        let cancelled_reloads = Arc::new(Mutex::new(HashSet::new()));
+        let latest_dev_reloads = Arc::new(Mutex::new(HashMap::new()));
 
         let ctx = SupervisorLoopParams {
             state: state.clone(),
@@ -213,6 +217,8 @@ impl ExtensionSupervisor {
             command_rx,
             update_tx,
             pending_replaceable: pending_replaceable.clone(),
+            cancelled_reloads: cancelled_reloads.clone(),
+            latest_dev_reloads: latest_dev_reloads.clone(),
         };
 
         let worker_thread = thread::Builder::new()
@@ -232,6 +238,8 @@ impl ExtensionSupervisor {
             stop_signal,
             _worker_thread: worker_thread,
             pending_replaceable,
+            cancelled_reloads,
+            latest_dev_reloads,
         }
     }
 
@@ -323,22 +331,37 @@ impl ExtensionSupervisor {
             artifact_path,
             build_sequence,
         };
+        let replay_cmd = cmd.clone();
         let envelope = SupervisorCommandEnvelope {
             command: cmd,
             reply_tx: Some(reply_tx),
         };
         match self.command_tx.try_send(envelope) {
             Ok(()) => match reply_rx.recv_timeout(timeout) {
-                Ok(outcome) => Ok(outcome),
-                Err(mpsc::RecvTimeoutError::Timeout) => Ok(shilpo_ext_runtime::DevReloadOutcome {
-                    session_id,
-                    build_sequence,
-                    outcome: "timed_out".into(),
-                    engine_generation: self.generation(),
-                    diagnostic_code: "TIMEOUT".into(),
-                    message: format!("reload request timed out after {:?}", timeout),
-                    update: None,
-                }),
+                Ok(outcome) => {
+                    if outcome.outcome == "applied" {
+                        self.latest_dev_reloads
+                            .lock()
+                            .unwrap()
+                            .insert(session_id.clone(), replay_cmd);
+                    }
+                    Ok(outcome)
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    self.cancelled_reloads
+                        .lock()
+                        .unwrap()
+                        .insert((session_id.clone(), build_sequence));
+                    Ok(shilpo_ext_runtime::DevReloadOutcome {
+                        session_id,
+                        build_sequence,
+                        outcome: "timed_out".into(),
+                        engine_generation: self.generation(),
+                        diagnostic_code: "TIMEOUT".into(),
+                        message: format!("reload request timed out after {:?}", timeout),
+                        update: None,
+                    })
+                }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     Ok(shilpo_ext_runtime::DevReloadOutcome::rejected(
                         session_id,
@@ -361,6 +384,7 @@ impl ExtensionSupervisor {
         session_id: String,
         extension_id: shilpo_ext_api::ExtensionId,
     ) -> Result<(), String> {
+        self.latest_dev_reloads.lock().unwrap().remove(&session_id);
         let host_gen = self.host_generation();
         self.send_command(ExtensionCommand::DevUnload {
             expected_host_gen: host_gen,
@@ -427,6 +451,8 @@ struct SupervisorLoopParams {
     command_rx: mpsc::Receiver<SupervisorCommandEnvelope>,
     update_tx: mpsc::SyncSender<ExtensionUpdate>,
     pending_replaceable: Arc<Mutex<Option<ReplaceableEvent>>>,
+    cancelled_reloads: Arc<Mutex<HashSet<(String, u64)>>>,
+    latest_dev_reloads: Arc<Mutex<HashMap<String, ExtensionCommand>>>,
 }
 
 fn supervisor_loop<S: ChildSpawner>(
@@ -647,6 +673,44 @@ fn supervisor_loop<S: ChildSpawner>(
         *params.state.lock().unwrap() = SupervisorState::Ready;
         ready_since = Some(clock.now());
 
+        // Re-submit only the latest successfully applied development artifact for each
+        // live session after a worker restart. No reply is attached: the next CLI change
+        // will receive the authoritative result, while this replay refreshes the host.
+        let replays: Vec<ExtensionCommand> = params
+            .latest_dev_reloads
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect();
+        for command in replays {
+            let command = match command {
+                ExtensionCommand::DevReload {
+                    session_id,
+                    extension_id,
+                    canonical_root,
+                    artifact_path,
+                    build_sequence,
+                    ..
+                } => ExtensionCommand::DevReload {
+                    expected_host_gen: current_host_gen,
+                    session_id,
+                    extension_id,
+                    canonical_root,
+                    artifact_path,
+                    build_sequence,
+                },
+                other => other,
+            };
+            request_counter += 1;
+            let _ = child.write_host_message(&HostMessage {
+                protocol_version: PROTOCOL_VERSION,
+                host_generation: current_host_gen,
+                request_id: request_counter,
+                command,
+            });
+        }
+
         // Child process loop: pump commands from host and updates from child worker
         let mut clean_shutdown = false;
         let mut pending_replies: HashMap<
@@ -740,6 +804,17 @@ fn supervisor_loop<S: ChildSpawner>(
                     if worker_msg.engine_generation < last_accepted_engine_gen {
                         let mut diag = params.diagnostics.lock().unwrap();
                         diag.stale_updates_dropped += 1;
+                        continue;
+                    }
+
+                    if let WorkerPayload::DevReload(ref outcome) = worker_msg.payload
+                        && params
+                            .cancelled_reloads
+                            .lock()
+                            .unwrap()
+                            .remove(&(outcome.session_id.clone(), outcome.build_sequence))
+                    {
+                        pending_replies.remove(&worker_msg.request_id);
                         continue;
                     }
 

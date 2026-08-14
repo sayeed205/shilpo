@@ -98,6 +98,14 @@ pub struct ProcessOutput {
 
 pub trait ProcessRunner: Send + Sync {
     fn run(&self, command: &ProcessCommand) -> Result<ProcessOutput, String>;
+    fn run_with_timeout(
+        &self,
+        command: &ProcessCommand,
+        timeout: std::time::Duration,
+    ) -> Result<ProcessOutput, String> {
+        let _ = timeout;
+        self.run(command)
+    }
     fn which(&self, binary_name: &str) -> Option<PathBuf>;
 }
 
@@ -122,6 +130,55 @@ impl ProcessRunner for OsProcessRunner {
             stdout: output.stdout,
             stderr: output.stderr,
         })
+    }
+
+    fn run_with_timeout(
+        &self,
+        command: &ProcessCommand,
+        timeout: std::time::Duration,
+    ) -> Result<ProcessOutput, String> {
+        use std::process::Stdio;
+        use std::time::Instant;
+        let mut cmd = std::process::Command::new(&command.program);
+        cmd.args(&command.args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(cwd) = &command.cwd {
+            cmd.current_dir(cwd);
+        }
+        for (k, v) in &command.env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("failed to spawn '{}': {e}", command.program))?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            if child
+                .try_wait()
+                .map_err(|e| format!("failed waiting for '{}': {e}", command.program))?
+                .is_some()
+            {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|e| format!("failed collecting '{}': {e}", command.program))?;
+                return Ok(ProcessOutput {
+                    success: output.status.success(),
+                    exit_code: output.status.code(),
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                });
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "process '{}' timed out after {:?}",
+                    command.program, timeout
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     fn which(&self, binary_name: &str) -> Option<PathBuf> {
@@ -522,6 +579,7 @@ fn determine_rust_artifact(
     crate_dir: &Path,
     release: bool,
     runner: &dyn ProcessRunner,
+    timeout: std::time::Duration,
 ) -> Result<PathBuf, String> {
     let cargo_toml = crate_dir.join("Cargo.toml");
     let profile = if release { "release" } else { "debug" };
@@ -538,7 +596,7 @@ fn determine_rust_artifact(
         ])
         .cwd(crate_dir);
 
-    if let Ok(output) = runner.run(&metadata_cmd)
+    if let Ok(output) = runner.run_with_timeout(&metadata_cmd, timeout)
         && output.success
         && let Ok(metadata) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
         && let Some(target_dir_str) = metadata.get("target_directory").and_then(|v| v.as_str())
@@ -651,6 +709,7 @@ fn build_typescript(
     config: &ResolvedBuildConfig,
     runner: &dyn ProcessRunner,
     diagnostics: &mut Vec<String>,
+    timeout: std::time::Duration,
 ) -> Result<PathBuf, ()> {
     let entry_path = config
         .entry
@@ -723,7 +782,7 @@ fn build_typescript(
         .arg(temp_dest_abs.to_str().unwrap_or("temp.wasm"))
         .cwd(dir);
 
-    let output = match runner.run(&cmd) {
+    let output = match runner.run_with_timeout(&cmd, timeout) {
         Ok(out) => out,
         Err(e) => {
             let _ = fs::remove_file(&temp_dest_abs);
@@ -786,6 +845,7 @@ fn build_rust(
     release: bool,
     runner: &dyn ProcessRunner,
     diagnostics: &mut Vec<String>,
+    timeout: std::time::Duration,
 ) -> Result<PathBuf, ()> {
     let crate_rel = config
         .crate_dir
@@ -806,7 +866,9 @@ fn build_rust(
         let check_cmd = ProcessCommand::new("cargo")
             .args(["component", "--version"])
             .cwd(&full_crate);
-        runner.run(&check_cmd).is_ok_and(|out| out.success)
+        runner
+            .run_with_timeout(&check_cmd, timeout)
+            .is_ok_and(|out| out.success)
     };
 
     if !cargo_comp_available {
@@ -823,7 +885,7 @@ fn build_rust(
     }
     cmd = cmd.cwd(&full_crate);
 
-    let output = match runner.run(&cmd) {
+    let output = match runner.run_with_timeout(&cmd, timeout) {
         Ok(out) => out,
         Err(e) => {
             diagnostics.push(format!("error[build.spawn]: {e}"));
@@ -857,7 +919,7 @@ fn build_rust(
         return Err(());
     }
 
-    let produced_artifact = match determine_rust_artifact(&full_crate, release, runner) {
+    let produced_artifact = match determine_rust_artifact(&full_crate, release, runner, timeout) {
         Ok(p) => p,
         Err(e) => {
             diagnostics.push(format!("error[build.artifact]: {e}"));
@@ -912,6 +974,20 @@ pub fn build_extension(
     release: bool,
     runner: &dyn ProcessRunner,
 ) -> ExtensionCliResult {
+    build_extension_with_timeout(
+        dir,
+        release,
+        runner,
+        std::time::Duration::from_secs(24 * 60 * 60),
+    )
+}
+
+pub fn build_extension_with_timeout(
+    dir: &Path,
+    release: bool,
+    runner: &dyn ProcessRunner,
+    timeout: std::time::Duration,
+) -> ExtensionCliResult {
     let config = match resolve_project_config(dir) {
         Ok(c) => c,
         Err(diagnostics) => {
@@ -931,8 +1007,12 @@ pub fn build_extension(
     )];
 
     let build_res = match config.language {
-        ExtensionLanguage::Typescript => build_typescript(dir, &config, runner, &mut diagnostics),
-        ExtensionLanguage::Rust => build_rust(dir, &config, release, runner, &mut diagnostics),
+        ExtensionLanguage::Typescript => {
+            build_typescript(dir, &config, runner, &mut diagnostics, timeout)
+        }
+        ExtensionLanguage::Rust => {
+            build_rust(dir, &config, release, runner, &mut diagnostics, timeout)
+        }
     };
 
     match build_res {
@@ -1673,6 +1753,7 @@ mod tests {
             &MetadataRunner {
                 metadata: serde_json::to_vec(&metadata).unwrap(),
             },
+            std::time::Duration::from_secs(10),
         )
         .unwrap();
         assert_eq!(selected, artifact);

@@ -1303,6 +1303,18 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
 
         // Candidate valid! Perform atomic swap.
         let is_registered = self.session.manifests.contains_key(&extension_id);
+        if is_registered && !self.active_dev_overrides.contains_key(&extension_id) {
+            return DevReloadOutcome::rejected(
+                session_id,
+                build_sequence,
+                self.generation,
+                "NON_DEV_ACTIVATION",
+                format!(
+                    "extension '{}' is already active outside a development session",
+                    extension_id
+                ),
+            );
+        }
         if is_registered {
             if let Err(e) = self
                 .session

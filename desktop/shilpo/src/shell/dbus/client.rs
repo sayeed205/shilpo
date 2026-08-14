@@ -46,6 +46,7 @@ pub trait Shell {
         session_id: String,
         build_sequence: u64,
         artifact_path: String,
+        timeout_ms: u64,
     ) -> zbus::Result<super::types::DevReloadResult>;
     async fn end_dev_session(&self, session_id: String) -> zbus::Result<()>;
 

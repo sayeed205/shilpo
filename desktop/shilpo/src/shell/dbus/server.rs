@@ -627,6 +627,7 @@ impl ShellDbusService {
         session_id: String,
         build_sequence: u64,
         artifact_path: String,
+        timeout_ms: u64,
     ) -> zbus::fdo::Result<super::types::DevReloadResult> {
         let _span = tracing::info_span!(
             target: "shilpo_profile",
@@ -656,11 +657,12 @@ impl ShellDbusService {
         }
 
         let path = std::path::Path::new(&artifact_path);
-        let artifact_full = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            session.canonical_source_root.join(path)
-        };
+        if path.is_absolute() {
+            return Err(zbus::fdo::Error::InvalidArgs(
+                "artifact_path must be relative to the session source root".into(),
+            ));
+        }
+        let artifact_full = session.canonical_source_root.join(path);
 
         let canonical_artifact = match artifact_full.canonicalize() {
             Ok(p) => p,
@@ -722,9 +724,15 @@ impl ShellDbusService {
                 src_root,
                 canonical_artifact,
                 build_sequence,
-                std::time::Duration::from_secs(10),
+                std::time::Duration::from_millis(timeout_ms.clamp(1, 86_400_000)),
             )
-            .map_err(zbus::fdo::Error::Failed)?;
+            .map_err(|error| {
+                if error == "extension command queue full" {
+                    zbus::fdo::Error::LimitsExceeded(error)
+                } else {
+                    zbus::fdo::Error::Failed(error)
+                }
+            })?;
 
         if outcome.outcome == "applied" {
             let mut sessions = self.dev_sessions.lock().unwrap();

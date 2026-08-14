@@ -60,6 +60,19 @@ impl ExtensionCli {
         crate::build::build_extension(dir, release, &crate::build::OsProcessRunner)
     }
 
+    pub fn build_with_timeout(
+        dir: &Path,
+        release: bool,
+        timeout: std::time::Duration,
+    ) -> ExtensionCliResult {
+        crate::build::build_extension_with_timeout(
+            dir,
+            release,
+            &crate::build::OsProcessRunner,
+            timeout,
+        )
+    }
+
     pub fn build_with_runner(
         dir: &Path,
         release: bool,
