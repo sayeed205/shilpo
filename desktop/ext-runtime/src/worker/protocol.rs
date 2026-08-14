@@ -16,12 +16,35 @@ pub enum ContributionSurface {
     Shortcut,
 }
 
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionRuntimeKind {
+    #[default]
+    Wasm,
+    TrustedLocalScript,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptExtensionStatus {
+    pub id: ExtensionId,
+    pub name: String,
+    pub version: String,
+    pub source: String,
+    pub status: String,
+    pub contributions_count: usize,
+    pub diagnostics: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContributionDescriptor {
     pub id: CanonicalId,
     pub extension_name: String,
     pub name: String,
     pub surface: ContributionSurface,
+    #[serde(default)]
+    pub runtime_kind: ExtensionRuntimeKind,
     pub settings_schema: Option<String>,
     pub default_size: Option<(u32, u32)>,
     pub minimum_size: Option<(u32, u32)>,
@@ -63,6 +86,8 @@ pub struct ExtensionSnapshot {
     pub catalog_changed_at: Option<ExtensionGeneration>,
     pub settings_schemas: Arc<BTreeMap<CanonicalId, serde_json::Value>>,
     pub prevalidated_asset_roots: Arc<BTreeMap<ExtensionId, PathBuf>>,
+    #[serde(default)]
+    pub script_extensions: Arc<[ScriptExtensionStatus]>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

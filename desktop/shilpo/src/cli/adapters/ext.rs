@@ -1,10 +1,12 @@
-use super::ipc::IpcAdapter;
+use std::path::{Path, PathBuf};
+
 use shilpo_ext_api::ExtensionId;
 use shilpo_ext_runtime::{
     ExtensionCatalog, ExtensionCli, ExtensionCliResult, ReleaseChannel, UpdateState,
     default_extension_state_dir, sign_package,
 };
-use std::path::{Path, PathBuf};
+
+use super::ipc::IpcAdapter;
 
 pub struct ExtAdapter {
     ipc: IpcAdapter,
@@ -229,23 +231,107 @@ impl ExtAdapter {
         let dev_regs = shilpo_ext_runtime::development_registrations(&self.state_dir).0;
         let installed = self.catalog.installed().unwrap_or_default();
         let installed_count = installed.len();
+        let live_scripts = self
+            .ipc
+            .telemetry()
+            .ok()
+            .and_then(|telemetry| {
+                serde_json::from_str::<serde_json::Value>(
+                    &telemetry.extension_host_diagnostics_json,
+                )
+                .ok()
+            })
+            .and_then(|diagnostics| diagnostics.get("script_extensions").cloned())
+            .and_then(|statuses| statuses.as_array().cloned());
+        let script_items: Vec<serde_json::Value> = if let Some(statuses) = live_scripts {
+            statuses
+                .into_iter()
+                .map(|status| script_item_from_status(&status))
+                .collect()
+        } else {
+            let catalog_paths = shilpo_ext_runtime::CatalogPaths::platform_default();
+            shilpo_ext_runtime::script::discover_script_bundles(&catalog_paths)
+                .iter()
+                .map(|b| {
+                    serde_json::json!({
+                        "id": b.id,
+                        "name": b.name,
+                        "version": b.version,
+                        "path": b.path,
+                        "mode": b.mode,
+                        "type": "script",
+                        "runtime_kind": "trusted_local_script",
+                        "source": "local",
+                        "status": b.status,
+                        "trusted": true,
+                        "sandboxed": false,
+                        "label": "Trusted local script (not sandboxed)",
+                        "contributions_count": b.contributions_count,
+                        "diagnostics": b.diagnostics,
+                    })
+                })
+                .collect()
+        };
+
+        let mut human_lines = Vec::new();
+        human_lines.push(format!("Development extensions: {}", dev_regs.len()));
+        human_lines.push(format!(
+            "Installed extensions: {}",
+            if dev_only { 0 } else { installed_count }
+        ));
+        if !installed.is_empty() && !dev_only {
+            for ext in &installed {
+                human_lines.push(format!(
+                    "  {} (v{}) [wasm, installed] - {} contributions",
+                    ext.receipt.id,
+                    ext.receipt.active.version,
+                    ext.manifest.contributions.bar_widgets.len()
+                        + ext.manifest.contributions.desktop_widgets.len()
+                ));
+            }
+        }
+        human_lines.push(format!(
+            "Trusted local script extensions: {}",
+            script_items.len()
+        ));
+        for script in &script_items {
+            human_lines.push(format!(
+                "  {} (v{}) [script, local, {}] - {} contributions (Trusted local script (not sandboxed))",
+                script.get("id").and_then(|value| value.as_str()).unwrap_or("unknown"),
+                script.get("version").and_then(|value| value.as_str()).unwrap_or("unknown"),
+                script.get("status").and_then(|value| value.as_str()).unwrap_or("unknown"),
+                script.get("contributions_count").and_then(|value| value.as_u64()).unwrap_or(0),
+            ));
+        }
+
         ExtOpResult {
             success: true,
             data: serde_json::json!({
                 "development": dev_regs,
                 "installed": if dev_only { Vec::new() } else { installed },
+                "scripts": script_items,
             }),
-            human_message: format!(
-                "Development extensions: {}\nInstalled extensions: {}",
-                dev_regs.len(),
-                if dev_only { 0 } else { installed_count }
-            ),
+            human_message: human_lines.join("\n"),
             warnings: Vec::new(),
             exit_code: 0,
         }
     }
 
     pub fn install(&self, target: &str, hash: Option<&str>) -> ExtOpResult {
+        let catalog_paths = shilpo_ext_runtime::CatalogPaths::platform_default();
+        let script_bundles = shilpo_ext_runtime::script::discover_script_bundles(&catalog_paths);
+        if script_bundles.iter().any(|b| b.id.as_str() == target) {
+            return ExtOpResult {
+                success: false,
+                data: serde_json::Value::Null,
+                human_message: format!(
+                    "script extension '{target}' is a trusted local script in $XDG_CONFIG_HOME/shilpo/scripts and is not managed via catalog install"
+                ),
+                warnings: Vec::new(),
+                exit_code: 1,
+            };
+        }
+
         let cli_res = if target.starts_with("https://") {
             match self.catalog.install_url(target, hash) {
                 Ok(receipt) => ExtensionCliResult {
@@ -289,6 +375,11 @@ impl ExtAdapter {
     }
 
     pub fn update(&self, id_str: Option<&str>, all: bool, dry_run: bool) -> ExtOpResult {
+        if let Some(id) = id_str
+            && self.is_script_id(id)
+        {
+            return script_catalog_operation_error(id, "update");
+        }
         if all {
             let snapshot = self.catalog.snapshot();
             let available = snapshot
@@ -366,6 +457,9 @@ impl ExtAdapter {
     }
 
     pub fn enable(&self, id_str: &str) -> ExtOpResult {
+        if self.is_script_id(id_str) {
+            return script_catalog_operation_error(id_str, "enable");
+        }
         let Ok(id) = ExtensionId::new(id_str) else {
             return ExtOpResult {
                 success: false,
@@ -391,6 +485,9 @@ impl ExtAdapter {
     }
 
     pub fn disable(&self, id_str: &str) -> ExtOpResult {
+        if self.is_script_id(id_str) {
+            return script_catalog_operation_error(id_str, "disable");
+        }
         let Ok(id) = ExtensionId::new(id_str) else {
             return ExtOpResult {
                 success: false,
@@ -416,6 +513,9 @@ impl ExtAdapter {
     }
 
     pub fn approve(&self, id_str: &str, grant_all: bool) -> ExtOpResult {
+        if self.is_script_id(id_str) {
+            return script_catalog_operation_error(id_str, "grant");
+        }
         let Ok(id) = ExtensionId::new(id_str) else {
             return ExtOpResult {
                 success: false,
@@ -495,6 +595,9 @@ impl ExtAdapter {
     }
 
     pub fn rollback(&self, id_str: &str) -> ExtOpResult {
+        if self.is_script_id(id_str) {
+            return script_catalog_operation_error(id_str, "rollback");
+        }
         let Ok(id) = ExtensionId::new(id_str) else {
             return ExtOpResult {
                 success: false,
@@ -520,6 +623,9 @@ impl ExtAdapter {
     }
 
     pub fn uninstall(&self, id_str: &str, delete_secrets: bool, delete_state: bool) -> ExtOpResult {
+        if self.is_script_id(id_str) {
+            return script_catalog_operation_error(id_str, "uninstall");
+        }
         let Ok(id) = ExtensionId::new(id_str) else {
             return ExtOpResult {
                 success: false,
@@ -746,6 +852,43 @@ impl ExtAdapter {
             },
         }
     }
+
+    fn is_script_id(&self, id: &str) -> bool {
+        shilpo_ext_runtime::script::discover_script_bundles(
+            &shilpo_ext_runtime::CatalogPaths::platform_default(),
+        )
+        .iter()
+        .any(|bundle| bundle.id.as_str() == id)
+    }
+}
+
+fn script_catalog_operation_error(id: &str, operation: &str) -> ExtOpResult {
+    ExtOpResult {
+        success: false,
+        data: serde_json::Value::Null,
+        human_message: format!(
+            "trusted local script '{id}' is not managed by the catalog; '{operation}' is unavailable"
+        ),
+        warnings: Vec::new(),
+        exit_code: 1,
+    }
+}
+
+fn script_item_from_status(status: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "id": status.get("id"),
+        "name": status.get("name"),
+        "version": status.get("version"),
+        "type": "script",
+        "runtime_kind": "trusted_local_script",
+        "source": "local",
+        "status": status.get("status"),
+        "trusted": true,
+        "sandboxed": false,
+        "label": "Trusted local script (not sandboxed)",
+        "contributions_count": status.get("contributions_count"),
+        "diagnostics": status.get("diagnostics"),
+    })
 }
 
 fn record_refresh_warning(result: &mut ExtOpResult, reason: impl Into<String>) {
@@ -756,7 +899,10 @@ fn record_refresh_warning(result: &mut ExtOpResult, reason: impl Into<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExtOpResult, record_refresh_warning};
+    use super::{
+        ExtOpResult, record_refresh_warning, script_catalog_operation_error,
+        script_item_from_status,
+    };
 
     #[test]
     fn daemon_refresh_failure_keeps_local_mutation_successful() {
@@ -774,5 +920,34 @@ mod tests {
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.warnings.len(), 1);
         assert!(result.warnings[0].contains("Local mutation succeeded"));
+    }
+
+    #[test]
+    fn live_script_status_has_stable_human_and_structured_fields() {
+        let item = script_item_from_status(&serde_json::json!({
+            "id": "local.script.test",
+            "name": "Test",
+            "version": "0.1.0",
+            "status": "ready",
+            "contributions_count": 2,
+            "diagnostics": ["example"],
+        }));
+        assert_eq!(item["type"], "script");
+        assert_eq!(item["source"], "local");
+        assert_eq!(item["status"], "ready");
+        assert_eq!(item["runtime_kind"], "trusted_local_script");
+        assert_eq!(item["sandboxed"], false);
+        assert_eq!(item["contributions_count"], 2);
+        assert_eq!(item["diagnostics"][0], "example");
+    }
+
+    #[test]
+    fn scripts_reject_catalog_only_operations() {
+        for operation in ["install", "update", "grant", "rollback", "uninstall"] {
+            let result = script_catalog_operation_error("local.script.test", operation);
+            assert!(!result.success);
+            assert!(result.human_message.contains("not managed by the catalog"));
+            assert!(result.human_message.contains(operation));
+        }
     }
 }

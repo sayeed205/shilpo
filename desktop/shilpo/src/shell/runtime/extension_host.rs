@@ -12,7 +12,6 @@ use crate::{
 use gpui::App;
 
 use super::{ShellRuntime, shell_surfaces::ShellSurfaces};
-use crate::shell::keybindings::GlobalShortcutBackend;
 
 /// Owns the wasm extension runtime (coordinator), its in-flight task registry,
 /// and the location service used by extension effects.

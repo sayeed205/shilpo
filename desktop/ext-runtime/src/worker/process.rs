@@ -1,7 +1,12 @@
 use super::protocol::{ExtensionCommand, ExtensionGeneration, ExtensionUpdate};
 use crate::{CatalogPaths, WasmRuntime};
 use serde::{Deserialize, Serialize};
-use std::io::{self, Read, Write};
+use std::{
+    io::{self, Read, Write},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
 
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024; // 8MB
@@ -231,13 +236,11 @@ pub fn run_extension_host() {
         }
     };
 
-    let stdin = io::stdin();
     let stdout = io::stdout();
-    let mut reader = stdin.lock();
     let mut writer = stdout.lock();
 
     // Read initial HostMessage handshake to establish host_generation
-    let first_msg = match recv_host_message(&mut reader) {
+    let first_msg = match recv_host_message(&mut io::stdin().lock()) {
         Ok(msg) => msg,
         Err(error) => {
             eprintln!("extension-host failed reading initial handshake: {error}");
@@ -280,17 +283,53 @@ pub fn run_extension_host() {
         let _ = send_worker_message(&mut writer, &msg);
     }
 
+    let (command_tx, command_rx) = mpsc::sync_channel(64);
+    thread::spawn(move || {
+        let mut reader = io::stdin().lock();
+        loop {
+            match recv_host_message(&mut reader) {
+                Ok(message) => {
+                    if command_tx.send(Ok(message)).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = command_tx.send(Err(error));
+                    break;
+                }
+            }
+        }
+    });
+
     loop {
-        let msg = match recv_host_message(&mut reader) {
-            Ok(m) => m,
-            Err(ProcessCodecError::Io(err)) if err.kind() == io::ErrorKind::UnexpectedEof => {
+        let msg = match command_rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(Ok(message)) => message,
+            Ok(Err(ProcessCodecError::Io(error)))
+                if error.kind() == io::ErrorKind::UnexpectedEof =>
+            {
                 tracing::info!("stdin closed; shutting down extension-host");
                 break;
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 eprintln!("extension-host error reading message: {error}");
                 break;
             }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(update) = engine.tick_scripts() {
+                    let notification = WorkerMessage {
+                        protocol_version: PROTOCOL_VERSION,
+                        host_generation,
+                        engine_generation: engine.generation(),
+                        request_id: 0,
+                        payload: WorkerPayload::Update(update),
+                    };
+                    if send_worker_message(&mut writer, &notification).is_err() {
+                        break;
+                    }
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
 
         if matches!(msg.command, ExtensionCommand::Shutdown) {

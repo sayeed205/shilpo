@@ -596,6 +596,7 @@ mod tests {
             extension_name: "org.shilpo.test".into(),
             name: "second".into(),
             surface: crate::extensions::ContributionSurface::Action,
+            runtime_kind: shilpo_ext_runtime::worker::protocol::ExtensionRuntimeKind::Wasm,
             settings_schema: None,
             default_size: None,
             minimum_size: None,

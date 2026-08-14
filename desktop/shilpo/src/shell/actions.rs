@@ -1060,6 +1060,7 @@ mod tests {
             extension_name: "Example".into(),
             name: "Open panel".into(),
             surface: shilpo_ext_runtime::worker::protocol::ContributionSurface::Shortcut,
+            runtime_kind: shilpo_ext_runtime::worker::protocol::ExtensionRuntimeKind::Wasm,
             settings_schema: None,
             default_size: None,
             minimum_size: None,
