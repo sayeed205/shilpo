@@ -5,6 +5,8 @@ members = [
     "core/theme",
     "core/macros",
     "core/ext-api",
+    # Language SDKs
+    "sdk/rust",
     # Linux desktop shell crates
     "desktop/shilpo",
     "desktop/device",
@@ -27,6 +29,7 @@ shilpo-ui = { path = "core/ui" }
 shilpo-theme = { path = "core/theme" }
 shilpo-macros = { path = "core/macros" }
 shilpo-ext-api = { path = "core/ext-api" }
+shilpo-ext-sdk = { path = "sdk/rust" }
 shilpo-device = { path = "desktop/device" }
 shilpo-services = { path = "desktop/services" }
 shilpo-ext-runtime = { path = "desktop/ext-runtime" }
