@@ -1273,7 +1273,7 @@ impl ShellSurfaces {
             let handle_id = handle.window_id();
             ShellRuntime::dispatch_surface_lifecycle(
                 cx,
-                ContributionSurface::Launcher,
+                ContributionSurface::Search,
                 false,
                 1280.,
                 720.,
@@ -1315,7 +1315,7 @@ impl ShellSurfaces {
         if had_handle {
             ShellRuntime::dispatch_surface_lifecycle(
                 cx,
-                ContributionSurface::Launcher,
+                ContributionSurface::Search,
                 false,
                 1280.,
                 720.,
@@ -1475,7 +1475,7 @@ impl ShellSurfaces {
                 };
                 ShellRuntime::dispatch_surface_lifecycle(
                     cx,
-                    ContributionSurface::Launcher,
+                    ContributionSurface::Search,
                     true,
                     1280.,
                     720.,

@@ -97,7 +97,7 @@ pub struct Contributions {
     #[serde(default)]
     pub side_panels: Vec<SidePanelContribution>,
     #[serde(default)]
-    pub launcher_providers: Vec<LauncherProviderContribution>,
+    pub search_providers: Vec<SearchProviderContribution>,
     #[serde(default)]
     pub actions: Vec<ActionContribution>,
     #[serde(default)]
@@ -133,7 +133,7 @@ named_contribution!(DesktopWidgetContribution {
 });
 named_contribution!(SettingsPageContribution { schema: String });
 named_contribution!(SidePanelContribution {});
-named_contribution!(LauncherProviderContribution {});
+named_contribution!(SearchProviderContribution {});
 named_contribution!(ActionContribution {});
 named_contribution!(BackgroundTaskContribution {});
 
@@ -301,7 +301,7 @@ impl Contributions {
                     .map(|entry| (&entry.id, entry.name.as_str())),
             )
             .chain(
-                self.launcher_providers
+                self.search_providers
                     .iter()
                     .map(|entry| (&entry.id, entry.name.as_str())),
             )
@@ -968,5 +968,87 @@ mod tests {
         assert!(validate_shortcut_spec("Super+Super+A").is_err());
         assert!(validate_shortcut_spec("Super+A+B").is_err());
         assert!(validate_shortcut_spec("Super+bad\"key").is_err());
+    }
+
+    #[test]
+    fn test_valid_search_providers_manifest() {
+        let toml = r#"
+            id = "org.shilpo.search"
+            name = "Search Extension"
+            version = "1.0.0"
+
+            [[contributions.search_providers]]
+            id = "web-search"
+            name = "Web Search"
+
+            [[contributions.search_providers]]
+            id = "docs-search"
+            name = "Documentation Search"
+        "#;
+        let manifest =
+            ExtensionManifest::from_toml(toml).expect("search_providers manifest should parse");
+        assert_eq!(manifest.contributions.search_providers.len(), 2);
+        assert_eq!(
+            manifest.contributions.search_providers[0].id.as_str(),
+            "web-search"
+        );
+        assert_eq!(
+            manifest.contributions.search_providers[0].name,
+            "Web Search"
+        );
+        assert_eq!(
+            manifest.contributions.search_providers[1].id.as_str(),
+            "docs-search"
+        );
+        assert_eq!(
+            manifest.contributions.search_providers[1].name,
+            "Documentation Search"
+        );
+    }
+
+    #[test]
+    fn test_legacy_provider_field_rejected() {
+        let legacy_field = ["launcher", "providers"].join("_");
+        let toml = format!(
+            r#"
+            id = "org.shilpo.search"
+            name = "Search Extension"
+            version = "1.0.0"
+
+            [[contributions.{legacy_field}]]
+            id = "web-search"
+            name = "Web Search"
+        "#
+        );
+        let err = ExtensionManifest::from_toml(&toml).unwrap_err();
+        assert!(matches!(err, ManifestError::ParseError(_)));
+        assert!(
+            err.to_string()
+                .contains(&format!("unknown field `{legacy_field}`")),
+            "Error should reject the legacy provider field: {err}"
+        );
+    }
+
+    #[test]
+    fn test_search_provider_duplicate_contribution_id_fails() {
+        let toml = r#"
+            id = "org.shilpo.search"
+            name = "Search Extension"
+            version = "1.0.0"
+
+            [[contributions.bar_widgets]]
+            id = "query-tool"
+            name = "Query Tool Bar Widget"
+
+            [[contributions.search_providers]]
+            id = "query-tool"
+            name = "Query Tool Search Provider"
+        "#;
+        let err = ExtensionManifest::from_toml(toml).unwrap_err();
+        assert!(matches!(err, ManifestError::Validation(_)));
+        assert!(
+            err.to_string().contains("duplicate contribution ID"),
+            "Error should reject cross-kind duplicate ID: {err}"
+        );
     }
 }

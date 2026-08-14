@@ -843,12 +843,12 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_binding: None,
                 });
             }
-            for contrib in &m.contributions.launcher_providers {
+            for contrib in &m.contributions.search_providers {
                 descriptors.push(ContributionDescriptor {
                     id: CanonicalId::new(ext_id.clone(), contrib.id.clone()),
                     extension_name: m.name.clone(),
                     name: contrib.name.clone(),
-                    surface: ContributionSurface::Launcher,
+                    surface: ContributionSurface::Search,
                     runtime_kind: ExtensionRuntimeKind::Wasm,
                     settings_schema: None,
                     default_size: None,
@@ -1390,5 +1390,52 @@ mod tests {
             shortcuts_after_unload[0].id.to_string(),
             "io.github.alice.weather/toggle-shortcut"
         );
+    }
+
+    #[test]
+    fn test_worker_descriptor_projection_search_providers() {
+        let manifest_toml = r#"
+            id = "io.github.search.web"
+            name = "Web Search Engine"
+            version = "1.0.0"
+
+            [[contributions.search_providers]]
+            id = "web-provider"
+            name = "Web Search Provider"
+        "#;
+        let manifest = ExtensionManifest::from_toml(manifest_toml).unwrap();
+        let temp_dir = std::env::temp_dir();
+        let mut engine = ExtensionEngine::new(
+            InMemoryRuntime::new(),
+            CatalogPaths::new(&temp_dir, &temp_dir),
+        )
+        .unwrap();
+
+        engine.active_sources.insert(
+            manifest.id.clone(),
+            ActiveSource {
+                manifest: manifest.clone(),
+                root: PathBuf::from("/tmp/web-search"),
+                grants: Vec::new(),
+                fingerprint: 42,
+            },
+        );
+
+        let snapshot = engine.build_snapshot(false);
+        let search_descriptors: Vec<_> = snapshot
+            .descriptors
+            .iter()
+            .filter(|d| d.surface == ContributionSurface::Search)
+            .collect();
+
+        assert_eq!(search_descriptors.len(), 1);
+        let desc = search_descriptors[0];
+        assert_eq!(desc.id.to_string(), "io.github.search.web/web-provider");
+        assert_eq!(desc.id.extension_id.as_str(), "io.github.search.web");
+        assert_eq!(desc.id.contribution_id.as_str(), "web-provider");
+        assert_eq!(desc.extension_name, "Web Search Engine");
+        assert_eq!(desc.name, "Web Search Provider");
+        assert_eq!(desc.surface, ContributionSurface::Search);
+        assert_eq!(desc.runtime_kind, ExtensionRuntimeKind::Wasm);
     }
 }

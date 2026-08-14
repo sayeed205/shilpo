@@ -12,6 +12,7 @@ use gpui::{
     MouseButton, ParentElement, Render, Role, ScrollHandle, ScrollWheelEvent, SharedString,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
+use shilpo_ext_api::CanonicalId;
 use shilpo_services::{CompositorSnapshot, WindowInfo, WorkspaceInfo};
 use shilpo_ui::{
     ActiveTheme, Colorize, FocusTrapElement, Icon, IconName, StyledExt,
@@ -185,6 +186,17 @@ impl LauncherSearchState {
     pub fn is_ready_for_generation(&self, generation: u64) -> bool {
         matches!(self, Self::Ready { generation: g } if *g == generation)
     }
+}
+
+fn search_provider_queries(
+    descriptors: &[crate::extensions::ContributionDescriptor],
+    generation: u64,
+) -> Vec<(CanonicalId, u64)> {
+    descriptors
+        .iter()
+        .filter(|descriptor| descriptor.surface == crate::extensions::ContributionSurface::Search)
+        .map(|descriptor| (descriptor.id.clone(), generation))
+        .collect()
 }
 
 /// Interactive Niri workspace filmstrip overview surface.
@@ -476,17 +488,21 @@ impl WorkspaceOverview {
                 if let Some(entity) = this.upgrade() {
                     entity.update(cx, |view, cx| {
                         if view.query_generation == query_gen {
-                            for descriptor in ShellRuntime::extension_descriptors(
+                            let descriptors = ShellRuntime::extension_descriptors(
                                 cx,
-                                crate::extensions::ContributionSurface::Launcher,
-                            ) {
+                                crate::extensions::ContributionSurface::Search,
+                            );
+                            for (contribution, generation) in
+                                search_provider_queries(&descriptors, query_gen)
+                            {
                                 ShellRuntime::dispatch_extension_input(
                                     cx,
-                                    &descriptor.id,
+                                    &contribution,
                                     None,
                                     "query",
                                     Some(text.clone().into()),
                                 );
+                                debug_assert_eq!(generation, query_gen);
                             }
                             let results = if let Some(search) = &view.search {
                                 search.search(&text)
@@ -754,10 +770,10 @@ impl WorkspaceOverview {
                 }
             }));
 
-            // Mount extension surface for Launcher contributions
+            // Mount extension surface for Search contributions
             ShellRuntime::dispatch_surface_lifecycle(
                 cx,
-                crate::extensions::ContributionSurface::Launcher,
+                crate::extensions::ContributionSurface::Search,
                 true,
                 640.,
                 480.,
@@ -1202,7 +1218,7 @@ impl Render for WorkspaceOverview {
             let scale_factor = window.scale_factor();
             let provider_views = ShellRuntime::extension_surface_views(
                 cx,
-                crate::extensions::ContributionSurface::Launcher,
+                crate::extensions::ContributionSurface::Search,
             )
             .into_iter()
             .map(|(id, tree)| {
@@ -1702,5 +1718,69 @@ mod tests {
         // Results arrive for generation 2
         search_state = LauncherSearchState::Ready { generation: 2 };
         assert!(search_state.is_ready_for_generation(2));
+    }
+
+    #[test]
+    fn test_search_surface_descriptor_discovery() {
+        let descriptor = crate::extensions::ContributionDescriptor {
+            id: "org.shilpo.web-search/provider".parse().unwrap(),
+            extension_name: "Web Search".into(),
+            name: "Web Provider".into(),
+            surface: crate::extensions::ContributionSurface::Search,
+            runtime_kind: shilpo_ext_runtime::worker::protocol::ExtensionRuntimeKind::Wasm,
+            settings_schema: None,
+            default_size: None,
+            minimum_size: None,
+            bar_widget: None,
+            action: None,
+            default_binding: None,
+        };
+        assert_eq!(
+            descriptor.surface,
+            crate::extensions::ContributionSurface::Search
+        );
+        assert_eq!(descriptor.extension_name, "Web Search");
+        assert_eq!(descriptor.name, "Web Provider");
+    }
+
+    #[test]
+    fn search_provider_queries_dispatch_once_per_provider_and_generation() {
+        let search_a = crate::extensions::ContributionDescriptor {
+            id: "org.shilpo.web-search/provider-a".parse().unwrap(),
+            extension_name: "Web Search".into(),
+            name: "Web Provider A".into(),
+            surface: crate::extensions::ContributionSurface::Search,
+            runtime_kind: shilpo_ext_runtime::worker::protocol::ExtensionRuntimeKind::Wasm,
+            settings_schema: None,
+            default_size: None,
+            minimum_size: None,
+            bar_widget: None,
+            action: None,
+            default_binding: None,
+        };
+        let search_b = crate::extensions::ContributionDescriptor {
+            id: "org.shilpo.docs-search/provider-b".parse().unwrap(),
+            extension_name: "Docs Search".into(),
+            name: "Docs Provider B".into(),
+            surface: crate::extensions::ContributionSurface::Search,
+            runtime_kind: shilpo_ext_runtime::worker::protocol::ExtensionRuntimeKind::Wasm,
+            settings_schema: None,
+            default_size: None,
+            minimum_size: None,
+            bar_widget: None,
+            action: None,
+            default_binding: None,
+        };
+        let non_search = crate::extensions::ContributionDescriptor {
+            surface: crate::extensions::ContributionSurface::Action,
+            ..search_a.clone()
+        };
+        let descriptors = vec![search_a, search_b, non_search];
+
+        let queries = search_provider_queries(&descriptors, 7);
+        assert_eq!(queries.len(), 2);
+        assert_eq!(queries[0].0, descriptors[0].id);
+        assert_eq!(queries[1].0, descriptors[1].id);
+        assert!(queries.iter().all(|(_, generation)| *generation == 7));
     }
 }

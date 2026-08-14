@@ -18,8 +18,8 @@ pub use id::{CanonicalId, ContributionId, ExtensionId, IdError};
 pub use manifest::{
     ActionContribution, BackgroundTaskContribution, BarMenuContribution, BarWidgetContribution,
     Capability, CapabilityKind, Contributions, DesktopWidgetContribution, ExtensionManifest,
-    LauncherProviderContribution, LibraryConfig, ManifestError, SUPPORTED_API_VERSION,
-    SUPPORTED_SCHEMA_VERSION, SecretPurpose, SecretRef, SettingsPageContribution,
+    LibraryConfig, ManifestError, SUPPORTED_API_VERSION, SUPPORTED_SCHEMA_VERSION,
+    SearchProviderContribution, SecretPurpose, SecretRef, SettingsPageContribution,
     SidePanelContribution, Subscription, valid_virtual_path_pattern, wildcard_matches,
 };
 pub use view::{
@@ -101,15 +101,27 @@ mod contract_tests {
 
     #[test]
     fn manifest_schema_fixture_matches_the_contract_owner() {
-        let schema = serde_json::from_str::<serde_json::Value>(
-            &ExtensionManifest::schema_json().expect("manifest schema should serialize"),
-        )
-        .expect("generated schema should be valid JSON");
-        let fixture = serde_json::from_str::<serde_json::Value>(include_str!(
-            "../schema/extension-v1.schema.json"
-        ))
-        .expect("checked-in schema should be valid JSON");
+        let schema_str =
+            ExtensionManifest::schema_json().expect("manifest schema should serialize");
+        let schema = serde_json::from_str::<serde_json::Value>(&schema_str)
+            .expect("generated schema should be valid JSON");
+        let fixture_str = include_str!("../schema/extension-v1.schema.json");
+        let fixture = serde_json::from_str::<serde_json::Value>(fixture_str)
+            .expect("checked-in schema should be valid JSON");
         assert_eq!(schema, fixture);
+
+        // Explicit new/legacy name assertions.
+        let legacy_provider_field = ["launcher", "providers"].join("_");
+        let legacy_provider_type = ["Launcher", "ProviderContribution"].concat();
+        assert!(schema_str.contains("search_providers"));
+        assert!(schema_str.contains("SearchProviderContribution"));
+        assert!(!schema_str.contains(&legacy_provider_field));
+        assert!(!schema_str.contains(&legacy_provider_type));
+
+        assert!(fixture_str.contains("search_providers"));
+        assert!(fixture_str.contains("SearchProviderContribution"));
+        assert!(!fixture_str.contains(&legacy_provider_field));
+        assert!(!fixture_str.contains(&legacy_provider_type));
     }
 
     #[test]

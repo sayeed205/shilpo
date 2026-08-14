@@ -16,7 +16,7 @@ An extension may contribute one or more:
 - desktop widgets;
 - side-panel pages;
 - settings pages;
-- launcher providers;
+- search providers;
 - shell actions;
 - background tasks that react to typed shell events.
 
