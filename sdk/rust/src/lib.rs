@@ -62,6 +62,7 @@
 //! ```
 
 #![deny(missing_docs)]
+#![doc = include_str!("../README.md")]
 
 pub mod bindings;
 pub mod builder;

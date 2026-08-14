@@ -21,10 +21,10 @@ impl Extension for SdkFixture {
     }
 
     fn on_event(&mut self, event: ExtensionEvent) -> Result<(), Error> {
-        if let ExtensionEvent::Input(input) = event {
-            if input.event_id == "increment" {
-                self.counter += 1;
-            }
+        if let ExtensionEvent::Input(input) = event
+            && input.event_id == "increment"
+        {
+            self.counter += 1;
         }
         Ok(())
     }

@@ -34,6 +34,11 @@ fn test_state_operations_and_typed_error_propagation() {
 
     // 6. Unwatch state
     assert!(State::unwatch(watch.watch_id).is_ok());
+    let second_watch = State::watch("user_name").expect("second watch");
+    assert_ne!(second_watch.watch_id, watch.watch_id);
+    assert!(State::unwatch(second_watch.watch_id).is_ok());
+    let missing_watch = State::unwatch(second_watch.watch_id).unwrap_err();
+    assert_eq!(missing_watch.kind, ErrorKind::NotFound);
 
     // 7. Delete state
     let del = State::delete("user_name").expect("delete");

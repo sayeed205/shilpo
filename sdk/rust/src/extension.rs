@@ -34,6 +34,19 @@ pub trait Extension: Default {
     }
 }
 
+/// Runs an extension callback without allowing a guest panic to unwind through
+/// the component boundary. The panic payload is intentionally not exposed to
+/// the host because it may contain extension secrets or other sensitive data.
+pub fn invoke_callback<T>(callback: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)) {
+        Ok(result) => result,
+        Err(_) => Err(Error {
+            kind: crate::bindings::shilpo::extension::types::ErrorKind::Internal,
+            message: "extension callback panicked".into(),
+        }),
+    }
+}
+
 /// Exports an [`Extension`] implementation to the canonical WebAssembly guest boundary.
 ///
 /// # Examples
@@ -70,29 +83,42 @@ macro_rules! export_extension {
 
         static mut __SHILPO_INSTANCE: ::core::option::Option<$ext> = ::core::option::Option::None;
 
+        fn __with_instance<T>(
+            callback: impl FnOnce(&mut $ext) -> ::core::result::Result<T, $crate::bindings::shilpo::extension::types::Error>,
+        ) -> ::core::result::Result<T, $crate::bindings::shilpo::extension::types::Error> {
+            unsafe {
+                if __SHILPO_INSTANCE.is_none() {
+                    __SHILPO_INSTANCE = ::core::option::Option::Some(
+                        <$ext as ::core::default::Default>::default(),
+                    );
+                }
+                match __SHILPO_INSTANCE.as_mut() {
+                    ::core::option::Option::Some(instance) => callback(instance),
+                    ::core::option::Option::None => ::core::result::Result::Err(
+                        $crate::bindings::shilpo::extension::types::Error {
+                            kind: $crate::bindings::shilpo::extension::types::ErrorKind::Internal,
+                            message: "extension instance unavailable".into(),
+                        },
+                    ),
+                }
+            }
+        }
+
         impl $crate::bindings::Guest for __ShilpoGuestComponent {
             fn activate(
                 activation: $crate::bindings::shilpo::extension::types::Activation,
             ) -> ::core::result::Result<(), $crate::bindings::shilpo::extension::types::Error> {
-                let inst = unsafe {
-                    if __SHILPO_INSTANCE.is_none() {
-                        __SHILPO_INSTANCE = ::core::option::Option::Some(<$ext as ::core::default::Default>::default());
-                    }
-                    __SHILPO_INSTANCE.as_mut().unwrap()
-                };
-                <$ext as $crate::extension::Extension>::activate(inst, activation)
+                $crate::extension::invoke_callback(|| {
+                    __with_instance(|inst| <$ext as $crate::extension::Extension>::activate(inst, activation))
+                })
             }
 
             fn deactivate(
                 reason: $crate::bindings::shilpo::extension::types::DeactivateReason,
             ) -> ::core::result::Result<(), $crate::bindings::shilpo::extension::types::Error> {
-                let inst = unsafe {
-                    if __SHILPO_INSTANCE.is_none() {
-                        __SHILPO_INSTANCE = ::core::option::Option::Some(<$ext as ::core::default::Default>::default());
-                    }
-                    __SHILPO_INSTANCE.as_mut().unwrap()
-                };
-                let res = <$ext as $crate::extension::Extension>::deactivate(inst, reason);
+                let res = $crate::extension::invoke_callback(|| {
+                    __with_instance(|inst| <$ext as $crate::extension::Extension>::deactivate(inst, reason))
+                });
                 unsafe {
                     __SHILPO_INSTANCE = ::core::option::Option::None;
                 }
@@ -102,13 +128,9 @@ macro_rules! export_extension {
             fn on_event(
                 event: $crate::bindings::shilpo::extension::events::ExtensionEvent,
             ) -> ::core::result::Result<(), $crate::bindings::shilpo::extension::types::Error> {
-                let inst = unsafe {
-                    if __SHILPO_INSTANCE.is_none() {
-                        __SHILPO_INSTANCE = ::core::option::Option::Some(<$ext as ::core::default::Default>::default());
-                    }
-                    __SHILPO_INSTANCE.as_mut().unwrap()
-                };
-                <$ext as $crate::extension::Extension>::on_event(inst, event)
+                $crate::extension::invoke_callback(|| {
+                    __with_instance(|inst| <$ext as $crate::extension::Extension>::on_event(inst, event))
+                })
             }
 
             fn view(
@@ -117,13 +139,9 @@ macro_rules! export_extension {
                 ::core::option::Option<$crate::bindings::shilpo::extension::view::ViewTree>,
                 $crate::bindings::shilpo::extension::types::Error,
             > {
-                let inst = unsafe {
-                    if __SHILPO_INSTANCE.is_none() {
-                        __SHILPO_INSTANCE = ::core::option::Option::Some(<$ext as ::core::default::Default>::default());
-                    }
-                    __SHILPO_INSTANCE.as_mut().unwrap()
-                };
-                <$ext as $crate::extension::Extension>::view(inst, &contribution_id)
+                $crate::extension::invoke_callback(|| {
+                    __with_instance(|inst| <$ext as $crate::extension::Extension>::view(inst, &contribution_id))
+                })
             }
         }
 

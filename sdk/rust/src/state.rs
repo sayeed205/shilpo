@@ -95,11 +95,14 @@ mod imp {
 mod imp {
     use super::*;
     use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::sync::Mutex;
 
     static FAKE_STORE: Mutex<Option<HashMap<String, (DataValue, u64)>>> = Mutex::new(None);
     static REVISION: Mutex<u64> = Mutex::new(1);
     static FAKE_ERROR: Mutex<Option<Error>> = Mutex::new(None);
+    static NEXT_WATCH_ID: Mutex<u64> = Mutex::new(1);
+    static WATCHES: Mutex<Option<HashSet<u64>>> = Mutex::new(None);
 
     #[doc(hidden)]
     pub fn set_fake_error(err: Option<Error>) {
@@ -111,6 +114,8 @@ mod imp {
         *FAKE_STORE.lock().unwrap() = Some(HashMap::new());
         *REVISION.lock().unwrap() = 1;
         *FAKE_ERROR.lock().unwrap() = None;
+        *NEXT_WATCH_ID.lock().unwrap() = 1;
+        *WATCHES.lock().unwrap() = Some(HashSet::new());
     }
 
     pub fn read(key: &str) -> Result<StateSnapshot, Error> {
@@ -172,17 +177,37 @@ mod imp {
             return Err(err);
         }
         let snap = read(key)?;
+        let mut next_id = NEXT_WATCH_ID.lock().unwrap();
+        let watch_id = *next_id;
+        *next_id = next_id.saturating_add(1);
+        WATCHES
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashSet::new)
+            .insert(watch_id);
         Ok(WatchRegistration {
-            watch_id: 1,
+            watch_id,
             snapshot: snap,
         })
     }
 
-    pub fn unwatch(_watch_id: u64) -> Result<(), Error> {
+    pub fn unwatch(watch_id: u64) -> Result<(), Error> {
         if let Some(err) = FAKE_ERROR.lock().unwrap().clone() {
             return Err(err);
         }
-        Ok(())
+        let removed = WATCHES
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashSet::new)
+            .remove(&watch_id);
+        if removed {
+            Ok(())
+        } else {
+            Err(Error {
+                kind: crate::bindings::shilpo::extension::types::ErrorKind::NotFound,
+                message: "state watch not found".into(),
+            })
+        }
     }
 }
 

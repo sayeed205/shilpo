@@ -2281,11 +2281,7 @@ mod bar_menu_component_fixture_tests {
         }
     }
 
-    const SDK_FIXTURE: &[u8] = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/sdk-component/target/wasm32-wasip2/release/",
-        "sdk_component_fixture.wasm"
-    ));
+    const SDK_FIXTURE: &[u8] = include_bytes!(env!("SHILPO_SDK_FIXTURE_WASM"));
 
     #[test]
     fn sdk_authored_guest_component_instantiates_and_renders_view_tree() {

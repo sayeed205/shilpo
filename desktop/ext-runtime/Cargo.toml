@@ -3,6 +3,7 @@ name = "shilpo-ext-runtime"
 version = "0.1.0"
 edition.workspace = true
 publish.workspace = true
+build = "build.rs"
 
 [[example]]
 name = "generate_distribution_schemas"

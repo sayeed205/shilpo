@@ -10,7 +10,7 @@ Official Rust SDK for developing sandboxed WebAssembly extensions for the [Shilp
 
 ## Features
 
-- **Declarative ViewTree Builders**: Fluent constructors for all 15 canonical UI node types (`row`, `column`, `stack`, `grid`, `text`, `icon`, `image`, `button`, `icon_button`, `toggle`, `slider`, `text_input`, `list`, `spacer`, `divider`, `badge`, `progress`, `loading_indicator`).
+- **Declarative ViewTree Builders**: Fluent constructors for all 18 canonical UI node types (`row`, `column`, `stack`, `grid`, `text`, `icon`, `image`, `button`, `icon_button`, `toggle`, `slider`, `text_input`, `list`, `spacer`, `divider`, `badge`, `progress`, `loading_indicator`).
 - **Ergonomic `view!` Macro**: Declarative UI composition with support for nested children, conditionals, and iterators.
 - **Typed Lifecycle Adapter**: Simple [`Extension`] trait and [`export_extension!`] macro wrapping the canonical `shilpo:extension@0.1.0` WIT contract.
 - **Durable State Helpers**: Key-value state storage with atomic watch registration snapshots via [`State`].
@@ -72,7 +72,7 @@ impl Extension for CounterExtension {
         }
 
         Ok(Some(view! {
-            row(gap = 8.0, align_items = Alignment::Center) {
+            row {
                 icon("counter").size(16.0),
                 text(format!("Count: {}", self.count)).bold(true),
                 button("+1", "increment"),
@@ -150,8 +150,8 @@ let is_connected = true;
 let devices = vec!["Headphones", "Keyboard", "Mouse"];
 
 let tree = view! {
-    column(gap = 8.0) {
-        row(gap = 4.0) {
+    column {
+        row {
             icon("bluetooth"),
             text("Bluetooth Devices").bold(true),
             if is_connected {
@@ -162,7 +162,7 @@ let tree = view! {
         },
         divider(),
         for device in (devices) {
-            row(gap = 8.0) {
+            row {
                 icon("bluetooth-connected").size(14.0),
                 text(device),
             },

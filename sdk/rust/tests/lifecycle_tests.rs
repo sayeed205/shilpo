@@ -90,3 +90,13 @@ fn test_extension_lifecycle_and_error_propagation() {
     assert_eq!(err.kind, ErrorKind::Unauthorized);
     assert_eq!(err.message, "activation unauthorized");
 }
+
+#[test]
+fn callback_panics_become_typed_internal_errors() {
+    let err = shilpo_ext_sdk::extension::invoke_callback::<()>(|| {
+        panic!("private extension detail");
+    })
+    .expect_err("panic must not cross the SDK callback boundary");
+    assert_eq!(err.kind, ErrorKind::Internal);
+    assert_eq!(err.message, "extension callback panicked");
+}
