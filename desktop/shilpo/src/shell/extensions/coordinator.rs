@@ -212,7 +212,7 @@ mod tests {
         );
         assert_eq!(
             coordinator
-                .descriptors_for(ContributionSurface::Launcher)
+                .descriptors_for(ContributionSurface::Search)
                 .len(),
             0
         );

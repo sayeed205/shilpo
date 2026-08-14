@@ -30,7 +30,7 @@
         "bar_widgets": [],
         "desktop_widgets": [],
         "keyboard_shortcuts": [],
-        "launcher_providers": [],
+        "search_providers": [],
         "settings_pages": [],
         "side_panels": []
       }
@@ -466,11 +466,11 @@
             "$ref": "#/$defs/KeyboardShortcutContribution"
           }
         },
-        "launcher_providers": {
+        "search_providers": {
           "type": "array",
           "default": [],
           "items": {
-            "$ref": "#/$defs/LauncherProviderContribution"
+            "$ref": "#/$defs/SearchProviderContribution"
           }
         },
         "settings_pages": {
@@ -588,7 +588,19 @@
         "action"
       ]
     },
-    "LauncherProviderContribution": {
+    "LibraryConfig": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
+    },
+    "SearchProviderContribution": {
       "type": "object",
       "properties": {
         "id": {
@@ -602,18 +614,6 @@
       "required": [
         "id",
         "name"
-      ]
-    },
-    "LibraryConfig": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "path"
       ]
     },
     "SecretPurpose": {

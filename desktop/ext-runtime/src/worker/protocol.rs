@@ -10,7 +10,8 @@ pub enum ContributionSurface {
     Desktop,
     Settings,
     SidePanel,
-    Launcher,
+    #[serde(rename = "search")]
+    Search,
     Action,
     Background,
     Shortcut,
@@ -157,4 +158,29 @@ pub struct ExtensionUpdate {
     pub snapshot: Option<ExtensionSnapshot>,
     pub effects: Vec<(ExtensionId, AuthorizedHostOperation)>,
     pub invalidated_views: Vec<CanonicalId>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_contribution_surface_search_serialization_round_trip() {
+        let surface = ContributionSurface::Search;
+        let json =
+            serde_json::to_string(&surface).expect("ContributionSurface::Search should serialize");
+        assert_eq!(json, "\"search\"");
+
+        let deserialized: ContributionSurface =
+            serde_json::from_str(&json).expect("ContributionSurface::Search should deserialize");
+        assert_eq!(deserialized, ContributionSurface::Search);
+
+        // Legacy surface names must be rejected.
+        let legacy_json = "\"Launcher\"";
+        let legacy_result: Result<ContributionSurface, _> = serde_json::from_str(legacy_json);
+        assert!(
+            legacy_result.is_err(),
+            "Legacy 'Launcher' surface must fail deserialization"
+        );
+    }
 }
