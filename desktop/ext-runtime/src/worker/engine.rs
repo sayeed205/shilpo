@@ -6,6 +6,7 @@ use super::protocol::{
 };
 use crate::{
     CURRENT_SHILPO_VERSION, CatalogPaths, ExtensionCatalog, ExtensionHost, ExtensionRuntime,
+    MonotonicClock, SystemMonotonicClock,
 };
 use semver::Version;
 use shilpo_ext_api::{
@@ -18,7 +19,7 @@ use std::{
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
     sync::Arc,
-    time::UNIX_EPOCH,
+    time::{Duration, UNIX_EPOCH},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -295,11 +296,20 @@ pub struct ExtensionEngine<R = crate::WasmRuntime> {
 
 impl<R: ExtensionRuntime> ExtensionEngine<R> {
     pub fn new(runtime: R, paths: CatalogPaths) -> Result<Self, String> {
+        Self::new_with_clock(runtime, paths, Arc::new(SystemMonotonicClock))
+    }
+
+    pub fn new_with_clock(
+        runtime: R,
+        paths: CatalogPaths,
+        clock: Arc<dyn MonotonicClock>,
+    ) -> Result<Self, String> {
         let shilpo_version =
             Version::parse(CURRENT_SHILPO_VERSION).expect("Shilpo version is valid semver");
         let catalog = ExtensionCatalog::open(paths.clone(), shilpo_version);
         let catalog_mtime = catalog_mtime(&paths.data_dir);
         let mut session = ExtensionSession::new(runtime);
+        session.host = session.host.with_clock(clock);
         let grant_catalog = catalog.clone();
         session
             .host
@@ -358,7 +368,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
             outcome = "failure",
         );
         let _enter = _span.enter();
-        let result = match command {
+        let mut result = match command {
             ExtensionCommand::Lifecycle { expected, event } => {
                 if expected != self.generation {
                     return None;
@@ -371,6 +381,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                         .then(|| self.build_snapshot(false)),
                     effects: changes.effects,
                     invalidated_views: changes.invalidated_views,
+                    circuit_notices: Vec::new(),
                 })
             }
             ExtensionCommand::Input {
@@ -399,6 +410,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                         .then(|| self.build_snapshot(false)),
                     effects: changes.effects,
                     invalidated_views: changes.invalidated_views,
+                    circuit_notices: Vec::new(),
                 })
             }
             ExtensionCommand::Response {
@@ -417,6 +429,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                         .then(|| self.build_snapshot(false)),
                     effects: changes.effects,
                     invalidated_views: changes.invalidated_views,
+                    circuit_notices: Vec::new(),
                 })
             }
             ExtensionCommand::Replaceable(event) => {
@@ -451,6 +464,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     snapshot: None,
                     effects: changes.effects,
                     invalidated_views: changes.invalidated_views,
+                    circuit_notices: Vec::new(),
                 })
             }
             ExtensionCommand::ReconcileInstances { expected, desired } => {
@@ -464,6 +478,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     snapshot: None,
                     effects: changes.effects,
                     invalidated_views: changes.invalidated_views,
+                    circuit_notices: Vec::new(),
                 })
             }
             ExtensionCommand::SourcesChanged => {
@@ -477,6 +492,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     snapshot: Some(snapshot),
                     effects: Vec::new(),
                     invalidated_views: Vec::new(),
+                    circuit_notices: Vec::new(),
                 })
             }
             ExtensionCommand::Shutdown => {
@@ -484,6 +500,22 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                 None
             }
         };
+        let circuit_notices = self
+            .session
+            .host
+            .circuit_breaker_mut()
+            .take_pending_notices();
+        let visible_changed = self
+            .session
+            .host
+            .circuit_breaker_mut()
+            .take_visible_changed();
+        if let Some(ref mut update) = result {
+            if (visible_changed || !circuit_notices.is_empty()) && update.snapshot.is_none() {
+                update.snapshot = Some(self.build_snapshot(false));
+            }
+            update.circuit_notices = circuit_notices;
+        }
         if result.is_some() {
             _span.record("outcome", "success");
         }
@@ -571,30 +603,72 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
         let preserved_instances: Vec<ContributionInstance> =
             self.session.instances.values().cloned().collect();
 
-        self.session.clear();
-        self.active_sources = new_sources;
-        self.catalog_mtime = catalog_mtime(&self.paths.data_dir);
-
-        for (id, source) in &self.active_sources {
+        // Compile every replacement before touching the active session. A malformed or
+        // incomplete source must not evict the last-valid runtime, views, instances, or
+        // circuit state. Registration is deliberately kept after this validation barrier
+        // because the runtime module handle is owned by the session once installed.
+        let mut compiled_modules = BTreeMap::new();
+        let mut preflight_failed = false;
+        for (id, source) in &new_sources {
             let wasm_file = source.root.join("extension.wasm");
             let wasm_bytes = match fs::read(&wasm_file) {
                 Ok(bytes) => bytes,
                 Err(error) => {
                     self.diagnostics
                         .push(format!("failed to read extension WASM for '{id}': {error}"));
+                    preflight_failed = true;
                     continue;
                 }
             };
-            let module = match self.session.host.runtime().compile_module(&wasm_bytes) {
-                Ok(mod_obj) => mod_obj,
+            match self.session.host.runtime().compile_module(&wasm_bytes) {
+                Ok(module) => {
+                    compiled_modules.insert(id.clone(), module);
+                }
                 Err(error) => {
                     self.diagnostics.push(format!(
                         "failed to compile extension module for '{id}': {error}"
                     ));
-                    continue;
+                    preflight_failed = true;
                 }
-            };
+            }
+        }
+        if !preflight_failed {
+            for (id, module) in &compiled_modules {
+                let source = new_sources
+                    .get(id)
+                    .expect("compiled module belongs to an active source");
+                let runtime_budget = self.session.host.runtime_budget();
+                if let Err(error) = self
+                    .session
+                    .host
+                    .runtime_mut()
+                    .validate_module_with_capabilities(
+                        id,
+                        module,
+                        runtime_budget,
+                        source.manifest.capabilities.clone(),
+                        source.grants.clone(),
+                    )
+                {
+                    self.diagnostics.push(format!(
+                        "failed to validate extension module for '{id}': {error}"
+                    ));
+                    preflight_failed = true;
+                }
+            }
+        }
+        if preflight_failed {
+            return Ok(());
+        }
 
+        self.session.clear();
+        self.active_sources = new_sources;
+        self.catalog_mtime = catalog_mtime(&self.paths.data_dir);
+
+        for (id, source) in &self.active_sources {
+            let module = compiled_modules
+                .remove(id)
+                .expect("preflight compiled every active source");
             if let Err(error) =
                 self.session
                     .register(source.manifest.clone(), module, source.grants.clone())
@@ -641,18 +715,49 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
         Ok(())
     }
 
-    pub fn tick_scripts(&mut self) -> Option<ExtensionUpdate> {
-        if !self.script_runtime.tick() {
+    pub fn tick(&mut self) -> Option<ExtensionUpdate> {
+        let circuit_transitioned = self.session.host.circuit_breaker_mut().advance_clock();
+        let circuit_notices = self
+            .session
+            .host
+            .circuit_breaker_mut()
+            .take_pending_notices();
+        let visible_changed = self
+            .session
+            .host
+            .circuit_breaker_mut()
+            .take_visible_changed();
+        let script_changed = self.script_runtime.tick();
+
+        if !circuit_transitioned
+            && !visible_changed
+            && !script_changed
+            && circuit_notices.is_empty()
+        {
             return None;
         }
+
         self.generation = self.generation.next();
         Some(ExtensionUpdate {
             host_generation: HostGeneration(0),
             generation: self.generation,
             snapshot: Some(self.build_snapshot(false)),
             effects: Vec::new(),
-            invalidated_views: self.script_runtime.views().into_keys().collect(),
+            invalidated_views: if script_changed {
+                self.script_runtime.views().into_keys().collect()
+            } else {
+                Vec::new()
+            },
+            circuit_notices,
         })
+    }
+
+    pub fn tick_scripts(&mut self) -> Option<ExtensionUpdate> {
+        self.tick()
+    }
+
+    pub fn next_tick_deadline(&self) -> Option<Duration> {
+        self.session.host.circuit_breaker().next_retry_deadline()
     }
 
     fn discover_sources(&mut self) -> Result<BTreeMap<ExtensionId, ActiveSource>, String> {
@@ -935,6 +1040,12 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
             settings_schemas: Arc::new(settings_schemas),
             prevalidated_asset_roots: Arc::new(prevalidated_asset_roots),
             script_extensions: Arc::from(self.script_runtime.statuses()),
+            wasm_extensions: Arc::from(
+                self.active_sources
+                    .keys()
+                    .map(|id| self.session.host.circuit_breaker().status(id))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }
@@ -963,9 +1074,14 @@ fn compute_fingerprint(root: &Path, manifest: &ExtensionManifest) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{GuestExtension, InMemoryRuntime};
+    use crate::{
+        CircuitStateKind, DiagnosticCode, FakeMonotonicClock, GuestExtension, InMemoryRuntime,
+    };
     use shilpo_ext_api::{BarMenuCloseReason, HostOperation, ImageNode, TextNode, ViewNode};
-    use std::sync::{Arc, Mutex};
+    use std::{
+        sync::{Arc, Mutex},
+        time::Instant,
+    };
 
     struct TestGuest;
     impl GuestExtension for TestGuest {
@@ -1318,9 +1434,11 @@ mod tests {
         let m2 = ExtensionManifest::from_toml(manifest_toml_2).unwrap();
 
         let temp_dir = std::env::temp_dir();
-        let mut engine = ExtensionEngine::new(
+        let clock = Arc::new(FakeMonotonicClock::new(Instant::now()));
+        let mut engine = ExtensionEngine::new_with_clock(
             InMemoryRuntime::new(),
             CatalogPaths::new(&temp_dir, &temp_dir),
+            clock.clone(),
         )
         .unwrap();
 
@@ -1405,9 +1523,11 @@ mod tests {
         "#;
         let manifest = ExtensionManifest::from_toml(manifest_toml).unwrap();
         let temp_dir = std::env::temp_dir();
-        let mut engine = ExtensionEngine::new(
+        let clock = Arc::new(FakeMonotonicClock::new(Instant::now()));
+        let mut engine = ExtensionEngine::new_with_clock(
             InMemoryRuntime::new(),
             CatalogPaths::new(&temp_dir, &temp_dir),
+            clock.clone(),
         )
         .unwrap();
 
@@ -1437,5 +1557,79 @@ mod tests {
         assert_eq!(desc.name, "Web Search Provider");
         assert_eq!(desc.surface, ContributionSurface::Search);
         assert_eq!(desc.runtime_kind, ExtensionRuntimeKind::Wasm);
+    }
+
+    #[test]
+    fn test_worker_tick_advances_circuit_and_projects_wasm_extensions() {
+        let manifest_toml = r#"
+            id = "io.github.test.tick"
+            name = "Tick Test"
+            version = "1.0.0"
+        "#;
+        let manifest = ExtensionManifest::from_toml(manifest_toml).unwrap();
+        let temp_dir = std::env::temp_dir();
+        let clock = Arc::new(FakeMonotonicClock::new(Instant::now()));
+        let mut engine = ExtensionEngine::new_with_clock(
+            InMemoryRuntime::new(),
+            CatalogPaths::new(&temp_dir, &temp_dir),
+            clock.clone(),
+        )
+        .unwrap();
+
+        engine.active_sources.insert(
+            manifest.id.clone(),
+            ActiveSource {
+                manifest: manifest.clone(),
+                root: PathBuf::from("/tmp/tick-test"),
+                grants: Vec::new(),
+                fingerprint: 1,
+            },
+        );
+
+        // Initially Closed in snapshot
+        let snapshot = engine.build_snapshot(false);
+        assert_eq!(snapshot.wasm_extensions.len(), 1);
+        assert_eq!(snapshot.wasm_extensions[0].state, CircuitStateKind::Closed);
+
+        // Trip the circuit
+        engine.session.host.circuit_breaker_mut().record_failure(
+            &manifest.id,
+            DiagnosticCode::RuntimeTrap,
+            "f1",
+        );
+        engine.session.host.circuit_breaker_mut().record_failure(
+            &manifest.id,
+            DiagnosticCode::RuntimeTrap,
+            "f2",
+        );
+        engine.session.host.circuit_breaker_mut().record_failure(
+            &manifest.id,
+            DiagnosticCode::RuntimeTrap,
+            "f3",
+        );
+
+        // Trip generates an update on tick with open notice and Open state in snapshot
+        let trip_update = engine
+            .tick()
+            .expect("trip generates update with open notice");
+        assert_eq!(trip_update.circuit_notices.len(), 1);
+        assert_eq!(
+            trip_update.snapshot.unwrap().wasm_extensions[0].state,
+            CircuitStateKind::Open
+        );
+
+        // Next tick when no transition is due produces None
+        assert!(engine.tick().is_none());
+
+        // Advance time by 30s through the same injected clock used by admission.
+        clock.advance(Duration::from_secs(35));
+
+        // Now tick returns an update with the new snapshot transitioning to HalfOpen
+        let update = engine
+            .tick()
+            .expect("tick should return update on visible change");
+        assert!(update.snapshot.is_some());
+        let snap = update.snapshot.unwrap();
+        assert_eq!(snap.wasm_extensions[0].state, CircuitStateKind::HalfOpen);
     }
 }

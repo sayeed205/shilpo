@@ -13,6 +13,37 @@ use gpui::App;
 
 use super::{ShellRuntime, shell_surfaces::ShellSurfaces};
 
+fn circuit_notice_notification(
+    notice: shilpo_ext_runtime::CircuitNotice,
+) -> shilpo_services::Notification {
+    let (title, body) = match notice.kind {
+        shilpo_ext_runtime::CircuitNoticeKind::Opened {
+            trip_count,
+            retry_after_ms,
+        } => {
+            let secs = retry_after_ms.div_ceil(1000);
+            (
+                format!("Extension '{}' temporarily disabled", notice.extension_id),
+                format!("Trip cycle {trip_count}. Retrying in {secs}s."),
+            )
+        }
+        shilpo_ext_runtime::CircuitNoticeKind::Recovered { trip_count } => (
+            format!("Extension '{}' recovered", notice.extension_id),
+            format!("Extension successfully recovered after {trip_count} trip cycle(s)."),
+        ),
+        shilpo_ext_runtime::CircuitNoticeKind::PermanentlyDisabled { trip_count } => (
+            format!("Extension '{}' permanently disabled", notice.extension_id),
+            format!(
+                "Failed after {trip_count} trip cycles. Reload with 'shilpo ext reload {}'.",
+                notice.extension_id
+            ),
+        ),
+    };
+    let mut notification = shilpo_services::Notification::new(title, body);
+    notification.app_name = "Shilpo Extensions".to_string();
+    notification
+}
+
 /// Owns the wasm extension runtime (coordinator), its in-flight task registry,
 /// and the location service used by extension effects.
 ///
@@ -347,6 +378,13 @@ impl ExtensionHost {
         if update.snapshot.is_some() {
             Self::sync_extension_actions(cx);
             ShellSurfaces::reconcile_bar_extension_instances(cx);
+        }
+
+        for notice in update.circuit_notices {
+            super::ShellSurfaces::request(
+                cx,
+                super::SurfaceRequest::ShowNotification(circuit_notice_notification(notice)),
+            );
         }
 
         for (extension_id, effect) in update.effects {
@@ -753,5 +791,42 @@ mod tests {
                 .descriptors_for(ContributionSurface::Action)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn test_circuit_notice_notification_mapping() {
+        let id = ExtensionId::new("io.github.test.notice").unwrap();
+        let notices = vec![
+            shilpo_ext_runtime::CircuitNotice {
+                extension_id: id.clone(),
+                kind: shilpo_ext_runtime::CircuitNoticeKind::Opened {
+                    trip_count: 1,
+                    retry_after_ms: 30000,
+                },
+                message: "opened".into(),
+            },
+            shilpo_ext_runtime::CircuitNotice {
+                extension_id: id.clone(),
+                kind: shilpo_ext_runtime::CircuitNoticeKind::Recovered { trip_count: 1 },
+                message: "recovered".into(),
+            },
+            shilpo_ext_runtime::CircuitNotice {
+                extension_id: id.clone(),
+                kind: shilpo_ext_runtime::CircuitNoticeKind::PermanentlyDisabled { trip_count: 4 },
+                message: "disabled".into(),
+            },
+        ];
+
+        let notifications: Vec<_> = notices
+            .into_iter()
+            .map(super::circuit_notice_notification)
+            .collect();
+
+        assert_eq!(notifications.len(), 3);
+        assert!(notifications[0].summary.contains("temporarily disabled"));
+        assert!(notifications[0].body.contains("Retrying in 30s"));
+        assert!(notifications[1].summary.contains("recovered"));
+        assert!(notifications[2].summary.contains("permanently disabled"));
+        assert!(notifications[2].body.contains("shilpo ext reload"));
     }
 }

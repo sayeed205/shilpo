@@ -8,6 +8,16 @@ catalog snapshots consumed by the shell, CLI, and Settings app.
 See [the extension architecture](../../docs/architecture/extensions.md) for the runtime, security, lifecycle, and
 distribution decisions.
 
+### WASM failure recovery
+
+WASM execution failures are isolated per extension by a session-local circuit breaker. Three consecutive qualifying
+failures open the circuit and schedule a half-open probe after 30, 60, 120, then 300 seconds. Three successful probes
+recover the extension; four failed trip/recovery cycles permanently disable it for the session. The worker advances
+deadlines even while idle, preserves the last-valid view and host-owned state, and reports circuit state through the
+worker snapshot and `shilpo ext status`. Open, recovered, and permanently-disabled transitions produce one host-owned
+notification each. Reload/replacement is transactional: invalid sources retain the last-valid runtime and its circuit
+state. Trusted local scripts use their separate scheduler policy and are not changed by this breaker.
+
 ## What an extension can add
 
 An extension may contribute one or more:

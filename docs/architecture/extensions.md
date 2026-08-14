@@ -489,6 +489,14 @@ Shilpo also supports **trusted local scripts** for read-only status bar widgets.
 
 ## Lifecycle and failure policy
 
+WASM guest failures use a session-local, per-extension circuit breaker. Three consecutive failures open the circuit;
+the worker advances recovery deadlines while idle and admits one half-open probe after 30, 60, 120, then 300 seconds.
+Three successful probes close the circuit, while four failed trip/recovery cycles permanently disable the extension for
+the session. Circuit state is projected in worker snapshots and `shilpo ext status`; the Shell emits bounded,
+host-owned notifications for open, recovered, and permanently-disabled transitions. Failed source replacement is
+transactional and retains the last-valid runtime, views, host state, and breaker state. Trusted local scripts retain
+their independent scheduler and retry policy.
+
 1. Discover package or development path.
 2. Parse and validate the manifest without running code.
 3. Check schema, extension interface, and minimum shell versions.

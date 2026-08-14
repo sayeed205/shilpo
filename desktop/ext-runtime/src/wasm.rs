@@ -1070,6 +1070,24 @@ impl ExtensionRuntime for WasmRuntime {
         Ok(())
     }
 
+    fn validate_module_with_capabilities(
+        &mut self,
+        extension_id: &ExtensionId,
+        module: &Self::Module,
+        budget: RuntimeBudget,
+        declared_capabilities: Vec<Capability>,
+        granted_capabilities: Vec<Capability>,
+    ) -> Result<(), RuntimeError> {
+        self.instantiate_module(
+            extension_id,
+            module,
+            budget,
+            declared_capabilities,
+            granted_capabilities,
+        )
+        .map(|_| ())
+    }
+
     fn compile_module(&self, bytes: &[u8]) -> Result<Self::Module, String> {
         Ok(WasmModule::from_bytes(bytes.to_vec()))
     }

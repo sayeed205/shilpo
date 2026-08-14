@@ -78,6 +78,7 @@ impl ChildStream for StaleEngineChild {
                     }),
                     effects: Vec::new(),
                     invalidated_views: Vec::new(),
+                    circuit_notices: Vec::new(),
                 }),
             }),
             1 => Some(WorkerMessage {
@@ -94,6 +95,7 @@ impl ChildStream for StaleEngineChild {
                     }),
                     effects: Vec::new(),
                     invalidated_views: Vec::new(),
+                    circuit_notices: Vec::new(),
                 }),
             }),
             _ => None,
@@ -155,6 +157,7 @@ impl ChildStream for StaleUpdateChild {
                     snapshot: Some(ExtensionSnapshot::default()),
                     effects: Vec::new(),
                     invalidated_views: Vec::new(),
+                    circuit_notices: Vec::new(),
                 }),
             }),
             1 => Some(WorkerMessage {
@@ -168,6 +171,7 @@ impl ChildStream for StaleUpdateChild {
                     snapshot: Some(ExtensionSnapshot::default()),
                     effects: Vec::new(),
                     invalidated_views: Vec::new(),
+                    circuit_notices: Vec::new(),
                 }),
             }),
             _ => None,
@@ -224,6 +228,7 @@ impl ChildStream for ReadyChild {
                     snapshot: Some(ExtensionSnapshot::default()),
                     effects: Vec::new(),
                     invalidated_views: Vec::new(),
+                    circuit_notices: Vec::new(),
                 }),
             }));
         }
