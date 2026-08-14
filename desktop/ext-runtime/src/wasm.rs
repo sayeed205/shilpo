@@ -2280,6 +2280,89 @@ mod bar_menu_component_fixture_tests {
                 .expect("every close reason must cross WIT");
         }
     }
+
+    const SDK_FIXTURE: &[u8] = include_bytes!(env!("SHILPO_SDK_FIXTURE_WASM"));
+
+    #[test]
+    fn sdk_authored_guest_component_instantiates_and_renders_view_tree() {
+        let mut runtime =
+            WasmRuntime::with_broker(Arc::new(FakeSecretBroker::new())).expect("runtime");
+        let extension_id = ExtensionId::new("io.example.sdk-fixture").unwrap();
+        runtime
+            .load(
+                &extension_id,
+                WasmModule::from_bytes(SDK_FIXTURE),
+                RuntimeBudget::default(),
+            )
+            .expect(
+                "SDK-authored fixture must instantiate through the canonical component boundary",
+            );
+
+        let tree = runtime
+            .view(&extension_id, "widget", RuntimeBudget::default())
+            .expect("view call")
+            .expect("sdk fixture view");
+
+        let ViewNode::Container(container) = tree.root else {
+            panic!("fixture root must remain a container");
+        };
+        assert_eq!(container.direction, ContainerDirection::Grid { columns: 2 });
+        assert_eq!(container.children.len(), 2);
+
+        let ViewNode::Container(row) = &container.children[0] else {
+            panic!("first child must be row container");
+        };
+        assert_eq!(row.direction, ContainerDirection::Row);
+        assert_eq!(row.children.len(), 2);
+
+        let ViewNode::Icon(icon) = &row.children[0] else {
+            panic!("first row child must be icon");
+        };
+        assert_eq!(icon.name, "star");
+        assert_eq!(icon.size, Some(16.0));
+
+        let ViewNode::Text(text) = &row.children[1] else {
+            panic!("second row child must be text");
+        };
+        assert_eq!(text.content, "Count: 42");
+        assert_eq!(text.bold, Some(true));
+
+        let ViewNode::Button(button) = &container.children[1] else {
+            panic!("second child must be button");
+        };
+        assert_eq!(button.label, "+1");
+        assert_eq!(button.event_id, "increment");
+
+        // Dispatch input event to increment count
+        runtime
+            .dispatch(
+                &extension_id,
+                &ApiEvent::Input {
+                    contribution_id: "widget".into(),
+                    instance_id: None,
+                    event_id: "increment".into(),
+                    value: None,
+                },
+                RuntimeBudget::default(),
+            )
+            .expect("input event must succeed");
+
+        let updated_tree = runtime
+            .view(&extension_id, "widget", RuntimeBudget::default())
+            .expect("view call")
+            .expect("sdk fixture view");
+
+        let ViewNode::Container(updated_container) = updated_tree.root else {
+            panic!("updated root must remain a container");
+        };
+        let ViewNode::Container(updated_row) = &updated_container.children[0] else {
+            panic!("first child must be row container");
+        };
+        let ViewNode::Text(updated_text) = &updated_row.children[1] else {
+            panic!("second row child must be text");
+        };
+        assert_eq!(updated_text.content, "Count: 43");
+    }
 }
 
 fn convert_view_tree_from_wit(

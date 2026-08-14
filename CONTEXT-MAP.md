@@ -36,6 +36,7 @@ library at its core.
 ### SDKs (`sdk/`)
 
 - **TypeScript SDK** (`sdk/typescript`) — Official TypeScript SDK (`@shilpo/ext-sdk@0.1.0`) for developing sandboxed WebAssembly extensions. Provides declarative ViewTree builders, typed `DataValue` helpers, `defineExtension` lifecycle adapter, host import facade, and in-memory test host. Published exclusively to JSR.
+- **Rust SDK** (`sdk/rust`) — Official Rust SDK (`shilpo-ext-sdk@0.1.0`) for developing sandboxed WebAssembly extensions. Provides declarative ViewTree builders, `view!` macro, typed `DataValue` conversions, `Extension` lifecycle trait, `State` helper, and re-exported canonical WIT bindings. Published to crates.io.
 
 ## Relationships
 
