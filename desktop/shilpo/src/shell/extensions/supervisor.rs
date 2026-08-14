@@ -330,17 +330,15 @@ impl ExtensionSupervisor {
         match self.command_tx.try_send(envelope) {
             Ok(()) => match reply_rx.recv_timeout(timeout) {
                 Ok(outcome) => Ok(outcome),
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    Ok(shilpo_ext_runtime::DevReloadOutcome {
-                        session_id,
-                        build_sequence,
-                        outcome: "timed_out".into(),
-                        engine_generation: self.generation(),
-                        diagnostic_code: "TIMEOUT".into(),
-                        message: format!("reload request timed out after {:?}", timeout),
-                        update: None,
-                    })
-                }
+                Err(mpsc::RecvTimeoutError::Timeout) => Ok(shilpo_ext_runtime::DevReloadOutcome {
+                    session_id,
+                    build_sequence,
+                    outcome: "timed_out".into(),
+                    engine_generation: self.generation(),
+                    diagnostic_code: "TIMEOUT".into(),
+                    message: format!("reload request timed out after {:?}", timeout),
+                    update: None,
+                }),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     Ok(shilpo_ext_runtime::DevReloadOutcome::rejected(
                         session_id,

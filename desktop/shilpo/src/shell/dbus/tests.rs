@@ -157,10 +157,7 @@ async fn test_introspection_exact_contract() {
                     (None, "(sttss)", Some("out")),
                 ],
             ),
-            (
-                "EndDevSession",
-                &[(Some("session_id"), "s", Some("in"))],
-            ),
+            ("EndDevSession", &[(Some("session_id"), "s", Some("in"))]),
         ],
     );
     assert_interface_contract(
@@ -627,15 +624,19 @@ async fn test_dev_session_start_reload_end_flow() {
 
     // Set up a mock/real supervisor
     let supervisor = crate::extensions::ExtensionSupervisor::new();
-    let coordinator = Arc::new(crate::extensions::ExtensionCoordinator::new_with_supervisor(supervisor));
-    harness.shell_service.set_extension_coordinator(Some(coordinator));
+    let coordinator =
+        Arc::new(crate::extensions::ExtensionCoordinator::new_with_supervisor(supervisor));
+    harness
+        .shell_service
+        .set_extension_coordinator(Some(coordinator));
 
     // 1. Start Dev Session
     let session_id = bounded!(
         "StartDevSession",
-        harness
-            .shell_proxy
-            .start_dev_session("org.shilpo.dev-dbus".into(), root.to_string_lossy().to_string())
+        harness.shell_proxy.start_dev_session(
+            "org.shilpo.dev-dbus".into(),
+            root.to_string_lossy().to_string()
+        )
     )
     .expect("session start must succeed");
 
@@ -668,9 +669,10 @@ async fn test_dev_session_security_and_manifest_validation() {
     // 1. Non-existent path
     let err1 = bounded!(
         "StartDevSession nonexistent",
-        harness
-            .shell_proxy
-            .start_dev_session("org.shilpo.dev-dbus".into(), "/nonexistent/path/here".into())
+        harness.shell_proxy.start_dev_session(
+            "org.shilpo.dev-dbus".into(),
+            "/nonexistent/path/here".into()
+        )
     )
     .unwrap_err();
     assert_method_error(err1, "org.freedesktop.DBus.Error.InvalidArgs");
@@ -703,9 +705,10 @@ async fn test_dev_session_security_and_manifest_validation() {
 
     let err3 = bounded!(
         "StartDevSession ID mismatch",
-        harness
-            .shell_proxy
-            .start_dev_session("org.shilpo.different-id".into(), root.to_string_lossy().to_string())
+        harness.shell_proxy.start_dev_session(
+            "org.shilpo.different-id".into(),
+            root.to_string_lossy().to_string()
+        )
     )
     .unwrap_err();
     assert_method_error(err3, "org.freedesktop.DBus.Error.InvalidArgs");
@@ -731,13 +734,17 @@ async fn test_dev_session_disconnect_cleanup() {
 
     let session_id = bounded!(
         "StartDevSession",
-        harness
-            .shell_proxy
-            .start_dev_session("org.shilpo.cleanup-test".into(), root.to_string_lossy().to_string())
+        harness.shell_proxy.start_dev_session(
+            "org.shilpo.cleanup-test".into(),
+            root.to_string_lossy().to_string()
+        )
     )
     .unwrap();
 
-    assert_eq!(harness.shell_service.dev_sessions().lock().unwrap().len(), 1);
+    assert_eq!(
+        harness.shell_service.dev_sessions().lock().unwrap().len(),
+        1
+    );
 
     // Simulate NameOwnerChanged disconnect
     let caller_name = harness
@@ -754,5 +761,8 @@ async fn test_dev_session_disconnect_cleanup() {
         .shell_service
         .handle_name_owner_changed(&caller_name, &caller_name, "");
 
-    assert_eq!(harness.shell_service.dev_sessions().lock().unwrap().len(), 0);
+    assert_eq!(
+        harness.shell_service.dev_sessions().lock().unwrap().len(),
+        0
+    );
 }

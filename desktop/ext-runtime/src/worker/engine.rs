@@ -1214,10 +1214,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     build_sequence,
                     self.generation,
                     "INVALID_MANIFEST",
-                    format!(
-                        "invalid manifest at '{}': {e}",
-                        manifest_path.display()
-                    ),
+                    format!("invalid manifest at '{}': {e}", manifest_path.display()),
                 );
             }
         };
@@ -1337,7 +1334,9 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
             self.session.runtime_ids.push(extension_id.clone());
         }
 
-        self.session.manifests.insert(extension_id.clone(), manifest.clone());
+        self.session
+            .manifests
+            .insert(extension_id.clone(), manifest.clone());
 
         let fingerprint = compute_fingerprint(&canonical_root, &manifest);
         let active_source = ActiveSource {
@@ -1346,8 +1345,10 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
             grants,
             fingerprint,
         };
-        self.active_sources.insert(extension_id.clone(), active_source.clone());
-        self.active_dev_overrides.insert(extension_id.clone(), active_source);
+        self.active_sources
+            .insert(extension_id.clone(), active_source.clone());
+        self.active_dev_overrides
+            .insert(extension_id.clone(), active_source);
 
         let mut invalidated = Vec::new();
         self.session.views.retain(|k, _| {
@@ -1381,7 +1382,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
             }
         }
 
-        self.dev_session_sequences.insert(session_id.clone(), build_sequence);
+        self.dev_session_sequences
+            .insert(session_id.clone(), build_sequence);
         self.generation = self.generation.next();
 
         self.session
@@ -1396,11 +1398,9 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     percentage: *percentage,
                     charging: *charging,
                 },
-                ReplaceableEvent::Network { connected } => {
-                    ExtensionEvent::NetworkChanged {
-                        connected: *connected,
-                    }
-                }
+                ReplaceableEvent::Network { connected } => ExtensionEvent::NetworkChanged {
+                    connected: *connected,
+                },
                 ReplaceableEvent::Media {
                     title,
                     artist,
@@ -1414,7 +1414,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     ExtensionEvent::TimerFired { name: name.clone() }
                 }
             };
-            self.session.dispatch_to_extension(&extension_id, &ext_event);
+            self.session
+                .dispatch_to_extension(&extension_id, &ext_event);
         }
 
         let snapshot = self.build_snapshot(false);

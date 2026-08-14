@@ -113,7 +113,8 @@ pub fn run_daemon() {
                         let name = args.name.as_str();
                         let old_owner = args.old_owner.as_deref().unwrap_or("");
                         let new_owner = args.new_owner.as_deref().unwrap_or("");
-                        dbus_service_for_names.handle_name_owner_changed(name, old_owner, new_owner);
+                        dbus_service_for_names
+                            .handle_name_owner_changed(name, old_owner, new_owner);
                     }
                 }
             });

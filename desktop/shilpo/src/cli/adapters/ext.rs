@@ -252,7 +252,10 @@ impl ExtAdapter {
         let canonical_root = match target_dir.canonicalize() {
             Ok(p) => p,
             Err(e) => {
-                let err_msg = format!("failed to resolve extension path '{}': {e}", target_dir.display());
+                let err_msg = format!(
+                    "failed to resolve extension path '{}': {e}",
+                    target_dir.display()
+                );
                 return ExtOpResult {
                     success: false,
                     data: serde_json::json!({ "error": err_msg }),
@@ -267,7 +270,10 @@ impl ExtAdapter {
         let manifest_str = match std::fs::read_to_string(&manifest_path) {
             Ok(s) => s,
             Err(e) => {
-                let err_msg = format!("failed to read extension.toml at '{}': {e}", manifest_path.display());
+                let err_msg = format!(
+                    "failed to read extension.toml at '{}': {e}",
+                    manifest_path.display()
+                );
                 return ExtOpResult {
                     success: false,
                     data: serde_json::json!({ "error": err_msg }),
@@ -281,7 +287,10 @@ impl ExtAdapter {
         let manifest = match shilpo_ext_api::ExtensionManifest::from_toml(&manifest_str) {
             Ok(m) => m,
             Err(e) => {
-                let err_msg = format!("invalid extension.toml at '{}': {e}", manifest_path.display());
+                let err_msg = format!(
+                    "invalid extension.toml at '{}': {e}",
+                    manifest_path.display()
+                );
                 return ExtOpResult {
                     success: false,
                     data: serde_json::json!({ "error": err_msg }),
@@ -294,7 +303,10 @@ impl ExtAdapter {
 
         // Step 1: Initial Build
         if !quiet && !json {
-            eprintln!("Building extension '{}' (v{})...", manifest.id, manifest.version);
+            eprintln!(
+                "Building extension '{}' (v{})...",
+                manifest.id, manifest.version
+            );
         }
 
         let initial_build = ExtensionCli::build(&canonical_root, false);
@@ -342,7 +354,10 @@ impl ExtAdapter {
         }
 
         // Step 2: D-Bus connection & StartDevSession
-        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
             Ok(rt) => rt,
             Err(e) => {
                 return ExtOpResult {
@@ -1381,11 +1396,11 @@ fn should_ignore_path(path: &Path, root: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use super::{
         ExtOpResult, record_refresh_warning, script_catalog_operation_error,
         script_item_from_status,
     };
+    use std::path::PathBuf;
 
     #[test]
     fn daemon_refresh_failure_keeps_local_mutation_successful() {
@@ -1540,10 +1555,7 @@ mod tests {
     #[test]
     fn test_should_ignore_path() {
         let root = PathBuf::from("/home/user/project");
-        assert!(super::should_ignore_path(
-            &root.join(".git/HEAD"),
-            &root
-        ));
+        assert!(super::should_ignore_path(&root.join(".git/HEAD"), &root));
         assert!(super::should_ignore_path(
             &root.join("node_modules/pkg/index.js"),
             &root
@@ -1560,10 +1572,7 @@ mod tests {
             &root.join("extension.wasm"),
             &root
         ));
-        assert!(super::should_ignore_path(
-            &root.join("build.tmp"),
-            &root
-        ));
+        assert!(super::should_ignore_path(&root.join("build.tmp"), &root));
         assert!(super::should_ignore_path(
             &root.join(".shilpo-cache/data"),
             &root
@@ -1574,10 +1583,7 @@ mod tests {
             &root.join("extension.toml"),
             &root
         ));
-        assert!(!super::should_ignore_path(
-            &root.join("src/lib.rs"),
-            &root
-        ));
+        assert!(!super::should_ignore_path(&root.join("src/lib.rs"), &root));
         assert!(!super::should_ignore_path(
             &root.join("src/index.ts"),
             &root

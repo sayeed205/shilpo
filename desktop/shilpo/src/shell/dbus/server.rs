@@ -581,11 +581,14 @@ impl ShellDbusService {
         }
 
         let manifest_path = canonical_root.join("extension.toml");
-        let manifest_str = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("failed to read extension.toml: {e}")))?;
+        let manifest_str = std::fs::read_to_string(&manifest_path).map_err(|e| {
+            zbus::fdo::Error::InvalidArgs(format!("failed to read extension.toml: {e}"))
+        })?;
 
-        let manifest = shilpo_ext_api::ExtensionManifest::from_toml(&manifest_str)
-            .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("invalid extension manifest: {e}")))?;
+        let manifest =
+            shilpo_ext_api::ExtensionManifest::from_toml(&manifest_str).map_err(|e| {
+                zbus::fdo::Error::InvalidArgs(format!("invalid extension manifest: {e}"))
+            })?;
 
         if manifest.id != ext_id {
             return Err(zbus::fdo::Error::InvalidArgs(format!(
@@ -641,10 +644,9 @@ impl ShellDbusService {
 
         let session = {
             let sessions = self.dev_sessions.lock().unwrap();
-            sessions
-                .get(&session_id)
-                .cloned()
-                .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("dev session '{session_id}' not found")))?
+            sessions.get(&session_id).cloned().ok_or_else(|| {
+                zbus::fdo::Error::InvalidArgs(format!("dev session '{session_id}' not found"))
+            })?
         };
 
         if session.caller_unique_name != sender {
@@ -693,7 +695,10 @@ impl ShellDbusService {
                 host_generation: 0,
                 engine_generation: 0,
                 diagnostic_code: "ARTIFACT_NOT_FILE".into(),
-                message: format!("artifact '{}' is not a regular file", canonical_artifact.display()),
+                message: format!(
+                    "artifact '{}' is not a regular file",
+                    canonical_artifact.display()
+                ),
             });
         }
 
@@ -702,7 +707,9 @@ impl ShellDbusService {
             .lock()
             .unwrap()
             .clone()
-            .ok_or_else(|| zbus::fdo::Error::Failed("extension coordinator is unavailable".into()))?;
+            .ok_or_else(|| {
+                zbus::fdo::Error::Failed("extension coordinator is unavailable".into())
+            })?;
 
         let sess_id = session.session_id.clone();
         let ext_id = session.extension_id.clone();

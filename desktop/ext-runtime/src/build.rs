@@ -1368,11 +1368,7 @@ mod tests {
         let mock_runner = MockProcessRunner::new().with_binary("node", true);
         let res = build_extension(dir, false, &mock_runner);
         assert!(!res.success);
-        assert!(
-            res.diagnostics
-                .iter()
-                .any(|d| d.contains("project-local"))
-        );
+        assert!(res.diagnostics.iter().any(|d| d.contains("project-local")));
     }
 
     #[test]
