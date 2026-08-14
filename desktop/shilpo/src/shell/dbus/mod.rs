@@ -12,4 +12,4 @@ pub mod types;
 pub use client::{DebugProxy, ShellProxy};
 pub use debug::DebugDbusService;
 pub use server::{ShellCommand, ShellDbusService};
-pub use types::{CommandResult, ShellStatus, ShellTelemetry};
+pub use types::{CommandResult, DevReloadResult, ShellStatus, ShellTelemetry};

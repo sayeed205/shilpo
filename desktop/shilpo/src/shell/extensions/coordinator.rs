@@ -129,6 +129,33 @@ impl ExtensionCoordinator {
         self.supervisor.send_command(command)
     }
 
+    pub fn reload_dev(
+        &self,
+        session_id: String,
+        extension_id: shilpo_ext_api::ExtensionId,
+        canonical_root: PathBuf,
+        artifact_path: PathBuf,
+        build_sequence: u64,
+        timeout: Duration,
+    ) -> Result<shilpo_ext_runtime::DevReloadOutcome, String> {
+        self.supervisor.reload_dev(
+            session_id,
+            extension_id,
+            canonical_root,
+            artifact_path,
+            build_sequence,
+            timeout,
+        )
+    }
+
+    pub fn unload_dev(
+        &self,
+        session_id: String,
+        extension_id: shilpo_ext_api::ExtensionId,
+    ) -> Result<(), String> {
+        self.supervisor.unload_dev(session_id, extension_id)
+    }
+
     pub fn drain_updates(&self) -> Vec<ExtensionUpdate> {
         self.supervisor.drain_updates()
     }

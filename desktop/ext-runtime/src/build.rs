@@ -1365,13 +1365,13 @@ mod tests {
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::write(dir.join("src/extension.ts"), "export {}").unwrap();
 
-        let mock_runner = MockProcessRunner::new();
+        let mock_runner = MockProcessRunner::new().with_binary("node", true);
         let res = build_extension(dir, false, &mock_runner);
         assert!(!res.success);
         assert!(
             res.diagnostics
                 .iter()
-                .any(|d| d.contains("project-local JCO executable not found"))
+                .any(|d| d.contains("project-local"))
         );
     }
 

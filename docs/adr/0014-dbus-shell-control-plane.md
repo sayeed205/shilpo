@@ -29,7 +29,7 @@ We retire the legacy Unix domain socket control plane (`desktop/services/src/ipc
 - **Interface**: `org.shilpo.Shell`
 
 ### 2. Method Surface & Contract
-The D-Bus interface exposes 18 typed methods:
+The D-Bus interface exposes typed methods:
 - `ReloadConfig() -> ()`
 - `ShowBar() -> ()`
 - `HideBar() -> ()`
@@ -48,12 +48,18 @@ The D-Bus interface exposes 18 typed methods:
 - `GetStatus() -> ShellStatus`
 - `GetTelemetry() -> ShellTelemetry`
 - `Capture(intent: String) -> ()`
+- `InvokeAction(action_id: String, payload_json: Option<String>) -> ()`
+- `NextWallpaper() -> ()`
+- `StartDevSession(extension_id: String, source_root: String) -> String`
+- `ReloadDevSession(session_id: String, build_sequence: u64, artifact_path: String) -> DevReloadResult`
+- `EndDevSession(session_id: String) -> ()`
 
 ### 3. Wire Types
 - **`CommandResult`**: Typed struct preserving compositor terminal outcomes (`Applied`, `ReconciledApplied`, `Rejected`, `TimedOut`, `Cancelled`) with owner generation, revision, and failure reason details.
 - **`ShellStatus`**: Real D-Bus struct with status fields (`running`, `instance_id`, `pid`, `readiness`, `bar_state`, `overview_visible`).
 - **`ShellTelemetry`**: Typed struct for runtime health & subsystem status.
   - *Narrow Exception*: `extension_host_diagnostics_json: String` contains the serialized diagnostic summary string from the Wasmtime extension host runtime as a documented narrow exception to avoid exporting dynamic host schema bags.
+- **`DevReloadResult`**: Wire signature `(sttss)` returning terminal dev reload outcome (`outcome`, `host_generation`, `engine_generation`, `diagnostic_code`, `message`).
 
 ### 4. Threading & Command Mailbox
 - **Mailbox**: Shell action and brightness commands are queued into a bounded `tokio::sync::mpsc` channel with capacity **128**.

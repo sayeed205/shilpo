@@ -1,6 +1,6 @@
 use shilpo_ext_api::{CanonicalId, ExtensionEvent, ExtensionId, HostOperation, ViewTree};
 use shilpo_ext_runtime::{AuthorizedHostOperation, AuthorizedHostOperationKind};
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{collections::HashMap, fs, path::PathBuf, sync::Arc};
 
 use crate::{
     actions::{ActionId, ActionInvocation},
@@ -50,7 +50,7 @@ fn circuit_notice_notification(
 /// Coordinator and task state are private; the shell interacts with extensions
 /// exclusively through the method surface below.
 pub struct ExtensionHost {
-    extensions: Option<crate::extensions::ExtensionCoordinator>,
+    extensions: Option<Arc<crate::extensions::ExtensionCoordinator>>,
     extension_tasks: HashMap<(ExtensionGeneration, ExtensionId, String), gpui::Task<()>>,
     extension_location_service: shilpo_services::LocationService,
     #[cfg(test)]
@@ -58,7 +58,7 @@ pub struct ExtensionHost {
 }
 
 impl ExtensionHost {
-    pub fn new(extensions: Option<crate::extensions::ExtensionCoordinator>) -> Self {
+    pub fn new(extensions: Option<Arc<crate::extensions::ExtensionCoordinator>>) -> Self {
         Self {
             extensions,
             extension_tasks: HashMap::new(),

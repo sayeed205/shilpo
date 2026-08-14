@@ -792,8 +792,7 @@ async fn main() {
                 ExtCommands::Build { path, release } => ext.build(path.as_deref(), release),
                 ExtCommands::Check { path } => ext.check(path.as_deref()),
                 ExtCommands::Pack { path, output } => ext.pack(path.as_deref(), output.as_deref()),
-                ExtCommands::Dev { path } => ext.dev(&path),
-                ExtCommands::Reload { id } => ext.reload(id.as_deref()),
+                ExtCommands::Dev { path } => ext.dev(path.as_deref(), cli.json, cli.quiet, timeout),
                 ExtCommands::Logs { id: _, follow } if cli.json && follow => {
                     adapters::ext::ExtOpResult {
                         success: false,

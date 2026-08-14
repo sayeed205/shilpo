@@ -292,7 +292,10 @@ impl ShellRuntime {
         let initial_wallpaper_path = theme_manager::init(cx);
         let session = session::SessionContext::init();
         let hub = ServiceHub::start(cx.background_executor().clone(), &session);
-        let extensions = ExtensionCoordinator::init(cx.background_executor().clone());
+        let extensions = ExtensionCoordinator::init(cx.background_executor().clone()).map(Arc::new);
+        if let Some(ref ext) = extensions {
+            dbus_service.set_extension_coordinator(Some(ext.clone()));
+        }
 
         let compositor = hub.compositor();
         let latest_snapshot =

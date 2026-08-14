@@ -241,54 +241,412 @@ impl ExtAdapter {
         }
     }
 
-    pub fn dev(&self, path: &Path) -> ExtOpResult {
-        let cli_res = ExtensionCli::dev(path, &self.state_dir);
-        let mut op_res = ExtOpResult {
-            success: cli_res.success,
-            data: serde_json::json!({
-                "extension_id": cli_res.extension_id,
-                "diagnostics": cli_res.diagnostics,
-            }),
-            human_message: cli_res.diagnostics.join("\n"),
-            warnings: Vec::new(),
-            exit_code: if cli_res.success { 0 } else { 1 },
+    pub fn dev(
+        &self,
+        path: Option<&Path>,
+        json: bool,
+        quiet: bool,
+        _timeout: std::time::Duration,
+    ) -> ExtOpResult {
+        let target_dir = path.unwrap_or_else(|| Path::new("."));
+        let canonical_root = match target_dir.canonicalize() {
+            Ok(p) => p,
+            Err(e) => {
+                let err_msg = format!("failed to resolve extension path '{}': {e}", target_dir.display());
+                return ExtOpResult {
+                    success: false,
+                    data: serde_json::json!({ "error": err_msg }),
+                    human_message: err_msg,
+                    warnings: Vec::new(),
+                    exit_code: 1,
+                };
+            }
         };
-        self.notify_daemon_if_needed(&mut op_res);
-        op_res
-    }
 
-    pub fn reload(&self, id_str: Option<&str>) -> ExtOpResult {
-        let Some(id_raw) = id_str else {
+        let manifest_path = canonical_root.join("extension.toml");
+        let manifest_str = match std::fs::read_to_string(&manifest_path) {
+            Ok(s) => s,
+            Err(e) => {
+                let err_msg = format!("failed to read extension.toml at '{}': {e}", manifest_path.display());
+                return ExtOpResult {
+                    success: false,
+                    data: serde_json::json!({ "error": err_msg }),
+                    human_message: err_msg,
+                    warnings: Vec::new(),
+                    exit_code: 1,
+                };
+            }
+        };
+
+        let manifest = match shilpo_ext_api::ExtensionManifest::from_toml(&manifest_str) {
+            Ok(m) => m,
+            Err(e) => {
+                let err_msg = format!("invalid extension.toml at '{}': {e}", manifest_path.display());
+                return ExtOpResult {
+                    success: false,
+                    data: serde_json::json!({ "error": err_msg }),
+                    human_message: err_msg,
+                    warnings: Vec::new(),
+                    exit_code: 1,
+                };
+            }
+        };
+
+        // Step 1: Initial Build
+        if !quiet && !json {
+            eprintln!("Building extension '{}' (v{})...", manifest.id, manifest.version);
+        }
+
+        let initial_build = ExtensionCli::build(&canonical_root, false);
+        if !initial_build.success {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "event": "build",
+                        "status": "failed",
+                        "build_sequence": 1,
+                        "extension_id": manifest.id.to_string(),
+                        "diagnostics": initial_build.diagnostics,
+                    })
+                );
+            }
             return ExtOpResult {
                 success: false,
-                data: serde_json::Value::Null,
-                human_message: "extension ID is required".into(),
+                data: serde_json::json!({
+                    "event": "build",
+                    "status": "failed",
+                    "extension_id": manifest.id.to_string(),
+                    "diagnostics": initial_build.diagnostics,
+                }),
+                human_message: format!(
+                    "Initial build failed for extension '{}':\n{}",
+                    manifest.id,
+                    initial_build.diagnostics.join("\n")
+                ),
                 warnings: Vec::new(),
-                exit_code: 2,
+                exit_code: 1,
             };
+        }
+
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "event": "build",
+                    "status": "success",
+                    "build_sequence": 1,
+                    "extension_id": manifest.id.to_string(),
+                })
+            );
+        }
+
+        // Step 2: D-Bus connection & StartDevSession
+        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(rt) => rt,
+            Err(e) => {
+                return ExtOpResult {
+                    success: false,
+                    data: serde_json::json!({ "error": format!("tokio runtime error: {e}") }),
+                    human_message: format!("Error creating runtime: {e}"),
+                    warnings: Vec::new(),
+                    exit_code: 1,
+                };
+            }
         };
-        let Ok(id) = ExtensionId::new(id_raw) else {
-            return ExtOpResult {
+
+        let result = rt.block_on(async {
+            let conn = match zbus::Connection::session().await {
+                Ok(c) => c,
+                Err(e) => {
+                    return Err(format!(
+                        "failed to connect to session D-Bus: {e}. Is the Shilpo shell running?"
+                    ));
+                }
+            };
+
+            let shell_proxy = match crate::shell::dbus::ShellProxy::new(&conn).await {
+                Ok(p) => p,
+                Err(e) => {
+                    return Err(format!("failed to attach ShellProxy: {e}"));
+                }
+            };
+
+            let session_id = match shell_proxy
+                .start_dev_session(
+                    manifest.id.to_string(),
+                    canonical_root.to_string_lossy().to_string(),
+                )
+                .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    return Err(format!("StartDevSession failed: {e}"));
+                }
+            };
+
+            let mut build_sequence: u64 = 1;
+
+            // Step 3: Initial Reload
+            let reload_res = shell_proxy
+                .reload_dev_session(session_id.clone(), build_sequence, "extension.wasm".into())
+                .await;
+
+            match reload_res {
+                Ok(res) => {
+                    if res.outcome == "applied" {
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::json!({
+                                    "event": "reload",
+                                    "status": "applied",
+                                    "build_sequence": build_sequence,
+                                    "extension_id": manifest.id.to_string(),
+                                    "session_id": session_id,
+                                    "host_generation": res.host_generation,
+                                    "engine_generation": res.engine_generation,
+                                })
+                            );
+                        } else if !quiet {
+                            eprintln!(
+                                "Extension '{}' (v{}) loaded into dev session '{}' (build #{})",
+                                manifest.id, manifest.version, session_id, build_sequence
+                            );
+                        }
+                    } else {
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::json!({
+                                    "event": "reload",
+                                    "status": res.outcome,
+                                    "build_sequence": build_sequence,
+                                    "extension_id": manifest.id.to_string(),
+                                    "diagnostic_code": res.diagnostic_code,
+                                    "message": res.message,
+                                })
+                            );
+                        } else {
+                            eprintln!(
+                                "Reload rejected [{}]: {}",
+                                res.diagnostic_code, res.message
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "event": "reload",
+                                "status": "error",
+                                "build_sequence": build_sequence,
+                                "extension_id": manifest.id.to_string(),
+                                "error": e.to_string(),
+                            })
+                        );
+                    } else {
+                        eprintln!("Reload error: {e}");
+                    }
+                }
+            }
+
+            if !quiet && !json {
+                eprintln!(
+                    "Watching '{}' for changes... (Press Ctrl+C to stop)",
+                    canonical_root.display()
+                );
+            }
+
+            // Step 4: File watcher setup
+            let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+            let root_for_watcher = canonical_root.clone();
+
+            let mut watcher = match notify::RecommendedWatcher::new(
+                move |res: Result<notify::Event, notify::Error>| {
+                    if let Ok(event) = res
+                        && (event.kind.is_modify()
+                            || event.kind.is_create()
+                            || event.kind.is_remove())
+                    {
+                        let relevant = event.paths.iter().any(|p| !should_ignore_path(p, &root_for_watcher));
+                        if relevant {
+                            let _ = event_tx.send(());
+                        }
+                    }
+                },
+                notify::Config::default(),
+            ) {
+                Ok(w) => w,
+                Err(e) => return Err(format!("failed to initialize file watcher: {e}")),
+            };
+
+            use notify::Watcher;
+            if let Err(e) = watcher.watch(&canonical_root, notify::RecursiveMode::Recursive) {
+                return Err(format!("failed to watch directory: {e}"));
+            }
+
+            // Step 5: Event loop with debouncing and Ctrl-C handling
+            let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .map_err(|e| format!("failed to register SIGINT handler: {e}"))?;
+            let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .map_err(|e| format!("failed to register SIGTERM handler: {e}"))?;
+
+            loop {
+                tokio::select! {
+                    _ = sigint.recv() => {
+                        if !quiet && !json {
+                            eprintln!("\nReceived interrupt signal, ending dev session...");
+                        }
+                        let _ = shell_proxy.end_dev_session(session_id.clone()).await;
+                        break;
+                    }
+                    _ = sigterm.recv() => {
+                        if !quiet && !json {
+                            eprintln!("\nReceived terminate signal, ending dev session...");
+                        }
+                        let _ = shell_proxy.end_dev_session(session_id.clone()).await;
+                        break;
+                    }
+                    Some(()) = event_rx.recv() => {
+                        // Debounce window (150ms)
+                        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                        // Drain any coalesced changes that arrived during debounce window
+                        while event_rx.try_recv().is_ok() {}
+
+                        build_sequence += 1;
+                        if !quiet && !json {
+                            eprintln!("File changes detected. Rebuilding #{}...", build_sequence);
+                        }
+
+                        let root_clone = canonical_root.clone();
+                        let build_res = tokio::task::spawn_blocking(move || {
+                            ExtensionCli::build(&root_clone, false)
+                        }).await.map_err(|e| format!("build task join error: {e}"))?;
+
+                        if !build_res.success {
+                            if json {
+                                println!(
+                                    "{}",
+                                    serde_json::json!({
+                                        "event": "build",
+                                        "status": "failed",
+                                        "build_sequence": build_sequence,
+                                        "extension_id": manifest.id.to_string(),
+                                        "diagnostics": build_res.diagnostics,
+                                    })
+                                );
+                            } else {
+                                eprintln!(
+                                    "Build #{} failed:\n{}",
+                                    build_sequence,
+                                    build_res.diagnostics.join("\n")
+                                );
+                            }
+                            continue;
+                        }
+
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::json!({
+                                    "event": "build",
+                                    "status": "success",
+                                    "build_sequence": build_sequence,
+                                    "extension_id": manifest.id.to_string(),
+                                })
+                            );
+                        }
+
+                        let reload_res = shell_proxy
+                            .reload_dev_session(session_id.clone(), build_sequence, "extension.wasm".into())
+                            .await;
+
+                        match reload_res {
+                            Ok(res) => {
+                                if res.outcome == "applied" {
+                                    if json {
+                                        println!(
+                                            "{}",
+                                            serde_json::json!({
+                                                "event": "reload",
+                                                "status": "applied",
+                                                "build_sequence": build_sequence,
+                                                "extension_id": manifest.id.to_string(),
+                                                "session_id": session_id,
+                                                "host_generation": res.host_generation,
+                                                "engine_generation": res.engine_generation,
+                                            })
+                                        );
+                                    } else if !quiet {
+                                        eprintln!(
+                                            "Dev reload applied (build #{}, host gen: {}, engine gen: {})",
+                                            build_sequence, res.host_generation, res.engine_generation
+                                        );
+                                    }
+                                } else {
+                                    if json {
+                                        println!(
+                                            "{}",
+                                            serde_json::json!({
+                                                "event": "reload",
+                                                "status": res.outcome,
+                                                "build_sequence": build_sequence,
+                                                "extension_id": manifest.id.to_string(),
+                                                "diagnostic_code": res.diagnostic_code,
+                                                "message": res.message,
+                                            })
+                                        );
+                                    } else {
+                                        eprintln!(
+                                            "Dev reload rejected [{}]: {}",
+                                            res.diagnostic_code, res.message
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                if json {
+                                    println!(
+                                        "{}",
+                                        serde_json::json!({
+                                            "event": "reload",
+                                            "status": "error",
+                                            "build_sequence": build_sequence,
+                                            "extension_id": manifest.id.to_string(),
+                                            "error": e.to_string(),
+                                        })
+                                    );
+                                } else {
+                                    eprintln!("Dev reload error: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Ok(())
+        });
+
+        match result {
+            Ok(()) => ExtOpResult {
+                success: true,
+                data: serde_json::json!({ "status": "stopped" }),
+                human_message: "Dev server stopped".into(),
+                warnings: Vec::new(),
+                exit_code: 0,
+            },
+            Err(e) => ExtOpResult {
                 success: false,
-                data: serde_json::Value::Null,
-                human_message: format!("invalid extension ID '{id_raw}'"),
+                data: serde_json::json!({ "error": e }),
+                human_message: format!("Error: {e}"),
                 warnings: Vec::new(),
-                exit_code: 2,
-            };
-        };
-        let cli_res = ExtensionCli::reload(&id, &self.state_dir);
-        let mut op_res = ExtOpResult {
-            success: cli_res.success,
-            data: serde_json::json!({
-                "extension_id": cli_res.extension_id,
-                "diagnostics": cli_res.diagnostics,
-            }),
-            human_message: cli_res.diagnostics.join("\n"),
-            warnings: Vec::new(),
-            exit_code: if cli_res.success { 0 } else { 1 },
-        };
-        self.notify_daemon_if_needed(&mut op_res);
-        op_res
+                exit_code: 1,
+            },
+        }
     }
 
     pub fn logs(&self, id_str: Option<&str>, follow: bool) -> ExtOpResult {
@@ -998,8 +1356,32 @@ fn record_refresh_warning(result: &mut ExtOpResult, reason: impl Into<String>) {
         .push(format!("Local mutation succeeded, but {}", reason.into()));
 }
 
+fn should_ignore_path(path: &Path, root: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(root) else {
+        return false;
+    };
+    for component in rel.components() {
+        let name = component.as_os_str().to_string_lossy();
+        if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" {
+            return true;
+        }
+    }
+    if let Some(ext) = path.extension().and_then(|e| e.to_str())
+        && (ext == "tmp" || ext == "wasm")
+    {
+        return true;
+    }
+    if let Some(file_name) = path.file_name().and_then(|f| f.to_str())
+        && (file_name == "extension.wasm" || file_name.starts_with('.'))
+    {
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use super::{
         ExtOpResult, record_refresh_warning, script_catalog_operation_error,
         script_item_from_status,
@@ -1153,5 +1535,52 @@ mod tests {
             human
                 .contains("io.github.test.dead [permanently_disabled, failed after 4 trip cycles]")
         );
+    }
+
+    #[test]
+    fn test_should_ignore_path() {
+        let root = PathBuf::from("/home/user/project");
+        assert!(super::should_ignore_path(
+            &root.join(".git/HEAD"),
+            &root
+        ));
+        assert!(super::should_ignore_path(
+            &root.join("node_modules/pkg/index.js"),
+            &root
+        ));
+        assert!(super::should_ignore_path(
+            &root.join("target/wasm32-wasip1/debug/app.wasm"),
+            &root
+        ));
+        assert!(super::should_ignore_path(
+            &root.join("dist/bundle.js"),
+            &root
+        ));
+        assert!(super::should_ignore_path(
+            &root.join("extension.wasm"),
+            &root
+        ));
+        assert!(super::should_ignore_path(
+            &root.join("build.tmp"),
+            &root
+        ));
+        assert!(super::should_ignore_path(
+            &root.join(".shilpo-cache/data"),
+            &root
+        ));
+
+        // Valid source files that should NOT be ignored
+        assert!(!super::should_ignore_path(
+            &root.join("extension.toml"),
+            &root
+        ));
+        assert!(!super::should_ignore_path(
+            &root.join("src/lib.rs"),
+            &root
+        ));
+        assert!(!super::should_ignore_path(
+            &root.join("src/index.ts"),
+            &root
+        ));
     }
 }

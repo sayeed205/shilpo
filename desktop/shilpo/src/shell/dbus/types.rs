@@ -112,3 +112,30 @@ pub struct ShellTelemetry {
     pub uptime_seconds: u64,
     pub extension_host_diagnostics_json: String,
 }
+
+/// Extension dev session reload terminal outcome wire type.
+/// Wire signature: `(sttss)`
+#[derive(Debug, Clone, Default, Serialize, Deserialize, zbus::zvariant::Type, PartialEq, Eq)]
+pub struct DevReloadResult {
+    pub outcome: String,
+    pub host_generation: u64,
+    pub engine_generation: u64,
+    pub diagnostic_code: String,
+    pub message: String,
+}
+
+impl From<shilpo_ext_runtime::DevReloadOutcome> for DevReloadResult {
+    fn from(outcome: shilpo_ext_runtime::DevReloadOutcome) -> Self {
+        Self {
+            outcome: outcome.outcome,
+            host_generation: outcome
+                .update
+                .as_ref()
+                .map(|u| u.host_generation.0)
+                .unwrap_or(0),
+            engine_generation: outcome.engine_generation.0,
+            diagnostic_code: outcome.diagnostic_code,
+            message: outcome.message,
+        }
+    }
+}

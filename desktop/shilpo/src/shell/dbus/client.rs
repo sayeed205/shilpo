@@ -36,6 +36,18 @@ pub trait Shell {
         payload_json: Option<String>,
     ) -> zbus::Result<()>;
     async fn next_wallpaper(&self) -> zbus::Result<()>;
+    async fn start_dev_session(
+        &self,
+        extension_id: String,
+        source_root: String,
+    ) -> zbus::Result<String>;
+    async fn reload_dev_session(
+        &self,
+        session_id: String,
+        build_sequence: u64,
+        artifact_path: String,
+    ) -> zbus::Result<super::types::DevReloadResult>;
+    async fn end_dev_session(&self, session_id: String) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn shell_started(&self, instance_id: String, pid: u32) -> zbus::Result<()>;
