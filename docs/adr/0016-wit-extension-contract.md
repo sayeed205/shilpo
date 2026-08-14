@@ -68,8 +68,8 @@ capability. This created security and design risks:
 
 ## Consequences & Follow-ups
 
-- Extensions must compile against `shilpo:extension@0.1.0` WIT definitions.
+- Extensions must compile against `shilpo:extension@0.1.0` WIT definitions. Official TypeScript (`@shilpo/ext-sdk`) and Rust extension SDKs are consumers of—not alternatives to—this canonical WIT contract.
 - Secret Service integration is operational via `Oo7SecretBroker` for `secrets` WIT calls. Runtime initialization fails
   closed when Secret Service is unavailable; there is no production plaintext or in-memory fallback.
 - Durable LMDB state persistence and reactive watch subscription contract are operational via `HeedStateStore` for `state` WIT calls.
-- Follow-up tracker issues: #78 (state store completed), #92 (ViewTree layout & interaction enhancements), #96 (hot-reload), #100 (CLI scaffolding), and #131 (benchmark suite).
+- Follow-up tracker issues: #78 (state store completed), #92 (ViewTree layout & interaction enhancements completed), #96 (TypeScript SDK completed), #100 (Rust SDK), #99/#101 (scaffolding and extension tooling), and #131 (search provider contribution model).

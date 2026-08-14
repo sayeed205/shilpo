@@ -140,16 +140,15 @@ ADR-0016. During the `@0.x` epoch the ABI may break freely; compatibility hostin
 
 ### Guest SDKs
 
-The primary extension authoring path is **TypeScript**, compiled to a WASM Component via
-[ComponentizeJS](https://github.com/nickvidal/ComponentizeJS) (Bytecode Alliance). The `shilpo ext build` command
-handles compilation transparently — authors write TypeScript, the toolchain produces a conformant WASM component.
+The primary extension authoring path is **TypeScript**, compiled to a WASM Component via JCO / ComponentizeJS (Bytecode Alliance).
 
-The TypeScript SDK (`@shilpo/ext-sdk`) uses Raycast-inspired API naming conventions (`List`, `Detail`, `Form`,
-`ActionPanel`, `Action.Push`) to lower the barrier for web developers familiar with that ecosystem. This is a
-design-level inspiration, not a runtime compatibility layer.
+The official TypeScript SDK (`@shilpo/ext-sdk@0.1.0`) lives in `sdk/typescript/`:
+- **Distribution**: Published exclusively to [JSR](https://jsr.io) (`jsr:@shilpo/ext-sdk`), with `deno.json` as its sole canonical package configuration (no package-level `package.json`).
+- **Portable SDK & Guest-Binding Split**: The SDK is pure, portable ESM TypeScript that runs seamlessly across Deno, Bun, and Node.js. It does not contain unresolved `shilpo:` WASM imports at module load time; host capability imports are cleanly injected via `HostFacade` / `HostPorts`, enabling hermetic in-memory testing (`FakeHost`, `createTestHost`) without live desktop daemons.
+- **Declarative ViewTree & No-React Boundary**: Extensions construct declarative, static `ViewTree` descriptions using typed builder functions (`container`, `row`, `column`, `text`, `button`, etc.). The SDK strictly maintains a no-React/no-virtual-DOM boundary — guests emit lightweight declarative trees, and Shilpo renders them directly in GPUI.
+- **Typed Lifecycle & DataValue**: `defineExtension` exposes typed lifecycle hooks (`onActivate`, `onDeactivate`, `onEvent`, `view`) and wraps guest handlers in deterministic error boundaries, mapping errors to typed WIT `ErrorPayload`s while redacting secret handles and internal stack paths.
 
-Rust extensions compile directly to `wasm32-wasip2` components using the standard `cargo` toolchain and
-`wit-bindgen`-generated bindings.
+Rust extensions compile directly to `wasm32-wasip2` components using the standard `cargo` toolchain and `wit-bindgen`-generated bindings.
 
 Rust-generated WASI Preview 2 components receive a default-deny WASI context so the Rust component adapter can
 initialize. It has closed stdin, discarded stdout/stderr, no arguments or environment, no preopened directories, and

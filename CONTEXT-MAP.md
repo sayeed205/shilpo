@@ -33,6 +33,10 @@ library at its core.
 
 - **Storybook** (`apps/storybook`) — Interactive desktop gallery for exploring and testing core UI components. Cross-platform. Demos the generic M3 component library only, not shell-specific widgets.
 
+### SDKs (`sdk/`)
+
+- **TypeScript SDK** (`sdk/typescript`) — Official TypeScript SDK (`@shilpo/ext-sdk@0.1.0`) for developing sandboxed WebAssembly extensions. Provides declarative ViewTree builders, typed `DataValue` helpers, `defineExtension` lifecycle adapter, host import facade, and in-memory test host. Published exclusively to JSR.
+
 ## Relationships
 
 - **UI → Theme**: UI imports `ThemeMode`, `SchemeVariant`, `ThemeState` as pure data types. UI owns the GPUI `Theme` global and `ThemeColor` rendering; Theme provides the color math.
@@ -46,5 +50,6 @@ library at its core.
 - **Ext Runtime → Ext API**: Ext Runtime implements guest contracts and capability authorization for Extension API types.
 - **Services → LMDB Session Store**: Services owns operational/session persistence (clipboard history, output state) independently of Shilpo declarative config.
 - **Theme Daemon → Theme**: Daemon uses core theme types and color generation.
+- **TypeScript SDK → Ext API**: TypeScript SDK generates typed interfaces from `core/ext-api/wit/extension.wit` and manifest schema from `core/ext-api/schema/extension-v1.schema.json`.
 - **Storybook → UI, Theme**: Demos the core component library.
 - **Services Domain Ports**: Long-lived service domains use domain-specific ports with the shared ADR-0008 operational semantics; process-owned ports use typed DBus clients and in-process ports use narrow handles.
