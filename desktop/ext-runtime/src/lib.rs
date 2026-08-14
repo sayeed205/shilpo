@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod build;
 pub mod catalog;
 pub mod circuit_breaker;
 pub mod cli;
@@ -9,6 +10,11 @@ pub mod state;
 pub mod wasm;
 pub mod worker;
 
+pub use build::{
+    ExtensionLanguage, ExtensionProjectConfig, OsProcessRunner, ProcessCommand, ProcessOutput,
+    ProcessRunner, ResolvedBuildConfig, build_extension, find_canonical_wit_dir, find_local_jco,
+    resolve_project_config,
+};
 pub use secrets::{FakeSecretBroker, Oo7SecretBroker, SecretBroker, SecretBrokerError};
 
 pub use adapter::{

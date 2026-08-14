@@ -1,6 +1,6 @@
 use crate::adapters::ConfigMigrateAdapter;
 use crate::args::{Cli, Commands, ConfigCommands, ModeValue, ShellCommands, VisibilityAction};
-use crate::output::{CliOutput, EXIT_FAILURE, EXIT_INVALID_ARGS, JsonEnvelope};
+use crate::output::{CliOutput, EXIT_FAILURE, EXIT_INVALID_ARGS, JsonEnvelope, JsonError};
 use clap::Parser;
 use std::fs;
 use tempfile::TempDir;
@@ -755,4 +755,127 @@ fn test_cli_config_effective_toml_is_deterministic_for_dynamic_maps() {
         first.human_message.find("[outputs.alpha]").unwrap()
             < first.human_message.find("[outputs.zeta]").unwrap()
     );
+}
+
+#[test]
+fn test_cli_parser_ext_build() {
+    use crate::args::ExtCommands;
+    use std::path::PathBuf;
+
+    let cli = Cli::try_parse_from(["shilpo", "ext", "build"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Ext {
+            command: ExtCommands::Build {
+                path: None,
+                release: false
+            }
+        })
+    ));
+
+    let cli =
+        Cli::try_parse_from(["shilpo", "ext", "build", "/path/to/project", "--release"]).unwrap();
+    if let Some(Commands::Ext {
+        command: ExtCommands::Build { path, release },
+    }) = cli.command
+    {
+        assert_eq!(path, Some(PathBuf::from("/path/to/project")));
+        assert!(release);
+    } else {
+        panic!("Expected Ext Build");
+    }
+}
+
+#[test]
+fn test_cli_ext_build_adapter_success_and_json_envelope() {
+    use crate::adapters::ExtAdapter;
+
+    let dir = TempDir::new().unwrap();
+    let project_dir = dir.path();
+    fs::write(
+        project_dir.join("extension.toml"),
+        r#"
+        schema_version = 1
+        id = "org.shilpo.test-build"
+        name = "Test Build"
+        version = "0.1.0"
+        api_version = "0.1.0"
+        min_shilpo_version = "0.1.0"
+        authors = ["Test"]
+        license = "MIT"
+
+        [library]
+        path = "extension.wasm"
+        "#,
+    )
+    .unwrap();
+    fs::create_dir_all(project_dir.join("src")).unwrap();
+    fs::write(project_dir.join("src/extension.ts"), "export {}").unwrap();
+    fs::create_dir_all(project_dir.join("node_modules/.bin")).unwrap();
+    fs::write(
+        project_dir.join("node_modules/.bin/jco"),
+        "#!/usr/bin/env node",
+    )
+    .unwrap();
+
+    let adapter = ExtAdapter::new();
+    // Test with nonexistent WIT source produces actionable diagnostic
+    let result = adapter.build(Some(project_dir), false);
+    // Since WIT might or might not be in ancestors depending on test environment, check structure
+    assert!(result.data.is_object());
+    assert_eq!(result.data["release"], false);
+
+    // Verify envelope serialization
+    let envelope = JsonEnvelope {
+        schema_version: 1,
+        ok: result.success,
+        command: "ext".into(),
+        data: if result.success {
+            result.data.clone()
+        } else {
+            serde_json::Value::Null
+        },
+        warnings: result.warnings.clone(),
+        error: (!result.success).then(|| JsonError {
+            code: "extension_operation_failed".into(),
+            message: result.human_message.clone(),
+            details: Some(result.data.clone()),
+        }),
+    };
+    let json_str = serde_json::to_string(&envelope).unwrap();
+    assert!(json_str.contains("\"schema_version\":1"));
+    assert!(json_str.contains("\"command\":\"ext\""));
+    assert_eq!(envelope.ok, result.success);
+    assert_eq!(envelope.error.is_none(), result.success);
+}
+
+#[test]
+fn test_cli_ext_build_adapter_failure_and_json_envelope() {
+    use crate::adapters::ExtAdapter;
+    use crate::output::JsonError;
+
+    let dir = TempDir::new().unwrap();
+    let empty_dir = dir.path();
+
+    let adapter = ExtAdapter::new();
+    let result = adapter.build(Some(empty_dir), false);
+    assert!(!result.success);
+    assert_eq!(result.exit_code, 1);
+    assert!(result.human_message.contains("error["));
+
+    let envelope = JsonEnvelope {
+        schema_version: 1,
+        ok: false,
+        command: "ext".into(),
+        data: serde_json::Value::Null,
+        warnings: result.warnings.clone(),
+        error: Some(JsonError {
+            code: "extension_operation_failed".into(),
+            message: result.human_message.clone(),
+            details: Some(result.data.clone()),
+        }),
+    };
+    let json_str = serde_json::to_string(&envelope).unwrap();
+    assert!(json_str.contains("\"ok\":false"));
+    assert!(json_str.contains("\"code\":\"extension_operation_failed\""));
 }

@@ -190,6 +190,23 @@ impl ExtAdapter {
         }
     }
 
+    pub fn build(&self, path: Option<&Path>, release: bool) -> ExtOpResult {
+        let target = path.unwrap_or_else(|| Path::new("."));
+        let cli_res = ExtensionCli::build(target, release);
+        ExtOpResult {
+            success: cli_res.success,
+            data: serde_json::json!({
+                "extension_id": cli_res.extension_id,
+                "artifact": cli_res.artifact,
+                "release": release,
+                "diagnostics": cli_res.diagnostics,
+            }),
+            human_message: cli_res.diagnostics.join("\n"),
+            warnings: Vec::new(),
+            exit_code: if cli_res.success { 0 } else { 1 },
+        }
+    }
+
     pub fn check(&self, path: Option<&Path>) -> ExtOpResult {
         let target = path.unwrap_or_else(|| Path::new("."));
         let cli_res = ExtensionCli::check(target);

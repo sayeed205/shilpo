@@ -56,6 +56,18 @@ struct CheckedExtension {
 pub struct ExtensionCli;
 
 impl ExtensionCli {
+    pub fn build(dir: &Path, release: bool) -> ExtensionCliResult {
+        crate::build::build_extension(dir, release, &crate::build::OsProcessRunner)
+    }
+
+    pub fn build_with_runner(
+        dir: &Path,
+        release: bool,
+        runner: &dyn crate::build::ProcessRunner,
+    ) -> ExtensionCliResult {
+        crate::build::build_extension(dir, release, runner)
+    }
+
     pub fn check(dir: &Path) -> ExtensionCliResult {
         match inspect_extension(dir) {
             Ok(checked) => ExtensionCliResult {
@@ -419,6 +431,11 @@ fn run_cli(args: &[String]) -> i32 {
     let state_dir = default_extension_state_dir();
     let catalog = ExtensionCatalog::open_default();
     let result = match command {
+        "build" => {
+            let source = Path::new(args.get(1).map_or(".", String::as_str));
+            let release = args.iter().any(|arg| arg == "--release");
+            ExtensionCli::build(source, release)
+        }
         "check" => ExtensionCli::check(Path::new(args.get(1).map_or(".", String::as_str))),
         "pack" => {
             let source = Path::new(args.get(1).map_or(".", String::as_str));
@@ -1261,7 +1278,7 @@ fn collect_runtime_files(
     }
 }
 
-fn is_regular_file(path: &Path, label: &str, diagnostics: &mut Vec<String>) -> bool {
+pub(crate) fn is_regular_file(path: &Path, label: &str, diagnostics: &mut Vec<String>) -> bool {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => true,
         Ok(_) => {
@@ -1430,7 +1447,7 @@ fn print_result(result: &ExtensionCliResult) {
 
 fn print_usage() {
     eprintln!(
-        "Usage: shilpo ext <check|pack|sign|keygen|dev|reload|logs|list|search|info|install|update|enable|disable|approve|rollback|uninstall|channel|check-updates|source|refresh-sources> [arguments]"
+        "Usage: shilpo ext <build|check|pack|sign|keygen|dev|reload|logs|list|search|info|install|update|enable|disable|approve|rollback|uninstall|channel|check-updates|source|refresh-sources> [arguments]"
     );
 }
 

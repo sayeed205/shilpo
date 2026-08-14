@@ -1,0 +1,8 @@
+{
+  "name": "shilpo-ts-fixture",
+  "version": "0.1.0",
+  "private": true,
+  "devDependencies": {
+    "@bytecodealliance/jco": "1.28.1"
+  }
+}
