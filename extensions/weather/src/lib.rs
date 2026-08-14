@@ -590,13 +590,15 @@ fn weather_description(code: i32) -> &'static str {
 
 #[cfg(target_arch = "wasm32")]
 mod guest {
-    use super::{Event, WeatherState};
+    use super::WeatherState;
     use std::cell::RefCell;
 
     wit_bindgen::generate!({
         path: "../../core/ext-api/wit",
         world: "extension",
     });
+
+    use shilpo::extension::{events, types, view};
 
     thread_local! {
         static STATE: RefCell<WeatherState> = RefCell::new(WeatherState::default());
@@ -605,21 +607,20 @@ mod guest {
     struct WeatherExtension;
 
     impl Guest for WeatherExtension {
-        fn on_event(event_json: String) -> String {
-            let Ok(event) = serde_json::from_str::<Event>(&event_json) else {
-                return "[]".into();
-            };
-            STATE.with(|state| {
-                serde_json::to_string(&state.borrow_mut().handle_event(event))
-                    .unwrap_or_else(|_| "[]".into())
-            })
+        fn activate(_activation: types::Activation) -> Result<(), types::Error> {
+            Ok(())
         }
 
-        fn view(contribution_id: String) -> String {
-            if contribution_id != "bar" {
-                return "null".into();
-            }
-            STATE.with(|state| state.borrow().view().to_string())
+        fn deactivate(_reason: types::DeactivateReason) -> Result<(), types::Error> {
+            Ok(())
+        }
+
+        fn on_event(_event: events::ExtensionEvent) -> Result<(), types::Error> {
+            Ok(())
+        }
+
+        fn view(_contribution_id: String) -> Result<Option<view::ViewTree>, types::Error> {
+            Ok(None)
         }
     }
 

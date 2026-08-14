@@ -1,3 +1,4 @@
+use crate::manifest::WallpaperMode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +15,7 @@ pub enum EventKind {
     MediaChanged,
     PowerChanged,
     TimerFired,
+    WorkspaceChanged,
 }
 
 #[derive(
@@ -30,6 +32,43 @@ pub enum BarMenuCloseReason {
     DisplayRemoved,
     OwnerRemoved,
     SourceUnavailable,
+}
+
+#[derive(
+    Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WallpaperRequestReason {
+    Activate,
+    UserNext,
+    SlideshowTick,
+    WorkspaceChanged,
+    SettingsChanged,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceTarget {
+    pub workspace_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WallpaperTarget {
+    Global,
+    Workspace(WorkspaceTarget),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WallpaperRequest {
+    pub request_id: String,
+    pub contribution_id: String,
+    pub reason: WallpaperRequestReason,
+    pub mode: WallpaperMode,
+    pub target: WallpaperTarget,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -61,6 +100,20 @@ pub enum ExtensionEvent {
     },
     TimerFired {
         name: String,
+    },
+    WorkspaceChanged {
+        workspace_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_name: Option<String>,
+    },
+    WallpaperRequest(WallpaperRequest),
+    WallpaperResult {
+        request_id: String,
+        success: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     ContributionMounted {
         contribution_id: String,
@@ -132,6 +185,8 @@ impl ExtensionEvent {
         match self {
             Self::ShellStarted
             | Self::ShellStopping
+            | Self::WallpaperRequest(_)
+            | Self::WallpaperResult { .. }
             | Self::ContributionMounted { .. }
             | Self::ContributionUnmounted { .. }
             | Self::ContributionResized { .. }
@@ -150,6 +205,7 @@ impl ExtensionEvent {
             Self::MediaChanged { .. } => Some(EventKind::MediaChanged),
             Self::PowerChanged { .. } => Some(EventKind::PowerChanged),
             Self::TimerFired { .. } => Some(EventKind::TimerFired),
+            Self::WorkspaceChanged { .. } => Some(EventKind::WorkspaceChanged),
         }
     }
 }

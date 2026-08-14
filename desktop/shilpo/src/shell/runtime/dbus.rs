@@ -165,6 +165,9 @@ impl ShellRuntime {
                         tracing::warn!(%error, action = %action_id, "D-Bus action ID rejected")
                     }
                 },
+                ShellCommand::NextWallpaper => {
+                    ShellRuntime::request_next_wallpaper(cx);
+                }
                 ShellCommand::EmitTestNotification { title, body } => {
                     let notif = shilpo_services::Notification {
                         id: 0,

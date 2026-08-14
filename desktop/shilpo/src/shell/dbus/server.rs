@@ -30,6 +30,7 @@ pub enum ShellCommand {
         action_id: String,
         payload_json: Option<String>,
     },
+    NextWallpaper,
 }
 
 /// D-Bus interface implementation for `org.shilpo.Shell`.
@@ -471,6 +472,18 @@ impl ShellDbusService {
             action_id,
             payload_json,
         })
+    }
+
+    async fn next_wallpaper(&self) -> zbus::fdo::Result<()> {
+        let _span = tracing::info_span!(
+            target: "shilpo_profile",
+            "dbus_call",
+            destination = "org.shilpo.Shell",
+            operation = "next_wallpaper",
+            outcome = tracing::field::Empty
+        );
+        let _enter = _span.enter();
+        self.send_command(ShellCommand::NextWallpaper)
     }
 
     #[zbus(signal)]

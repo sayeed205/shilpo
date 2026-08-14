@@ -15,6 +15,8 @@ pub enum ContributionSurface {
     Action,
     Background,
     Shortcut,
+    #[serde(rename = "wallpaper")]
+    Wallpaper,
 }
 
 #[derive(
@@ -55,6 +57,10 @@ pub struct ContributionDescriptor {
     pub action: Option<CanonicalId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_binding: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallpaper_modes: Option<Vec<shilpo_ext_api::WallpaperMode>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallpaper_targets: Option<Vec<shilpo_ext_api::WallpaperTargetKind>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

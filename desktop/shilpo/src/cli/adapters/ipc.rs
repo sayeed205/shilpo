@@ -194,6 +194,13 @@ impl IpcAdapter {
                 .map_err(map_dbus_error)
         })
     }
+
+    pub fn next_wallpaper(&self) -> Result<(), (i32, String)> {
+        let (_conn, proxy) = Self::get_proxy()?;
+        futures_lite::future::block_on(async {
+            proxy.next_wallpaper().await.map_err(map_dbus_error)
+        })
+    }
 }
 
 fn map_command_result(res: CommandResult) -> Result<(), (i32, String)> {

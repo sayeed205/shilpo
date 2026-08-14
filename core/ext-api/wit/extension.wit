@@ -106,9 +106,75 @@ interface types {
     }
 }
 
+/// Host import for wallpaper reading and setting.
+/// Required capability scopes: `wallpaper:read`, `wallpaper:set`.
+interface wallpaper {
+    use types.{error, request-id};
+
+    enum wallpaper-mode {
+        manual,
+        slideshow,
+    }
+
+    enum wallpaper-target-kind {
+        global,
+        workspace,
+    }
+
+    enum wallpaper-request-reason {
+        activate,
+        user-next,
+        slideshow-tick,
+        workspace-changed,
+        settings-changed,
+    }
+
+    record workspace-target {
+        workspace-id: string,
+        output-name: option<string>,
+    }
+
+    variant wallpaper-target {
+        global,
+        workspace(workspace-target),
+    }
+
+    record wallpaper-request {
+        request-id: request-id,
+        contribution-id: string,
+        reason: wallpaper-request-reason,
+        mode: wallpaper-mode,
+        target: wallpaper-target,
+    }
+
+    enum wallpaper-source {
+        extension-asset,
+        local-file,
+        remote,
+    }
+
+    record wallpaper-info {
+        path: string,
+    }
+
+    record wallpaper-set-request {
+        request-id: option<request-id>,
+        path: string,
+        source: wallpaper-source,
+        target: option<wallpaper-target>,
+    }
+
+    /// Sets system wallpaper path and source.
+    set: func(req: wallpaper-set-request) -> result<_, error>;
+
+    /// Reads current system wallpaper info.
+    read: func() -> result<wallpaper-info, error>;
+}
+
 /// Inbound lifecycle, environment, and contribution interaction events dispatched to guest extensions.
 interface events {
     use types.{canonical-id, request-id, data-value};
+    use wallpaper.{wallpaper-request, wallpaper-target};
 
     /// High-level event category names for capability filtering.
     enum event-kind {
@@ -120,6 +186,7 @@ interface events {
         media-changed,
         power-changed,
         timer-fired,
+        workspace-changed,
     }
 
     enum bar-menu-close-reason {
@@ -146,6 +213,9 @@ interface events {
         media-changed(media-event),
         power-changed(power-event),
         timer-fired(timer-event),
+        workspace-changed(workspace-event),
+        wallpaper-request(wallpaper-request),
+        wallpaper-result(wallpaper-result-event),
         contribution-mounted(mounted-event),
         contribution-unmounted(unmounted-event),
         contribution-resized(resized-event),
@@ -165,6 +235,8 @@ interface events {
     record media-event { title: option<string>, artist: option<string>, playing: bool }
     record power-event { percentage: option<f32>, charging: bool }
     record timer-event { name: string }
+    record workspace-event { workspace-id: string, workspace-name: option<string>, output-name: option<string> }
+    record wallpaper-result-event { request-id: request-id, success: bool, error: option<string> }
     record mounted-event { contribution-id: string, instance-id: option<string>, width: f32, height: f32 }
     record unmounted-event { contribution-id: string, instance-id: option<string> }
     record resized-event { contribution-id: string, instance-id: option<string>, width: f32, height: f32 }
@@ -516,27 +588,7 @@ interface theme {
     set-source-color: func(color: string) -> result<_, error>;
 }
 
-/// Host import for wallpaper reading and setting.
-/// Required capability scopes: `wallpaper:read`, `wallpaper:set`.
-interface wallpaper {
-    use types.{error};
 
-    enum wallpaper-source {
-        extension-asset,
-        local-file,
-        remote,
-    }
-
-    record wallpaper-info {
-        path: string,
-    }
-
-    /// Sets system wallpaper path and source.
-    set: func(path: string, source: wallpaper-source) -> result<_, error>;
-
-    /// Reads current system wallpaper info.
-    read: func() -> result<wallpaper-info, error>;
-}
 
 /// Canonical Shilpo extension component world.
 world extension {

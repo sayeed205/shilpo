@@ -1734,6 +1734,8 @@ mod tests {
             bar_widget: None,
             action: None,
             default_binding: None,
+            wallpaper_modes: None,
+            wallpaper_targets: None,
         };
         assert_eq!(
             descriptor.surface,
@@ -1757,6 +1759,8 @@ mod tests {
             bar_widget: None,
             action: None,
             default_binding: None,
+            wallpaper_modes: None,
+            wallpaper_targets: None,
         };
         let search_b = crate::extensions::ContributionDescriptor {
             id: "org.shilpo.docs-search/provider-b".parse().unwrap(),
@@ -1770,6 +1774,8 @@ mod tests {
             bar_widget: None,
             action: None,
             default_binding: None,
+            wallpaper_modes: None,
+            wallpaper_targets: None,
         };
         let non_search = crate::extensions::ContributionDescriptor {
             surface: crate::extensions::ContributionSurface::Action,

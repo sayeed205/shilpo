@@ -603,6 +603,8 @@ mod tests {
             bar_widget: None,
             action: None,
             default_binding: None,
+            wallpaper_modes: None,
+            wallpaper_targets: None,
         }]);
 
         let ids = dispatcher

@@ -76,11 +76,8 @@ impl ThemeAdapter {
     }
 
     pub async fn random_wallpaper() -> Result<String, (i32, String)> {
-        let client = ThemeClient::new().await;
-        client
-            .set_random_wallpaper()
-            .await
-            .map_err(|e| (3, format!("failed to communicate with theme daemon: {e}")))?;
-        Ok("Random wallpaper selected".into())
+        let ipc = super::ipc::IpcAdapter::new();
+        ipc.next_wallpaper()?;
+        Ok("Dispatched next wallpaper request to active provider".into())
     }
 }
