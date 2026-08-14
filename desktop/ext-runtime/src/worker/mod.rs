@@ -10,7 +10,7 @@ pub use process::{
     send_worker_message, write_frame,
 };
 pub use protocol::{
-    ContributionDescriptor, ContributionInstance, ContributionSurface, ExtensionChanges,
-    ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, ReplaceableEvent,
-    ScriptExtensionStatus,
+    ContributionDescriptor, ContributionInstance, ContributionSurface, DevReloadOutcome,
+    ExtensionChanges, ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate,
+    ReplaceableEvent, ScriptExtensionStatus,
 };

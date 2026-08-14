@@ -34,6 +34,7 @@ pub struct HostMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WorkerPayload {
     Update(ExtensionUpdate),
+    DevReload(super::protocol::DevReloadOutcome),
     ShutdownAck,
     FatalError(String),
 }
@@ -350,6 +351,36 @@ pub fn run_extension_host() {
             let _ = send_worker_message(&mut writer, &ack);
             tracing::info!("extension-host received shutdown; exiting cleanly");
             break;
+        }
+
+        if let ExtensionCommand::DevReload {
+            session_id,
+            extension_id,
+            canonical_root,
+            artifact_path,
+            build_sequence,
+            ..
+        } = msg.command
+        {
+            let outcome = engine.handle_dev_reload(
+                session_id,
+                extension_id,
+                canonical_root,
+                artifact_path,
+                build_sequence,
+            );
+            let reply = WorkerMessage {
+                protocol_version: PROTOCOL_VERSION,
+                host_generation,
+                engine_generation: engine.generation(),
+                request_id: msg.request_id,
+                payload: WorkerPayload::DevReload(outcome),
+            };
+            if let Err(error) = send_worker_message(&mut writer, &reply) {
+                eprintln!("extension-host error sending dev reload reply: {error}");
+                break;
+            }
+            continue;
         }
 
         if let Some(update) = engine.handle_command(msg.command) {

@@ -290,10 +290,11 @@ pub enum ExtCommands {
         #[arg(long)]
         output: Option<PathBuf>,
     },
-    /// Register extension directory for development override
-    Dev { path: PathBuf },
-    /// Reload extension development override
-    Reload { id: Option<String> },
+    /// Watch extension directory, compile, and reload live session in running shell
+    Dev {
+        /// Path to extension directory (defaults to current directory)
+        path: Option<PathBuf>,
+    },
     /// View development extension logs
     Logs {
         id: Option<String>,

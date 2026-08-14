@@ -1,8 +1,8 @@
 use super::process::HostGeneration;
 use super::protocol::{
-    ContributionDescriptor, ContributionInstance, ContributionSurface, ExtensionChanges,
-    ExtensionCommand, ExtensionGeneration, ExtensionRuntimeKind, ExtensionSnapshot,
-    ExtensionUpdate, ReplaceableEvent,
+    ContributionDescriptor, ContributionInstance, ContributionSurface, DevReloadOutcome,
+    ExtensionChanges, ExtensionCommand, ExtensionGeneration, ExtensionRuntimeKind,
+    ExtensionSnapshot, ExtensionUpdate, ReplaceableEvent,
 };
 use crate::{
     CURRENT_SHILPO_VERSION, CatalogPaths, ExtensionCatalog, ExtensionHost, ExtensionRuntime,
@@ -286,6 +286,8 @@ pub struct ExtensionEngine<R = crate::WasmRuntime> {
     catalog: ExtensionCatalog,
     catalog_mtime: Option<std::time::SystemTime>,
     active_sources: BTreeMap<ExtensionId, ActiveSource>,
+    active_dev_overrides: BTreeMap<ExtensionId, ActiveSource>,
+    dev_session_sequences: HashMap<String, u64>,
     session: ExtensionSession<R>,
     script_runtime: crate::script::ScriptRuntime,
     generation: ExtensionGeneration,
@@ -337,6 +339,8 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
             catalog,
             catalog_mtime,
             active_sources: BTreeMap::new(),
+            active_dev_overrides: BTreeMap::new(),
+            dev_session_sequences: HashMap::new(),
             session,
             script_runtime,
             generation: ExtensionGeneration(0),
@@ -495,6 +499,28 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     circuit_notices: Vec::new(),
                 })
             }
+            ExtensionCommand::DevReload {
+                session_id,
+                extension_id,
+                canonical_root,
+                artifact_path,
+                build_sequence,
+                ..
+            } => {
+                let outcome = self.handle_dev_reload(
+                    session_id,
+                    extension_id,
+                    canonical_root,
+                    artifact_path,
+                    build_sequence,
+                );
+                outcome.update
+            }
+            ExtensionCommand::DevUnload {
+                session_id,
+                extension_id,
+                ..
+            } => self.handle_dev_unload(&session_id, &extension_id),
             ExtensionCommand::Shutdown => {
                 self.script_runtime.shutdown();
                 None
@@ -1081,7 +1107,423 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     .map(|id| self.session.host.circuit_breaker().status(id))
                     .collect::<Vec<_>>(),
             ),
+            dev_overrides: Arc::from(
+                self.active_dev_overrides
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ),
         }
+    }
+
+    pub fn handle_dev_reload(
+        &mut self,
+        session_id: String,
+        extension_id: ExtensionId,
+        canonical_root: PathBuf,
+        artifact_path: PathBuf,
+        build_sequence: u64,
+    ) -> DevReloadOutcome {
+        if let Some(&last_seq) = self.dev_session_sequences.get(&session_id)
+            && build_sequence <= last_seq
+        {
+            return DevReloadOutcome::rejected(
+                session_id,
+                build_sequence,
+                self.generation,
+                "STALE_BUILD_SEQUENCE",
+                format!("stale build sequence {build_sequence} <= last accepted {last_seq}"),
+            );
+        }
+
+        if !canonical_root.is_dir() {
+            return DevReloadOutcome::rejected(
+                session_id,
+                build_sequence,
+                self.generation,
+                "INVALID_ROOT",
+                format!(
+                    "source root '{}' is not a directory",
+                    canonical_root.display()
+                ),
+            );
+        }
+
+        let canonical_artifact = match artifact_path.canonicalize() {
+            Ok(p) => p,
+            Err(e) => {
+                return DevReloadOutcome::rejected(
+                    session_id,
+                    build_sequence,
+                    self.generation,
+                    "ARTIFACT_NOT_FOUND",
+                    format!("artifact '{}' not found: {e}", artifact_path.display()),
+                );
+            }
+        };
+
+        if !canonical_artifact.starts_with(&canonical_root) {
+            return DevReloadOutcome::rejected(
+                session_id,
+                build_sequence,
+                self.generation,
+                "ARTIFACT_OUTSIDE_ROOT",
+                format!(
+                    "artifact '{}' is outside source root '{}'",
+                    canonical_artifact.display(),
+                    canonical_root.display()
+                ),
+            );
+        }
+
+        if !canonical_artifact.is_file() {
+            return DevReloadOutcome::rejected(
+                session_id,
+                build_sequence,
+                self.generation,
+                "ARTIFACT_NOT_FILE",
+                format!(
+                    "artifact '{}' is not a regular file",
+                    canonical_artifact.display()
+                ),
+            );
+        }
+
+        let manifest_path = canonical_root.join("extension.toml");
+        let toml_str = match fs::read_to_string(&manifest_path) {
+            Ok(s) => s,
+            Err(e) => {
+                return DevReloadOutcome::rejected(
+                    session_id,
+                    build_sequence,
+                    self.generation,
+                    "MANIFEST_NOT_FOUND",
+                    format!(
+                        "failed to read manifest at '{}': {e}",
+                        manifest_path.display()
+                    ),
+                );
+            }
+        };
+
+        let manifest = match ExtensionManifest::from_toml(&toml_str) {
+            Ok(m) => m,
+            Err(e) => {
+                return DevReloadOutcome::rejected(
+                    session_id,
+                    build_sequence,
+                    self.generation,
+                    "INVALID_MANIFEST",
+                    format!("invalid manifest at '{}': {e}", manifest_path.display()),
+                );
+            }
+        };
+
+        if manifest.id != extension_id {
+            return DevReloadOutcome::rejected(
+                session_id,
+                build_sequence,
+                self.generation,
+                "ID_MISMATCH",
+                format!(
+                    "manifest declares ID '{}' but session bound to '{}'",
+                    manifest.id, extension_id
+                ),
+            );
+        }
+
+        let shilpo_version =
+            Version::parse(CURRENT_SHILPO_VERSION).expect("Shilpo version is valid semver");
+        if manifest.min_shilpo_version > shilpo_version {
+            return DevReloadOutcome::rejected(
+                session_id,
+                build_sequence,
+                self.generation,
+                "UNSUPPORTED_SHILPO_VERSION",
+                format!(
+                    "extension '{}' requires Shilpo >= {}, current is {}",
+                    extension_id, manifest.min_shilpo_version, shilpo_version
+                ),
+            );
+        }
+
+        let wasm_bytes = match fs::read(&canonical_artifact) {
+            Ok(b) => b,
+            Err(e) => {
+                return DevReloadOutcome::rejected(
+                    session_id,
+                    build_sequence,
+                    self.generation,
+                    "READ_FAILED",
+                    format!("failed to read WASM artifact: {e}"),
+                );
+            }
+        };
+
+        let module = match self.session.host.runtime().compile_module(&wasm_bytes) {
+            Ok(m) => m,
+            Err(e) => {
+                return DevReloadOutcome::rejected(
+                    session_id,
+                    build_sequence,
+                    self.generation,
+                    "COMPILE_ERROR",
+                    format!("failed to compile WASM component: {e}"),
+                );
+            }
+        };
+
+        let grants = self
+            .catalog
+            .load_grants(&extension_id)
+            .map(|g| g.granted_capabilities)
+            .unwrap_or_else(|_| manifest.capabilities.clone());
+
+        let runtime_budget = self.session.host.runtime_budget();
+        if let Err(e) = self
+            .session
+            .host
+            .runtime_mut()
+            .validate_module_with_capabilities(
+                &extension_id,
+                &module,
+                runtime_budget,
+                manifest.capabilities.clone(),
+                grants.clone(),
+            )
+        {
+            return DevReloadOutcome::rejected(
+                session_id,
+                build_sequence,
+                self.generation,
+                "VALIDATION_ERROR",
+                format!("WASM validation failed: {e}"),
+            );
+        }
+
+        // Candidate valid! Perform atomic swap.
+        let is_registered = self.session.manifests.contains_key(&extension_id);
+        if is_registered && !self.active_dev_overrides.contains_key(&extension_id) {
+            return DevReloadOutcome::rejected(
+                session_id,
+                build_sequence,
+                self.generation,
+                "NON_DEV_ACTIVATION",
+                format!(
+                    "extension '{}' is already active outside a development session",
+                    extension_id
+                ),
+            );
+        }
+        if is_registered {
+            if let Err(e) = self
+                .session
+                .host
+                .replace(manifest.clone(), module, grants.clone())
+            {
+                return DevReloadOutcome::rejected(
+                    session_id,
+                    build_sequence,
+                    self.generation,
+                    "REPLACE_FAILED",
+                    format!("failed to replace extension in runtime: {e}"),
+                );
+            }
+        } else {
+            if let Err(e) = self
+                .session
+                .host
+                .register(manifest.clone(), module, grants.clone())
+            {
+                return DevReloadOutcome::rejected(
+                    session_id,
+                    build_sequence,
+                    self.generation,
+                    "REGISTER_FAILED",
+                    format!("failed to register extension in runtime: {e}"),
+                );
+            }
+            self.session.runtime_ids.push(extension_id.clone());
+        }
+
+        self.session
+            .manifests
+            .insert(extension_id.clone(), manifest.clone());
+
+        let fingerprint = compute_fingerprint(&canonical_root, &manifest);
+        let active_source = ActiveSource {
+            manifest: manifest.clone(),
+            root: canonical_root.clone(),
+            grants,
+            fingerprint,
+        };
+        self.active_sources
+            .insert(extension_id.clone(), active_source.clone());
+        self.active_dev_overrides
+            .insert(extension_id.clone(), active_source);
+
+        let mut invalidated = Vec::new();
+        self.session.views.retain(|k, _| {
+            if k.extension_id == extension_id {
+                invalidated.push(k.clone());
+                false
+            } else {
+                true
+            }
+        });
+
+        for contrib in &manifest.contributions.bar_widgets {
+            let canonical = CanonicalId::new(extension_id.clone(), contrib.id.clone());
+            if let Ok(Some(view)) = self.session.host.render_view(&canonical) {
+                self.session.views.insert(canonical.clone(), view);
+                invalidated.push(canonical);
+            }
+        }
+        for contrib in &manifest.contributions.bar_menus {
+            let canonical = CanonicalId::new(extension_id.clone(), contrib.id.clone());
+            if let Ok(Some(view)) = self.session.host.render_view(&canonical) {
+                self.session.views.insert(canonical.clone(), view);
+                invalidated.push(canonical);
+            }
+        }
+        for contrib in &manifest.contributions.desktop_widgets {
+            let canonical = CanonicalId::new(extension_id.clone(), contrib.id.clone());
+            if let Ok(Some(view)) = self.session.host.render_view(&canonical) {
+                self.session.views.insert(canonical.clone(), view);
+                invalidated.push(canonical);
+            }
+        }
+
+        self.dev_session_sequences
+            .insert(session_id.clone(), build_sequence);
+        self.generation = self.generation.next();
+
+        self.session
+            .dispatch_to_extension(&extension_id, &ExtensionEvent::ShellStarted);
+
+        for event in self.replaceable_events.values() {
+            let ext_event = match event {
+                ReplaceableEvent::Power {
+                    percentage,
+                    charging,
+                } => ExtensionEvent::PowerChanged {
+                    percentage: *percentage,
+                    charging: *charging,
+                },
+                ReplaceableEvent::Network { connected } => ExtensionEvent::NetworkChanged {
+                    connected: *connected,
+                },
+                ReplaceableEvent::Media {
+                    title,
+                    artist,
+                    playing,
+                } => ExtensionEvent::MediaChanged {
+                    title: title.clone(),
+                    artist: artist.clone(),
+                    playing: *playing,
+                },
+                ReplaceableEvent::TimerFired(name) => {
+                    ExtensionEvent::TimerFired { name: name.clone() }
+                }
+            };
+            self.session
+                .dispatch_to_extension(&extension_id, &ext_event);
+        }
+
+        let snapshot = self.build_snapshot(false);
+        let update = ExtensionUpdate {
+            host_generation: HostGeneration(0),
+            generation: self.generation,
+            snapshot: Some(snapshot),
+            effects: Vec::new(),
+            invalidated_views: invalidated,
+            circuit_notices: Vec::new(),
+        };
+
+        DevReloadOutcome::applied(
+            session_id,
+            build_sequence,
+            self.generation,
+            "Extension reloaded successfully",
+            Some(update),
+        )
+    }
+
+    pub fn handle_dev_unload(
+        &mut self,
+        session_id: &str,
+        extension_id: &ExtensionId,
+    ) -> Option<ExtensionUpdate> {
+        self.dev_session_sequences.remove(session_id);
+        self.active_dev_overrides.remove(extension_id)?;
+
+        let mut invalidated = Vec::new();
+        self.session.views.retain(|k, _| {
+            if k.extension_id == *extension_id {
+                invalidated.push(k.clone());
+                false
+            } else {
+                true
+            }
+        });
+
+        // If it was also in installed catalog, reload catalog version
+        let catalog_sources = self.discover_sources().unwrap_or_default();
+        if let Some(cat_source) = catalog_sources.get(extension_id) {
+            let wasm_file = cat_source.root.join("extension.wasm");
+            if let Ok(bytes) = fs::read(&wasm_file)
+                && let Ok(module) = self.session.host.runtime().compile_module(&bytes)
+            {
+                let _ = self.session.host.replace(
+                    cat_source.manifest.clone(),
+                    module,
+                    cat_source.grants.clone(),
+                );
+                self.session
+                    .manifests
+                    .insert(extension_id.clone(), cat_source.manifest.clone());
+                self.active_sources
+                    .insert(extension_id.clone(), cat_source.clone());
+
+                for contrib in &cat_source.manifest.contributions.bar_widgets {
+                    let canonical = CanonicalId::new(extension_id.clone(), contrib.id.clone());
+                    if let Ok(Some(view)) = self.session.host.render_view(&canonical) {
+                        self.session.views.insert(canonical.clone(), view);
+                        invalidated.push(canonical);
+                    }
+                }
+                for contrib in &cat_source.manifest.contributions.bar_menus {
+                    let canonical = CanonicalId::new(extension_id.clone(), contrib.id.clone());
+                    if let Ok(Some(view)) = self.session.host.render_view(&canonical) {
+                        self.session.views.insert(canonical.clone(), view);
+                        invalidated.push(canonical);
+                    }
+                }
+                for contrib in &cat_source.manifest.contributions.desktop_widgets {
+                    let canonical = CanonicalId::new(extension_id.clone(), contrib.id.clone());
+                    if let Ok(Some(view)) = self.session.host.render_view(&canonical) {
+                        self.session.views.insert(canonical.clone(), view);
+                        invalidated.push(canonical);
+                    }
+                }
+            }
+        } else {
+            let _ = self.session.host.unregister(extension_id);
+            self.session.manifests.remove(extension_id);
+            self.session.runtime_ids.retain(|id| id != extension_id);
+            self.active_sources.remove(extension_id);
+        }
+
+        self.generation = self.generation.next();
+        let snapshot = self.build_snapshot(false);
+        Some(ExtensionUpdate {
+            host_generation: HostGeneration(0),
+            generation: self.generation,
+            snapshot: Some(snapshot),
+            effects: Vec::new(),
+            invalidated_views: invalidated,
+            circuit_notices: Vec::new(),
+        })
     }
 }
 
@@ -1265,6 +1707,8 @@ mod tests {
             ),
             catalog_mtime: None,
             active_sources: BTreeMap::new(),
+            active_dev_overrides: BTreeMap::new(),
+            dev_session_sequences: HashMap::new(),
             session,
             script_runtime: crate::script::ScriptRuntime::new(CatalogPaths::platform_default()),
             generation: ExtensionGeneration(1),
@@ -1666,5 +2110,184 @@ mod tests {
         assert!(update.snapshot.is_some());
         let snap = update.snapshot.unwrap();
         assert_eq!(snap.wasm_extensions[0].state, CircuitStateKind::HalfOpen);
+    }
+
+    #[test]
+    fn test_handle_dev_reload_success_and_atomic_swap() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let manifest_content = r#"
+            schema_version = 1
+            id = "org.shilpo.dev-test"
+            name = "Dev Test"
+            version = "0.1.0"
+            api_version = "0.1.0"
+            min_shilpo_version = "0.1.0"
+
+            [[contributions.bar_widgets]]
+            id = "widget1"
+            name = "Widget 1"
+        "#;
+        fs::write(root.join("extension.toml"), manifest_content).unwrap();
+        fs::write(root.join("extension.wasm"), b"WASM_DUMMY_BYTECODE").unwrap();
+
+        let clock = Arc::new(FakeMonotonicClock::new(Instant::now()));
+        let mut engine = ExtensionEngine::new_with_clock(
+            InMemoryRuntime::new(),
+            CatalogPaths::new(&root, &root),
+            clock,
+        )
+        .unwrap();
+
+        let initial_gen = engine.generation();
+        let ext_id = ExtensionId::new("org.shilpo.dev-test").unwrap();
+
+        let outcome = engine.handle_dev_reload(
+            "session-1".into(),
+            ext_id.clone(),
+            root.clone(),
+            root.join("extension.wasm"),
+            1,
+        );
+
+        assert_eq!(outcome.outcome, "applied");
+        assert_eq!(outcome.diagnostic_code, "OK");
+        assert!(outcome.engine_generation > initial_gen);
+        assert!(engine.active_dev_overrides.contains_key(&ext_id));
+        assert!(engine.session.manifests.contains_key(&ext_id));
+
+        let snapshot = engine.build_snapshot(false);
+        assert!(snapshot.dev_overrides.contains(&ext_id));
+
+        // Test unload
+        let unload_update = engine.handle_dev_unload("session-1", &ext_id);
+        assert!(unload_update.is_some());
+        assert!(!engine.active_dev_overrides.contains_key(&ext_id));
+        assert!(!engine.session.manifests.contains_key(&ext_id));
+    }
+
+    #[test]
+    fn test_handle_dev_reload_fencing_stale_build_sequence() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::write(
+            root.join("extension.toml"),
+            r#"
+            schema_version = 1
+            id = "org.shilpo.fence-test"
+            name = "Fence Test"
+            version = "0.1.0"
+            api_version = "0.1.0"
+            min_shilpo_version = "0.1.0"
+            "#,
+        )
+        .unwrap();
+        fs::write(root.join("extension.wasm"), b"WASM_DUMMY_BYTECODE").unwrap();
+
+        let clock = Arc::new(FakeMonotonicClock::new(Instant::now()));
+        let mut engine = ExtensionEngine::new_with_clock(
+            InMemoryRuntime::new(),
+            CatalogPaths::new(&root, &root),
+            clock,
+        )
+        .unwrap();
+
+        let ext_id = ExtensionId::new("org.shilpo.fence-test").unwrap();
+
+        // First build sequence 5
+        let res1 = engine.handle_dev_reload(
+            "session-fenced".into(),
+            ext_id.clone(),
+            root.clone(),
+            root.join("extension.wasm"),
+            5,
+        );
+        assert_eq!(res1.outcome, "applied");
+
+        // Stale build sequence 5 (duplicate)
+        let res2 = engine.handle_dev_reload(
+            "session-fenced".into(),
+            ext_id.clone(),
+            root.clone(),
+            root.join("extension.wasm"),
+            5,
+        );
+        assert_eq!(res2.outcome, "rejected");
+        assert_eq!(res2.diagnostic_code, "STALE_BUILD_SEQUENCE");
+
+        // Stale build sequence 4 (older)
+        let res3 = engine.handle_dev_reload(
+            "session-fenced".into(),
+            ext_id,
+            root.clone(),
+            root.join("extension.wasm"),
+            4,
+        );
+        assert_eq!(res3.outcome, "rejected");
+        assert_eq!(res3.diagnostic_code, "STALE_BUILD_SEQUENCE");
+    }
+
+    #[test]
+    fn test_handle_dev_reload_security_validations() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::write(
+            root.join("extension.toml"),
+            r#"
+            schema_version = 1
+            id = "org.shilpo.sec-test"
+            name = "Sec Test"
+            version = "0.1.0"
+            api_version = "0.1.0"
+            min_shilpo_version = "0.1.0"
+            "#,
+        )
+        .unwrap();
+        fs::write(root.join("extension.wasm"), b"WASM_DUMMY_BYTECODE").unwrap();
+
+        let clock = Arc::new(FakeMonotonicClock::new(Instant::now()));
+        let mut engine = ExtensionEngine::new_with_clock(
+            InMemoryRuntime::new(),
+            CatalogPaths::new(&root, &root),
+            clock,
+        )
+        .unwrap();
+
+        let ext_id = ExtensionId::new("org.shilpo.sec-test").unwrap();
+
+        // 1. Wrong extension ID
+        let wrong_id = ExtensionId::new("org.shilpo.wrong-id").unwrap();
+        let res = engine.handle_dev_reload(
+            "s1".into(),
+            wrong_id,
+            root.clone(),
+            root.join("extension.wasm"),
+            1,
+        );
+        assert_eq!(res.outcome, "rejected");
+        assert_eq!(res.diagnostic_code, "ID_MISMATCH");
+
+        // 2. Nonexistent artifact
+        let res = engine.handle_dev_reload(
+            "s2".into(),
+            ext_id.clone(),
+            root.clone(),
+            root.join("nonexistent.wasm"),
+            1,
+        );
+        assert_eq!(res.outcome, "rejected");
+        assert_eq!(res.diagnostic_code, "ARTIFACT_NOT_FOUND");
+
+        // 3. Artifact outside root
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        let res = engine.handle_dev_reload(
+            "s3".into(),
+            ext_id,
+            root.clone(),
+            outside.path().to_path_buf(),
+            1,
+        );
+        assert_eq!(res.outcome, "rejected");
+        assert_eq!(res.diagnostic_code, "ARTIFACT_OUTSIDE_ROOT");
     }
 }

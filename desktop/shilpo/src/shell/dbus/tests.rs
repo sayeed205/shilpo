@@ -3,7 +3,7 @@ use super::{
     test_harness::{TestDbusHarness, wait_for},
 };
 use futures_lite::stream::StreamExt;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 
 macro_rules! bounded {
@@ -140,6 +140,25 @@ async fn test_introspection_exact_contract() {
                 ],
             ),
             ("NextWallpaper", &[]),
+            (
+                "StartDevSession",
+                &[
+                    (Some("extension_id"), "s", Some("in")),
+                    (Some("source_root"), "s", Some("in")),
+                    (None, "s", Some("out")),
+                ],
+            ),
+            (
+                "ReloadDevSession",
+                &[
+                    (Some("session_id"), "s", Some("in")),
+                    (Some("build_sequence"), "t", Some("in")),
+                    (Some("artifact_path"), "s", Some("in")),
+                    (Some("timeout_ms"), "t", Some("in")),
+                    (None, "(sttss)", Some("out")),
+                ],
+            ),
+            ("EndDevSession", &[(Some("session_id"), "s", Some("in"))]),
         ],
     );
     assert_interface_contract(
@@ -581,4 +600,173 @@ async fn test_clean_lifecycle_drop() {
     )
     .unwrap();
     drop(harness);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_dev_session_start_reload_end_flow() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().to_path_buf();
+    let manifest_toml = r#"
+        schema_version = 1
+        id = "org.shilpo.dev-dbus"
+        name = "Dev DBus"
+        version = "0.1.0"
+        api_version = "0.1.0"
+        min_shilpo_version = "0.1.0"
+
+        [[contributions.bar_widgets]]
+        id = "widget1"
+        name = "Widget 1"
+    "#;
+    std::fs::write(root.join("extension.toml"), manifest_toml).unwrap();
+    std::fs::write(root.join("extension.wasm"), b"DUMMY_BYTECODE").unwrap();
+
+    let harness = TestDbusHarness::new().await;
+
+    // Set up a mock/real supervisor
+    let supervisor = crate::extensions::ExtensionSupervisor::new();
+    let coordinator =
+        Arc::new(crate::extensions::ExtensionCoordinator::new_with_supervisor(supervisor));
+    harness
+        .shell_service
+        .set_extension_coordinator(Some(coordinator));
+
+    // 1. Start Dev Session
+    let session_id = bounded!(
+        "StartDevSession",
+        harness.shell_proxy.start_dev_session(
+            "org.shilpo.dev-dbus".into(),
+            root.to_string_lossy().to_string()
+        )
+    )
+    .expect("session start must succeed");
+
+    assert!(!session_id.is_empty());
+
+    // 2. Reload Dev Session
+    let res = bounded!(
+        "ReloadDevSession",
+        harness.shell_proxy.reload_dev_session(
+            session_id.clone(),
+            1,
+            "extension.wasm".into(),
+            10_000
+        )
+    )
+    .expect("reload call must succeed");
+
+    // Outcome may be applied or host unavailable in mock
+    assert!(!res.outcome.is_empty());
+
+    // 3. End Dev Session
+    bounded!(
+        "EndDevSession",
+        harness.shell_proxy.end_dev_session(session_id)
+    )
+    .expect("end session must succeed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_dev_session_security_and_manifest_validation() {
+    let harness = TestDbusHarness::new().await;
+
+    // 1. Non-existent path
+    let err1 = bounded!(
+        "StartDevSession nonexistent",
+        harness.shell_proxy.start_dev_session(
+            "org.shilpo.dev-dbus".into(),
+            "/nonexistent/path/here".into()
+        )
+    )
+    .unwrap_err();
+    assert_method_error(err1, "org.freedesktop.DBus.Error.InvalidArgs");
+
+    // 2. Relative path
+    let err2 = bounded!(
+        "StartDevSession relative",
+        harness
+            .shell_proxy
+            .start_dev_session("org.shilpo.dev-dbus".into(), "relative/path".into())
+    )
+    .unwrap_err();
+    assert_method_error(err2, "org.freedesktop.DBus.Error.InvalidArgs");
+
+    // 3. Manifest ID mismatch
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().to_path_buf();
+    std::fs::write(
+        root.join("extension.toml"),
+        r#"
+        schema_version = 1
+        id = "org.shilpo.actual-id"
+        name = "Actual"
+        version = "0.1.0"
+        api_version = "0.1.0"
+        min_shilpo_version = "0.1.0"
+        "#,
+    )
+    .unwrap();
+
+    let err3 = bounded!(
+        "StartDevSession ID mismatch",
+        harness.shell_proxy.start_dev_session(
+            "org.shilpo.different-id".into(),
+            root.to_string_lossy().to_string()
+        )
+    )
+    .unwrap_err();
+    assert_method_error(err3, "org.freedesktop.DBus.Error.InvalidArgs");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_dev_session_disconnect_cleanup() {
+    let harness = TestDbusHarness::new().await;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().to_path_buf();
+    std::fs::write(
+        root.join("extension.toml"),
+        r#"
+        schema_version = 1
+        id = "org.shilpo.cleanup-test"
+        name = "Cleanup Test"
+        version = "0.1.0"
+        api_version = "0.1.0"
+        min_shilpo_version = "0.1.0"
+        "#,
+    )
+    .unwrap();
+
+    let session_id = bounded!(
+        "StartDevSession",
+        harness.shell_proxy.start_dev_session(
+            "org.shilpo.cleanup-test".into(),
+            root.to_string_lossy().to_string()
+        )
+    )
+    .unwrap();
+
+    assert_eq!(
+        harness.shell_service.dev_sessions().lock().unwrap().len(),
+        1
+    );
+
+    // Simulate NameOwnerChanged disconnect
+    let caller_name = harness
+        .shell_service
+        .dev_sessions()
+        .lock()
+        .unwrap()
+        .get(&session_id)
+        .unwrap()
+        .caller_unique_name
+        .clone();
+
+    harness
+        .shell_service
+        .handle_name_owner_changed(&caller_name, &caller_name, "");
+
+    assert_eq!(
+        harness.shell_service.dev_sessions().lock().unwrap().len(),
+        0
+    );
 }

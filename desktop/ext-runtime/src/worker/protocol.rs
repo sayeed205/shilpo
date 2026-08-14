@@ -101,6 +101,8 @@ pub struct ExtensionSnapshot {
     pub script_extensions: Arc<[ScriptExtensionStatus]>,
     #[serde(default)]
     pub wasm_extensions: Arc<[WasmExtensionStatus]>,
+    #[serde(default)]
+    pub dev_overrides: Arc<[ExtensionId]>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -159,7 +161,69 @@ pub enum ExtensionCommand {
         desired: Vec<ContributionInstance>,
     },
     SourcesChanged,
+    DevReload {
+        expected_host_gen: super::process::HostGeneration,
+        session_id: String,
+        extension_id: ExtensionId,
+        canonical_root: PathBuf,
+        artifact_path: PathBuf,
+        build_sequence: u64,
+    },
+    DevUnload {
+        expected_host_gen: super::process::HostGeneration,
+        session_id: String,
+        extension_id: ExtensionId,
+    },
     Shutdown,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DevReloadOutcome {
+    pub session_id: String,
+    pub build_sequence: u64,
+    pub outcome: String,
+    pub engine_generation: ExtensionGeneration,
+    pub diagnostic_code: String,
+    pub message: String,
+    pub update: Option<ExtensionUpdate>,
+}
+
+impl DevReloadOutcome {
+    pub fn applied(
+        session_id: impl Into<String>,
+        build_sequence: u64,
+        engine_generation: ExtensionGeneration,
+        message: impl Into<String>,
+        update: Option<ExtensionUpdate>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            build_sequence,
+            outcome: "applied".into(),
+            engine_generation,
+            diagnostic_code: "OK".into(),
+            message: message.into(),
+            update,
+        }
+    }
+
+    pub fn rejected(
+        session_id: impl Into<String>,
+        build_sequence: u64,
+        engine_generation: ExtensionGeneration,
+        diagnostic_code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            build_sequence,
+            outcome: "rejected".into(),
+            engine_generation,
+            diagnostic_code: diagnostic_code.into(),
+            message: message.into(),
+            update: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

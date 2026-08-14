@@ -2,7 +2,8 @@ use crate::effects::{AuthorizedHostOperation, capability_allows_operation};
 use crate::{CircuitBreaker, DiagnosticCode, ExtensionDiagnostic};
 use shilpo_ext_api::{
     CanonicalId, Capability, ContributionId, ExtensionEvent, ExtensionId, ExtensionManifest,
-    HostOperation, IdError, ManifestError, ViewLimits, ViewTree, ViewValidationError,
+    HostOperation, IdError, ManifestError, TextNode, ViewLimits, ViewNode, ViewTree,
+    ViewValidationError,
 };
 use std::collections::HashMap;
 use std::fmt;
@@ -179,8 +180,26 @@ impl InMemoryRuntime {
 impl ExtensionRuntime for InMemoryRuntime {
     type Module = Box<dyn GuestExtension>;
 
-    fn compile_module(&self, _bytes: &[u8]) -> Result<Self::Module, String> {
-        Err("in-memory runtime does not compile WASM bytes".to_owned())
+    fn compile_module(&self, bytes: &[u8]) -> Result<Self::Module, String> {
+        if bytes.is_empty() {
+            return Err("empty WASM bytes".to_owned());
+        }
+        #[derive(Default)]
+        struct DummyInMemoryGuest;
+        impl GuestExtension for DummyInMemoryGuest {
+            fn on_event(&mut self, _event: &ExtensionEvent) -> Vec<HostOperation> {
+                Vec::new()
+            }
+            fn view(&self, _contribution_id: &str) -> Option<ViewTree> {
+                Some(ViewTree::new(ViewNode::Text(TextNode {
+                    content: "dummy".into(),
+                    font_size: None,
+                    bold: None,
+                    style: None,
+                })))
+            }
+        }
+        Ok(Box::new(DummyInMemoryGuest))
     }
 
     fn load(

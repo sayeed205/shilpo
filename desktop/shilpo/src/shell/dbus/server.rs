@@ -33,11 +33,24 @@ pub enum ShellCommand {
     NextWallpaper,
 }
 
+/// Active dev session record.
+#[derive(Debug, Clone)]
+pub struct DevSession {
+    pub session_id: String,
+    pub caller_unique_name: String,
+    pub extension_id: shilpo_ext_api::ExtensionId,
+    pub canonical_source_root: std::path::PathBuf,
+    pub created_at: std::time::Instant,
+    pub last_build_sequence: u64,
+}
+
 /// D-Bus interface implementation for `org.shilpo.Shell`.
 #[derive(Clone)]
 pub struct ShellDbusService {
     mailbox_tx: mpsc::Sender<ShellCommand>,
     compositor_broker: Arc<Mutex<Option<Arc<CompositorCommandBroker>>>>,
+    extension_coordinator: Arc<Mutex<Option<Arc<crate::extensions::ExtensionCoordinator>>>>,
+    dev_sessions: Arc<Mutex<std::collections::HashMap<String, DevSession>>>,
     status: Arc<arc_swap::ArcSwap<ShellStatus>>,
     telemetry: Arc<arc_swap::ArcSwap<ShellTelemetry>>,
     last_workspace: Arc<Mutex<Option<(u64, u64, u64)>>>,
@@ -54,10 +67,51 @@ impl ShellDbusService {
         Self {
             mailbox_tx,
             compositor_broker,
+            extension_coordinator: Arc::new(Mutex::new(None)),
+            dev_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
             status,
             telemetry,
             last_workspace: Arc::new(Mutex::new(None)),
             last_theme: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn set_extension_coordinator(
+        &self,
+        coordinator: Option<Arc<crate::extensions::ExtensionCoordinator>>,
+    ) {
+        *self.extension_coordinator.lock().unwrap() = coordinator;
+    }
+
+    pub fn dev_sessions(&self) -> Arc<Mutex<std::collections::HashMap<String, DevSession>>> {
+        self.dev_sessions.clone()
+    }
+
+    pub fn handle_name_owner_changed(&self, name: &str, old_owner: &str, new_owner: &str) {
+        if new_owner.is_empty() {
+            let target = if !old_owner.is_empty() {
+                old_owner
+            } else {
+                name
+            };
+            let to_unload: Vec<DevSession> = {
+                let mut sessions = self.dev_sessions.lock().unwrap();
+                let mut removed = Vec::new();
+                sessions.retain(|_id, session| {
+                    if session.caller_unique_name == target || session.caller_unique_name == name {
+                        removed.push(session.clone());
+                        false
+                    } else {
+                        true
+                    }
+                });
+                removed
+            };
+            for session in to_unload {
+                if let Some(coordinator) = self.extension_coordinator.lock().unwrap().clone() {
+                    let _ = coordinator.unload_dev(session.session_id, session.extension_id);
+                }
+            }
         }
     }
 
@@ -484,6 +538,253 @@ impl ShellDbusService {
         );
         let _enter = _span.enter();
         self.send_command(ShellCommand::NextWallpaper)
+    }
+
+    async fn start_dev_session(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        extension_id: String,
+        source_root: String,
+    ) -> zbus::fdo::Result<String> {
+        let _span = tracing::info_span!(
+            target: "shilpo_profile",
+            "dbus_call",
+            destination = "org.shilpo.Shell",
+            operation = "start_dev_session",
+            outcome = tracing::field::Empty
+        );
+        let _enter = _span.enter();
+
+        let sender = header
+            .sender()
+            .map(|s| s.as_str().to_owned())
+            .unwrap_or_else(|| "p2p-caller".to_string());
+
+        let ext_id = shilpo_ext_api::ExtensionId::new(&extension_id)
+            .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("invalid extension ID: {e}")))?;
+
+        let path = std::path::PathBuf::from(&source_root);
+        if !path.is_absolute() {
+            return Err(zbus::fdo::Error::InvalidArgs(
+                "source_root must be an absolute path".into(),
+            ));
+        }
+
+        let canonical_root = path
+            .canonicalize()
+            .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("invalid source_root: {e}")))?;
+
+        if !canonical_root.is_dir() {
+            return Err(zbus::fdo::Error::InvalidArgs(
+                "source_root must be a directory".into(),
+            ));
+        }
+
+        let manifest_path = canonical_root.join("extension.toml");
+        let manifest_str = std::fs::read_to_string(&manifest_path).map_err(|e| {
+            zbus::fdo::Error::InvalidArgs(format!("failed to read extension.toml: {e}"))
+        })?;
+
+        let manifest =
+            shilpo_ext_api::ExtensionManifest::from_toml(&manifest_str).map_err(|e| {
+                zbus::fdo::Error::InvalidArgs(format!("invalid extension manifest: {e}"))
+            })?;
+
+        if manifest.id != ext_id {
+            return Err(zbus::fdo::Error::InvalidArgs(format!(
+                "manifest declares ID '{}' but requested '{}'",
+                manifest.id, ext_id
+            )));
+        }
+
+        let mut sessions = self.dev_sessions.lock().unwrap();
+        if sessions.len() >= 64 {
+            return Err(zbus::fdo::Error::LimitsExceeded(
+                "maximum concurrent dev sessions reached (64)".into(),
+            ));
+        }
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        sessions.insert(
+            session_id.clone(),
+            DevSession {
+                session_id: session_id.clone(),
+                caller_unique_name: sender,
+                extension_id: ext_id,
+                canonical_source_root: canonical_root,
+                created_at: std::time::Instant::now(),
+                last_build_sequence: 0,
+            },
+        );
+
+        tracing::Span::current().record("outcome", "success");
+        Ok(session_id)
+    }
+
+    async fn reload_dev_session(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        session_id: String,
+        build_sequence: u64,
+        artifact_path: String,
+        timeout_ms: u64,
+    ) -> zbus::fdo::Result<super::types::DevReloadResult> {
+        let _span = tracing::info_span!(
+            target: "shilpo_profile",
+            "dbus_call",
+            destination = "org.shilpo.Shell",
+            operation = "reload_dev_session",
+            outcome = tracing::field::Empty
+        );
+        let _enter = _span.enter();
+
+        let sender = header
+            .sender()
+            .map(|s| s.as_str().to_owned())
+            .unwrap_or_else(|| "p2p-caller".to_string());
+
+        let session = {
+            let sessions = self.dev_sessions.lock().unwrap();
+            sessions.get(&session_id).cloned().ok_or_else(|| {
+                zbus::fdo::Error::InvalidArgs(format!("dev session '{session_id}' not found"))
+            })?
+        };
+
+        if session.caller_unique_name != sender {
+            return Err(zbus::fdo::Error::AccessDenied(
+                "caller unique name does not match session owner".into(),
+            ));
+        }
+
+        let path = std::path::Path::new(&artifact_path);
+        if path.is_absolute() {
+            return Err(zbus::fdo::Error::InvalidArgs(
+                "artifact_path must be relative to the session source root".into(),
+            ));
+        }
+        let artifact_full = session.canonical_source_root.join(path);
+
+        let canonical_artifact = match artifact_full.canonicalize() {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(super::types::DevReloadResult {
+                    outcome: "rejected".into(),
+                    host_generation: 0,
+                    engine_generation: 0,
+                    diagnostic_code: "ARTIFACT_NOT_FOUND".into(),
+                    message: format!("artifact not found: {e}"),
+                });
+            }
+        };
+
+        if !canonical_artifact.starts_with(&session.canonical_source_root) {
+            return Ok(super::types::DevReloadResult {
+                outcome: "rejected".into(),
+                host_generation: 0,
+                engine_generation: 0,
+                diagnostic_code: "ARTIFACT_OUTSIDE_ROOT".into(),
+                message: format!(
+                    "artifact '{}' is outside source root '{}'",
+                    canonical_artifact.display(),
+                    session.canonical_source_root.display()
+                ),
+            });
+        }
+
+        if !canonical_artifact.is_file() {
+            return Ok(super::types::DevReloadResult {
+                outcome: "rejected".into(),
+                host_generation: 0,
+                engine_generation: 0,
+                diagnostic_code: "ARTIFACT_NOT_FILE".into(),
+                message: format!(
+                    "artifact '{}' is not a regular file",
+                    canonical_artifact.display()
+                ),
+            });
+        }
+
+        let coordinator = self
+            .extension_coordinator
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| {
+                zbus::fdo::Error::Failed("extension coordinator is unavailable".into())
+            })?;
+
+        let sess_id = session.session_id.clone();
+        let ext_id = session.extension_id.clone();
+        let src_root = session.canonical_source_root.clone();
+
+        let outcome = coordinator
+            .reload_dev(
+                sess_id,
+                ext_id,
+                src_root,
+                canonical_artifact,
+                build_sequence,
+                std::time::Duration::from_millis(timeout_ms.clamp(1, 86_400_000)),
+            )
+            .map_err(|error| {
+                if error == "extension command queue full" {
+                    zbus::fdo::Error::LimitsExceeded(error)
+                } else {
+                    zbus::fdo::Error::Failed(error)
+                }
+            })?;
+
+        if outcome.outcome == "applied" {
+            let mut sessions = self.dev_sessions.lock().unwrap();
+            if let Some(s) = sessions.get_mut(&session.session_id) {
+                s.last_build_sequence = build_sequence;
+            }
+        }
+
+        let result = super::types::DevReloadResult::from(outcome);
+        tracing::Span::current().record("outcome", result.outcome.as_str());
+        Ok(result)
+    }
+
+    async fn end_dev_session(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        session_id: String,
+    ) -> zbus::fdo::Result<()> {
+        let _span = tracing::info_span!(
+            target: "shilpo_profile",
+            "dbus_call",
+            destination = "org.shilpo.Shell",
+            operation = "end_dev_session",
+            outcome = tracing::field::Empty
+        );
+        let _enter = _span.enter();
+
+        let sender = header
+            .sender()
+            .map(|s| s.as_str().to_owned())
+            .unwrap_or_else(|| "p2p-caller".to_string());
+
+        let removed = {
+            let mut sessions = self.dev_sessions.lock().unwrap();
+            if let Some(s) = sessions.get(&session_id)
+                && s.caller_unique_name != sender
+            {
+                return Err(zbus::fdo::Error::AccessDenied(
+                    "caller does not match session owner".into(),
+                ));
+            }
+            sessions.remove(&session_id)
+        };
+
+        if let Some(session) = removed
+            && let Some(coordinator) = self.extension_coordinator.lock().unwrap().clone()
+        {
+            let _ = coordinator.unload_dev(session.session_id, session.extension_id);
+        }
+
+        tracing::Span::current().record("outcome", "success");
+        Ok(())
     }
 
     #[zbus(signal)]
