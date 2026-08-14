@@ -274,6 +274,14 @@ pub enum ThemeWallpaperAction {
 pub enum ExtCommands {
     /// Display extension host runtime status, supervisor state, and process diagnostics
     Status,
+    /// Build extension WebAssembly component
+    Build {
+        /// Path to extension directory (defaults to current directory)
+        path: Option<PathBuf>,
+        /// Build component with release optimizations
+        #[arg(long)]
+        release: bool,
+    },
     /// Inspect extension manifest, component, and assets
     Check { path: Option<PathBuf> },
     /// Pack extension directory into .shilpo-ext bundle

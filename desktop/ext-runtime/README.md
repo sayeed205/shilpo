@@ -166,17 +166,53 @@ Extensions that only provide static data may omit `Cargo.toml`, `src/`, and
 
 ### Prerequisites
 
-- Rust installed through `rustup`;
-- the `wasm32-wasip2` target;
-- a Shilpo build that includes the extension host and CLI;
-- `wit-bindgen` for the current low-level Rust guest interface.
+#### For Rust Extensions
 
-```bash
-rustup target add wasm32-wasip2
+- Rust installed through `rustup`;
+- the `wasm32-wasip2` target:
+  ```bash
+  rustup target add wasm32-wasip2
+  ```
+- `cargo-component`:
+  ```bash
+  cargo install cargo-component
+  ```
+- `wit-bindgen` for the low-level Rust guest interface.
+
+#### For TypeScript Extensions
+
+- Node.js (v18+);
+- Pinned project-local JCO executable installed in `node_modules`:
+  ```bash
+  npm install --save-dev @bytecodealliance/jco
+  ```
+
+### Project Configuration (`shilpo-ext.json`)
+
+Every project must contain `extension.toml`. To explicitly configure the project language and entry point, add an optional `shilpo-ext.json` at the project root:
+
+```json
+{
+  "language": "typescript",
+  "entry": "src/extension.ts"
+}
 ```
 
-Use [`examples/world-clock`](../../examples/world-clock) as the working scaffold. The CLI does not currently provide an
-extension scaffolding command.
+or:
+
+```json
+{
+  "language": "rust",
+  "crate": "."
+}
+```
+
+If `shilpo-ext.json` is omitted:
+- Projects containing `src/extension.ts` (and no root `Cargo.toml`) are inferred as TypeScript.
+- Projects containing `Cargo.toml` (and no `src/extension.ts`) are inferred as Rust.
+- If both or neither match, `shilpo-ext.json` is required to disambiguate.
+
+The output WASM path is always read from `[library].path` in `extension.toml`.
 
 ### Manifest
 
@@ -365,17 +401,24 @@ the extension catalog.
 The generated schema is the machine-readable authoring contract. The tests compare it with the checked-in fixture to
 prevent an accidental schema change.
 
-### Validate, build, and package
+### Build, check, and package
+
+The standard extension authoring lifecycle consists of `build` → `check` → `pack`:
 
 ```bash
-cargo test
-cargo build --target wasm32-wasip2 --release
-cp target/wasm32-wasip2/release/world_clock.wasm extension.wasm
+# 1. Build TypeScript or Rust sources into the [library].path component
+shilpo ext build . --release
+
+# 2. Inspect manifest, component, and assets
 shilpo ext check .
+
+# 3. Pack extension directory into .shilpo-ext bundle
 shilpo ext pack .
 ```
 
-Build and copy the component to the manifest's `library.path` before running `check`. `check` validates:
+`build` compiles the configured language sources into a temporary destination file under the component directory and atomically activates it at `[library].path` upon success. On failure, any temporary artifact is removed and the previously successful component is preserved.
+
+`check` validates:
 
 - manifest syntax and IDs;
 - schema and interface compatibility;

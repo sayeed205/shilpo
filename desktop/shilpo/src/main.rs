@@ -789,6 +789,7 @@ async fn main() {
             let ext = ExtAdapter::new();
             let op = match command {
                 ExtCommands::Status => ext.status(),
+                ExtCommands::Build { path, release } => ext.build(path.as_deref(), release),
                 ExtCommands::Check { path } => ext.check(path.as_deref()),
                 ExtCommands::Pack { path, output } => ext.pack(path.as_deref(), output.as_deref()),
                 ExtCommands::Dev { path } => ext.dev(&path),
