@@ -262,6 +262,7 @@ pub fn run_extension_host() {
             snapshot: Some(initial_update),
             effects: Vec::new(),
             invalidated_views: Vec::new(),
+            circuit_notices: Vec::new(),
         }),
     };
 
@@ -302,7 +303,12 @@ pub fn run_extension_host() {
     });
 
     loop {
-        let msg = match command_rx.recv_timeout(Duration::from_millis(20)) {
+        let timeout = engine
+            .next_tick_deadline()
+            .map_or(Duration::from_millis(20), |d| {
+                d.min(Duration::from_millis(20))
+            });
+        let msg = match command_rx.recv_timeout(timeout) {
             Ok(Ok(message)) => message,
             Ok(Err(ProcessCodecError::Io(error)))
                 if error.kind() == io::ErrorKind::UnexpectedEof =>
@@ -315,7 +321,7 @@ pub fn run_extension_host() {
                 break;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if let Some(update) = engine.tick_scripts() {
+                if let Some(update) = engine.tick() {
                     let notification = WorkerMessage {
                         protocol_version: PROTOCOL_VERSION,
                         host_generation,

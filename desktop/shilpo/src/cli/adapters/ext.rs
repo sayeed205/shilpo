@@ -76,14 +76,98 @@ impl ExtAdapter {
                     .get("engine_generation")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
-                let human = format!(
-                    "Extension Host Status:\n  State: {}\n  Host Generation: {}\n  Engine Generation: {}",
-                    state_str, host_gen, engine_gen
-                );
+                let mut human_lines = vec![
+                    "Extension Host Status:".to_string(),
+                    format!("  State: {state_str}"),
+                    format!("  Host Generation: {host_gen}"),
+                    format!("  Engine Generation: {engine_gen}"),
+                ];
+
+                let wasm_extensions = ext_status.get("wasm_extensions").and_then(|v| v.as_array());
+
+                if let Some(wasms) = wasm_extensions
+                    && !wasms.is_empty()
+                {
+                    human_lines.push(String::new());
+                    human_lines.push(format!("WASM Extensions ({}):", wasms.len()));
+                    for ext in wasms {
+                        let id = ext.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let state = ext
+                            .get("state")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("closed");
+                        let trip_count =
+                            ext.get("trip_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let desc = match state {
+                            "closed" => {
+                                let failures = ext
+                                    .get("consecutive_failures")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                if failures > 0 {
+                                    format!("closed, {failures} failure(s)")
+                                } else {
+                                    "closed, healthy".to_string()
+                                }
+                            }
+                            "open" => {
+                                let retry_ms = ext
+                                    .get("retry_after_ms")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let secs = retry_ms.div_ceil(1000);
+                                format!("open, retrying in {secs}s (trip {trip_count})")
+                            }
+                            "half_open" => {
+                                let successes = ext
+                                    .get("consecutive_successes")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                format!(
+                                    "half_open, probing ({successes}/3 successes, trip {trip_count})"
+                                )
+                            }
+                            "permanently_disabled" => {
+                                format!(
+                                    "permanently_disabled, failed after {trip_count} trip cycles"
+                                )
+                            }
+                            other => other.to_string(),
+                        };
+                        human_lines.push(format!("  {id} [{desc}]"));
+                    }
+                }
+
+                let script_extensions = ext_status
+                    .get("script_extensions")
+                    .and_then(|v| v.as_array());
+
+                if let Some(scripts) = script_extensions
+                    && !scripts.is_empty()
+                {
+                    human_lines.push(String::new());
+                    human_lines.push(format!("Script Extensions ({}):", scripts.len()));
+                    for script in scripts {
+                        let id = script
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let status = script
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let version = script
+                            .get("version")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        human_lines.push(format!("  {id} (v{version}) [{status}]"));
+                    }
+                }
+
                 ExtOpResult {
                     success: true,
                     data: ext_status,
-                    human_message: human,
+                    human_message: human_lines.join("\n"),
                     warnings: Vec::new(),
                     exit_code: 0,
                 }
@@ -949,5 +1033,108 @@ mod tests {
             assert!(result.human_message.contains("not managed by the catalog"));
             assert!(result.human_message.contains(operation));
         }
+    }
+
+    #[test]
+    fn test_status_output_formats_all_circuit_states() {
+        let telemetry_json = serde_json::json!({
+            "lifecycle": "ready",
+            "host_generation": 1,
+            "engine_generation": 5,
+            "wasm_extensions": [
+                {
+                    "id": "io.github.test.healthy",
+                    "runtime_kind": "wasm",
+                    "state": "closed",
+                    "consecutive_failures": 0,
+                    "trip_count": 0
+                },
+                {
+                    "id": "io.github.test.retrying",
+                    "runtime_kind": "wasm",
+                    "state": "open",
+                    "trip_count": 2,
+                    "retry_after_ms": 45000
+                },
+                {
+                    "id": "io.github.test.probing",
+                    "runtime_kind": "wasm",
+                    "state": "half_open",
+                    "consecutive_successes": 1,
+                    "trip_count": 1
+                },
+                {
+                    "id": "io.github.test.dead",
+                    "runtime_kind": "wasm",
+                    "state": "permanently_disabled",
+                    "trip_count": 4
+                }
+            ],
+            "script_extensions": [
+                {
+                    "id": "local.script.test",
+                    "name": "Test Script",
+                    "version": "1.0.0",
+                    "status": "ready"
+                }
+            ]
+        });
+
+        let ext_status = telemetry_json;
+        let state_str = ext_status.get("lifecycle").unwrap().as_str().unwrap();
+        let host_gen = ext_status.get("host_generation").unwrap().as_u64().unwrap();
+        let engine_gen = ext_status
+            .get("engine_generation")
+            .unwrap()
+            .as_u64()
+            .unwrap();
+
+        let mut human_lines = vec![
+            "Extension Host Status:".to_string(),
+            format!("  State: {state_str}"),
+            format!("  Host Generation: {host_gen}"),
+            format!("  Engine Generation: {engine_gen}"),
+        ];
+
+        let wasm_extensions = ext_status
+            .get("wasm_extensions")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        human_lines.push(String::new());
+        human_lines.push(format!("WASM Extensions ({}):", wasm_extensions.len()));
+        for ext in wasm_extensions {
+            let id = ext.get("id").unwrap().as_str().unwrap();
+            let state = ext.get("state").unwrap().as_str().unwrap();
+            let trip_count = ext.get("trip_count").unwrap().as_u64().unwrap();
+            let desc = match state {
+                "closed" => "closed, healthy".to_string(),
+                "open" => {
+                    let retry_ms = ext.get("retry_after_ms").unwrap().as_u64().unwrap();
+                    let secs = retry_ms.div_ceil(1000);
+                    format!("open, retrying in {secs}s (trip {trip_count})")
+                }
+                "half_open" => {
+                    let successes = ext.get("consecutive_successes").unwrap().as_u64().unwrap();
+                    format!("half_open, probing ({successes}/3 successes, trip {trip_count})")
+                }
+                "permanently_disabled" => {
+                    format!("permanently_disabled, failed after {trip_count} trip cycles")
+                }
+                other => other.to_string(),
+            };
+            human_lines.push(format!("  {id} [{desc}]"));
+        }
+
+        let human = human_lines.join("\n");
+        assert!(human.contains("io.github.test.healthy [closed, healthy]"));
+        assert!(human.contains("io.github.test.retrying [open, retrying in 45s (trip 2)]"));
+        assert!(
+            human.contains("io.github.test.probing [half_open, probing (1/3 successes, trip 1)]")
+        );
+        assert!(
+            human
+                .contains("io.github.test.dead [permanently_disabled, failed after 4 trip cycles]")
+        );
     }
 }

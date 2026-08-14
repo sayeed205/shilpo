@@ -13,3 +13,5 @@
 - **Search Provider Contribution (`SearchProviderContribution`)**: WASM extension contribution declaring a search provider that feeds results to the Shell's Overview and search UI. Trusted local scripts cannot provide search providers.
 - **Script Runtime (`ScriptRuntime`)**: Deep worker-owned module that validates script bundles, schedules poll/stream
   tasks, owns process groups, decodes bounded records, retains last-valid views, and projects script status.
+- **Extension Circuit Breaker (`CircuitBreaker`)**: Session-local WASM failure state machine with bounded exponential
+  recovery, half-open probes, typed status projection, and host-owned transition notices.

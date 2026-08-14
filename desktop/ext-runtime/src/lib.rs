@@ -23,7 +23,11 @@ pub use catalog::{
     UpdateState, default_extension_config_dir, default_extension_data_dir, generate_signing_key,
     package_signature_path, sign_package, sign_registry_index, sign_release,
 };
-pub use circuit_breaker::{CircuitBreaker, DiagnosticCode, DiagnosticLevel, ExtensionDiagnostic};
+pub use circuit_breaker::{
+    CircuitBreaker, CircuitBreakerPolicy, CircuitNotice, CircuitNoticeKind, CircuitStateKind,
+    DiagnosticCode, DiagnosticLevel, ExtensionDiagnostic, FakeMonotonicClock, MonotonicClock,
+    SystemMonotonicClock, WasmExtensionStatus,
+};
 pub use cli::{
     DevelopmentRegistration, ExtensionCli, ExtensionCliResult, default_extension_state_dir,
     development_registrations, follow_log, source_command, write_signing_key,
@@ -678,7 +682,7 @@ mod tests {
 
     #[test]
     fn circuit_breaker_trips_after_max_failures() {
-        let mut cb = CircuitBreaker::new(2);
+        let mut cb = CircuitBreaker::new_with_threshold(2);
         let id = ExtensionId::new("io.github.test.failing").unwrap();
 
         assert!(!cb.is_tripped(&id));

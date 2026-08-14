@@ -121,6 +121,20 @@ pub trait ExtensionRuntime {
         self.replace(extension_id, module, budget)
     }
 
+    /// Validates that a compiled module can be instantiated with its grants without
+    /// changing the active runtime instance. This is the reload transaction's
+    /// preflight seam; adapters that cannot stage an instance may keep the default.
+    fn validate_module_with_capabilities(
+        &mut self,
+        _extension_id: &ExtensionId,
+        _module: &Self::Module,
+        _budget: RuntimeBudget,
+        _declared_capabilities: Vec<Capability>,
+        _granted_capabilities: Vec<Capability>,
+    ) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+
     fn load(
         &mut self,
         extension_id: &ExtensionId,
@@ -298,6 +312,8 @@ pub struct DispatchResult {
     pub rejected: Vec<HostOperation>,
 }
 
+use crate::circuit_breaker::{CircuitBreakerPolicy, MonotonicClock};
+
 pub struct ExtensionHost<R> {
     runtime: R,
     registrations: HashMap<ExtensionId, Registration>,
@@ -331,6 +347,7 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             let _ = self.runtime.unload(&id);
         }
         self.registrations.clear();
+        self.circuit_breaker.clear();
     }
 
     pub fn with_view_limits(mut self, limits: ViewLimits) -> Self {
@@ -344,8 +361,30 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
     }
 
     pub fn with_failure_threshold(mut self, max_consecutive_failures: u32) -> Self {
-        self.circuit_breaker = CircuitBreaker::new(max_consecutive_failures);
+        self.circuit_breaker = CircuitBreaker::new_with_threshold(max_consecutive_failures);
         self
+    }
+
+    pub fn with_circuit_breaker_policy(mut self, policy: CircuitBreakerPolicy) -> Self {
+        self.circuit_breaker = self.circuit_breaker.with_policy(policy);
+        self
+    }
+
+    pub fn with_clock(mut self, clock: Arc<dyn MonotonicClock>) -> Self {
+        self.circuit_breaker = self.circuit_breaker.with_clock(clock);
+        self
+    }
+
+    pub fn circuit_breaker(&self) -> &CircuitBreaker {
+        &self.circuit_breaker
+    }
+
+    pub fn circuit_breaker_mut(&mut self) -> &mut CircuitBreaker {
+        &mut self.circuit_breaker
+    }
+
+    pub fn runtime_budget(&self) -> RuntimeBudget {
+        self.runtime_budget
     }
 
     pub fn register(
@@ -385,7 +424,8 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             return Err(error.into());
         }
         self.registrations
-            .insert(id, Registration { manifest, grants });
+            .insert(id.clone(), Registration { manifest, grants });
+        self.circuit_breaker.reset(&id);
         Ok(())
     }
 
@@ -398,6 +438,7 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             return Err(error.into());
         }
         self.registrations.remove(id);
+        self.circuit_breaker.remove(id);
         Ok(())
     }
 
@@ -427,17 +468,19 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             }
         }
 
-        self.runtime
-            .replace_with_capabilities(
-                &id,
-                module,
-                self.runtime_budget,
-                manifest.capabilities.clone(),
-                grants.clone(),
-            )
-            .map_err(HostError::Runtime)?;
+        if let Err(error) = self.runtime.replace_with_capabilities(
+            &id,
+            module,
+            self.runtime_budget,
+            manifest.capabilities.clone(),
+            grants.clone(),
+        ) {
+            self.record_runtime_failure(&id, &error);
+            return Err(HostError::Runtime(error));
+        }
         self.registrations
-            .insert(id, Registration { manifest, grants });
+            .insert(id.clone(), Registration { manifest, grants });
+        self.circuit_breaker.reset(&id);
         Ok(())
     }
 
@@ -446,11 +489,14 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
         extension_id: &ExtensionId,
         event: &ExtensionEvent,
     ) -> Result<DispatchResult, HostError> {
-        self.ensure_enabled(extension_id)?;
-        let registration = self
-            .registrations
-            .get(extension_id)
-            .ok_or_else(|| HostError::NotRegistered(extension_id.clone()))?;
+        let _permit = self.circuit_breaker.acquire_permit(extension_id)?;
+        let registration = match self.registrations.get(extension_id) {
+            Some(r) => r,
+            None => {
+                self.circuit_breaker.release_probe(extension_id);
+                return Err(HostError::NotRegistered(extension_id.clone()));
+            }
+        };
 
         if let Some(event_kind) = event.subscription_kind() {
             let subscribed = registration
@@ -468,6 +514,7 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
                 .iter()
                 .any(|capability| capability.allows_event(event_kind));
             if !(subscribed && declared && granted) {
+                self.circuit_breaker.release_probe(extension_id);
                 return Ok(DispatchResult::default());
             }
         }
@@ -476,12 +523,19 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
             contribution_id, ..
         } = event
         {
-            let contribution_id = ContributionId::new(contribution_id.clone())?;
+            let contribution_id = match ContributionId::new(contribution_id.clone()) {
+                Ok(id) => id,
+                Err(err) => {
+                    self.circuit_breaker.release_probe(extension_id);
+                    return Err(err.into());
+                }
+            };
             if !registration
                 .manifest
                 .contributions
                 .contains(&contribution_id)
             {
+                self.circuit_breaker.release_probe(extension_id);
                 return Err(HostError::UnknownContribution(CanonicalId::new(
                     extension_id.clone(),
                     contribution_id,
@@ -522,16 +576,22 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
     }
 
     pub fn render_view(&mut self, canonical: &CanonicalId) -> Result<Option<ViewTree>, HostError> {
-        self.ensure_enabled(&canonical.extension_id)?;
-        let registration = self
-            .registrations
-            .get(&canonical.extension_id)
-            .ok_or_else(|| HostError::NotRegistered(canonical.extension_id.clone()))?;
+        let _permit = self
+            .circuit_breaker
+            .acquire_permit(&canonical.extension_id)?;
+        let registration = match self.registrations.get(&canonical.extension_id) {
+            Some(r) => r,
+            None => {
+                self.circuit_breaker.release_probe(&canonical.extension_id);
+                return Err(HostError::NotRegistered(canonical.extension_id.clone()));
+            }
+        };
         if !registration
             .manifest
             .contributions
             .contains(&canonical.contribution_id)
         {
+            self.circuit_breaker.release_probe(&canonical.extension_id);
             return Err(HostError::UnknownContribution(canonical.clone()));
         }
         let view = match self.runtime.view(
@@ -574,15 +634,7 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
     }
 
     pub fn is_disabled(&self, id: &ExtensionId) -> bool {
-        self.circuit_breaker.is_tripped(id)
-    }
-
-    fn ensure_enabled(&self, id: &ExtensionId) -> Result<(), HostError> {
-        if self.circuit_breaker.is_tripped(id) {
-            Err(HostError::Disabled(id.clone()))
-        } else {
-            Ok(())
-        }
+        self.circuit_breaker.is_disabled(id)
     }
 
     fn record_runtime_failure(&mut self, id: &ExtensionId, error: &RuntimeError) {
@@ -663,5 +715,214 @@ fn authorize_operation(
                 Err(operation)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuit_breaker::{CircuitStateKind, FakeMonotonicClock};
+    use std::time::Instant;
+
+    struct ConfigurableFailureRuntime {
+        failure_kind: Option<RuntimeFailureKind>,
+    }
+
+    impl ExtensionRuntime for ConfigurableFailureRuntime {
+        type Module = ();
+
+        fn compile_module(&self, _bytes: &[u8]) -> Result<Self::Module, String> {
+            Ok(())
+        }
+
+        fn load(
+            &mut self,
+            _id: &ExtensionId,
+            _m: Self::Module,
+            _b: RuntimeBudget,
+        ) -> Result<(), RuntimeError> {
+            if let Some(RuntimeFailureKind::Load) = self.failure_kind {
+                return Err(RuntimeError::with_kind(
+                    RuntimeFailureKind::Load,
+                    "simulated load failure",
+                ));
+            }
+            Ok(())
+        }
+
+        fn replace(
+            &mut self,
+            _id: &ExtensionId,
+            _m: Self::Module,
+            _b: RuntimeBudget,
+        ) -> Result<(), RuntimeError> {
+            if let Some(RuntimeFailureKind::Load) = self.failure_kind {
+                return Err(RuntimeError::with_kind(
+                    RuntimeFailureKind::Load,
+                    "simulated replace failure",
+                ));
+            }
+            Ok(())
+        }
+
+        fn unload(&mut self, _id: &ExtensionId) -> Result<(), RuntimeError> {
+            Ok(())
+        }
+
+        fn dispatch(
+            &mut self,
+            _id: &ExtensionId,
+            _event: &ExtensionEvent,
+            _b: RuntimeBudget,
+        ) -> Result<Vec<HostOperation>, RuntimeError> {
+            if let Some(kind) = self.failure_kind {
+                return Err(RuntimeError::with_kind(kind, "simulated dispatch failure"));
+            }
+            Ok(Vec::new())
+        }
+
+        fn view(
+            &mut self,
+            _id: &ExtensionId,
+            _cid: &str,
+            _b: RuntimeBudget,
+        ) -> Result<Option<ViewTree>, RuntimeError> {
+            if let Some(kind) = self.failure_kind {
+                return Err(RuntimeError::with_kind(kind, "simulated view failure"));
+            }
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn test_failure_classification_counting_and_rejection() {
+        let kinds = [
+            (RuntimeFailureKind::Trap, DiagnosticCode::RuntimeTrap),
+            (RuntimeFailureKind::Timeout, DiagnosticCode::RuntimeTimeout),
+            (
+                RuntimeFailureKind::FuelExhausted,
+                DiagnosticCode::FuelExhausted,
+            ),
+            (RuntimeFailureKind::MemoryLimit, DiagnosticCode::MemoryLimit),
+            (
+                RuntimeFailureKind::InvalidOutput,
+                DiagnosticCode::InvalidOutput,
+            ),
+        ];
+
+        for (kind, expected_code) in kinds {
+            let clock = Arc::new(FakeMonotonicClock::new(Instant::now()));
+            let mut host = ExtensionHost::new(ConfigurableFailureRuntime {
+                failure_kind: Some(kind),
+            })
+            .with_failure_threshold(3)
+            .with_clock(clock);
+
+            let manifest = ExtensionManifest::from_toml(
+                r#"
+                id = "io.github.test.fail"
+                name = "Fail"
+                version = "1.0.0"
+                "#,
+            )
+            .unwrap();
+            let id = manifest.id.clone();
+            host.register(manifest, (), vec![]).unwrap();
+
+            // 1st failure
+            assert!(
+                host.dispatch_event(&id, &ExtensionEvent::ShellStarted)
+                    .is_err()
+            );
+            assert_eq!(
+                host.circuit_breaker().status(&id).consecutive_failures,
+                Some(1)
+            );
+
+            // 2nd failure
+            assert!(
+                host.dispatch_event(&id, &ExtensionEvent::ShellStarted)
+                    .is_err()
+            );
+            assert_eq!(
+                host.circuit_breaker().status(&id).consecutive_failures,
+                Some(2)
+            );
+
+            // 3rd failure -> Opens circuit
+            assert!(
+                host.dispatch_event(&id, &ExtensionEvent::ShellStarted)
+                    .is_err()
+            );
+            assert_eq!(
+                host.circuit_breaker().status(&id).state,
+                CircuitStateKind::Open
+            );
+
+            // Blocked calls do NOT increment failures
+            assert!(matches!(
+                host.dispatch_event(&id, &ExtensionEvent::ShellStarted),
+                Err(HostError::Disabled(_))
+            ));
+            assert_eq!(host.circuit_breaker().status(&id).trip_count, 1);
+            assert_eq!(
+                host.diagnostics().last().unwrap().code,
+                DiagnosticCode::CircuitOpen
+            );
+            assert!(host.diagnostics().iter().any(|d| d.code == expected_code));
+        }
+    }
+
+    #[test]
+    fn test_successful_replacement_resets_circuit_while_failed_replacement_retains_state() {
+        let clock = Arc::new(FakeMonotonicClock::new(Instant::now()));
+        let mut host = ExtensionHost::new(ConfigurableFailureRuntime {
+            failure_kind: Some(RuntimeFailureKind::Trap),
+        })
+        .with_failure_threshold(1)
+        .with_clock(clock);
+
+        let manifest = ExtensionManifest::from_toml(
+            r#"
+            id = "io.github.test.replace"
+            name = "Replace"
+            version = "1.0.0"
+            "#,
+        )
+        .unwrap();
+        let id = manifest.id.clone();
+        host.register(manifest.clone(), (), vec![]).unwrap();
+
+        // Dispatch fails -> Tripped to Open
+        assert!(
+            host.dispatch_event(&id, &ExtensionEvent::ShellStarted)
+                .is_err()
+        );
+        assert_eq!(
+            host.circuit_breaker().status(&id).state,
+            CircuitStateKind::Open
+        );
+
+        // Failed replacement retains Open circuit state
+        host.runtime_mut().failure_kind = Some(RuntimeFailureKind::Load);
+        let replace_err = host.replace(manifest.clone(), (), vec![]);
+        assert!(replace_err.is_err());
+        assert_eq!(
+            host.circuit_breaker().status(&id).state,
+            CircuitStateKind::Open
+        );
+
+        // Successful replacement resets to clean closed state
+        host.runtime_mut().failure_kind = None;
+        let replace_ok = host.replace(manifest, (), vec![]);
+        assert!(replace_ok.is_ok());
+        assert_eq!(
+            host.circuit_breaker().status(&id).state,
+            CircuitStateKind::Closed
+        );
+        assert_eq!(
+            host.circuit_breaker().status(&id).consecutive_failures,
+            Some(0)
+        );
     }
 }

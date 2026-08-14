@@ -78,6 +78,10 @@ impl ExtensionGeneration {
     }
 }
 
+pub use crate::circuit_breaker::{
+    CircuitNotice, CircuitNoticeKind, CircuitStateKind, WasmExtensionStatus,
+};
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ExtensionSnapshot {
     pub generation: ExtensionGeneration,
@@ -89,6 +93,8 @@ pub struct ExtensionSnapshot {
     pub prevalidated_asset_roots: Arc<BTreeMap<ExtensionId, PathBuf>>,
     #[serde(default)]
     pub script_extensions: Arc<[ScriptExtensionStatus]>,
+    #[serde(default)]
+    pub wasm_extensions: Arc<[WasmExtensionStatus]>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -158,6 +164,8 @@ pub struct ExtensionUpdate {
     pub snapshot: Option<ExtensionSnapshot>,
     pub effects: Vec<(ExtensionId, AuthorizedHostOperation)>,
     pub invalidated_views: Vec<CanonicalId>,
+    #[serde(default)]
+    pub circuit_notices: Vec<CircuitNotice>,
 }
 
 #[cfg(test)]
@@ -182,5 +190,104 @@ mod tests {
             legacy_result.is_err(),
             "Legacy 'Launcher' surface must fail deserialization"
         );
+    }
+
+    #[test]
+    fn test_circuit_state_protocol_round_trips_for_every_state() {
+        let states = [
+            (
+                WasmExtensionStatus {
+                    id: ExtensionId::new("io.github.test.healthy").unwrap(),
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
+                    state: CircuitStateKind::Closed,
+                    consecutive_failures: Some(0),
+                    consecutive_successes: None,
+                    trip_count: 0,
+                    retry_after_ms: None,
+                    latest_diagnostic: None,
+                },
+                r#"{"id":"io.github.test.healthy","runtime_kind":"wasm","state":"closed","consecutive_failures":0,"trip_count":0}"#,
+            ),
+            (
+                WasmExtensionStatus {
+                    id: ExtensionId::new("io.github.test.open").unwrap(),
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
+                    state: CircuitStateKind::Open,
+                    consecutive_failures: None,
+                    consecutive_successes: None,
+                    trip_count: 2,
+                    retry_after_ms: Some(45000),
+                    latest_diagnostic: Some("runtime trap: panic".into()),
+                },
+                r#"{"id":"io.github.test.open","runtime_kind":"wasm","state":"open","trip_count":2,"retry_after_ms":45000,"latest_diagnostic":"runtime trap: panic"}"#,
+            ),
+            (
+                WasmExtensionStatus {
+                    id: ExtensionId::new("io.github.test.halfopen").unwrap(),
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
+                    state: CircuitStateKind::HalfOpen,
+                    consecutive_failures: None,
+                    consecutive_successes: Some(2),
+                    trip_count: 1,
+                    retry_after_ms: None,
+                    latest_diagnostic: None,
+                },
+                r#"{"id":"io.github.test.halfopen","runtime_kind":"wasm","state":"half_open","consecutive_successes":2,"trip_count":1}"#,
+            ),
+            (
+                WasmExtensionStatus {
+                    id: ExtensionId::new("io.github.test.perm").unwrap(),
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
+                    state: CircuitStateKind::PermanentlyDisabled,
+                    consecutive_failures: None,
+                    consecutive_successes: None,
+                    trip_count: 4,
+                    retry_after_ms: None,
+                    latest_diagnostic: Some("4 failed trip cycles".into()),
+                },
+                r#"{"id":"io.github.test.perm","runtime_kind":"wasm","state":"permanently_disabled","trip_count":4,"latest_diagnostic":"4 failed trip cycles"}"#,
+            ),
+        ];
+
+        for (status, expected_json) in states {
+            let json = serde_json::to_string(&status).expect("should serialize");
+            assert_eq!(json, expected_json);
+
+            let deserialized: WasmExtensionStatus =
+                serde_json::from_str(&json).expect("should deserialize");
+            assert_eq!(deserialized, status);
+        }
+    }
+
+    #[test]
+    fn test_snapshot_and_update_missing_field_backward_tolerance() {
+        // Old snapshot json without wasm_extensions
+        let old_snapshot_json = r#"{
+            "generation": 42,
+            "descriptors": [],
+            "views": {},
+            "diagnostics": [],
+            "settings_schemas": {},
+            "prevalidated_asset_roots": {},
+            "script_extensions": []
+        }"#;
+
+        let snapshot: ExtensionSnapshot = serde_json::from_str(old_snapshot_json)
+            .expect("should deserialize with default wasm_extensions");
+        assert_eq!(snapshot.generation, ExtensionGeneration(42));
+        assert!(snapshot.wasm_extensions.is_empty());
+
+        // Old update json without circuit_notices
+        let old_update_json = r#"{
+            "host_generation": 1,
+            "generation": 42,
+            "effects": [],
+            "invalidated_views": []
+        }"#;
+
+        let update: ExtensionUpdate = serde_json::from_str(old_update_json)
+            .expect("should deserialize with default circuit_notices");
+        assert_eq!(update.generation, ExtensionGeneration(42));
+        assert!(update.circuit_notices.is_empty());
     }
 }
