@@ -34,13 +34,14 @@ featuring Material Design 3 (M3) & Material Expressive design inspirations.
 
 ---
 
-## Quick Start
+## Extensions & Ecosystem
 
-To launch the interactive Storybook component gallery:
+Shilpo features a sandboxed WebAssembly extension runtime and developer ecosystem. Build custom top bar widgets, dropdown menus, desktop widgets, settings panels, and command palette actions in TypeScript or Rust.
 
-```bash
-cargo run -p storybook
-```
+- [**Extension Documentation Hub**](docs/extensions/index.md): Complete authoring guides, API references, and security model.
+- [**TypeScript Showcase**](extensions/example): The single canonical reference extension demonstrating all 10 contribution families.
+- [**Rust Component Reference**](extensions/world-clock): Experimental official WASI Preview 2 component extension.
+- [**Trusted Local Scripts**](extensions/cpu-temp-script): Lightweight, unsandboxed polling bar widget scripts.
 
 ---
 

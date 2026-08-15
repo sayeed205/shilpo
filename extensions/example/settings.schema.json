@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Showcase Extension Settings",
+  "type": "object",
+  "properties": {
+    "showNotifications": {
+      "type": "boolean",
+      "default": true,
+      "description": "Show desktop notifications on state or palette changes"
+    },
+    "refreshIntervalSeconds": {
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 3600,
+      "default": 30,
+      "description": "Background task sync interval in seconds"
+    },
+    "accentLabel": {
+      "type": "string",
+      "default": "Active",
+      "description": "Custom label displayed in widgets"
+    }
+  },
+  "additionalProperties": false
+}
