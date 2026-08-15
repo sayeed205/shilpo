@@ -1,5 +1,8 @@
-/examples/world-clock/extension.wasm
-/examples/world-clock/target/
+/extensions/world-clock/target/
+/extensions/world-clock/extension.wasm
+/extensions/example/extension.wasm
+/extensions/example/node_modules/
+/extensions/example/dist/
 .idea
 .slim/deepwork/
 

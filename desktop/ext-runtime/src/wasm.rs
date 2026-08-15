@@ -1013,10 +1013,17 @@ impl WasmRuntime {
                 if status.success() {
                     return Ok(());
                 }
-                return Err(RuntimeError::with_kind(
-                    RuntimeFailureKind::Load,
-                    "component validation failed in isolated worker".to_string(),
-                ));
+                let mut error_message = String::new();
+                if let Some(mut stderr) = child.stderr.take() {
+                    let _ = std::io::Read::read_to_string(&mut stderr, &mut error_message);
+                }
+                let error_message = error_message.trim();
+                let message = if error_message.is_empty() {
+                    "component validation failed in isolated worker".to_string()
+                } else {
+                    error_message.to_string()
+                };
+                return Err(RuntimeError::with_kind(RuntimeFailureKind::Load, message));
             }
             if Instant::now() >= deadline {
                 let _ = child.kill();
@@ -1509,11 +1516,12 @@ const ALLOWED_SHILPO_INTERFACES: &[&str] = &[
     "shilpo:extension/view",
 ];
 
-// These interfaces are linked by the component model but receive no ambient
-// authority from the empty WasiCtx constructed by this runtime. Filesystem,
-// sockets, subprocesses, and other authority-bearing WASI interfaces remain
-// rejected at the component boundary.
-const ALLOWED_WASI_INTERFACES: &[&str] = &["wasi:cli/", "wasi:clocks/", "wasi:io/", "wasi:random/"];
+const ALLOWED_WASI_INTERFACES: &[&str] = &[
+    "wasi:cli/",
+    "wasi:clocks/",
+    "wasi:io/",
+    "wasi:random/",
+];
 
 fn validate_component_type(engine: &Engine, component: &Component) -> Result<(), RuntimeError> {
     let component_type = component.component_type();

@@ -1,0 +1,100 @@
+id = "org.shilpo.example"
+name = "Shilpo Showcase Extension"
+version = "0.1.0"
+schema_version = 1
+api_version = "0.1.0"
+min_shilpo_version = "0.1.0"
+authors = ["Shilpo Team <team@shilpo.org>"]
+description = "Canonical TypeScript showcase extension demonstrating all Shilpo contribution families, least-privilege capabilities, and hermetic testing."
+repository = "https://github.com/sayeed205/shilpo"
+license = "MIT"
+
+[library]
+path = "extension.wasm"
+
+[[contributions.bar_widgets]]
+id = "status-bar"
+name = "Showcase Status Bar"
+description = "Compact bar widget showing extension status and quick actions."
+
+[[contributions.bar_menus]]
+id = "status-menu"
+name = "Showcase Status Menu"
+bar_widget = "status-bar"
+
+[[contributions.desktop_widgets]]
+id = "system-card"
+name = "Showcase Desktop Card"
+description = "Resizable desktop showcase widget with counter, theme info, and actions."
+default_width = 320
+default_height = 240
+min_width = 200
+min_height = 150
+
+[[contributions.settings_pages]]
+id = "preferences"
+name = "Showcase Preferences"
+schema = "settings.schema.json"
+
+[[contributions.side_panels]]
+id = "side-panel"
+name = "Showcase Side Panel"
+
+[[contributions.search_providers]]
+id = "search-commands"
+name = "Showcase Search"
+
+[[contributions.actions]]
+id = "toggle-power"
+name = "Toggle Showcase Mode"
+
+[[contributions.keyboard_shortcuts]]
+id = "shortcut-toggle"
+name = "Toggle Mode Shortcut"
+action = "toggle-power"
+default_binding = "Super+Shift+S"
+
+[[contributions.background_tasks]]
+id = "sync-task"
+name = "Showcase Sync Task"
+
+[[contributions.wallpaper_providers]]
+id = "solid-wallpapers"
+name = "Showcase Wallpapers"
+description = "Provides customizable dynamic solid wallpapers."
+modes = ["manual", "slideshow"]
+targets = ["global", "workspace"]
+
+[[subscriptions]]
+event = "palette_generated"
+
+[[subscriptions]]
+event = "wallpaper_changed"
+
+[[capabilities]]
+kind = "events:subscribe"
+events = ["palette_generated", "wallpaper_changed"]
+
+[[capabilities]]
+kind = "theme:read"
+
+[[capabilities]]
+kind = "notifications:show"
+
+[[capabilities]]
+kind = "clipboard:read"
+
+[[capabilities]]
+kind = "clipboard:write"
+
+[[capabilities]]
+kind = "wallpaper:read"
+
+[[capabilities]]
+kind = "actions:invoke"
+actions = ["toggle-power"]
+
+[[capabilities]]
+kind = "network:http"
+hosts = ["api.example.com"]
+paths = ["/showcase"]

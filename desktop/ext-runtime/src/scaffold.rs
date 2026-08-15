@@ -1302,6 +1302,8 @@ shilpo ext build
 shilpo ext dev
 ```
 
+See [Shilpo Extension Documentation](https://github.com/sayeed205/shilpo/blob/main/docs/extensions/index.md) for authoring guides, API references, and testing practices.
+
 > **Note**: `shilpo-ext-sdk` currently references the GitHub repository while the crate is prepared for release.
 "#
     )
@@ -1561,6 +1563,8 @@ shilpo ext build
 ```bash
 shilpo ext dev
 ```
+
+See [Shilpo Extension Documentation](https://github.com/sayeed205/shilpo/blob/main/docs/extensions/index.md) for authoring guides, API references, and testing practices.
 "#
     )
 }

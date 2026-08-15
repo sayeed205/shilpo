@@ -1,0 +1,16 @@
+{
+  "name": "shilpo-showcase-extension",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Canonical TypeScript showcase extension demonstrating all Shilpo contribution families, least-privilege capabilities, and hermetic testing.",
+  "scripts": {
+    "build": "shilpo ext build",
+    "test": "deno test tests/"
+  },
+  "dependencies": {
+    "@shilpo/ext-sdk": "npm:@jsr/shilpo__ext-sdk@0.1.0"
+  },
+  "devDependencies": {
+    "@bytecodealliance/jco": "1.28.1"
+  }
+}

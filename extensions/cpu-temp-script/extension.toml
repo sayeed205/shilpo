@@ -1,0 +1,16 @@
+schema_version = 1
+id = "local.script.cpu-temp"
+name = "CPU Temperature Script"
+version = "0.1.0"
+
+[runtime]
+mode = "poll"
+executable = "cpu-temp.sh"
+args = []
+interval_ms = 5000
+timeout_ms = 1000
+
+[[contributions.bar_widgets]]
+id = "cpu-temp"
+name = "CPU Temperature"
+description = "Polls and displays current CPU temperature"
