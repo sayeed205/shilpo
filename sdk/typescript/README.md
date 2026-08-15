@@ -167,15 +167,14 @@ npx --yes @bytecodealliance/jco componentize src/extension.ts \
 
 The TypeScript SDK is published to JSR by GitHub Actions. The one-time setup is:
 
-1. Create or claim `@shilpo/ext-sdk` on [JSR](https://jsr.io) and link it to the
-   `sayeed205/shilpo` GitHub repository.
-2. Ensure the JSR package is configured to allow this repository's GitHub Actions
-   workflow to publish.
+1. Create or claim `@shilpo/ext-sdk` on [JSR](https://jsr.io) and link it to the `sayeed205/shilpo`
+   GitHub repository.
+2. Ensure the JSR package is configured to allow this repository's GitHub Actions workflow to
+   publish.
 3. Update the version in `deno.json` and commit the generated sources.
-4. Push a tag named `typescript-sdk-v<version>`, matching the `deno.json` version
-   exactly (for example, `typescript-sdk-v0.1.0`).
+4. Push a tag named `typescript-sdk-v<version>`, matching the `deno.json` version exactly (for
+   example, `typescript-sdk-v0.1.0`).
 
-The workflow runs generation checks, formatting, lint, type checks, tests, and a
-package dry run before publishing with GitHub Actions OIDC. No `JSR_TOKEN` secret
-is required. Publication is scoped to `sdk/typescript` and JSR supplies provenance
-for the published package.
+The workflow runs generation checks, formatting, lint, type checks, tests, and a package dry run
+before publishing with GitHub Actions OIDC. No `JSR_TOKEN` secret is required. Publication is scoped
+to `sdk/typescript` and JSR supplies provenance for the published package.
