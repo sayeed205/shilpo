@@ -172,6 +172,8 @@ lsp-types = { opt-level = 3 }
 reqwest_client = { opt-level = 3 }
 markdown = { opt-level = 3 }
 xml5ever = { opt-level = 3 }
+wasmtime = { opt-level = 3 }
+cranelift-codegen = { opt-level = 3 }
 
 [workspace.metadata.typos]
 files.extend-exclude = ["**/fixtures/*"]

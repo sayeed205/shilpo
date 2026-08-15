@@ -18,7 +18,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
-use wasmtime::component::{Component, Linker, ResourceTable};
+use wasmtime::component::{Component, Linker, ResourceTable, types::ComponentItem};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
@@ -853,10 +853,185 @@ impl WasmRuntime {
         })
     }
 
+    /// Default bounded validation timeout for component compilation and interface checking (30s).
+    pub const DEFAULT_VALIDATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Maximum component size accepted for validation (32 MiB).
+    pub const MAX_VALIDATION_COMPONENT_SIZE: usize = 32 * 1024 * 1024;
+
+    /// Validates a WebAssembly component binary against the canonical
+    /// `shilpo:extension@0.1.0` WIT contract within the default bounded timeout (30s).
     pub fn validate_module(bytes: &[u8]) -> Result<(), RuntimeError> {
+        Self::validate_module_timeout(bytes, Self::DEFAULT_VALIDATION_TIMEOUT)
+    }
+
+    /// Validates a component in the current process. Production callers should use
+    /// `validate_module_timeout`, which isolates compilation in a killable helper process.
+    pub fn validate_module_unbounded(bytes: &[u8]) -> Result<(), RuntimeError> {
+        Self::validate_module_in_process(bytes)
+    }
+
+    /// Validates a WebAssembly component binary against the canonical
+    /// `shilpo:extension@0.1.0` WIT contract within an explicit bounded duration.
+    pub fn validate_module_timeout(bytes: &[u8], timeout: Duration) -> Result<(), RuntimeError> {
+        if let Ok(executable) = std::env::current_exe()
+            && executable.file_stem().is_some_and(|stem| stem == "shilpo")
+        {
+            return Self::validate_module_isolated(bytes, timeout, &executable);
+        }
+
+        Self::validate_module_in_process_timeout(bytes, timeout)
+    }
+
+    fn validate_module_in_process(bytes: &[u8]) -> Result<(), RuntimeError> {
+        if bytes.len() > Self::MAX_VALIDATION_COMPONENT_SIZE {
+            return Err(RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                format!(
+                    "component size ({} bytes) exceeds maximum supported validation limit of {} bytes",
+                    bytes.len(),
+                    Self::MAX_VALIDATION_COMPONENT_SIZE
+                ),
+            ));
+        }
         let engine = configured_engine()?;
         let component = compile_component(&engine, bytes)?;
         validate_component_type(&engine, &component)
+    }
+
+    fn validate_module_in_process_timeout(
+        bytes: &[u8],
+        timeout: Duration,
+    ) -> Result<(), RuntimeError> {
+        if bytes.len() > Self::MAX_VALIDATION_COMPONENT_SIZE {
+            return Err(RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                format!(
+                    "component size ({} bytes) exceeds maximum supported validation limit of {} bytes",
+                    bytes.len(),
+                    Self::MAX_VALIDATION_COMPONENT_SIZE
+                ),
+            ));
+        }
+
+        let bytes_vec = bytes.to_vec();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::Builder::new()
+            .name("wasm-validator".into())
+            .spawn(move || {
+                let res = (|| {
+                    let engine = configured_engine()?;
+                    let component = compile_component(&engine, &bytes_vec)?;
+                    validate_component_type(&engine, &component)
+                })();
+                let _ = tx.send(res);
+            });
+
+        match handle {
+            Ok(join_handle) => match rx.recv_timeout(timeout) {
+                Ok(res) => {
+                    let _ = join_handle.join();
+                    res
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    #[cfg(test)]
+                    return Err(RuntimeError::with_kind(
+                        RuntimeFailureKind::Timeout,
+                        format!(
+                            "component validation timed out after {:.3}s",
+                            timeout.as_secs_f64()
+                        ),
+                    ));
+
+                    #[cfg(not(test))]
+                    {
+                        // Component compilation is synchronous and cannot be interrupted by
+                        // Wasmtime. Join before returning so a timed-out validation never leaves
+                        // compiler work running after its caller has gone away.
+                        let _ = join_handle.join();
+                        Err(RuntimeError::with_kind(
+                            RuntimeFailureKind::Timeout,
+                            format!(
+                                "component validation timed out after {:.3}s",
+                                timeout.as_secs_f64()
+                            ),
+                        ))
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = join_handle.join();
+                    Err(RuntimeError::with_kind(
+                        RuntimeFailureKind::Load,
+                        "component validation thread terminated unexpectedly".to_string(),
+                    ))
+                }
+            },
+            Err(error) => Err(RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                format!("failed to spawn validation thread: {error}"),
+            )),
+        }
+    }
+
+    fn validate_module_isolated(
+        bytes: &[u8],
+        timeout: Duration,
+        executable: &Path,
+    ) -> Result<(), RuntimeError> {
+        let path = std::env::temp_dir().join(format!(
+            "shilpo-wasm-validator-{}-{}.wasm",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::write(&path, bytes).map_err(|error| {
+            RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                format!("failed to stage component for validation: {error}"),
+            )
+        })?;
+        let mut child = std::process::Command::new(executable)
+            .env("SHILPO_WASM_VALIDATOR", &path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                RuntimeError::with_kind(
+                    RuntimeFailureKind::Load,
+                    format!("failed to start isolated component validator: {error}"),
+                )
+            })?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = child.try_wait().map_err(|error| {
+                RuntimeError::with_kind(
+                    RuntimeFailureKind::Load,
+                    format!("failed to poll isolated component validator: {error}"),
+                )
+            })? {
+                let _ = fs::remove_file(&path);
+                if status.success() {
+                    return Ok(());
+                }
+                return Err(RuntimeError::with_kind(
+                    RuntimeFailureKind::Load,
+                    "component validation failed in isolated worker".to_string(),
+                ));
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = fs::remove_file(&path);
+                return Err(RuntimeError::with_kind(
+                    RuntimeFailureKind::Timeout,
+                    format!(
+                        "component validation timed out after {:.3}s",
+                        timeout.as_secs_f64()
+                    ),
+                ));
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 
     /// Drops all watch registrations and undelivered state events for an
@@ -1301,17 +1476,57 @@ fn configured_engine() -> Result<Engine, RuntimeError> {
 
 fn compile_component(engine: &Engine, bytes: &[u8]) -> Result<Component, RuntimeError> {
     Component::new(engine, bytes).map_err(|error| {
+        let message = format!("{error:#}");
+        let lowercase = message.to_ascii_lowercase();
+        if lowercase.contains("component model async")
+            || (lowercase.contains("requires") && lowercase.contains("async"))
+        {
+            return RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                "unsupported async component; rebuild with the synchronous QJS backend".to_string(),
+            );
+        }
         RuntimeError::with_kind(
             RuntimeFailureKind::Load,
-            format!("component compilation failed: {error:#}"),
+            format!("component compilation failed: {message}"),
         )
     })
 }
 
+const ALLOWED_SHILPO_INTERFACES: &[&str] = &[
+    "shilpo:extension/actions",
+    "shilpo:extension/clipboard",
+    "shilpo:extension/filesystem",
+    "shilpo:extension/http",
+    "shilpo:extension/location",
+    "shilpo:extension/notifications",
+    "shilpo:extension/state",
+    "shilpo:extension/secrets",
+    "shilpo:extension/theme",
+    "shilpo:extension/wallpaper",
+    "shilpo:extension/types",
+    "shilpo:extension/events",
+    "shilpo:extension/view",
+];
+
+// These interfaces are linked by the component model but receive no ambient
+// authority from the empty WasiCtx constructed by this runtime. Filesystem,
+// sockets, subprocesses, and other authority-bearing WASI interfaces remain
+// rejected at the component boundary.
+const ALLOWED_WASI_INTERFACES: &[&str] = &["wasi:cli/", "wasi:clocks/", "wasi:io/", "wasi:random/"];
+
 fn validate_component_type(engine: &Engine, component: &Component) -> Result<(), RuntimeError> {
     let component_type = component.component_type();
     for (name, _) in component_type.imports(engine) {
-        if !name.starts_with("wasi:") && !name.starts_with("shilpo:extension") {
+        let is_wasi = ALLOWED_WASI_INTERFACES
+            .iter()
+            .any(|prefix| name.starts_with(prefix));
+        let is_valid_shilpo = ALLOWED_SHILPO_INTERFACES.iter().any(|prefix| {
+            name == *prefix
+                || name.starts_with(&format!("{prefix}@"))
+                || name.starts_with(&format!("{prefix}/"))
+        });
+        if !is_wasi && !is_valid_shilpo {
             return Err(RuntimeError::with_kind(
                 RuntimeFailureKind::Load,
                 format!("unsupported component import '{name}'"),
@@ -1319,13 +1534,43 @@ fn validate_component_type(engine: &Engine, component: &Component) -> Result<(),
         }
     }
     for export in ["activate", "deactivate", "on-event", "view"] {
-        if component_type.get_export(engine, export).is_none() {
+        let Some(component_export) = component_type.get_export(engine, export) else {
             return Err(RuntimeError::with_kind(
                 RuntimeFailureKind::Load,
                 format!("missing required component export '{export}'"),
             ));
+        };
+        if !matches!(component_export.ty, ComponentItem::ComponentFunc(_)) {
+            return Err(RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                format!("component export '{export}' has the wrong WIT type"),
+            ));
         }
     }
+    // Ask Wasmtime's linker to resolve the component against the generated
+    // canonical bindings. Unlike name checks, pre-instantiation compares the
+    // complete WIT function/interface types.
+    let mut linker = Linker::<WasmState>::new(engine);
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(|error| {
+        RuntimeError::with_kind(
+            RuntimeFailureKind::Load,
+            format!("failed to configure validation WASI linker: {error:#}"),
+        )
+    })?;
+    Extension::add_to_linker::<WasmState, WasmState>(&mut linker, get_wasm_state).map_err(
+        |error| {
+            RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                format!("failed to configure validation extension linker: {error:#}"),
+            )
+        },
+    )?;
+    linker.instantiate_pre(component).map_err(|error| {
+        RuntimeError::with_kind(
+            RuntimeFailureKind::Load,
+            format!("component does not match the canonical WIT contract: {error:#}"),
+        )
+    })?;
     Ok(())
 }
 

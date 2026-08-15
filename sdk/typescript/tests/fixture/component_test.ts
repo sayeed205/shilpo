@@ -7,20 +7,23 @@ const ROOT_DIR = resolve(DIR, "../../../..");
 const WIT_DIR = resolve(ROOT_DIR, "core/ext-api/wit");
 const SOURCE_FILE = resolve(DIR, "extension.ts");
 const WASM_FILE = resolve(DIR, "extension.wasm");
+const LOCAL_JCO = resolve(DIR, "node_modules/.bin/jco");
 
 describe("Component Conformance Fixture", () => {
   it("builds TypeScript extension into valid Wasm component", async () => {
-    // 1. Run jco componentize
-    const cmd = new Deno.Command("npx", {
+    // 1. Run the exact project-local JCO pinned by package-lock.json.
+    // Never fall back to a network/global executable in a conformance test.
+    const cmd = new Deno.Command(LOCAL_JCO, {
       args: [
-        "--yes",
-        "@bytecodealliance/jco@1",
         "componentize",
         SOURCE_FILE,
         "--wit",
         WIT_DIR,
         "--world-name",
         "extension",
+        "--backend",
+        "qjs",
+        "--backend-qjs-disable-async",
         "-o",
         WASM_FILE,
       ],
