@@ -13,6 +13,19 @@ const REQUIRED_CONTRIBUTION_FAMILIES = [
   "wallpaper_providers",
 ];
 
+const OWNERS: Record<string, [string, string]> = {
+  bar_widgets: ["src/contributions/bar_widget.ts", "tests/views_test.ts"],
+  bar_menus: ["src/contributions/bar_menu.ts", "tests/views_test.ts"],
+  desktop_widgets: ["src/contributions/desktop_widget.ts", "tests/views_test.ts"],
+  settings_pages: ["src/contributions/settings_page.ts", "tests/views_test.ts"],
+  side_panels: ["src/contributions/side_panel.ts", "tests/views_test.ts"],
+  search_providers: ["src/contributions/search_provider.ts", "tests/events_test.ts"],
+  actions: ["src/contributions/actions.ts", "tests/events_test.ts"],
+  keyboard_shortcuts: ["src/contributions/keyboard_shortcuts.ts", "tests/events_test.ts"],
+  background_tasks: ["src/contributions/background_task.ts", "tests/events_test.ts"],
+  wallpaper_providers: ["src/contributions/wallpaper_provider.ts", "tests/events_test.ts"],
+};
+
 Deno.test("Showcase Coverage Matrix - validates all 10 contribution families in manifest and docs", async () => {
   const manifestText = await Deno.readTextFile(
     new URL("../extension.toml", import.meta.url),
@@ -37,5 +50,8 @@ Deno.test("Showcase Coverage Matrix - validates all 10 contribution families in 
       true,
       `Coverage matrix COVERAGE.md must document contribution family ${family}`,
     );
+    const [source, test] = OWNERS[family]!;
+    await Deno.stat(new URL(`../${source}`, import.meta.url));
+    await Deno.stat(new URL(`../${test}`, import.meta.url));
   }
 });

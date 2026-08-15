@@ -44,6 +44,10 @@ export class ShowcaseStateStore {
     return this.state.clicks;
   }
 
+  hydrateClicks(clicks: number): void {
+    if (Number.isSafeInteger(clicks) && clicks >= 0) this.state.clicks = clicks;
+  }
+
   toggleMode(): ShowcaseMode {
     this.state.mode = this.state.mode === "active" ? "idle" : "active";
     this.state.accentLabel = this.state.mode === "active" ? "Active" : "Idle";

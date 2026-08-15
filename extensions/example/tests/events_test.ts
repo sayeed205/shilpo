@@ -52,6 +52,7 @@ Deno.test("Showcase Events - handles input, actions, shortcuts, tasks, and syste
   assertEquals(showcase.store.snapshot.notificationsEnabled, false);
 
   // 5. Action Invocation
+  showcase.store.setNotificationsEnabled(true);
   showcase.handleAction("toggle-power");
   assertEquals(showcase.store.snapshot.mode, "active");
 
@@ -63,22 +64,32 @@ Deno.test("Showcase Events - handles input, actions, shortcuts, tasks, and syste
   showcase.handleBackgroundTask("sync-task");
   assertEquals(showcase.store.snapshot.lastSyncIso.length > 0, true);
 
-  // 8. Palette Generated System Event
-  showcase.store.setNotificationsEnabled(true);
+  // 8. Palette events are inert; notifications require explicit action invocation.
   showcase.ext.onEvent({
     tag: "palette-generated",
     val: {
       accent: "#6200ee",
     },
   });
-  assertEquals(host.notificationsList.length > 0, true);
+  assertEquals(host.notificationsList.length, 3);
 
-  // 9. Search Provider
+  // 9. Manual scoped HTTPS request and completion.
+  showcase.ext.onEvent({
+    tag: "input",
+    val: { contributionId: "status-menu", eventId: "btn-menu-refresh" },
+  });
+  assertEquals(host.httpRequests.length, 1);
+  showcase.ext.onEvent({
+    tag: "http-response",
+    val: { requestId: "showcase-refresh", status: 200, body: "{}" },
+  });
+
+  // 10. Search Provider
   const searchResults = searchCommands("toggle");
   assertEquals(searchResults.length, 1);
   assertEquals(searchResults[0]?.id, "toggle-power");
 
-  // 10. Wallpaper Provider
+  // 11. Wallpaper Provider
   const wallpaper = generateWallpaper(showcase.store.snapshot);
   assertEquals(wallpaper.source, "extension-asset");
 });

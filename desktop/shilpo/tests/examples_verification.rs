@@ -118,6 +118,25 @@ fn trusted_local_script_manifest_is_valid() {
     let script_manifest: shilpo_ext_runtime::script::ScriptManifest =
         toml::from_str(&text).expect("cpu-temp-script must be valid ScriptManifest");
 
+    let bundle = tempfile::tempdir().expect("create script validation bundle");
+    let script_path = bundle.path().join("cpu-temp.sh");
+    std::fs::write(
+        &script_path,
+        "#!/bin/sh\nprintf '%s' '{\"schema_version\":1,\"contribution\":\"cpu-temp\",\"kind\":\"text\",\"text\":\"42 C\"}'\n",
+    )
+        .expect("write script fixture");
+    script_manifest
+        .validate(bundle.path())
+        .expect("script manifest must pass ScriptRuntime validation");
+
+    let output = std::process::Command::new("sh")
+        .arg(&script_path)
+        .output()
+        .expect("execute bounded script fixture");
+    assert!(output.status.success());
+    shilpo_ext_runtime::script::decode_and_validate_record(&output.stdout, &script_manifest)
+        .expect("script record must decode and validate");
+
     assert_eq!(script_manifest.id.as_str(), "local.script.cpu-temp");
     assert_eq!(script_manifest.runtime.executable, "cpu-temp.sh");
 }

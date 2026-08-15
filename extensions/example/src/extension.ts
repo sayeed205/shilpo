@@ -27,6 +27,8 @@ export function createShowcaseExtension(customHost?: HostFacade) {
         if (customHost?.state) {
           try {
             customHost.state.watch("showcase_clicks");
+            const persisted = customHost.state.getString("showcase_clicks");
+            if (persisted) store.hydrateClicks(Number.parseInt(persisted, 10));
           } catch {
             // Degraded state fallback
           }
@@ -46,6 +48,7 @@ export function createShowcaseExtension(customHost?: HostFacade) {
               case "btn-desktop-increment":
               case "btn-panel-increment":
                 store.incrementClicks();
+                persistState(customHost, store);
                 break;
               case "btn-menu-toggle":
               case "btn-desktop-toggle":
@@ -63,17 +66,34 @@ export function createShowcaseExtension(customHost?: HostFacade) {
                   }
                 }
                 break;
+              case "btn-menu-refresh":
+                if (customHost?.http) {
+                  try {
+                    customHost.http.request({
+                      requestId: "showcase-refresh",
+                      url: "https://api.example.com/showcase",
+                      method: "GET",
+                      headers: [],
+                    });
+                    store.appendLog("Manual HTTPS refresh requested");
+                  } catch {
+                    store.appendLog("HTTPS refresh unavailable");
+                  }
+                }
+                break;
               case "btn-panel-clear-logs":
                 store.reset();
                 break;
               case "tog-notifications":
                 if (input.value && DataValue.isBool(input.value)) {
                   store.setNotificationsEnabled(DataValue.toJs(input.value) as boolean);
+                  persistState(customHost, store);
                 }
                 break;
               case "input-label":
                 if (input.value && DataValue.isText(input.value)) {
                   store.setAccentLabel(DataValue.toJs(input.value) as string);
+                  persistState(customHost, store);
                 }
                 break;
             }
@@ -82,16 +102,6 @@ export function createShowcaseExtension(customHost?: HostFacade) {
 
           case "palette-generated":
             store.appendLog("System theme palette generated");
-            if (store.snapshot.notificationsEnabled && customHost?.notifications) {
-              try {
-                customHost.notifications.show({
-                  title: "Palette Updated",
-                  body: "Showcase components refreshed for new palette.",
-                });
-              } catch {
-                // Ignore notification failure
-              }
-            }
             break;
 
           case "wallpaper-changed":
@@ -105,6 +115,14 @@ export function createShowcaseExtension(customHost?: HostFacade) {
             }
             break;
           }
+
+          case "http-response":
+            store.appendLog(
+              event.val.error
+                ? `HTTPS refresh failed: ${event.val.error}`
+                : `HTTPS refresh completed (${event.val.status ?? 0})`,
+            );
+            break;
         }
       },
 
@@ -135,6 +153,14 @@ export function createShowcaseExtension(customHost?: HostFacade) {
     handleShortcut: (shortcutId: string) => handleShortcut(shortcutId, store, customHost),
     handleBackgroundTask: (taskId: string) => handleBackgroundTask(taskId, store, customHost),
   };
+}
+
+function persistState(host: HostFacade | undefined, store: ShowcaseStateStore): void {
+  try {
+    host?.state?.write("showcase_clicks", DataValue.text(String(store.snapshot.clicks)));
+  } catch {
+    // In-memory state remains available when durable state is degraded.
+  }
 }
 
 const defaultInstance = createShowcaseExtension();

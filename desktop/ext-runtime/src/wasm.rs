@@ -1470,7 +1470,6 @@ impl Drop for WasmRuntime {
 fn configured_engine() -> Result<Engine, RuntimeError> {
     let mut config = Config::new();
     config.wasm_component_model(true);
-    config.wasm_component_model_async(true);
     config.consume_fuel(true);
     config.epoch_interruption(true);
     config.max_wasm_stack(512 * 1024);
@@ -1520,7 +1519,6 @@ const ALLOWED_SHILPO_INTERFACES: &[&str] = &[
 const ALLOWED_WASI_INTERFACES: &[&str] = &[
     "wasi:cli/",
     "wasi:clocks/",
-    "wasi:filesystem/",
     "wasi:io/",
     "wasi:random/",
 ];

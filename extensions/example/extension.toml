@@ -93,3 +93,8 @@ kind = "wallpaper:read"
 [[capabilities]]
 kind = "actions:invoke"
 actions = ["toggle-power"]
+
+[[capabilities]]
+kind = "network:http"
+hosts = ["api.example.com"]
+paths = ["/showcase"]

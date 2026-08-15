@@ -61,7 +61,7 @@ In adherence to Shilpo's least-privilege architecture:
 ### 1. Install Dependencies
 
 ```bash
-npm install
+npm ci
 ```
 
 ### 2. Build WebAssembly Component
@@ -75,7 +75,7 @@ shilpo ext build
 Or manually using `jco`:
 
 ```bash
-npx --yes @bytecodealliance/jco@1 componentize src/extension.ts \
+node_modules/.bin/jco componentize src/extension.ts \
   --wit node_modules/@shilpo/ext-sdk/wit \
   --world-name extension \
   --backend qjs \

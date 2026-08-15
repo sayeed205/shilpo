@@ -26,6 +26,7 @@ export function renderBarMenu(state: ShowcaseState): ViewTree {
           children: [
             button("Toggle Mode", "btn-menu-toggle", { style: { padding: 6 } }),
             button("Copy Status", "btn-menu-copy", { style: { padding: 6 } }),
+            button("Refresh Demo", "btn-menu-refresh", { style: { padding: 6 } }),
           ],
         }),
       ],
