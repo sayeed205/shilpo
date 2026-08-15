@@ -1547,6 +1547,30 @@ fn validate_component_type(engine: &Engine, component: &Component) -> Result<(),
             ));
         }
     }
+    // Ask Wasmtime's linker to resolve the component against the generated
+    // canonical bindings. Unlike name checks, pre-instantiation compares the
+    // complete WIT function/interface types.
+    let mut linker = Linker::<WasmState>::new(engine);
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(|error| {
+        RuntimeError::with_kind(
+            RuntimeFailureKind::Load,
+            format!("failed to configure validation WASI linker: {error:#}"),
+        )
+    })?;
+    Extension::add_to_linker::<WasmState, WasmState>(&mut linker, get_wasm_state).map_err(
+        |error| {
+            RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                format!("failed to configure validation extension linker: {error:#}"),
+            )
+        },
+    )?;
+    linker.instantiate_pre(component).map_err(|error| {
+        RuntimeError::with_kind(
+            RuntimeFailureKind::Load,
+            format!("component does not match the canonical WIT contract: {error:#}"),
+        )
+    })?;
     Ok(())
 }
 
