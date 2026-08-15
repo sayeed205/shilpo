@@ -11,6 +11,7 @@
     "@shilpo/ext-sdk": "npm:@jsr/shilpo__ext-sdk@0.1.0"
   },
   "devDependencies": {
-    "@bytecodealliance/jco": "1.28.1"
+    "@bytecodealliance/jco": "1.28.1",
+    "typescript": "5.6.3"
   }
 }

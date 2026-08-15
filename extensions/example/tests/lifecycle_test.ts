@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { createTestHost } from "@shilpo/ext-sdk/testing";
-import { createShowcaseExtension } from "../src/extension.ts";
+import { createShowcaseExtension } from "../src/extension.tsx";
 
 Deno.test("Showcase Lifecycle - activates and deactivates gracefully", () => {
   const { facade } = createTestHost();

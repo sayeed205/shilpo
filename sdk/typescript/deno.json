@@ -5,6 +5,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./builder": "./src/builder/index.ts",
+    "./jsx-runtime": "./src/jsx-runtime/index.ts",
+    "./jsx-dev-runtime": "./src/jsx-dev-runtime/index.ts",
     "./manifest": "./src/manifest/index.ts",
     "./testing": "./src/testing/index.ts"
   },

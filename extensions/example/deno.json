@@ -2,6 +2,8 @@
   "minimumDependencyAge": 0,
   "imports": {
     "@shilpo/ext-sdk": "jsr:@shilpo/ext-sdk@0.1.0",
+    "@shilpo/ext-sdk/jsx-runtime": "jsr:@shilpo/ext-sdk@0.1.0/jsx-runtime",
+    "@shilpo/ext-sdk/jsx-dev-runtime": "jsr:@shilpo/ext-sdk@0.1.0/jsx-dev-runtime",
     "@shilpo/ext-sdk/builder": "jsr:@shilpo/ext-sdk@0.1.0/builder",
     "@shilpo/ext-sdk/manifest": "jsr:@shilpo/ext-sdk@0.1.0/manifest",
     "@shilpo/ext-sdk/testing": "jsr:@shilpo/ext-sdk@0.1.0/testing",
@@ -9,7 +11,7 @@
   },
   "tasks": {
     "test": "deno test --allow-read --allow-write --allow-env tests/",
-    "check": "deno check src/**/*.ts tests/**/*.ts",
+    "check": "deno check src/**/*.ts src/**/*.tsx tests/**/*.ts",
     "lint": "deno lint",
     "fmt": "deno fmt",
     "fmt:check": "deno fmt --check"

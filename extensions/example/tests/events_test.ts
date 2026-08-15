@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { DataValue } from "@shilpo/ext-sdk";
 import { createTestHost } from "@shilpo/ext-sdk/testing";
-import { createShowcaseExtension } from "../src/extension.ts";
+import { createShowcaseExtension } from "../src/extension.tsx";
 import { searchCommands } from "../src/contributions/search_provider.ts";
 import { generateWallpaper } from "../src/contributions/wallpaper_provider.ts";
 

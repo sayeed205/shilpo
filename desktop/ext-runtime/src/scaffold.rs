@@ -140,6 +140,44 @@ impl std::str::FromStr for PackageManager {
     }
 }
 
+/// View authoring syntax for TypeScript extensions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ViewSyntax {
+    #[default]
+    Jsx,
+    Builders,
+}
+
+impl ViewSyntax {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Jsx => "jsx",
+            Self::Builders => "builders",
+        }
+    }
+}
+
+impl std::fmt::Display for ViewSyntax {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for ViewSyntax {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "jsx" | "tsx" => Ok(Self::Jsx),
+            "builders" | "builder" | "ts" => Ok(Self::Builders),
+            other => Err(format!(
+                "unsupported view syntax '{other}': expected 'jsx' or 'builders'"
+            )),
+        }
+    }
+}
+
 /// Scaffolding options.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScaffoldOptions {
@@ -148,6 +186,7 @@ pub struct ScaffoldOptions {
     pub language: StarterLanguage,
     pub contribution: StarterContribution,
     pub package_manager: Option<PackageManager>,
+    pub view_syntax: Option<ViewSyntax>,
     pub extension_id: Option<String>,
     pub package_name: Option<String>,
     pub description: Option<String>,
@@ -182,6 +221,7 @@ pub enum ScaffoldError {
     InvalidCapability(String),
     InvalidSubscription(String),
     CapabilityConflict(String),
+    InvalidOption(String),
     TargetExistsAndNotEmpty(PathBuf),
     TargetIsFile(PathBuf),
     TargetIsSymlink(PathBuf),
@@ -206,6 +246,7 @@ impl std::fmt::Display for ScaffoldError {
             Self::InvalidCapability(msg) => write!(f, "invalid capability: {msg}"),
             Self::InvalidSubscription(msg) => write!(f, "invalid subscription: {msg}"),
             Self::CapabilityConflict(msg) => write!(f, "capability conflict: {msg}"),
+            Self::InvalidOption(msg) => write!(f, "invalid option: {msg}"),
             Self::TargetExistsAndNotEmpty(path) => {
                 write!(
                     f,
@@ -589,6 +630,12 @@ pub fn scaffold_extension<R: ProcessRunner>(
         ));
     }
 
+    if options.language == StarterLanguage::Rust && options.view_syntax.is_some() {
+        return Err(ScaffoldError::InvalidOption(
+            "--view-syntax is only supported for TypeScript extensions".into(),
+        ));
+    }
+
     // 2. Derive identifiers
     let extension_id = derive_extension_id(&options.name, options.extension_id.as_deref())?;
     let package_name = derive_package_name(
@@ -659,7 +706,7 @@ pub fn scaffold_extension<R: ProcessRunner>(
     files_created.push("extension.toml".into());
 
     // B. shilpo-ext.json
-    let project_config_json = generate_project_config(options.language);
+    let project_config_json = generate_project_config(options.language, options.view_syntax);
     fs::write(staging_dir.join("shilpo-ext.json"), project_config_json).map_err(|e| {
         ScaffoldError::StagingFailed(format!("failed to write shilpo-ext.json: {e}"))
     })?;
@@ -702,6 +749,7 @@ pub fn scaffold_extension<R: ProcessRunner>(
         }
         StarterLanguage::Typescript => {
             let pm = options.package_manager.unwrap_or(PackageManager::Npm);
+            let view_syntax = options.view_syntax.unwrap_or(ViewSyntax::Jsx);
 
             // package.json
             let package_json = generate_package_json(&package_name, options.description.as_deref());
@@ -711,7 +759,7 @@ pub fn scaffold_extension<R: ProcessRunner>(
             files_created.push("package.json".into());
 
             // tsconfig.json
-            let tsconfig_json = generate_tsconfig_json();
+            let tsconfig_json = generate_tsconfig_json(view_syntax);
             fs::write(staging_dir.join("tsconfig.json"), tsconfig_json).map_err(|e| {
                 ScaffoldError::StagingFailed(format!("failed to write tsconfig.json: {e}"))
             })?;
@@ -724,16 +772,33 @@ pub fn scaffold_extension<R: ProcessRunner>(
             })?;
             files_created.push(".npmrc".into());
 
-            // src/extension.ts
+            // src/extension.tsx or src/extension.ts
             let src_dir = staging_dir.join("src");
             fs::create_dir_all(&src_dir).map_err(|e| {
                 ScaffoldError::StagingFailed(format!("failed to create src directory: {e}"))
             })?;
-            let extension_ts = generate_typescript_source(&options.name, options.contribution);
-            fs::write(src_dir.join("extension.ts"), extension_ts).map_err(|e| {
-                ScaffoldError::StagingFailed(format!("failed to write src/extension.ts: {e}"))
+            let (entry_rel, extension_src) = match view_syntax {
+                ViewSyntax::Jsx => (
+                    "src/extension.tsx",
+                    generate_typescript_source(
+                        &options.name,
+                        options.contribution,
+                        ViewSyntax::Jsx,
+                    ),
+                ),
+                ViewSyntax::Builders => (
+                    "src/extension.ts",
+                    generate_typescript_source(
+                        &options.name,
+                        options.contribution,
+                        ViewSyntax::Builders,
+                    ),
+                ),
+            };
+            fs::write(staging_dir.join(entry_rel), extension_src).map_err(|e| {
+                ScaffoldError::StagingFailed(format!("failed to write {entry_rel}: {e}"))
             })?;
-            files_created.push("src/extension.ts".into());
+            files_created.push(entry_rel.into());
 
             // .gitignore
             let gitignore = "node_modules/\ndist/\n";
@@ -1056,18 +1121,25 @@ fn generate_manifest(
     Ok(format!("# Generated by Shilpo CLI v0.1.0\n{toml_body}"))
 }
 
-fn generate_project_config(language: StarterLanguage) -> String {
+fn generate_project_config(language: StarterLanguage, view_syntax: Option<ViewSyntax>) -> String {
     let config = match language {
         StarterLanguage::Rust => ExtensionProjectConfig {
             language: ExtensionLanguage::Rust,
             entry: None,
             crate_dir: Some(".".into()),
         },
-        StarterLanguage::Typescript => ExtensionProjectConfig {
-            language: ExtensionLanguage::Typescript,
-            entry: Some("src/extension.ts".into()),
-            crate_dir: None,
-        },
+        StarterLanguage::Typescript => {
+            let syntax = view_syntax.unwrap_or(ViewSyntax::Jsx);
+            let entry = match syntax {
+                ViewSyntax::Jsx => "src/extension.tsx",
+                ViewSyntax::Builders => "src/extension.ts",
+            };
+            ExtensionProjectConfig {
+                language: ExtensionLanguage::Typescript,
+                entry: Some(entry.into()),
+                crate_dir: None,
+            }
+        }
     };
 
     serde_json::to_string_pretty(&config).unwrap_or_else(|_| "{}".into()) + "\n"
@@ -1322,14 +1394,34 @@ fn generate_package_json(package_name: &str, description: Option<&str>) -> Strin
         "description": description.unwrap_or(""),
         "scripts": {"build": "shilpo ext build"},
         "dependencies": {"@shilpo/ext-sdk": "npm:@jsr/shilpo__ext-sdk@^0.1.0"},
-        "devDependencies": {"@bytecodealliance/jco": "1.28.1"}
+        "devDependencies": {
+            "@bytecodealliance/jco": "1.28.1",
+            "typescript": "5.6.3"
+        }
     }))
     .expect("package metadata is serializable")
         + "\n"
 }
 
-fn generate_tsconfig_json() -> String {
-    r#"{
+fn generate_tsconfig_json(syntax: ViewSyntax) -> String {
+    match syntax {
+        ViewSyntax::Jsx => r#"{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
+    "jsxImportSource": "@shilpo/ext-sdk",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*"]
+}
+"#
+        .to_string(),
+        ViewSyntax::Builders => r#"{
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",
@@ -1342,16 +1434,195 @@ fn generate_tsconfig_json() -> String {
   "include": ["src/**/*"]
 }
 "#
-    .to_string()
+        .to_string(),
+    }
 }
 
-fn generate_typescript_source(name: &str, contribution: StarterContribution) -> String {
+fn generate_typescript_source(
+    name: &str,
+    contribution: StarterContribution,
+    syntax: ViewSyntax,
+) -> String {
     let safe_name = escape_js_string_contents(name);
     let safe_template_name = escape_js_template_contents(name);
-    match contribution {
-        StarterContribution::BarWidget => {
-            format!(
-                r#"// Generated by Shilpo CLI v0.1.0
+    match syntax {
+        ViewSyntax::Jsx => match contribution {
+            StarterContribution::BarWidget => {
+                format!(
+                    r#"// Generated by Shilpo CLI v0.1.0
+import {{ defineExtension, Row, Icon, Text, Button }} from "@shilpo/ext-sdk";
+
+let clicks = 0;
+
+const ext = defineExtension({{
+  onActivate(_activation, _host) {{
+    clicks = 0;
+  }},
+
+  onInput(event, _host) {{
+    if (event.eventId === "increment") {{
+      clicks += 1;
+    }}
+  }},
+
+  view(contributionId) {{
+    if (contributionId !== "widget") {{
+      return undefined;
+    }}
+
+    return (
+      <Row gap={{8}} alignItems="center">
+        <Icon name="star" size={{16}} />
+        <Text bold>{safe_template_name}: {{clicks}}</Text>
+        <Button eventId="increment">+1</Button>
+      </Row>
+    );
+  }},
+}});
+
+export const activate = ext.activate;
+export const deactivate = ext.deactivate;
+export const onEvent = ext.onEvent;
+export const view = ext.view;
+"#
+                )
+            }
+            StarterContribution::DesktopWidget => {
+                format!(
+                    r#"// Generated by Shilpo CLI v0.1.0
+import {{ defineExtension, Column, Row, Icon, Text, Divider }} from "@shilpo/ext-sdk";
+
+const ext = defineExtension({{
+  view(contributionId) {{
+    if (contributionId !== "widget") {{
+      return undefined;
+    }}
+
+    return (
+      <Column gap={{12}}>
+        <Row gap={{8}} alignItems="center">
+          <Icon name="dashboard" size={{20}} />
+          <Text bold fontSize={{16}}>{safe_name}</Text>
+        </Row>
+        <Divider />
+        <Text>Desktop widget content</Text>
+      </Column>
+    );
+  }},
+}});
+
+export const activate = ext.activate;
+export const deactivate = ext.deactivate;
+export const onEvent = ext.onEvent;
+export const view = ext.view;
+"#
+                )
+            }
+            StarterContribution::SettingsPage => {
+                format!(
+                    r#"// Generated by Shilpo CLI v0.1.0
+import {{ defineExtension, Column, Row, Text, Divider, Spacer, Toggle }} from "@shilpo/ext-sdk";
+
+let enabled = true;
+
+const ext = defineExtension({{
+  onActivate(_activation, _host) {{
+    enabled = true;
+  }},
+
+  onInput(event, _host) {{
+    if (event.eventId === "toggle-enabled") {{
+      enabled = !enabled;
+    }}
+  }},
+
+  view(contributionId) {{
+    if (contributionId !== "settings") {{
+      return undefined;
+    }}
+
+    return (
+      <Column gap={{12}}>
+        <Text bold fontSize={{18}}>{safe_name} Settings</Text>
+        <Divider />
+        <Row gap={{8}} alignItems="center">
+          <Text>Enable Feature</Text>
+          <Spacer />
+          <Toggle value={{enabled}} eventId="toggle-enabled" />
+        </Row>
+      </Column>
+    );
+  }},
+}});
+
+export const activate = ext.activate;
+export const deactivate = ext.deactivate;
+export const onEvent = ext.onEvent;
+export const view = ext.view;
+"#
+                )
+            }
+            StarterContribution::SidePanel => {
+                format!(
+                    r#"// Generated by Shilpo CLI v0.1.0
+import {{ defineExtension, Column, Row, Icon, Text, Divider }} from "@shilpo/ext-sdk";
+
+const ext = defineExtension({{
+  view(contributionId) {{
+    if (contributionId !== "panel") {{
+      return undefined;
+    }}
+
+    return (
+      <Column gap={{8}}>
+        <Row gap={{8}} alignItems="center">
+          <Icon name="sidebar" size={{18}} />
+          <Text bold>{safe_name} Panel</Text>
+        </Row>
+        <Divider />
+        <Text>Side panel content</Text>
+      </Column>
+    );
+  }},
+}});
+
+export const activate = ext.activate;
+export const deactivate = ext.deactivate;
+export const onEvent = ext.onEvent;
+export const view = ext.view;
+"#
+                )
+            }
+            StarterContribution::Action => r#"// Generated by Shilpo CLI v0.1.0
+import { defineExtension } from "@shilpo/ext-sdk";
+
+const ext = defineExtension({
+  onActivate(_activation, _host) {},
+  onEvent(_event, _host) {},
+});
+
+export const activate = ext.activate;
+export const deactivate = ext.deactivate;
+export const onEvent = ext.onEvent;
+export const view = ext.view;
+"#
+            .to_string(),
+            StarterContribution::Empty => r#"// Generated by Shilpo CLI v0.1.0
+import { defineExtension } from "@shilpo/ext-sdk";
+
+const ext = defineExtension({});
+
+export const activate = ext.activate;
+export const deactivate = ext.deactivate;
+export const onEvent = ext.onEvent;
+export const view = ext.view;
+"#
+            .to_string(),
+        },
+        ViewSyntax::Builders => match contribution {
+            StarterContribution::BarWidget => {
+                format!(
+                    r#"// Generated by Shilpo CLI v0.1.0
 import {{ defineExtension, row, icon, text, button, Alignment }} from "@shilpo/ext-sdk";
 
 let clicks = 0;
@@ -1389,11 +1660,11 @@ export const deactivate = ext.deactivate;
 export const onEvent = ext.onEvent;
 export const view = ext.view;
 "#
-            )
-        }
-        StarterContribution::DesktopWidget => {
-            format!(
-                r#"// Generated by Shilpo CLI v0.1.0
+                )
+            }
+            StarterContribution::DesktopWidget => {
+                format!(
+                    r#"// Generated by Shilpo CLI v0.1.0
 import {{ defineExtension, column, row, icon, text, divider, Alignment }} from "@shilpo/ext-sdk";
 
 const ext = defineExtension({{
@@ -1425,11 +1696,11 @@ export const deactivate = ext.deactivate;
 export const onEvent = ext.onEvent;
 export const view = ext.view;
 "#
-            )
-        }
-        StarterContribution::SettingsPage => {
-            format!(
-                r#"// Generated by Shilpo CLI v0.1.0
+                )
+            }
+            StarterContribution::SettingsPage => {
+                format!(
+                    r#"// Generated by Shilpo CLI v0.1.0
 import {{ defineExtension, column, row, text, divider, spacer, toggle, Alignment }} from "@shilpo/ext-sdk";
 
 let enabled = true;
@@ -1474,11 +1745,11 @@ export const deactivate = ext.deactivate;
 export const onEvent = ext.onEvent;
 export const view = ext.view;
 "#
-            )
-        }
-        StarterContribution::SidePanel => {
-            format!(
-                r#"// Generated by Shilpo CLI v0.1.0
+                )
+            }
+            StarterContribution::SidePanel => {
+                format!(
+                    r#"// Generated by Shilpo CLI v0.1.0
 import {{ defineExtension, column, row, icon, text, divider, Alignment }} from "@shilpo/ext-sdk";
 
 const ext = defineExtension({{
@@ -1495,7 +1766,7 @@ const ext = defineExtension({{
           alignItems: "center" as Alignment,
           children: [
             icon("sidebar", {{ size: 18 }}),
-        text("{safe_name} Panel", {{ bold: true }}),
+            text("{safe_name} Panel", {{ bold: true }}),
           ],
         }}),
         divider(),
@@ -1510,9 +1781,9 @@ export const deactivate = ext.deactivate;
 export const onEvent = ext.onEvent;
 export const view = ext.view;
 "#
-            )
-        }
-        StarterContribution::Action => r#"// Generated by Shilpo CLI v0.1.0
+                )
+            }
+            StarterContribution::Action => r#"// Generated by Shilpo CLI v0.1.0
 import { defineExtension } from "@shilpo/ext-sdk";
 
 const ext = defineExtension({
@@ -1525,8 +1796,8 @@ export const deactivate = ext.deactivate;
 export const onEvent = ext.onEvent;
 export const view = ext.view;
 "#
-        .to_string(),
-        StarterContribution::Empty => r#"// Generated by Shilpo CLI v0.1.0
+            .to_string(),
+            StarterContribution::Empty => r#"// Generated by Shilpo CLI v0.1.0
 import { defineExtension } from "@shilpo/ext-sdk";
 
 const ext = defineExtension({});
@@ -1536,7 +1807,8 @@ export const deactivate = ext.deactivate;
 export const onEvent = ext.onEvent;
 export const view = ext.view;
 "#
-        .to_string(),
+            .to_string(),
+        },
     }
 }
 
@@ -1762,11 +2034,16 @@ mod tests {
     fn generated_sources_escape_display_values() {
         let name = "A \"quoted\"\nname";
         let rust = generate_rust_source(name, StarterContribution::BarWidget);
-        let typescript = generate_typescript_source(name, StarterContribution::BarWidget);
+        let ts_jsx =
+            generate_typescript_source(name, StarterContribution::BarWidget, ViewSyntax::Jsx);
+        let ts_bld =
+            generate_typescript_source(name, StarterContribution::BarWidget, ViewSyntax::Builders);
         assert!(!rust.contains("A \"quoted\"\nname"));
-        assert!(!typescript.contains("A \"quoted\"\nname"));
+        assert!(!ts_jsx.contains("A \"quoted\"\nname"));
+        assert!(!ts_bld.contains("A \"quoted\"\nname"));
         assert!(rust.contains("A \\\"quoted\\\"\\nname"));
-        assert!(typescript.contains("A \\\"quoted\\\"\\nname"));
+        assert!(ts_jsx.contains("A \\\"quoted\\\"\\nname"));
+        assert!(ts_bld.contains("A \\\"quoted\\\"\\nname"));
         let schema: serde_json::Value =
             serde_json::from_str(&generate_settings_schema(name)).unwrap();
         assert!(schema["title"].as_str().unwrap().starts_with(name));
@@ -1857,6 +2134,7 @@ mod tests {
                     } else {
                         None
                     },
+                    view_syntax: None,
                     extension_id: None,
                     package_name: None,
                     description: Some("Test description".into()),
@@ -1894,12 +2172,13 @@ mod tests {
                     }
                     StarterLanguage::Typescript => {
                         assert_eq!(config.language, ExtensionLanguage::Typescript);
+                        assert_eq!(config.entry, Some("src/extension.tsx".into()));
                         assert!(target.join("package.json").exists());
                         assert!(target.join("tsconfig.json").exists());
                         assert!(target.join(".npmrc").exists());
-                        assert!(target.join("src/extension.ts").exists());
+                        assert!(target.join("src/extension.tsx").exists());
                         let ts_content =
-                            fs::read_to_string(target.join("src/extension.ts")).unwrap();
+                            fs::read_to_string(target.join("src/extension.tsx")).unwrap();
                         assert!(!ts_content.contains("<name>"));
                         assert!(!ts_content.contains("{name}"));
                     }
@@ -1925,6 +2204,41 @@ mod tests {
     }
 
     #[test]
+    fn test_scaffold_typescript_builders_syntax() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("ext-ts-builders");
+        let options = ScaffoldOptions {
+            name: "TS Builders".into(),
+            target_dir: target.clone(),
+            language: StarterLanguage::Typescript,
+            contribution: StarterContribution::BarWidget,
+            package_manager: Some(PackageManager::Npm),
+            view_syntax: Some(ViewSyntax::Builders),
+            extension_id: None,
+            package_name: None,
+            description: None,
+            capabilities: Vec::new(),
+            subscriptions: Vec::new(),
+            install: false,
+            build: false,
+            git: false,
+        };
+
+        let runner = MockProcessRunner::new();
+        let res = scaffold_extension(&options, &runner).unwrap();
+        assert_eq!(res.language, StarterLanguage::Typescript);
+        assert!(target.join("src/extension.ts").exists());
+        assert!(!target.join("src/extension.tsx").exists());
+
+        let config_str = fs::read_to_string(target.join("shilpo-ext.json")).unwrap();
+        let config: ExtensionProjectConfig = serde_json::from_str(&config_str).unwrap();
+        assert_eq!(config.entry, Some("src/extension.ts".into()));
+
+        let tsconfig_str = fs::read_to_string(target.join("tsconfig.json")).unwrap();
+        assert!(!tsconfig_str.contains("\"jsx\":"));
+    }
+
+    #[test]
     fn test_scaffold_with_git_and_install_mocked() {
         let temp = tempdir().unwrap();
         let target = temp.path().join("ts-full");
@@ -1934,6 +2248,7 @@ mod tests {
             language: StarterLanguage::Typescript,
             contribution: StarterContribution::BarWidget,
             package_manager: Some(PackageManager::Pnpm),
+            view_syntax: None,
             extension_id: None,
             package_name: None,
             description: None,
@@ -1970,6 +2285,7 @@ mod tests {
             language: StarterLanguage::Rust,
             contribution: StarterContribution::Empty,
             package_manager: None,
+            view_syntax: None,
             extension_id: None,
             package_name: None,
             description: None,
@@ -2002,6 +2318,7 @@ mod tests {
             language: StarterLanguage::Typescript,
             contribution: StarterContribution::Empty,
             package_manager: Some(PackageManager::Bun),
+            view_syntax: None,
             extension_id: None,
             package_name: None,
             description: None,
@@ -2040,6 +2357,7 @@ mod tests {
             language: StarterLanguage::Rust,
             contribution: StarterContribution::Empty,
             package_manager: Some(PackageManager::Npm),
+            view_syntax: None,
             extension_id: None,
             package_name: None,
             description: None,
@@ -2053,5 +2371,31 @@ mod tests {
         let runner = MockProcessRunner::new();
         let err = scaffold_extension(&options, &runner).unwrap_err();
         assert!(matches!(err, ScaffoldError::InvalidTarget(_)));
+    }
+
+    #[test]
+    fn test_rust_rejects_view_syntax() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("rust-view-syntax");
+        let options = ScaffoldOptions {
+            name: "Rust Syntax".into(),
+            target_dir: target,
+            language: StarterLanguage::Rust,
+            contribution: StarterContribution::Empty,
+            package_manager: None,
+            view_syntax: Some(ViewSyntax::Jsx),
+            extension_id: None,
+            package_name: None,
+            description: None,
+            capabilities: Vec::new(),
+            subscriptions: Vec::new(),
+            install: false,
+            build: false,
+            git: false,
+        };
+
+        let runner = MockProcessRunner::new();
+        let err = scaffold_extension(&options, &runner).unwrap_err();
+        assert!(matches!(err, ScaffoldError::InvalidOption(_)));
     }
 }

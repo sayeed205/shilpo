@@ -5,7 +5,7 @@ use shilpo_ext_api::{Capability, EventKind, ExtensionId, Subscription};
 use shilpo_ext_runtime::{
     ExtensionCatalog, ExtensionCli, ExtensionCliResult, LintOptions, LintReport, LintSeverity,
     PackageManager, ReleaseChannel, ScaffoldError, ScaffoldOptions, StarterContribution,
-    StarterLanguage, UpdateState, default_extension_state_dir, derive_package_name,
+    StarterLanguage, UpdateState, ViewSyntax, default_extension_state_dir, derive_package_name,
     scaffold_extension, sign_package,
 };
 
@@ -48,6 +48,7 @@ impl ExtAdapter {
         language: Option<StarterLanguage>,
         contribution: Option<StarterContribution>,
         package_manager: Option<PackageManager>,
+        view_syntax: Option<ViewSyntax>,
         extension_id: Option<String>,
         package_name: Option<String>,
         description: Option<String>,
@@ -120,9 +121,20 @@ impl ExtAdapter {
             }
         };
 
+        if language == Some(StarterLanguage::Rust) && view_syntax.is_some() {
+            return ExtOpResult {
+                success: false,
+                data: serde_json::Value::Null,
+                human_message: "--view-syntax is only supported for TypeScript extensions".into(),
+                warnings: Vec::new(),
+                exit_code: crate::cli::output::EXIT_INVALID_ARGS,
+            };
+        }
+
         let mut chosen_language = language;
         let mut chosen_contribution = contribution;
         let mut chosen_pm = package_manager;
+        let mut chosen_view_syntax = view_syntax;
         let mut chosen_git = git;
         let mut chosen_install = install;
         let mut chosen_description = description;
@@ -177,6 +189,22 @@ impl ExtAdapter {
                     "5" | "action" => Some(StarterContribution::Action),
                     "6" | "empty" => Some(StarterContribution::Empty),
                     _ => Some(StarterContribution::BarWidget),
+                };
+            }
+
+            if chosen_language == Some(StarterLanguage::Typescript) && chosen_view_syntax.is_none()
+            {
+                println!("\nSelect view authoring syntax:");
+                println!("  1) JSX (recommended)");
+                println!("  2) Builder functions");
+                print!("Selection [1]: ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                let choice = line.trim();
+                chosen_view_syntax = match choice {
+                    "2" | "builders" | "builder" => Some(ViewSyntax::Builders),
+                    _ => Some(ViewSyntax::Jsx),
                 };
             }
 
@@ -238,9 +266,15 @@ impl ExtAdapter {
             let preview_contribution =
                 chosen_contribution.unwrap_or(StarterContribution::BarWidget);
             let preview_pm = chosen_pm.unwrap_or(PackageManager::Npm);
+            let preview_syntax = chosen_view_syntax.unwrap_or(ViewSyntax::Jsx);
             if !yes {
+                let syntax_line = if preview_language == StarterLanguage::Typescript {
+                    format!("\n  view syntax: {preview_syntax}")
+                } else {
+                    String::new()
+                };
                 println!(
-                    "\nSummary:\n  name: {trimmed_name}\n  target: {}\n  language: {preview_language}\n  contribution: {preview_contribution}\n  package manager: {preview_pm}\n  git: {}\n  install: {}",
+                    "\nSummary:\n  name: {trimmed_name}\n  target: {}\n  language: {preview_language}\n  contribution: {preview_contribution}{syntax_line}\n  package manager: {preview_pm}\n  git: {}\n  install: {}",
                     target_dir.display(),
                     chosen_git,
                     chosen_install || build
@@ -272,6 +306,11 @@ impl ExtAdapter {
         } else {
             None
         };
+        let final_view_syntax = if final_language == StarterLanguage::Typescript {
+            chosen_view_syntax.or(Some(ViewSyntax::Jsx))
+        } else {
+            None
+        };
 
         let options = ScaffoldOptions {
             name: trimmed_name.to_string(),
@@ -279,6 +318,7 @@ impl ExtAdapter {
             language: final_language,
             contribution: final_contribution,
             package_manager: final_pm,
+            view_syntax: final_view_syntax,
             extension_id,
             package_name,
             description: chosen_description,

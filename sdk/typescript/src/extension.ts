@@ -15,12 +15,17 @@ import type {
 import { createHostFacade, type HostFacade } from "./host.ts";
 import { type ViewNodeSpec } from "./builder/nodes.ts";
 import { buildViewTree } from "./builder/tree.ts";
+import { isFragment, normalizeChildren } from "./jsx/components.ts";
+import type { ViewElement } from "./jsx/types.ts";
 
 export interface ExtensionDefinition {
   onActivate?: (act: Activation, host: HostFacade) => void | Promise<void>;
   onDeactivate?: (reason: DeactivateReason, host: HostFacade) => void | Promise<void>;
   onEvent?: (event: ExtensionEvent, host: HostFacade) => void | Promise<void>;
-  view?: (contributionId: string, host: HostFacade) => ViewTree | ViewNodeSpec | undefined;
+  view?: (
+    contributionId: string,
+    host: HostFacade,
+  ) => ViewTree | ViewElement | undefined | null;
 
   // Specific event handlers for ergonomics
   onInput?: (event: InputEvent, host: HostFacade) => void;
@@ -127,11 +132,34 @@ export function defineExtension(
           return undefined;
         }
         const result = definition.view(contributionId, host);
-        if (result === undefined) {
+        if (result === undefined || result === null) {
           return undefined;
         }
         if ("nodes" in result && "root" in result) {
           return result as ViewTree;
+        }
+        if (isFragment(result)) {
+          const children = normalizeChildren(result.children, "Fragment");
+          if (children.length === 0) {
+            throw new Error(
+              "View returned an empty fragment. A view must normalize to exactly one root ViewNode.",
+            );
+          }
+          if (children.length > 1) {
+            throw new Error(
+              `View returned multiple root elements (${children.length}). A view must normalize to exactly one root ViewNode; wrap elements in a Container, Row, Column, or Stack.`,
+            );
+          }
+          return buildViewTree(children[0]!);
+        }
+        if (Array.isArray(result)) {
+          const children = normalizeChildren(result, "View");
+          if (children.length !== 1) {
+            throw new Error(
+              `View returned ${children.length} root elements. A view must normalize to exactly one root ViewNode.`,
+            );
+          }
+          return buildViewTree(children[0]!);
         }
         return buildViewTree(result as ViewNodeSpec);
       });

@@ -116,6 +116,8 @@ pub static PROCESS_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 pub struct OsProcessRunner;
 
+const REQUIRED_TYPESCRIPT_VERSION: &str = "5.6.3";
+
 impl ProcessRunner for OsProcessRunner {
     fn run(&self, command: &ProcessCommand) -> Result<ProcessOutput, String> {
         let mut cmd = std::process::Command::new(&command.program);
@@ -351,25 +353,40 @@ pub fn resolve_project_config(dir: &Path) -> Result<ResolvedBuildConfig, Vec<Str
                     );
                     return Err(diagnostics);
                 }
-                let entry_str = cfg.entry.unwrap_or_else(|| "src/extension.ts".into());
-                let entry_path = match validate_safe_relative_path(&entry_str, "entry") {
-                    Ok(p) => p,
-                    Err(e) => {
-                        diagnostics.push(e);
+                let entry_path = if let Some(entry_str) = cfg.entry {
+                    let entry_path = match validate_safe_relative_path(&entry_str, "entry") {
+                        Ok(p) => p,
+                        Err(e) => {
+                            diagnostics.push(e);
+                            return Err(diagnostics);
+                        }
+                    };
+                    let ext_str = entry_path
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    if ext_str != "ts" && ext_str != "tsx" {
+                        diagnostics.push(format!(
+                            "error[config.entry]: entry file '{}' must end with .ts or .tsx",
+                            entry_path.display()
+                        ));
                         return Err(diagnostics);
                     }
+                    entry_path
+                } else {
+                    let has_ts = dir.join("src/extension.ts").is_file();
+                    let has_tsx = dir.join("src/extension.tsx").is_file();
+                    if has_ts && has_tsx {
+                        diagnostics.push(
+                            "error[config.entry]: ambiguous TypeScript entry: found both src/extension.ts and src/extension.tsx; specify \"entry\" in shilpo-ext.json".into(),
+                        );
+                        return Err(diagnostics);
+                    } else if has_tsx {
+                        PathBuf::from("src/extension.tsx")
+                    } else {
+                        PathBuf::from("src/extension.ts")
+                    }
                 };
-                let ext_str = entry_path
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
-                if ext_str != "ts" && ext_str != "tsx" {
-                    diagnostics.push(format!(
-                        "error[config.entry]: entry file '{}' must end with .ts or .tsx",
-                        entry_path.display()
-                    ));
-                    return Err(diagnostics);
-                }
                 (ExtensionLanguage::Typescript, Some(entry_path), None)
             }
             ExtensionLanguage::Rust => {
@@ -394,26 +411,43 @@ pub fn resolve_project_config(dir: &Path) -> Result<ResolvedBuildConfig, Vec<Str
     } else {
         // Infer from project structure
         let ts_entry = dir.join("src/extension.ts");
+        let tsx_entry = dir.join("src/extension.tsx");
         let rust_cargo = dir.join("Cargo.toml");
         let has_ts = ts_entry.is_file();
+        let has_tsx = tsx_entry.is_file();
         let has_rust = rust_cargo.is_file();
 
-        match (has_ts, has_rust) {
-            (true, false) => (
-                ExtensionLanguage::Typescript,
-                Some(PathBuf::from("src/extension.ts")),
-                None,
-            ),
+        if has_ts && has_tsx {
+            diagnostics.push(
+                "error[build.config]: ambiguous project: found both src/extension.ts and src/extension.tsx; specify \"entry\" in shilpo-ext.json".into(),
+            );
+            return Err(diagnostics);
+        }
+
+        match (has_ts || has_tsx, has_rust) {
+            (true, false) => {
+                let entry = if has_tsx {
+                    PathBuf::from("src/extension.tsx")
+                } else {
+                    PathBuf::from("src/extension.ts")
+                };
+                (ExtensionLanguage::Typescript, Some(entry), None)
+            }
             (false, true) => (ExtensionLanguage::Rust, None, Some(PathBuf::from("."))),
             (true, true) => {
+                let ts_name = if has_tsx {
+                    "src/extension.tsx"
+                } else {
+                    "src/extension.ts"
+                };
                 diagnostics.push(
-                    "error[build.config]: ambiguous project: found both src/extension.ts and Cargo.toml; specify \"language\" in shilpo-ext.json".into(),
+                    format!("error[build.config]: ambiguous project: found both {ts_name} and Cargo.toml; specify \"language\" in shilpo-ext.json"),
                 );
                 return Err(diagnostics);
             }
             (false, false) => {
                 diagnostics.push(
-                    "error[build.config]: unable to infer project language: neither src/extension.ts nor Cargo.toml was found; specify \"language\" in shilpo-ext.json".into(),
+                    "error[build.config]: unable to infer project language: neither src/extension.ts, src/extension.tsx, nor Cargo.toml was found; specify \"language\" in shilpo-ext.json".into(),
                 );
                 return Err(diagnostics);
             }
@@ -556,6 +590,42 @@ pub fn find_local_jco(project_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+pub fn find_local_tsc(project_dir: &Path) -> Option<PathBuf> {
+    let root = project_dir.canonicalize().ok()?;
+    if find_javascript_lockfile(&root).is_none() || !root.join("package.json").is_file() {
+        return None;
+    }
+
+    let package_source = fs::read_to_string(root.join("package.json")).ok()?;
+    let package_json: serde_json::Value = serde_json::from_str(&package_source).ok()?;
+    let declared_version = ["devDependencies", "dependencies", "optionalDependencies"]
+        .iter()
+        .find_map(|section| package_json.get(*section)?.get("typescript"))
+        .and_then(serde_json::Value::as_str)?;
+    if declared_version != REQUIRED_TYPESCRIPT_VERSION {
+        return None;
+    }
+
+    let installed_package = root.join("node_modules/typescript/package.json");
+    let installed_source = fs::read_to_string(installed_package).ok()?;
+    let installed_json: serde_json::Value = serde_json::from_str(&installed_source).ok()?;
+    if installed_json
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        != Some(REQUIRED_TYPESCRIPT_VERSION)
+    {
+        return None;
+    }
+
+    let candidates = [
+        root.join("node_modules/.bin/tsc"),
+        root.join("node_modules/typescript/bin/tsc"),
+    ];
+    candidates
+        .into_iter()
+        .find(|candidate| is_safe_tool_path(candidate, &root))
+}
+
 fn is_safe_tool_path(path: &Path, root: &Path) -> bool {
     let Ok(root) = root.canonicalize() else {
         return false;
@@ -567,22 +637,30 @@ fn is_safe_tool_path(path: &Path, root: &Path) -> bool {
 }
 
 fn find_javascript_lockfile(project_dir: &Path) -> Option<PathBuf> {
-    let mut current = Some(project_dir);
-    while let Some(dir) = current {
-        for name in [
-            "package-lock.json",
-            "npm-shrinkwrap.json",
-            "pnpm-lock.yaml",
-            "yarn.lock",
-        ] {
-            let candidate = dir.join(name);
-            if candidate.is_file() && !candidate.is_symlink() {
-                return Some(candidate);
-            }
+    for name in [
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lockb",
+        "bun.lock",
+    ] {
+        let candidate = project_dir.join(name);
+        if candidate.is_file() && !candidate.is_symlink() {
+            return Some(candidate);
         }
-        current = dir.parent();
     }
     None
+}
+
+fn process_failure_diagnostic(error: &str, phase: &str) -> String {
+    if error.contains("timed out") {
+        format!("error[build.timeout]: {phase} {error}")
+    } else if error.contains("cancelled") {
+        format!("error[build.cancelled]: {phase} {error}")
+    } else {
+        format!("error[build.spawn]: {phase} {error}")
+    }
 }
 
 fn determine_rust_artifact(
@@ -735,6 +813,24 @@ fn build_typescript(
         return Err(());
     }
 
+    let tsc_path = match find_local_tsc(dir) {
+        Some(p) => p,
+        None => {
+            diagnostics.push(
+                "error[build.toolchain]: project-local, lockfile-backed TypeScript compiler not found; install it locally with 'npm install --save-dev typescript' and commit the lockfile".into(),
+            );
+            return Err(());
+        }
+    };
+
+    let tsconfig_path = dir.join("tsconfig.json");
+    if !tsconfig_path.is_file() {
+        diagnostics.push(
+            "error[build.config]: tsconfig.json not found in project root; generate one or run 'shilpo ext new'".into(),
+        );
+        return Err(());
+    }
+
     let jco_path = match find_local_jco(dir) {
         Some(p) => p,
         None => {
@@ -767,6 +863,8 @@ fn build_typescript(
 
     let temp_dest = temporary_destination(dest_dir, &final_dest);
 
+    let tsc_abs = fs::canonicalize(&tsc_path).unwrap_or_else(|_| tsc_path.clone());
+    let tsconfig_abs = fs::canonicalize(&tsconfig_path).unwrap_or_else(|_| tsconfig_path.clone());
     let jco_abs = fs::canonicalize(&jco_path).unwrap_or_else(|_| jco_path.clone());
     let entry_abs = fs::canonicalize(&full_entry).unwrap_or_else(|_| full_entry.clone());
     let wit_abs = fs::canonicalize(&wit_dir).unwrap_or_else(|_| wit_dir.clone());
@@ -780,6 +878,62 @@ fn build_typescript(
         })
         .unwrap_or_else(|_| temp_dest.clone());
 
+    let start_time = std::time::Instant::now();
+
+    // 1. Run type-check with tsc
+    let tsc_cmd = ProcessCommand::new("node")
+        .arg(tsc_abs.to_str().unwrap_or("tsc"))
+        .arg("--noEmit")
+        .arg("--project")
+        .arg(tsconfig_abs.to_str().unwrap_or("tsconfig.json"))
+        .cwd(dir);
+
+    let tsc_output = match runner.run_with_timeout(&tsc_cmd, timeout) {
+        Ok(out) => out,
+        Err(e) => {
+            diagnostics.push(process_failure_diagnostic(&e, "TypeScript type-check"));
+            return Err(());
+        }
+    };
+
+    if !tsc_output.stderr.is_empty() {
+        let stderr_str = String::from_utf8_lossy(&tsc_output.stderr);
+        for line in stderr_str.lines() {
+            if !line.trim().is_empty() {
+                diagnostics.push(line.to_string());
+            }
+        }
+    }
+
+    if !tsc_output.stdout.is_empty() {
+        let stdout_str = String::from_utf8_lossy(&tsc_output.stdout);
+        for line in stdout_str.lines() {
+            if !line.trim().is_empty() {
+                diagnostics.push(line.to_string());
+            }
+        }
+    }
+
+    if !tsc_output.success {
+        diagnostics.push(format!(
+            "error[build.typecheck]: TypeScript type-checking failed with status {}",
+            tsc_output.exit_code.unwrap_or(1)
+        ));
+        return Err(());
+    }
+
+    // Compute remaining timeout budget
+    let elapsed = start_time.elapsed();
+    let remaining_timeout = timeout
+        .checked_sub(elapsed)
+        .unwrap_or(std::time::Duration::ZERO);
+    if remaining_timeout.is_zero() {
+        diagnostics
+            .push("error[build.timeout]: build timed out during TypeScript type-checking".into());
+        return Err(());
+    }
+
+    // 2. Run JCO componentize
     let cmd = ProcessCommand::new("node")
         .arg(jco_abs.to_str().unwrap_or("jco"))
         .arg("componentize")
@@ -795,11 +949,11 @@ fn build_typescript(
         .arg(temp_dest_abs.to_str().unwrap_or("temp.wasm"))
         .cwd(dir);
 
-    let output = match runner.run_with_timeout(&cmd, timeout) {
+    let output = match runner.run_with_timeout(&cmd, remaining_timeout) {
         Ok(out) => out,
         Err(e) => {
             let _ = fs::remove_file(&temp_dest_abs);
-            diagnostics.push(format!("error[build.spawn]: {e}"));
+            diagnostics.push(process_failure_diagnostic(&e, "JCO componentization"));
             return Err(());
         }
     };
@@ -1163,6 +1317,20 @@ mod tests {
         fs::write(dir.join("extension.toml"), manifest).unwrap();
     }
 
+    fn write_typescript_toolchain_fixture(dir: &Path) {
+        fs::write(
+            dir.join("package.json"),
+            r#"{"devDependencies":{"typescript":"5.6.3"}}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("node_modules/typescript")).unwrap();
+        fs::write(
+            dir.join("node_modules/typescript/package.json"),
+            r#"{"version":"5.6.3"}"#,
+        )
+        .unwrap();
+    }
+
     #[test]
     fn test_resolve_project_config_shilpo_ext_json_typescript_default() {
         let temp = tempdir().unwrap();
@@ -1373,16 +1541,19 @@ mod tests {
         write_manifest(dir, "org.shilpo.ts-test", "dist/output.wasm");
         fs::write(
             dir.join("shilpo-ext.json"),
-            r#"{"language": "typescript", "entry": "src/extension.ts"}"#,
+            r#"{"language": "typescript", "entry": "src/extension.tsx"}"#,
         )
         .unwrap();
         fs::create_dir_all(dir.join("src")).unwrap();
-        fs::write(dir.join("src/extension.ts"), "export {}").unwrap();
+        fs::write(dir.join("src/extension.tsx"), "export {}").unwrap();
+        fs::write(dir.join("tsconfig.json"), "{}").unwrap();
 
-        // Local JCO
+        // Local TSC and JCO
         fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
 
         // WIT dir
         fs::create_dir_all(dir.join("core/ext-api/wit")).unwrap();
@@ -1437,8 +1608,11 @@ mod tests {
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::write(dir.join("src/extension.ts"), "export {}").unwrap();
         fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("tsconfig.json"), "{}").unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
 
         let mock_runner = MockProcessRunner::new().with_binary("node", false);
         let res = build_extension(dir, false, &mock_runner);
@@ -1451,21 +1625,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typescript_build_missing_jco() {
-        let temp = tempdir().unwrap();
-        let dir = temp.path();
-        write_manifest(dir, "org.shilpo.ts-test", "extension.wasm");
-        fs::create_dir_all(dir.join("src")).unwrap();
-        fs::write(dir.join("src/extension.ts"), "export {}").unwrap();
-
-        let mock_runner = MockProcessRunner::new().with_binary("node", true);
-        let res = build_extension(dir, false, &mock_runner);
-        assert!(!res.success);
-        assert!(res.diagnostics.iter().any(|d| d.contains("project-local")));
-    }
-
-    #[test]
-    fn test_typescript_build_failure_preserves_previous_component() {
+    fn test_typescript_build_missing_tsc() {
         let temp = tempdir().unwrap();
         let dir = temp.path();
         write_manifest(dir, "org.shilpo.ts-test", "extension.wasm");
@@ -1473,7 +1633,136 @@ mod tests {
         fs::write(dir.join("src/extension.ts"), "export {}").unwrap();
         fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
         fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("tsconfig.json"), "{}").unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
+
+        let mock_runner = MockProcessRunner::new().with_binary("node", true);
+        let res = build_extension(dir, false, &mock_runner);
+        assert!(!res.success);
+        assert!(
+            res.diagnostics
+                .iter()
+                .any(|d| d.contains("TypeScript compiler not found"))
+        );
+    }
+
+    #[test]
+    fn test_find_local_tsc_requires_exact_project_local_package() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
+        fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
+        assert!(find_local_tsc(dir).is_some());
+
+        let nested = dir.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        assert!(find_local_tsc(&nested).is_none());
+
+        fs::write(
+            dir.join("package.json"),
+            r#"{"devDependencies":{"typescript":"^5.6.3"}}"#,
+        )
+        .unwrap();
+        assert!(find_local_tsc(dir).is_none());
+    }
+
+    #[test]
+    fn test_typescript_build_timeout_has_stable_diagnostic() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        write_manifest(dir, "org.shilpo.ts-test", "extension.wasm");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/extension.ts"), "export {}").unwrap();
+        fs::write(dir.join("tsconfig.json"), "{}").unwrap();
+        fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
+
+        struct TimeoutRunner;
+        impl ProcessRunner for TimeoutRunner {
+            fn run(&self, _command: &ProcessCommand) -> Result<ProcessOutput, String> {
+                Err("process 'node' timed out after 1s".into())
+            }
+
+            fn which(&self, binary_name: &str) -> Option<PathBuf> {
+                (binary_name == "node").then(|| PathBuf::from("/usr/bin/node"))
+            }
+        }
+
+        let result = build_extension(dir, false, &TimeoutRunner);
+        assert!(!result.success);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| { d.starts_with("error[build.timeout]: TypeScript type-check") })
+        );
+    }
+
+    #[test]
+    fn test_typescript_build_missing_tsconfig() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        write_manifest(dir, "org.shilpo.ts-test", "extension.wasm");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/extension.ts"), "export {}").unwrap();
+        fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
+
+        let mock_runner = MockProcessRunner::new().with_binary("node", true);
+        let res = build_extension(dir, false, &mock_runner);
+        assert!(!res.success);
+        assert!(
+            res.diagnostics
+                .iter()
+                .any(|d| d.contains("tsconfig.json not found"))
+        );
+    }
+
+    #[test]
+    fn test_typescript_build_missing_jco() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        write_manifest(dir, "org.shilpo.ts-test", "extension.wasm");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/extension.ts"), "export {}").unwrap();
+        fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("tsconfig.json"), "{}").unwrap();
+        fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
+
+        let mock_runner = MockProcessRunner::new().with_binary("node", true);
+        let res = build_extension(dir, false, &mock_runner);
+        assert!(!res.success);
+        assert!(
+            res.diagnostics
+                .iter()
+                .any(|d| d.contains("JCO executable not found"))
+        );
+    }
+
+    #[test]
+    fn test_typescript_build_typecheck_failure_aborts_before_jco() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        write_manifest(dir, "org.shilpo.ts-test", "extension.wasm");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/extension.tsx"), "export {}").unwrap();
+        fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("tsconfig.json"), "{}").unwrap();
+        fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
         fs::create_dir_all(dir.join("core/ext-api/wit")).unwrap();
         fs::write(
             dir.join("core/ext-api/wit/extension.wit"),
@@ -1485,18 +1774,109 @@ mod tests {
         let original_bytes = b"ORIGINAL_WORKING_COMPONENT";
         fs::write(dir.join("extension.wasm"), original_bytes).unwrap();
 
-        // Mock runner simulates JCO compiler error
-        let mock_runner = MockProcessRunner::new().with_response(
-            "node",
-            Ok(ProcessOutput {
-                success: false,
-                exit_code: Some(1),
-                stdout: Vec::new(),
-                stderr: b"SyntaxError: unexpected token".to_vec(),
-            }),
+        struct FailingTscRunner;
+        impl ProcessRunner for FailingTscRunner {
+            fn run(&self, command: &ProcessCommand) -> Result<ProcessOutput, String> {
+                if command.args.contains(&"--noEmit".to_string()) {
+                    return Ok(ProcessOutput {
+                        success: false,
+                        exit_code: Some(2),
+                        stdout: b"src/extension.tsx(10,5): error TS2322: Type 'string' is not assignable to type 'number'.\n".to_vec(),
+                        stderr: Vec::new(),
+                    });
+                }
+                panic!("JCO should never be called when TypeScript type-checking fails");
+            }
+            fn which(&self, binary_name: &str) -> Option<PathBuf> {
+                if binary_name == "node" {
+                    Some(PathBuf::from("/usr/bin/node"))
+                } else {
+                    None
+                }
+            }
+        }
+
+        let res = build_extension(dir, false, &FailingTscRunner);
+        assert!(!res.success);
+        assert!(
+            res.diagnostics
+                .iter()
+                .any(|d| d.contains("TypeScript type-checking failed with status 2"))
+        );
+        assert!(
+            res.diagnostics
+                .iter()
+                .any(|d| d.contains("src/extension.tsx(10,5): error TS2322"))
         );
 
-        let res = build_extension(dir, false, &mock_runner);
+        // Previous component must be preserved
+        assert_eq!(
+            fs::read(dir.join("extension.wasm")).unwrap(),
+            original_bytes
+        );
+
+        // No temp files left
+        let entries: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_typescript_build_failure_preserves_previous_component() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        write_manifest(dir, "org.shilpo.ts-test", "extension.wasm");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/extension.ts"), "export {}").unwrap();
+        fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("tsconfig.json"), "{}").unwrap();
+        fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
+        fs::create_dir_all(dir.join("core/ext-api/wit")).unwrap();
+        fs::write(
+            dir.join("core/ext-api/wit/extension.wit"),
+            "package test:ext;",
+        )
+        .unwrap();
+
+        // Write existing component
+        let original_bytes = b"ORIGINAL_WORKING_COMPONENT";
+        fs::write(dir.join("extension.wasm"), original_bytes).unwrap();
+
+        // Mock runner simulates TSC success and JCO failure
+        struct FailingJcoRunner;
+        impl ProcessRunner for FailingJcoRunner {
+            fn run(&self, command: &ProcessCommand) -> Result<ProcessOutput, String> {
+                if command.args.contains(&"--noEmit".to_string()) {
+                    return Ok(ProcessOutput {
+                        success: true,
+                        exit_code: Some(0),
+                        stdout: Vec::new(),
+                        stderr: Vec::new(),
+                    });
+                }
+                Ok(ProcessOutput {
+                    success: false,
+                    exit_code: Some(1),
+                    stdout: Vec::new(),
+                    stderr: b"SyntaxError: unexpected token".to_vec(),
+                })
+            }
+            fn which(&self, binary_name: &str) -> Option<PathBuf> {
+                if binary_name == "node" {
+                    Some(PathBuf::from("/usr/bin/node"))
+                } else {
+                    None
+                }
+            }
+        }
+
+        let res = build_extension(dir, false, &FailingJcoRunner);
         assert!(!res.success);
         assert!(
             res.diagnostics
@@ -1520,6 +1900,35 @@ mod tests {
             entries.is_empty(),
             "Temporary files must be cleaned up on failure"
         );
+    }
+
+    #[test]
+    fn test_resolve_project_config_ambiguous_ts_and_tsx() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        write_manifest(dir, "org.shilpo.test", "extension.wasm");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/extension.ts"), "export {}").unwrap();
+        fs::write(dir.join("src/extension.tsx"), "export {}").unwrap();
+
+        let err = resolve_project_config(dir).unwrap_err();
+        assert!(err.iter().any(|d| {
+            d.contains("ambiguous project: found both src/extension.ts and src/extension.tsx")
+        }));
+    }
+
+    #[test]
+    fn test_resolve_project_config_inferred_tsx() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        write_manifest(dir, "org.shilpo.test", "extension.wasm");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/extension.tsx"), "export {}").unwrap();
+
+        let config = resolve_project_config(dir).unwrap();
+        assert_eq!(config.language, ExtensionLanguage::Typescript);
+        assert_eq!(config.entry, Some(PathBuf::from("src/extension.tsx")));
+        assert_eq!(config.crate_dir, None);
     }
 
     #[test]
@@ -1668,6 +2077,7 @@ mod tests {
         fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
         fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
         fs::create_dir_all(dir.join("core/ext-api/wit")).unwrap();
         fs::write(
             dir.join("core/ext-api/wit/extension.wit"),
@@ -1694,6 +2104,7 @@ mod tests {
         let dir = temp.path();
         fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
         let outside = tempdir().unwrap();
         let outside_jco = outside.path().join("jco");
         fs::write(&outside_jco, "#!/usr/bin/env node").unwrap();
@@ -1791,9 +2202,9 @@ mod tests {
             );
             return;
         }
-        if find_local_jco(&fixture_dir).is_none() {
+        if find_local_tsc(&fixture_dir).is_none() || find_local_jco(&fixture_dir).is_none() {
             eprintln!(
-                "SKIPPED: TypeScript build fixture integration test skipped: local JCO not found (run npm install in sdk/typescript/tests/fixture)"
+                "SKIPPED: TypeScript build fixture integration test skipped: local TSC or JCO not found (run npm install in sdk/typescript/tests/fixture)"
             );
             return;
         }

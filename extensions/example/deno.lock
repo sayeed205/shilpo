@@ -27,7 +27,8 @@
     "packageJson": {
       "dependencies": [
         "npm:@bytecodealliance/jco@1.28.1",
-        "npm:@jsr/shilpo__ext-sdk@0.1.0"
+        "npm:@jsr/shilpo__ext-sdk@0.1.0",
+        "npm:typescript@5.6.3"
       ]
     }
   }

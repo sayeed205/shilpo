@@ -14,11 +14,11 @@ const REQUIRED_CONTRIBUTION_FAMILIES = [
 ];
 
 const OWNERS: Record<string, [string, string]> = {
-  bar_widgets: ["src/contributions/bar_widget.ts", "tests/views_test.ts"],
-  bar_menus: ["src/contributions/bar_menu.ts", "tests/views_test.ts"],
-  desktop_widgets: ["src/contributions/desktop_widget.ts", "tests/views_test.ts"],
-  settings_pages: ["src/contributions/settings_page.ts", "tests/views_test.ts"],
-  side_panels: ["src/contributions/side_panel.ts", "tests/views_test.ts"],
+  bar_widgets: ["src/contributions/bar_widget.tsx", "tests/views_test.ts"],
+  bar_menus: ["src/contributions/bar_menu.tsx", "tests/views_test.ts"],
+  desktop_widgets: ["src/contributions/desktop_widget.tsx", "tests/views_test.ts"],
+  settings_pages: ["src/contributions/settings_page.tsx", "tests/views_test.ts"],
+  side_panels: ["src/contributions/side_panel.tsx", "tests/views_test.ts"],
   search_providers: ["src/contributions/search_provider.ts", "tests/events_test.ts"],
   actions: ["src/contributions/actions.ts", "tests/events_test.ts"],
   keyboard_shortcuts: ["src/contributions/keyboard_shortcuts.ts", "tests/events_test.ts"],

@@ -879,3 +879,168 @@ fn test_cli_ext_build_adapter_failure_and_json_envelope() {
     assert!(json_str.contains("\"ok\":false"));
     assert!(json_str.contains("\"code\":\"extension_operation_failed\""));
 }
+
+#[test]
+fn test_cli_parser_ext_new_view_syntax() {
+    use crate::args::{
+        ExtCommands, StarterContributionValue, StarterLanguageValue, ViewSyntaxValue,
+    };
+
+    let cli = Cli::try_parse_from([
+        "shilpo",
+        "ext",
+        "new",
+        "my-widget",
+        "--language",
+        "typescript",
+        "--contribution",
+        "bar-widget",
+        "--view-syntax",
+        "jsx",
+        "--yes",
+    ])
+    .unwrap();
+
+    if let Some(Commands::Ext {
+        command:
+            ExtCommands::New {
+                name,
+                language,
+                contribution,
+                view_syntax,
+                yes,
+                ..
+            },
+    }) = cli.command
+    {
+        assert_eq!(name, "my-widget");
+        assert_eq!(language, Some(StarterLanguageValue::Typescript));
+        assert_eq!(contribution, Some(StarterContributionValue::BarWidget));
+        assert_eq!(view_syntax, Some(ViewSyntaxValue::Jsx));
+        assert!(yes);
+    } else {
+        panic!("Expected Ext New");
+    }
+
+    let cli_builders = Cli::try_parse_from([
+        "shilpo",
+        "ext",
+        "new",
+        "my-widget",
+        "--language",
+        "typescript",
+        "--contribution",
+        "bar-widget",
+        "--view-syntax",
+        "builders",
+        "--yes",
+    ])
+    .unwrap();
+
+    if let Some(Commands::Ext {
+        command: ExtCommands::New {
+            view_syntax: vs_builders,
+            ..
+        },
+    }) = cli_builders.command
+    {
+        assert_eq!(vs_builders, Some(ViewSyntaxValue::Builders));
+    } else {
+        panic!("Expected Ext New");
+    }
+}
+
+#[test]
+fn test_cli_ext_new_adapter_view_syntax_scaffolding() {
+    use crate::adapters::ExtAdapter;
+    use shilpo_ext_runtime::{StarterContribution, StarterLanguage, ViewSyntax};
+
+    let dir = TempDir::new().unwrap();
+    let target_jsx = dir.path().join("widget-jsx");
+    let target_bld = dir.path().join("widget-bld");
+
+    let adapter = ExtAdapter::new();
+
+    // JSX scaffold
+    let res_jsx = adapter.scaffold_new(
+        "widget-jsx",
+        Some(target_jsx.clone()),
+        Some(StarterLanguage::Typescript),
+        Some(StarterContribution::BarWidget),
+        None,
+        Some(ViewSyntax::Jsx),
+        None,
+        None,
+        None,
+        &[],
+        &[],
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        false,
+    );
+    assert!(
+        res_jsx.success,
+        "JSX scaffold failed: {}",
+        res_jsx.human_message
+    );
+    assert!(target_jsx.join("src/extension.tsx").exists());
+    assert!(!target_jsx.join("src/extension.ts").exists());
+
+    // Builders scaffold
+    let res_bld = adapter.scaffold_new(
+        "widget-bld",
+        Some(target_bld.clone()),
+        Some(StarterLanguage::Typescript),
+        Some(StarterContribution::BarWidget),
+        None,
+        Some(ViewSyntax::Builders),
+        None,
+        None,
+        None,
+        &[],
+        &[],
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        false,
+    );
+    assert!(
+        res_bld.success,
+        "Builders scaffold failed: {}",
+        res_bld.human_message
+    );
+    assert!(target_bld.join("src/extension.ts").exists());
+    assert!(!target_bld.join("src/extension.tsx").exists());
+
+    // Rust rejecting view_syntax
+    let target_rust = dir.path().join("widget-rust");
+    let res_rust = adapter.scaffold_new(
+        "widget-rust",
+        Some(target_rust),
+        Some(StarterLanguage::Rust),
+        Some(StarterContribution::BarWidget),
+        None,
+        Some(ViewSyntax::Jsx),
+        None,
+        None,
+        None,
+        &[],
+        &[],
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        false,
+    );
+    assert!(!res_rust.success);
+    assert!(res_rust.human_message.contains("--view-syntax"));
+}
