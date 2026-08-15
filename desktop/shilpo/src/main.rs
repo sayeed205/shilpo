@@ -788,6 +788,45 @@ async fn main() {
         Commands::Ext { command } => {
             let ext = ExtAdapter::new();
             let op = match command {
+                ExtCommands::New {
+                    name,
+                    target,
+                    language,
+                    contribution,
+                    package_manager,
+                    extension_id,
+                    package_name,
+                    description,
+                    capabilities,
+                    subscriptions,
+                    install,
+                    build,
+                    git,
+                    yes,
+                } => {
+                    use std::io::IsTerminal;
+                    let is_interactive =
+                        std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+                    ext.scaffold_new(
+                        &name,
+                        target,
+                        language.map(Into::into),
+                        contribution.map(Into::into),
+                        package_manager.map(Into::into),
+                        extension_id,
+                        package_name,
+                        description,
+                        &capabilities,
+                        &subscriptions,
+                        install,
+                        build,
+                        git,
+                        yes,
+                        is_interactive,
+                        cli.json,
+                        cli.quiet,
+                    )
+                }
                 ExtCommands::Status => ext.status(),
                 ExtCommands::Build { path, release } => ext.build(path.as_deref(), release),
                 ExtCommands::Check { path } => ext.check(path.as_deref()),
