@@ -16,7 +16,8 @@ use shilpo_ext_api::{
 };
 
 use crate::build::{
-    ExtensionLanguage, ExtensionProjectConfig, ProcessCommand, ProcessRunner, build_extension,
+    ExtensionLanguage, ExtensionProjectConfig, PROCESS_CANCELLED, ProcessCommand, ProcessRunner,
+    build_extension,
 };
 
 static SCAFFOLD_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -515,6 +516,25 @@ pub fn synchronize_capabilities_and_subscriptions(
             }
             _ => {}
         }
+
+        let wildcard_scope = match cap {
+            Capability::ActionsInvoke { actions } => actions
+                .iter()
+                .any(|value| value.contains('*') || value.contains('?')),
+            Capability::NetworkHttp { hosts, paths } => hosts
+                .iter()
+                .chain(paths.iter())
+                .any(|value| value.contains('*') || value.contains('?')),
+            Capability::FilesystemRead { paths } | Capability::FilesystemWrite { paths } => paths
+                .iter()
+                .any(|value| value.contains('*') || value.contains('?')),
+            _ => false,
+        };
+        if wildcard_scope {
+            return Err(ScaffoldError::InvalidCapability(
+                "wildcard capability scopes are not permitted; provide explicit values".into(),
+            ));
+        }
     }
 
     // Synchronize event subscriptions with events:subscribe capability
@@ -528,7 +548,9 @@ pub fn synchronize_capabilities_and_subscriptions(
                 found_events_cap = true;
                 for sub_event in &subscribed_events {
                     if !events.contains(sub_event) {
-                        events.push(*sub_event);
+                        return Err(ScaffoldError::CapabilityConflict(format!(
+                            "subscription '{sub_event:?}' is not authorized by the explicit events:subscribe capability"
+                        )));
                     }
                 }
             }
@@ -553,6 +575,11 @@ pub fn scaffold_extension<R: ProcessRunner>(
     options: &ScaffoldOptions,
     runner: &R,
 ) -> Result<ScaffoldResult, ScaffoldError> {
+    PROCESS_CANCELLED.store(false, std::sync::atomic::Ordering::Release);
+    install_cancel_handlers();
+    if cancellation_requested() {
+        return Err(ScaffoldError::Cancelled);
+    }
     // 1. Validation of target path
     validate_target_path(&options.target_dir)?;
 
@@ -756,6 +783,12 @@ pub fn scaffold_extension<R: ProcessRunner>(
         })?;
 
     // 7. Atomic Activation (Rename)
+    // A signal may arrive while the generated files are being validated. Keep
+    // the staging tree intact for the guard to remove rather than activating
+    // a project after the user has cancelled.
+    if cancellation_requested() {
+        return Err(ScaffoldError::Cancelled);
+    }
     if options.target_dir.exists() && options.target_dir.is_dir() {
         // Safe to remove the empty target directory before rename
         let _ = fs::remove_dir(&options.target_dir);
@@ -780,10 +813,13 @@ pub fn scaffold_extension<R: ProcessRunner>(
 
     // 8. Post-activation Stage: Git Init
     if options.git {
+        if cancellation_requested() {
+            return Err(ScaffoldError::Cancelled);
+        }
         let git_cmd = ProcessCommand::new("git")
             .arg("init")
             .cwd(&options.target_dir);
-        match runner.run(&git_cmd) {
+        match runner.run_with_timeout(&git_cmd, std::time::Duration::from_secs(24 * 60 * 60)) {
             Ok(output) if output.success => {
                 git_initialized = true;
             }
@@ -798,6 +834,7 @@ pub fn scaffold_extension<R: ProcessRunner>(
                     ),
                 });
             }
+            Err(e) if e.contains("cancelled") => return Err(ScaffoldError::Cancelled),
             Err(e) => {
                 return Err(ScaffoldError::StageFailed {
                     stage: "git_init".into(),
@@ -811,11 +848,14 @@ pub fn scaffold_extension<R: ProcessRunner>(
     // 9. Post-activation Stage: Install
     let should_install = options.install || options.build;
     if should_install && options.language == StarterLanguage::Typescript {
+        if cancellation_requested() {
+            return Err(ScaffoldError::Cancelled);
+        }
         let pm = options.package_manager.unwrap_or(PackageManager::Npm);
         let install_cmd = ProcessCommand::new(pm.as_str())
             .arg("install")
             .cwd(&options.target_dir);
-        match runner.run(&install_cmd) {
+        match runner.run_with_timeout(&install_cmd, std::time::Duration::from_secs(24 * 60 * 60)) {
             Ok(output) if output.success => {
                 installed = true;
             }
@@ -831,6 +871,7 @@ pub fn scaffold_extension<R: ProcessRunner>(
                     ),
                 });
             }
+            Err(e) if e.contains("cancelled") => return Err(ScaffoldError::Cancelled),
             Err(e) => {
                 return Err(ScaffoldError::StageFailed {
                     stage: "install".into(),
@@ -843,15 +884,25 @@ pub fn scaffold_extension<R: ProcessRunner>(
 
     // 10. Post-activation Stage: Build
     if options.build {
+        if cancellation_requested() {
+            return Err(ScaffoldError::Cancelled);
+        }
         let build_res = build_extension(&options.target_dir, false, runner);
         if build_res.success {
             built = true;
         } else {
             let err_msg = build_res
                 .diagnostics
-                .into_iter()
-                .next()
+                .first()
+                .cloned()
                 .unwrap_or_else(|| "build failed".into());
+            if build_res
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("cancelled"))
+            {
+                return Err(ScaffoldError::Cancelled);
+            }
             return Err(ScaffoldError::StageFailed {
                 stage: "build".into(),
                 recovery_command: format!("cd {display_target} && shilpo ext build"),
@@ -883,6 +934,28 @@ pub fn scaffold_extension<R: ProcessRunner>(
         git_initialized,
         next_steps,
     })
+}
+
+fn cancellation_requested() -> bool {
+    PROCESS_CANCELLED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+extern "C" fn scaffold_signal_handler(_signal: libc::c_int) {
+    PROCESS_CANCELLED.store(true, std::sync::atomic::Ordering::Release);
+}
+
+fn install_cancel_handlers() {
+    // SAFETY: installing a process-local flag-only handler is async-signal-safe.
+    unsafe {
+        libc::signal(
+            libc::SIGINT,
+            scaffold_signal_handler as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGTERM,
+            scaffold_signal_handler as *const () as libc::sighandler_t,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,7 +1075,7 @@ fn generate_project_config(language: StarterLanguage) -> String {
 
 fn generate_cargo_toml(package_name: &str, description: Option<&str>) -> String {
     let desc_line = description
-        .map(|d| format!("description = \"{d}\"\n"))
+        .map(|d| format!("description = {:?}\n", d))
         .unwrap_or_default();
 
     format!(
@@ -1022,6 +1095,7 @@ shilpo-ext-sdk = {{ git = "https://github.com/sayeed205/shilpo.git" }}
 }
 
 fn generate_rust_source(name: &str, contribution: StarterContribution) -> String {
+    let safe_name = escape_rust_string_contents(name);
     match contribution {
         StarterContribution::BarWidget => {
             format!(
@@ -1055,7 +1129,7 @@ impl Extension for ExtensionState {{
         Ok(Some(view! {{
             row {{
                 icon("star").size(16.0),
-                text(format!("{name}: {{}}", self.clicks)).bold(true),
+                    text(format!("{safe_name}: {{}}", self.clicks)).bold(true),
                 button("+1", "increment"),
             }}
         }}))
@@ -1084,7 +1158,7 @@ impl Extension for ExtensionState {{
             column {{
                 row {{
                     icon("dashboard").size(20.0),
-                    text("{name}").bold(true).font_size(16.0),
+                    text("{safe_name}").bold(true).font_size(16.0),
                 }},
                 divider(),
                 text("Desktop widget content"),
@@ -1129,7 +1203,7 @@ impl Extension for ExtensionState {{
 
         Ok(Some(view! {{
             column {{
-                text("{name} Settings").bold(true).font_size(18.0),
+        text("{safe_name} Settings").bold(true).font_size(18.0),
                 divider(),
                 row {{
                     text("Enable Feature"),
@@ -1163,7 +1237,7 @@ impl Extension for ExtensionState {{
             column {{
                 row {{
                     icon("sidebar").size(18.0),
-                    text("{name} Panel").bold(true),
+        text("{safe_name} Panel").bold(true),
                 }},
                 divider(),
                 text("Side panel content"),
@@ -1234,25 +1308,17 @@ shilpo ext dev
 }
 
 fn generate_package_json(package_name: &str, description: Option<&str>) -> String {
-    let desc = description.unwrap_or("");
-    format!(
-        r#"{{
-  "name": "{package_name}",
-  "version": "0.1.0",
-  "type": "module",
-  "description": "{desc}",
-  "scripts": {{
-    "build": "shilpo ext build"
-  }},
-  "dependencies": {{
-    "@shilpo/ext-sdk": "npm:@jsr/shilpo__ext-sdk@^0.1.0"
-  }},
-  "devDependencies": {{
-    "@bytecodealliance/jco": "^1.28.1"
-  }}
-}}
-"#
-    )
+    serde_json::to_string_pretty(&serde_json::json!({
+        "name": package_name,
+        "version": "0.1.0",
+        "type": "module",
+        "description": description.unwrap_or(""),
+        "scripts": {"build": "shilpo ext build"},
+        "dependencies": {"@shilpo/ext-sdk": "npm:@jsr/shilpo__ext-sdk@^0.1.0"},
+        "devDependencies": {"@bytecodealliance/jco": "1.28.1"}
+    }))
+    .expect("package metadata is serializable")
+        + "\n"
 }
 
 fn generate_tsconfig_json() -> String {
@@ -1273,6 +1339,8 @@ fn generate_tsconfig_json() -> String {
 }
 
 fn generate_typescript_source(name: &str, contribution: StarterContribution) -> String {
+    let safe_name = escape_js_string_contents(name);
+    let safe_template_name = escape_js_template_contents(name);
     match contribution {
         StarterContribution::BarWidget => {
             format!(
@@ -1302,7 +1370,7 @@ const ext = defineExtension({{
       alignItems: "center" as Alignment,
       children: [
         icon("star", {{ size: 16 }}),
-        text(`{name}: ${{clicks}}`, {{ bold: true }}),
+        text(`{safe_template_name}: ${{clicks}}`, {{ bold: true }}),
         button("+1", "increment"),
       ],
     }});
@@ -1335,7 +1403,7 @@ const ext = defineExtension({{
           alignItems: "center" as Alignment,
           children: [
             icon("dashboard", {{ size: 20 }}),
-            text("{name}", {{ bold: true, fontSize: 16 }}),
+            text("{safe_name}", {{ bold: true, fontSize: 16 }}),
           ],
         }}),
         divider(),
@@ -1378,7 +1446,7 @@ const ext = defineExtension({{
     return column({{
       gap: 12,
       children: [
-        text("{name} Settings", {{ bold: true, fontSize: 18 }}),
+        text("{safe_name} Settings", {{ bold: true, fontSize: 18 }}),
         divider(),
         row({{
           gap: 8,
@@ -1420,7 +1488,7 @@ const ext = defineExtension({{
           alignItems: "center" as Alignment,
           children: [
             icon("sidebar", {{ size: 18 }}),
-            text("{name} Panel", {{ bold: true }}),
+        text("{safe_name} Panel", {{ bold: true }}),
           ],
         }}),
         divider(),
@@ -1498,22 +1566,43 @@ shilpo ext dev
 }
 
 fn generate_settings_schema(name: &str) -> String {
-    format!(
-        r#"{{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "{name} Settings",
-  "type": "object",
-  "properties": {{
-    "enabled": {{
-      "type": "boolean",
-      "default": true,
-      "description": "Enable or disable extension features"
-    }}
-  }},
-  "additionalProperties": false
-}}
-"#
-    )
+    serde_json::to_string_pretty(&serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": format!("{name} Settings"),
+        "type": "object",
+        "properties": {"enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable or disable extension features"
+        }},
+        "additionalProperties": false
+    }))
+    .expect("settings schema is serializable")
+        + "\n"
+}
+
+fn escape_rust_string_contents(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+fn escape_js_string_contents(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+fn escape_js_template_contents(value: &str) -> String {
+    escape_js_string_contents(value)
+        .replace('`', "\\`")
+        .replace("${", "\\${")
 }
 
 #[cfg(test)]
@@ -1626,6 +1715,50 @@ mod tests {
     }
 
     #[test]
+    fn generated_metadata_uses_exact_jco_and_escapes_json() {
+        let package = generate_package_json("demo", Some("quoted \"description\"\nline"));
+        let value: serde_json::Value = serde_json::from_str(&package).unwrap();
+        assert_eq!(value["devDependencies"]["@bytecodealliance/jco"], "1.28.1");
+        assert_eq!(value["description"], "quoted \"description\"\nline");
+    }
+
+    #[test]
+    fn capability_sync_rejects_conflicts_and_wildcards() {
+        let explicit = [Capability::EventsSubscribe {
+            events: vec![EventKind::ThemeChanged],
+        }];
+        let subscriptions = [Subscription {
+            event: EventKind::OutputsChanged,
+        }];
+        assert!(matches!(
+            synchronize_capabilities_and_subscriptions(&explicit, &subscriptions),
+            Err(ScaffoldError::CapabilityConflict(_))
+        ));
+
+        let wildcard = [Capability::FilesystemRead {
+            paths: vec!["/var/*".into()],
+        }];
+        assert!(matches!(
+            synchronize_capabilities_and_subscriptions(&wildcard, &[]),
+            Err(ScaffoldError::InvalidCapability(_))
+        ));
+    }
+
+    #[test]
+    fn generated_sources_escape_display_values() {
+        let name = "A \"quoted\"\nname";
+        let rust = generate_rust_source(name, StarterContribution::BarWidget);
+        let typescript = generate_typescript_source(name, StarterContribution::BarWidget);
+        assert!(!rust.contains("A \"quoted\"\nname"));
+        assert!(!typescript.contains("A \"quoted\"\nname"));
+        assert!(rust.contains("A \\\"quoted\\\"\\nname"));
+        assert!(typescript.contains("A \\\"quoted\\\"\\nname"));
+        let schema: serde_json::Value =
+            serde_json::from_str(&generate_settings_schema(name)).unwrap();
+        assert!(schema["title"].as_str().unwrap().starts_with(name));
+    }
+
+    #[test]
     fn test_validate_target_path() {
         let temp = tempdir().unwrap();
         let valid_new = temp.path().join("new_dir");
@@ -1661,7 +1794,7 @@ mod tests {
     fn test_capability_subscription_synchronization() {
         let caps = vec![Capability::NetworkHttp {
             hosts: vec!["api.weather.com".into()],
-            paths: vec!["/v1/*".into()],
+            paths: vec!["/v1/weather".into()],
         }];
         let subs = vec![
             Subscription {

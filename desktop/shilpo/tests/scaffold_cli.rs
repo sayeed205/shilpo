@@ -207,7 +207,7 @@ fn test_cli_scaffold_with_capabilities_and_subscriptions() {
             "--contribution",
             "action",
             "--capability",
-            r#"{"kind":"network:http","hosts":["api.github.com"],"paths":["/repos/*"]}"#,
+            r#"{"kind":"network:http","hosts":["api.github.com"],"paths":["/repos/shilpo"]}"#,
             "--subscribe",
             "theme_changed",
             "--subscribe",

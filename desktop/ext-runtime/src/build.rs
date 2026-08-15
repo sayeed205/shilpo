@@ -4,6 +4,7 @@ use shilpo_ext_api::ExtensionManifest;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -109,6 +110,10 @@ pub trait ProcessRunner: Send + Sync {
     fn which(&self, binary_name: &str) -> Option<PathBuf>;
 }
 
+/// Set by the scaffold command's SIGINT/SIGTERM handler. The process runner
+/// polls this flag while waiting so child processes are terminated promptly.
+pub static PROCESS_CANCELLED: AtomicBool = AtomicBool::new(false);
+
 pub struct OsProcessRunner;
 
 impl ProcessRunner for OsProcessRunner {
@@ -176,6 +181,11 @@ impl ProcessRunner for OsProcessRunner {
                     "process '{}' timed out after {:?}",
                     command.program, timeout
                 ));
+            }
+            if PROCESS_CANCELLED.load(std::sync::atomic::Ordering::Acquire) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("process '{}' cancelled", command.program));
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }

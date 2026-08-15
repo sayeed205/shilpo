@@ -123,6 +123,7 @@ impl ExtAdapter {
         let mut chosen_pm = package_manager;
         let mut chosen_git = git;
         let mut chosen_install = install;
+        let mut chosen_description = description;
 
         // Interactive / Non-interactive requirements
         if chosen_language.is_none() || chosen_contribution.is_none() {
@@ -217,12 +218,32 @@ impl ExtAdapter {
                     chosen_install = true;
                 }
             }
+        }
 
+        if is_interactive && !is_json {
+            if chosen_description.is_none() {
+                print!("\nDescription (optional, press Enter to skip): ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                let value = line.trim().to_string();
+                if !value.is_empty() {
+                    chosen_description = Some(value);
+                }
+            }
+
+            let preview_language = chosen_language.unwrap_or(StarterLanguage::Typescript);
+            let preview_contribution =
+                chosen_contribution.unwrap_or(StarterContribution::BarWidget);
+            let preview_pm = chosen_pm.unwrap_or(PackageManager::Npm);
             if !yes {
-                print!(
-                    "\nCreate extension '{trimmed_name}' in '{}'? [Y/n]: ",
-                    target_dir.display()
+                println!(
+                    "\nSummary:\n  name: {trimmed_name}\n  target: {}\n  language: {preview_language}\n  contribution: {preview_contribution}\n  package manager: {preview_pm}\n  git: {}\n  install: {}",
+                    target_dir.display(),
+                    chosen_git,
+                    chosen_install || build
                 );
+                print!("\nCreate this extension? [Y/n]: ");
                 let _ = std::io::Write::flush(&mut std::io::stdout());
                 let mut line = String::new();
                 let _ = std::io::stdin().read_line(&mut line);
@@ -258,7 +279,7 @@ impl ExtAdapter {
             package_manager: final_pm,
             extension_id,
             package_name,
-            description,
+            description: chosen_description,
             capabilities,
             subscriptions,
             install: chosen_install,
