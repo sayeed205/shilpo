@@ -67,10 +67,36 @@ fn test_cli_scaffold_create_alias_typescript_settings_page_pnpm() {
     assert!(target.join("package.json").exists());
     assert!(target.join("tsconfig.json").exists());
     assert!(target.join(".npmrc").exists());
-    assert!(target.join("src/extension.ts").exists());
+    assert!(target.join("src/extension.tsx").exists());
     assert!(target.join("settings.schema.json").exists());
     assert!(target.join(".gitignore").exists());
     assert!(target.join("README.md").exists());
+}
+
+#[test]
+fn test_cli_scaffold_typescript_builders_syntax() {
+    let temp = tempdir().unwrap();
+    let target = temp.path().join("ts-builders");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_shilpo"))
+        .args([
+            "ext",
+            "new",
+            "TS Builders",
+            target.to_str().unwrap(),
+            "--language",
+            "typescript",
+            "--contribution",
+            "bar-widget",
+            "--view-syntax",
+            "builders",
+        ])
+        .output()
+        .expect("shilpo ext new should run");
+
+    assert!(output.status.success());
+    assert!(target.join("src/extension.ts").exists());
+    assert!(!target.join("src/extension.tsx").exists());
 }
 
 #[test]

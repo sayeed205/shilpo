@@ -5,6 +5,9 @@ edition.workspace = true
 publish.workspace = true
 default-run = "shilpo"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "shilpo"
 path = "src/main.rs"

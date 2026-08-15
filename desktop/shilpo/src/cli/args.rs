@@ -288,6 +288,9 @@ pub enum ExtCommands {
         /// TypeScript package manager (npm, pnpm, yarn, bun)
         #[arg(long, value_enum)]
         package_manager: Option<PackageManagerValue>,
+        /// View authoring syntax for TypeScript extensions (jsx, builders)
+        #[arg(long, value_enum)]
+        view_syntax: Option<ViewSyntaxValue>,
         /// Explicit extension ID override (reverse-domain format, e.g. dev.local.my-extension)
         #[arg(long)]
         extension_id: Option<String>,
@@ -498,6 +501,21 @@ impl From<PackageManagerValue> for shilpo_ext_runtime::PackageManager {
             PackageManagerValue::Pnpm => Self::Pnpm,
             PackageManagerValue::Yarn => Self::Yarn,
             PackageManagerValue::Bun => Self::Bun,
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewSyntaxValue {
+    Jsx,
+    Builders,
+}
+
+impl From<ViewSyntaxValue> for shilpo_ext_runtime::ViewSyntax {
+    fn from(v: ViewSyntaxValue) -> Self {
+        match v {
+            ViewSyntaxValue::Jsx => Self::Jsx,
+            ViewSyntaxValue::Builders => Self::Builders,
         }
     }
 }

@@ -4,11 +4,9 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "allowImportingTsExtensions": true,
-    "noEmit": true,
     "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "noEmit": true,
+    "skipLibCheck": true
   },
-  "include": ["src/**/*"]
+  "include": ["extension.ts"]
 }

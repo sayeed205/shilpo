@@ -26,7 +26,7 @@ pub use build::{
 };
 pub use scaffold::{
     PackageManager, ScaffoldError, ScaffoldOptions, ScaffoldResult, StarterContribution,
-    StarterLanguage, derive_extension_id, derive_package_name, scaffold_extension,
+    StarterLanguage, ViewSyntax, derive_extension_id, derive_package_name, scaffold_extension,
     synchronize_capabilities_and_subscriptions, validate_target_path,
 };
 pub use secrets::{FakeSecretBroker, Oo7SecretBroker, SecretBroker, SecretBrokerError};

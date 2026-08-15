@@ -95,6 +95,7 @@ export { err, ok } from "./generated/wit.ts";
 
 export * from "./data.ts";
 export * from "./builder/index.ts";
+export * from "./jsx/index.ts";
 export * from "./host.ts";
 export * from "./extension.ts";
 export * from "./manifest/index.ts";
