@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -183,6 +184,7 @@ impl LintReport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LintOptions {
     pub deny_warnings: bool,
+    pub timeout: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +201,14 @@ pub struct CheckedExtensionData {
 
 pub fn inspect_extension(dir: &Path, policy: InspectionPolicy) -> LintReport {
     inspect_extension_full(dir, policy).2
+}
+
+pub fn inspect_extension_with_timeout(
+    dir: &Path,
+    deny_warnings: bool,
+    timeout: Duration,
+) -> LintReport {
+    inspect_extension_full_with_timeout(dir, InspectionPolicy::Lint { deny_warnings }, timeout).2
 }
 
 pub fn inspect_extension_checked(
@@ -226,6 +236,14 @@ pub fn inspect_extension_checked(
 pub fn inspect_extension_full(
     dir: &Path,
     policy: InspectionPolicy,
+) -> (Option<ExtensionManifest>, Vec<PathBuf>, LintReport) {
+    inspect_extension_full_with_timeout(dir, policy, WasmRuntime::DEFAULT_VALIDATION_TIMEOUT)
+}
+
+fn inspect_extension_full_with_timeout(
+    dir: &Path,
+    policy: InspectionPolicy,
+    validation_timeout: Duration,
 ) -> (Option<ExtensionManifest>, Vec<PathBuf>, LintReport) {
     let project_display = if dir.as_os_str().is_empty() {
         ".".to_string()
@@ -256,6 +274,8 @@ pub fn inspect_extension_full(
             );
         }
     };
+
+    let project_display = root.to_string_lossy().to_string();
 
     if !root.is_dir() {
         let diag = LintDiagnostic::error(
@@ -319,23 +339,25 @@ pub fn inspect_extension_full(
         }
     };
 
+    if let Err(error) = toml::from_str::<toml::Value>(&manifest_source) {
+        let mut diag =
+            LintDiagnostic::error("manifest.syntax", error.to_string()).with_path("extension.toml");
+        if let Some(span) = error.span() {
+            let (line, col) = line_col_from_offset(&manifest_source, span.start);
+            diag = diag.with_line_col(line, col);
+        }
+        return (
+            None,
+            Vec::new(),
+            LintReport::from_diagnostics(project_display, None, vec![diag], deny_warnings),
+        );
+    }
+
     let manifest: ExtensionManifest = match toml::from_str(&manifest_source) {
         Ok(manifest) => manifest,
         Err(error) => {
-            let mut diag = LintDiagnostic::error("manifest.invalid", error.to_string())
+            let diag = LintDiagnostic::error("manifest.invalid", error.to_string())
                 .with_path("extension.toml");
-            if let Err(toml_err) = toml::from_str::<toml::Value>(&manifest_source) {
-                diag.rule_id = "manifest.syntax".into();
-                if let Some(span) = toml_err.span() {
-                    let (line, col) = line_col_from_offset(&manifest_source, span.start);
-                    diag.line = Some(line);
-                    diag.column = Some(col);
-                }
-            } else if let Some(span) = error.span() {
-                let (line, col) = line_col_from_offset(&manifest_source, span.start);
-                diag.line = Some(line);
-                diag.column = Some(col);
-            }
             return (
                 None,
                 Vec::new(),
@@ -343,6 +365,7 @@ pub fn inspect_extension_full(
             );
         }
     };
+    let canonical_validation_error = ExtensionManifest::from_toml(&manifest_source).err();
 
     let extension_id = Some(manifest.id.to_string());
     diagnostics.push(
@@ -352,6 +375,12 @@ pub fn inspect_extension_full(
         )
         .with_path("extension.toml"),
     );
+    if let Some(error) = canonical_validation_error {
+        diagnostics.push(
+            LintDiagnostic::error("manifest.invalid", error.to_string())
+                .with_path("extension.toml"),
+        );
+    }
 
     // 2. Manifest Versioning & Compatibility
     if manifest.schema_version != 1 {
@@ -484,6 +513,12 @@ pub fn inspect_extension_full(
     let mut visited_dirs = HashSet::new();
     for directory in ["assets", "i18n"] {
         let relative = PathBuf::from(directory);
+        if matches!(
+            fs::symlink_metadata(root.join(&relative)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        ) {
+            continue;
+        }
         collect_and_validate_runtime_files(
             &root,
             &relative,
@@ -597,8 +632,11 @@ pub fn inspect_extension_full(
 
                     match fs::read(&wasm_path) {
                         Ok(bytes) => {
-                            if let Err(error) = WasmRuntime::validate_module(&bytes) {
-                                let rule_id = if error.to_string().contains("timed out") {
+                            if let Err(error) =
+                                WasmRuntime::validate_module_timeout(&bytes, validation_timeout)
+                            {
+                                let rule_id = if error.kind() == crate::RuntimeFailureKind::Timeout
+                                {
                                     "wasm.timeout"
                                 } else {
                                     "wasm.invalid"
@@ -1001,7 +1039,7 @@ fn validate_capabilities_and_subscriptions(
 
 fn validate_project_config(
     root: &Path,
-    _manifest: &ExtensionManifest,
+    manifest: &ExtensionManifest,
     diagnostics: &mut Vec<LintDiagnostic>,
 ) {
     let config_path = root.join("shilpo-ext.json");
@@ -1056,36 +1094,34 @@ fn validate_project_config(
         };
 
         // Validate entry path if present
-        if let Some(entry) = &config.entry {
-            let entry_path = root.join(entry);
-            if !entry_path.exists() {
-                diagnostics.push(
-                    LintDiagnostic::error(
-                        "config.entry-missing",
-                        format!("declared entry path '{entry}' does not exist"),
-                    )
-                    .with_path("shilpo-ext.json")
-                    .with_remediation("Ensure the entry source file exists at the specified path"),
-                );
-            }
+        if let Some(entry) = &config.entry
+            && let Err(diagnostic) = validate_config_path(root, entry, "config.entry", false)
+        {
+            diagnostics.push(diagnostic);
         }
 
         // Validate language consistency
         match config.language {
             ExtensionLanguage::Rust => {
-                let cargo_path = config
-                    .crate_dir
-                    .as_deref()
-                    .map(|c| root.join(c).join("Cargo.toml"))
-                    .unwrap_or_else(|| root.join("Cargo.toml"));
-                if !cargo_path.exists() {
-                    diagnostics.push(
-                        LintDiagnostic::error(
-                            "config.language-mismatch",
-                            "shilpo-ext.json declares Rust language, but Cargo.toml was not found",
-                        )
-                        .with_path("shilpo-ext.json"),
-                    );
+                let crate_root = config.crate_dir.as_deref().unwrap_or(".");
+                if let Err(diagnostic) =
+                    validate_config_path(root, crate_root, "config.crate", true)
+                {
+                    diagnostics.push(diagnostic);
+                } else {
+                    let cargo_path = root.join(crate_root).join("Cargo.toml");
+                    if !cargo_path.is_file()
+                        || fs::symlink_metadata(&cargo_path)
+                            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+                    {
+                        diagnostics.push(
+                            LintDiagnostic::error(
+                                "config.language-mismatch",
+                                "shilpo-ext.json declares Rust language, but Cargo.toml was not found as a regular file",
+                            )
+                            .with_path("shilpo-ext.json"),
+                        );
+                    }
                 }
             }
             ExtensionLanguage::Typescript => {
@@ -1117,6 +1153,70 @@ fn validate_project_config(
             );
         }
     }
+
+    if let Some(library) = &manifest.library
+        && let Err(diagnostic) =
+            check_path_containment(root, Path::new(&library.path), &library.path)
+    {
+        diagnostics.push(diagnostic);
+    }
+}
+
+fn validate_config_path(
+    root: &Path,
+    value: &str,
+    label: &str,
+    expect_directory: bool,
+) -> Result<PathBuf, LintDiagnostic> {
+    let relative = Path::new(value);
+    if value.trim().is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+    {
+        return Err(LintDiagnostic::error(
+            label,
+            format!("path '{value}' must be a safe relative path"),
+        )
+        .with_path("shilpo-ext.json"));
+    }
+
+    let path = root.join(relative);
+    let canonical = path.canonicalize().map_err(|error| {
+        LintDiagnostic::error(
+            if expect_directory {
+                "config.crate-missing"
+            } else {
+                "config.entry-missing"
+            },
+            format!("declared path '{value}' does not exist: {error}"),
+        )
+        .with_path("shilpo-ext.json")
+    })?;
+    if !canonical.starts_with(root) {
+        return Err(LintDiagnostic::error(
+            "config.path-escape",
+            format!("declared path '{value}' resolves outside the project root"),
+        )
+        .with_path("shilpo-ext.json"));
+    }
+
+    let metadata = fs::symlink_metadata(&path).map_err(|error| {
+        LintDiagnostic::error(label, format!("failed to inspect '{value}': {error}"))
+            .with_path("shilpo-ext.json")
+    })?;
+    if metadata.file_type().is_symlink()
+        || (expect_directory && !metadata.is_dir())
+        || (!expect_directory && !metadata.is_file())
+    {
+        return Err(LintDiagnostic::error(
+            "config.not-regular",
+            format!("declared path '{value}' has the wrong file type"),
+        )
+        .with_path("shilpo-ext.json"));
+    }
+    Ok(path)
 }
 
 fn check_path_containment(root: &Path, relative: &Path, label: &str) -> Result<(), LintDiagnostic> {
@@ -1269,16 +1369,17 @@ fn collect_and_validate_runtime_files(
     diagnostics: &mut Vec<LintDiagnostic>,
 ) {
     let path = root.join(relative);
-    if !path.exists() {
-        return;
-    }
-
     let meta = match fs::symlink_metadata(&path) {
         Ok(m) => m,
         Err(e) => {
+            let rule = if e.kind() == std::io::ErrorKind::NotFound {
+                "asset.missing"
+            } else {
+                "asset.read"
+            };
             diagnostics.push(
                 LintDiagnostic::error(
-                    "asset.read",
+                    rule,
                     format!("failed to inspect asset '{}': {e}", relative.display()),
                 )
                 .with_path(relative.to_string_lossy().to_string()),
@@ -1345,36 +1446,44 @@ fn collect_and_validate_runtime_files(
         files.insert(relative.to_path_buf());
 
         // Deep asset validation for PNG and SVG
-        if let Some(ext) = relative.extension().and_then(|s| s.to_str()) {
+        if let Some(ext) = relative.extension().and_then(|s| s.to_str())
+            && file_len <= MAX_FILE_BYTES
+        {
             let lower = ext.to_lowercase();
-            if lower == "png"
-                && let Ok(bytes) = fs::read(&path)
-                && let Err(err) = validate_png_bytes(&bytes)
-            {
-                diagnostics.push(
-                    LintDiagnostic::error(
-                        "asset.invalid-png",
-                        format!(
-                            "asset '{}' is not a valid PNG image: {err}",
-                            relative.display()
-                        ),
-                    )
-                    .with_path(relative.to_string_lossy().to_string()),
-                );
-            } else if lower == "svg"
-                && let Ok(bytes) = fs::read(&path)
-                && let Err(err) = validate_svg_bytes(&bytes)
-            {
-                diagnostics.push(
-                    LintDiagnostic::error(
-                        "asset.invalid-svg",
-                        format!(
-                            "asset '{}' is not a valid SVG document: {err}",
-                            relative.display()
-                        ),
-                    )
-                    .with_path(relative.to_string_lossy().to_string()),
-                );
+            if lower == "png" || lower == "svg" {
+                match fs::read(&path) {
+                    Ok(bytes) => {
+                        let result = if lower == "png" {
+                            validate_png_bytes(&bytes)
+                        } else {
+                            validate_svg_bytes(&bytes)
+                        };
+                        if let Err(err) = result {
+                            diagnostics.push(
+                                LintDiagnostic::error(
+                                    if lower == "png" {
+                                        "asset.invalid-png"
+                                    } else {
+                                        "asset.invalid-svg"
+                                    },
+                                    format!(
+                                        "asset '{}' is not a valid {} image: {err}",
+                                        relative.display(),
+                                        lower
+                                    ),
+                                )
+                                .with_path(relative.to_string_lossy().to_string()),
+                            );
+                        }
+                    }
+                    Err(error) => diagnostics.push(
+                        LintDiagnostic::error(
+                            "asset.read",
+                            format!("failed to read asset '{}': {error}", relative.display()),
+                        )
+                        .with_path(relative.to_string_lossy().to_string()),
+                    ),
+                }
             }
         }
         return;
@@ -1394,7 +1503,19 @@ fn collect_and_validate_runtime_files(
     // Directory recursion with cycle detection
     let canonical_dir = match path.canonicalize() {
         Ok(c) => c,
-        Err(_) => return,
+        Err(error) => {
+            diagnostics.push(
+                LintDiagnostic::error(
+                    "asset.read",
+                    format!(
+                        "failed to resolve asset directory '{}': {error}",
+                        relative.display()
+                    ),
+                )
+                .with_path(relative.to_string_lossy().to_string()),
+            );
+            return;
+        }
     };
     if !visited_dirs.insert(canonical_dir) {
         diagnostics.push(
@@ -1407,17 +1528,45 @@ fn collect_and_validate_runtime_files(
         return;
     }
 
-    if let Ok(entries) = fs::read_dir(&path) {
-        for entry in entries.flatten() {
-            let child_rel = relative.join(entry.file_name());
-            collect_and_validate_runtime_files(
-                root,
-                &child_rel,
-                files,
-                total_size,
-                visited_dirs,
-                diagnostics,
+    let entries = match fs::read_dir(&path) {
+        Ok(entries) => entries,
+        Err(error) => {
+            diagnostics.push(
+                LintDiagnostic::error(
+                    "asset.read",
+                    format!(
+                        "failed to read asset directory '{}': {error}",
+                        relative.display()
+                    ),
+                )
+                .with_path(relative.to_string_lossy().to_string()),
             );
+            return;
+        }
+    };
+    for entry in entries {
+        match entry {
+            Ok(entry) => {
+                let child_rel = relative.join(entry.file_name());
+                collect_and_validate_runtime_files(
+                    root,
+                    &child_rel,
+                    files,
+                    total_size,
+                    visited_dirs,
+                    diagnostics,
+                );
+            }
+            Err(error) => diagnostics.push(
+                LintDiagnostic::error(
+                    "asset.read",
+                    format!(
+                        "failed to enumerate asset directory '{}': {error}",
+                        relative.display()
+                    ),
+                )
+                .with_path(relative.to_string_lossy().to_string()),
+            ),
         }
     }
 }

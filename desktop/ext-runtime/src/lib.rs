@@ -15,7 +15,8 @@ pub mod worker;
 pub use lint::{
     CheckedExtensionData, InspectionPolicy, LintDiagnostic, LintOptions, LintReport, LintSeverity,
     MAX_FILE_BYTES, MAX_PACKAGE_BYTES, WASM_LARGE_THRESHOLD_BYTES, inspect_extension,
-    inspect_extension_checked, inspect_extension_full, validate_png_bytes, validate_svg_bytes,
+    inspect_extension_checked, inspect_extension_full, inspect_extension_with_timeout,
+    validate_png_bytes, validate_svg_bytes,
 };
 
 pub use build::{

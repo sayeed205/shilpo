@@ -223,4 +223,3 @@ shilpo ext lint . --json
 # Quiet mode: only output failures
 shilpo ext lint . --quiet
 ```
-

@@ -93,10 +93,10 @@ fn test_incompatible_shilpo_version() {
         dir.path().join("extension.toml"),
         r#"
 schema_version = 1
+api_version = "0.1.0"
 id = "org.shilpo.test"
 name = "Test"
 version = "0.1.0"
-api_version = "0.1.0"
 min_shilpo_version = "99.0.0"
 "#,
     )
@@ -124,9 +124,11 @@ fn test_duplicate_contribution_ids() {
         dir.path().join("extension.toml"),
         r#"
 schema_version = 1
+api_version = "0.1.0"
 id = "org.shilpo.test"
 name = "Test"
 version = "0.1.0"
+min_shilpo_version = "0.1.0"
 
 [[contributions.bar_widgets]]
 id = "my-widget"
@@ -373,6 +375,36 @@ version = "0.1.0"
 }
 
 #[test]
+fn test_project_config_rejects_path_escape() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("extension.toml"),
+        r#"
+schema_version = 1
+id = "org.shilpo.test"
+name = "Test"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("shilpo-ext.json"),
+        r#"{ "language": "typescript", "entry": "../outside.ts" }"#,
+    )
+    .unwrap();
+
+    let report = inspect_extension(
+        dir.path(),
+        InspectionPolicy::Lint {
+            deny_warnings: false,
+        },
+    );
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.rule_id == "config.entry" && diagnostic.message.contains("safe relative path")
+    }));
+}
+
+#[test]
 fn test_settings_schema_validation() {
     let dir = tempdir().unwrap();
     fs::write(
@@ -456,9 +488,11 @@ fn test_wasm_artifact_lint_vs_check() {
         dir.path().join("extension.toml"),
         r#"
 schema_version = 1
+api_version = "0.1.0"
 id = "org.shilpo.test"
 name = "Test"
 version = "0.1.0"
+min_shilpo_version = "0.1.0"
 
 [library]
 path = "extension.wasm"

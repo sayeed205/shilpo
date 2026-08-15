@@ -104,4 +104,3 @@ shilpo ext lint . --deny-warnings
 # Emit machine-parseable JSON reports
 shilpo ext lint . --json
 ```
-

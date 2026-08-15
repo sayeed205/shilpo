@@ -533,9 +533,16 @@ impl ExtAdapter {
         deny_warnings: bool,
         _is_json: bool,
         is_quiet: bool,
+        timeout: std::time::Duration,
     ) -> ExtOpResult {
         let target = path.unwrap_or_else(|| Path::new("."));
-        let report = ExtensionCli::lint(target, LintOptions { deny_warnings });
+        let report = ExtensionCli::lint(
+            target,
+            LintOptions {
+                deny_warnings,
+                timeout,
+            },
+        );
         let human_message = format_human_lint_report(&report, is_quiet);
         let exit_code = if report.passed {
             crate::cli::output::EXIT_SUCCESS

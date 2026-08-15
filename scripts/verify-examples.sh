@@ -46,11 +46,26 @@ else
   SHILPO_BIN="target/debug/shilpo"
 fi
 
-if "$SHILPO_BIN" ext lint extensions/example; then
-  pass "TypeScript showcase ext lint"
+if "$SHILPO_BIN" ext lint extensions/example && \
+   "$SHILPO_BIN" ext build extensions/example; then
+  pass "TypeScript showcase lint and component build"
 else
-  fail "TypeScript showcase ext lint failed"
+  fail "TypeScript showcase lint/build failed"
 fi
+
+# The showcase intentionally demonstrates the asynchronous HTTP facade. The
+# current runtime rejects that backend deterministically; retain the check
+# seam by asserting the stable #180 diagnostic rather than accepting the module.
+CHECK_LOG=$(mktemp)
+if "$SHILPO_BIN" ext check extensions/example >"$CHECK_LOG" 2>&1; then
+  pass "TypeScript showcase bounded ext check"
+elif grep -q "unsupported async component" "$CHECK_LOG"; then
+  pass "TypeScript showcase bounded ext check rejected unsupported async component"
+else
+  cat "$CHECK_LOG" >&2
+  fail "TypeScript showcase ext check failed without a stable diagnostic"
+fi
+rm -f "$CHECK_LOG"
 
 # Clean untracked build artifacts
 rm -rf extensions/example/extension.wasm extensions/example/dist

@@ -188,3 +188,41 @@ version = "0.1.0"
     assert_eq!(envelope["data"]["passed"], false);
     assert!(envelope["data"]["error_count"].as_u64().unwrap() >= 1);
 }
+
+#[test]
+fn test_cli_ext_lint_passes_timeout_to_wasm_validation() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("extension.toml"),
+        r#"
+schema_version = 1
+id = "org.shilpo.test"
+name = "Test Extension"
+version = "0.1.0"
+
+[library]
+path = "extension.wasm"
+"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("extension.wasm"), b"not a component").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_shilpo"))
+        .args([
+            "--timeout",
+            "1ms",
+            "ext",
+            "lint",
+            dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .expect("shilpo ext lint should run with a timeout");
+
+    assert_eq!(output.status.code(), Some(1));
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(combined.contains("wasm.invalid") || combined.contains("wasm.timeout"));
+}

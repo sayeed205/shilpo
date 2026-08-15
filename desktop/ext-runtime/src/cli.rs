@@ -77,12 +77,7 @@ impl ExtensionCli {
     }
 
     pub fn lint(dir: &Path, options: crate::lint::LintOptions) -> crate::lint::LintReport {
-        crate::lint::inspect_extension(
-            dir,
-            crate::lint::InspectionPolicy::Lint {
-                deny_warnings: options.deny_warnings,
-            },
-        )
+        crate::lint::inspect_extension_with_timeout(dir, options.deny_warnings, options.timeout)
     }
 
     pub fn check_report(dir: &Path) -> crate::lint::LintReport {
