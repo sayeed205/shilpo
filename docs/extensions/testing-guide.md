@@ -87,3 +87,21 @@ deno test tests/
 # Or via npm test if configured
 npm test
 ```
+
+---
+
+## 5. Extension Linting & Static Checks
+
+Validate manifest, capabilities, schema, and asset requirements ahead of time using `shilpo ext lint`:
+
+```bash
+# Run extension linter
+shilpo ext lint .
+
+# Enforce zero warnings in CI pipelines
+shilpo ext lint . --deny-warnings
+
+# Emit machine-parseable JSON reports
+shilpo ext lint . --json
+```
+

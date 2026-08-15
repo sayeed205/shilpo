@@ -1292,6 +1292,11 @@ fn generate_rust_readme(name: &str, description: Option<&str>) -> String {
 
 ## Development
 
+### Lint
+```bash
+shilpo ext lint
+```
+
 ### Build
 ```bash
 shilpo ext build
@@ -1552,6 +1557,11 @@ fn generate_typescript_readme(
 ### Install Dependencies
 ```bash
 {pm} install
+```
+
+### Lint
+```bash
+shilpo ext lint
 ```
 
 ### Build

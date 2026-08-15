@@ -203,3 +203,24 @@ Extensions providing `settings_pages` declare a JSON Schema Draft 2020-12 file d
   "additionalProperties": false
 }
 ```
+
+---
+
+## 6. Linting & Validation (`shilpo ext lint`)
+
+You can validate manifests, capabilities, schemas, assets, and project configurations ahead of time without running the extension:
+
+```bash
+# Human-readable diagnostic output
+shilpo ext lint .
+
+# Strict CI mode: fail on warnings as well as errors
+shilpo ext lint . --deny-warnings
+
+# Machine-readable JSON output
+shilpo ext lint . --json
+
+# Quiet mode: only output failures
+shilpo ext lint . --quiet
+```
+

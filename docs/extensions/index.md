@@ -61,7 +61,10 @@ shilpo ext new my-extension --typescript --starter bar-widget
 # Build the WebAssembly component
 shilpo ext build my-extension
 
-# Validate manifest, component, and settings
+# Lint manifest, capabilities, schemas, and assets ahead of time
+shilpo ext lint my-extension
+
+# Validate built component and runtime package
 shilpo ext check my-extension
 
 # Start live hot-reloading development server

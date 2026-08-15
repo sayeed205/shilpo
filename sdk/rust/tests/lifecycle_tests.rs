@@ -93,7 +93,7 @@ fn test_extension_lifecycle_and_error_propagation() {
 
 #[test]
 fn callback_panics_become_typed_internal_errors() {
-    let err = shilpo_ext_sdk::extension::invoke_callback::<()>(|| {
+    let err = shilpo_ext_sdk::extension::invoke_callback(|| -> Result<(), Error> {
         panic!("private extension detail");
     })
     .expect_err("panic must not cross the SDK callback boundary");

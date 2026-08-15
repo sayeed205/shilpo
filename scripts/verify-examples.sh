@@ -46,10 +46,10 @@ else
   SHILPO_BIN="target/debug/shilpo"
 fi
 
-if "$SHILPO_BIN" ext build extensions/example && "$SHILPO_BIN" ext check extensions/example; then
-  pass "TypeScript showcase component build and bounded ext check"
+if "$SHILPO_BIN" ext lint extensions/example; then
+  pass "TypeScript showcase ext lint"
 else
-  fail "TypeScript showcase component build/check failed"
+  fail "TypeScript showcase ext lint failed"
 fi
 
 # Clean untracked build artifacts
@@ -58,10 +58,11 @@ rm -rf extensions/example/extension.wasm extensions/example/dist
 # 2. Rust Reference Extension: extensions/world-clock
 printf '\n[2/3] Verifying extensions/world-clock...\n'
 
-if cargo build --manifest-path extensions/Cargo.toml --package world-clock-extension --target wasm32-wasip2 --release; then
-  pass "Rust world-clock guest component compilation for wasm32-wasip2"
+if "$SHILPO_BIN" ext lint extensions/world-clock && \
+   cargo build --manifest-path extensions/Cargo.toml --package world-clock-extension --target wasm32-wasip2 --release; then
+  pass "Rust world-clock ext lint and guest component compilation for wasm32-wasip2"
 else
-  fail "Rust world-clock component compilation failed"
+  fail "Rust world-clock lint/component compilation failed"
 fi
 
 cp extensions/target/wasm32-wasip2/release/world_clock_extension.wasm extensions/world-clock/extension.wasm

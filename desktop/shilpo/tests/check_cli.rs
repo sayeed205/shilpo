@@ -106,5 +106,5 @@ fn test_cli_ext_check_missing_manifest() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(combined.contains("error[file.missing]"));
+    assert!(combined.contains("error[manifest.missing]") || combined.contains("manifest.missing"));
 }

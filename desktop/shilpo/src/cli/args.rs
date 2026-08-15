@@ -328,6 +328,14 @@ pub enum ExtCommands {
     },
     /// Inspect extension manifest, component, and assets
     Check { path: Option<PathBuf> },
+    /// Lint extension manifest, capabilities, project configuration, and assets
+    Lint {
+        /// Path to extension directory (defaults to current directory)
+        path: Option<PathBuf>,
+        /// Treat warnings as errors
+        #[arg(long)]
+        deny_warnings: bool,
+    },
     /// Pack extension directory into .shilpo-ext bundle
     Pack {
         path: Option<PathBuf>,

@@ -1516,12 +1516,7 @@ const ALLOWED_SHILPO_INTERFACES: &[&str] = &[
     "shilpo:extension/view",
 ];
 
-const ALLOWED_WASI_INTERFACES: &[&str] = &[
-    "wasi:cli/",
-    "wasi:clocks/",
-    "wasi:io/",
-    "wasi:random/",
-];
+const ALLOWED_WASI_INTERFACES: &[&str] = &["wasi:cli/", "wasi:clocks/", "wasi:io/", "wasi:random/"];
 
 fn validate_component_type(engine: &Engine, component: &Component) -> Result<(), RuntimeError> {
     let component_type = component.component_type();
