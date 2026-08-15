@@ -83,7 +83,15 @@ node_modules/.bin/jco componentize src/extension.ts \
   -o extension.wasm
 ```
 
-### 3. Validate Component & Manifest
+### 3. Lint Manifest, Capabilities & Schemas
+
+Perform ahead-of-time linting on the manifest, capability declarations, and settings schema:
+
+```bash
+shilpo ext lint extensions/example
+```
+
+### 4. Validate Component & Manifest
 
 Validate the manifest, settings schema, and component interface:
 
@@ -91,7 +99,7 @@ Validate the manifest, settings schema, and component interface:
 shilpo ext check extensions/example
 ```
 
-### 4. Package Extension
+### 5. Package Extension
 
 Bundle into a signed or unsigned distribution archive (`.shilpo-ext`):
 
@@ -99,7 +107,7 @@ Bundle into a signed or unsigned distribution archive (`.shilpo-ext`):
 shilpo ext pack extensions/example
 ```
 
-### 5. Run Automated Tests
+### 6. Run Automated Tests
 
 Run the hermetic test suite exercising lifecycle, views, events, state, and coverage invariants:
 

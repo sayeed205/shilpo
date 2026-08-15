@@ -7,18 +7,13 @@ use crate::wasm::{WasmModule, WasmRuntime};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 use shilpo_ext_api::{ExtensionEvent, ExtensionId, ExtensionManifest, ViewLimits};
-use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tar::Builder;
-
-const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExtensionCliResult {
@@ -79,6 +74,14 @@ impl ExtensionCli {
         runner: &dyn crate::build::ProcessRunner,
     ) -> ExtensionCliResult {
         crate::build::build_extension(dir, release, runner)
+    }
+
+    pub fn lint(dir: &Path, options: crate::lint::LintOptions) -> crate::lint::LintReport {
+        crate::lint::inspect_extension_with_timeout(dir, options.deny_warnings, options.timeout)
+    }
+
+    pub fn check_report(dir: &Path) -> crate::lint::LintReport {
+        crate::lint::inspect_extension(dir, crate::lint::InspectionPolicy::Check)
     }
 
     pub fn check(dir: &Path) -> ExtensionCliResult {
@@ -900,106 +903,21 @@ fn catalog_snapshot(
 }
 
 fn inspect_extension(dir: &Path) -> Result<CheckedExtension, (Option<String>, Vec<String>)> {
-    let mut diagnostics = Vec::new();
-    let manifest_path = dir.join("extension.toml");
-    if !is_regular_file(&manifest_path, "manifest", &mut diagnostics) {
-        return Err((None, diagnostics));
-    }
-    let source = fs::read_to_string(&manifest_path).map_err(|error| {
-        (
-            None,
-            vec![format!(
-                "error[manifest.read]: failed to read {}: {error}",
-                manifest_path.display()
-            )],
-        )
-    })?;
-    let manifest = ExtensionManifest::from_toml(&source)
-        .map_err(|error| (None, vec![format!("error[manifest.invalid]: {error}")]))?;
-    let extension_id = Some(manifest.id.to_string());
-    diagnostics.push(format!(
-        "info[manifest.valid]: '{}' {}",
-        manifest.id, manifest.version
-    ));
-
-    let mut files = BTreeSet::new();
-    files.insert(PathBuf::from("extension.toml"));
-    let mut total_size = file_size(&manifest_path, &mut diagnostics);
-
-    if let Some(library) = &manifest.library {
-        let relative = PathBuf::from(&library.path);
-        let path = dir.join(&relative);
-        if !is_regular_file(&path, "library", &mut diagnostics) {
-            return Err((extension_id, diagnostics));
+    match crate::lint::inspect_extension_checked(dir) {
+        Ok(checked) => {
+            let diagnostics = checked
+                .report
+                .diagnostics
+                .into_iter()
+                .map(|d| format!("{}[{}]: {}", d.severity, d.rule_id, d.message))
+                .collect();
+            Ok(CheckedExtension {
+                manifest: checked.manifest,
+                files: checked.files,
+                diagnostics,
+            })
         }
-        match fs::read(&path) {
-            Ok(bytes) => {
-                if let Err(error) = WasmRuntime::validate_module(&bytes) {
-                    diagnostics.push(format!("error[wasm.invalid]: {error}"));
-                } else {
-                    diagnostics.push(format!(
-                        "info[wasm.valid]: component interface validated at {}",
-                        relative.display()
-                    ));
-                }
-            }
-            Err(error) => diagnostics.push(format!(
-                "error[wasm.read]: failed to read {}: {error}",
-                path.display()
-            )),
-        }
-        total_size += file_size(&path, &mut diagnostics);
-        files.insert(relative);
-    }
-
-    for page in &manifest.contributions.settings_pages {
-        let relative = PathBuf::from(&page.schema);
-        let path = dir.join(&relative);
-        if !is_regular_file(&path, "settings schema", &mut diagnostics) {
-            continue;
-        }
-        validate_settings_schema(&path, &mut diagnostics);
-        total_size += file_size(&path, &mut diagnostics);
-        files.insert(relative);
-    }
-
-    for optional in ["README.md", "LICENSE"] {
-        let relative = PathBuf::from(optional);
-        let path = dir.join(&relative);
-        if !path.exists() {
-            continue;
-        }
-        if is_regular_file(&path, optional, &mut diagnostics) {
-            total_size += file_size(&path, &mut diagnostics);
-            files.insert(relative);
-        }
-    }
-    for directory in ["assets", "i18n"] {
-        collect_runtime_files(
-            dir,
-            Path::new(directory),
-            &mut files,
-            &mut total_size,
-            &mut diagnostics,
-        );
-    }
-
-    if total_size > MAX_PACKAGE_BYTES {
-        diagnostics.push(format!(
-            "error[package.size]: runtime files use {total_size} bytes; limit is {MAX_PACKAGE_BYTES}"
-        ));
-    }
-    let has_error = diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.starts_with("error["));
-    if has_error {
-        Err((extension_id, diagnostics))
-    } else {
-        Ok(CheckedExtension {
-            manifest,
-            files: files.into_iter().collect(),
-            diagnostics,
-        })
+        Err(err) => Err(err),
     }
 }
 
@@ -1145,152 +1063,6 @@ pub(crate) fn probe_runtime(dir: &Path, manifest: &ExtensionManifest) -> Result<
         .map_err(|error| error.to_string())
 }
 
-fn validate_settings_schema(path: &Path, diagnostics: &mut Vec<String>) {
-    let source = match fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) => {
-            diagnostics.push(format!(
-                "error[settings.read]: failed to read {}: {error}",
-                path.display()
-            ));
-            return;
-        }
-    };
-    let schema: Value = match serde_json::from_str(&source) {
-        Ok(schema) => schema,
-        Err(error) => {
-            diagnostics.push(format!(
-                "error[settings.json]: {} is invalid JSON: {error}",
-                path.display()
-            ));
-            return;
-        }
-    };
-    if let Err(error) = jsonschema::meta::validate(&schema) {
-        diagnostics.push(format!(
-            "error[settings.schema]: {} is not valid JSON Schema: {error}",
-            path.display()
-        ));
-        return;
-    }
-    if contains_remote_reference(&schema) {
-        diagnostics.push(format!(
-            "error[settings.reference]: {} contains a remote $ref",
-            path.display()
-        ));
-        return;
-    }
-    let defaults = settings_defaults(&schema);
-    match jsonschema::validator_for(&schema) {
-        Ok(validator) => {
-            if let Err(error) = validator.validate(&defaults) {
-                diagnostics.push(format!(
-                    "error[settings.defaults]: defaults in {} are invalid: {error}",
-                    path.display()
-                ));
-            } else {
-                diagnostics.push(format!(
-                    "info[settings.valid]: schema and defaults validated at {}",
-                    path.display()
-                ));
-            }
-        }
-        Err(error) => diagnostics.push(format!(
-            "error[settings.compile]: failed to compile {}: {error}",
-            path.display()
-        )),
-    }
-}
-
-fn settings_defaults(schema: &Value) -> Value {
-    let mut defaults = Map::new();
-    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
-        for (key, property) in properties {
-            if let Some(value) = property.get("default") {
-                defaults.insert(key.clone(), value.clone());
-            }
-        }
-    }
-    Value::Object(defaults)
-}
-
-fn contains_remote_reference(value: &Value) -> bool {
-    match value {
-        Value::Object(object) => object.iter().any(|(key, value)| {
-            (key == "$ref"
-                && value
-                    .as_str()
-                    .is_some_and(|reference| reference.contains("://")))
-                || contains_remote_reference(value)
-        }),
-        Value::Array(values) => values.iter().any(contains_remote_reference),
-        _ => false,
-    }
-}
-
-fn collect_runtime_files(
-    root: &Path,
-    relative: &Path,
-    files: &mut BTreeSet<PathBuf>,
-    total_size: &mut u64,
-    diagnostics: &mut Vec<String>,
-) {
-    let path = root.join(relative);
-    if !path.exists() {
-        return;
-    }
-    let metadata = match fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            diagnostics.push(format!(
-                "error[asset.metadata]: failed to inspect {}: {error}",
-                path.display()
-            ));
-            return;
-        }
-    };
-    if metadata.file_type().is_symlink() {
-        diagnostics.push(format!(
-            "error[asset.symlink]: symbolic links are not packageable: {}",
-            path.display()
-        ));
-        return;
-    }
-    if metadata.is_file() {
-        *total_size += metadata.len();
-        if metadata.len() > MAX_FILE_BYTES {
-            diagnostics.push(format!(
-                "error[asset.size]: {} exceeds the per-file limit",
-                path.display()
-            ));
-        }
-        files.insert(relative.to_path_buf());
-        return;
-    }
-    if !metadata.is_dir() {
-        return;
-    }
-    let entries = match fs::read_dir(&path) {
-        Ok(entries) => entries,
-        Err(error) => {
-            diagnostics.push(format!(
-                "error[asset.read]: failed to read {}: {error}",
-                path.display()
-            ));
-            return;
-        }
-    };
-    for entry in entries.flatten() {
-        collect_runtime_files(
-            root,
-            &relative.join(entry.file_name()),
-            files,
-            total_size,
-            diagnostics,
-        );
-    }
-}
-
 pub(crate) fn is_regular_file(path: &Path, label: &str, diagnostics: &mut Vec<String>) -> bool {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => true,
@@ -1308,21 +1080,6 @@ pub(crate) fn is_regular_file(path: &Path, label: &str, diagnostics: &mut Vec<St
             ));
             false
         }
-    }
-}
-
-fn file_size(path: &Path, diagnostics: &mut Vec<String>) -> u64 {
-    match fs::metadata(path) {
-        Ok(metadata) => {
-            if metadata.len() > MAX_FILE_BYTES {
-                diagnostics.push(format!(
-                    "error[file.size]: {} exceeds the per-file limit",
-                    path.display()
-                ));
-            }
-            metadata.len()
-        }
-        Err(_) => 0,
     }
 }
 

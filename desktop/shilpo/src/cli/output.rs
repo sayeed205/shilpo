@@ -95,7 +95,7 @@ impl CliOutput {
                 schema_version: 1,
                 ok: false,
                 command: command_name.into(),
-                data: Value::Null,
+                data: details.clone().unwrap_or(Value::Null),
                 warnings,
                 error: Some(JsonError {
                     code: code.into(),
@@ -105,7 +105,15 @@ impl CliOutput {
             };
             println!("{}", serde_json::to_string(&env).unwrap_or_default());
         } else {
-            eprintln!("error: {message}");
+            if message.starts_with("error")
+                || message.contains('\n')
+                || message.contains(": error: ")
+                || message.contains(": [")
+            {
+                eprintln!("{message}");
+            } else {
+                eprintln!("error: {message}");
+            }
             for warning in warnings {
                 eprintln!("warning: {warning}");
             }

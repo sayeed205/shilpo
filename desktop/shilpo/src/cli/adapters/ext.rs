@@ -1,10 +1,12 @@
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use shilpo_ext_api::{Capability, EventKind, ExtensionId, Subscription};
 use shilpo_ext_runtime::{
-    ExtensionCatalog, ExtensionCli, ExtensionCliResult, PackageManager, ReleaseChannel,
-    ScaffoldError, ScaffoldOptions, StarterContribution, StarterLanguage, UpdateState,
-    default_extension_state_dir, derive_package_name, scaffold_extension, sign_package,
+    ExtensionCatalog, ExtensionCli, ExtensionCliResult, LintOptions, LintReport, LintSeverity,
+    PackageManager, ReleaseChannel, ScaffoldError, ScaffoldOptions, StarterContribution,
+    StarterLanguage, UpdateState, default_extension_state_dir, derive_package_name,
+    scaffold_extension, sign_package,
 };
 
 use super::ipc::IpcAdapter;
@@ -522,6 +524,38 @@ impl ExtAdapter {
             human_message: cli_res.diagnostics.join("\n"),
             warnings: Vec::new(),
             exit_code: if cli_res.success { 0 } else { 1 },
+        }
+    }
+
+    pub fn lint(
+        &self,
+        path: Option<&Path>,
+        deny_warnings: bool,
+        _is_json: bool,
+        is_quiet: bool,
+        timeout: std::time::Duration,
+    ) -> ExtOpResult {
+        let target = path.unwrap_or_else(|| Path::new("."));
+        let report = ExtensionCli::lint(
+            target,
+            LintOptions {
+                deny_warnings,
+                timeout,
+            },
+        );
+        let human_message = format_human_lint_report(&report, is_quiet);
+        let exit_code = if report.passed {
+            crate::cli::output::EXIT_SUCCESS
+        } else {
+            crate::cli::output::EXIT_FAILURE
+        };
+
+        ExtOpResult {
+            success: report.passed,
+            data: serde_json::to_value(&report).unwrap_or(serde_json::Value::Null),
+            human_message,
+            warnings: Vec::new(),
+            exit_code,
         }
     }
 
@@ -1735,6 +1769,91 @@ fn record_refresh_warning(result: &mut ExtOpResult, reason: impl Into<String>) {
     result
         .warnings
         .push(format!("Local mutation succeeded, but {}", reason.into()));
+}
+
+fn format_human_lint_report(report: &LintReport, is_quiet: bool) -> String {
+    let mut out = String::new();
+    let use_color = std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal();
+
+    for diag in &report.diagnostics {
+        if is_quiet && diag.severity == LintSeverity::Info {
+            continue;
+        }
+        if is_quiet && diag.severity == LintSeverity::Warning && report.passed {
+            continue;
+        }
+
+        let sev_str = match diag.severity {
+            LintSeverity::Error => {
+                if use_color {
+                    "\x1b[31;1merror\x1b[0m"
+                } else {
+                    "error"
+                }
+            }
+            LintSeverity::Warning => {
+                if use_color {
+                    "\x1b[33;1mwarning\x1b[0m"
+                } else {
+                    "warning"
+                }
+            }
+            LintSeverity::Info => {
+                if use_color {
+                    "\x1b[36minfo\x1b[0m"
+                } else {
+                    "info"
+                }
+            }
+        };
+
+        let prefix = if let Some(path) = &diag.path {
+            if let (Some(line), Some(col)) = (diag.line, diag.column) {
+                format!(
+                    "{path}:{line}:{col}: {sev_str}: [{}] {}",
+                    diag.rule_id, diag.message
+                )
+            } else if let Some(line) = diag.line {
+                format!(
+                    "{path}:{line}: {sev_str}: [{}] {}",
+                    diag.rule_id, diag.message
+                )
+            } else {
+                format!("{path}: {sev_str}: [{}] {}", diag.rule_id, diag.message)
+            }
+        } else {
+            format!("{sev_str}: [{}] {}", diag.rule_id, diag.message)
+        };
+
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&prefix);
+
+        if let Some(help) = &diag.remediation {
+            out.push_str(&format!("\n  help: {help}"));
+        }
+    }
+
+    if !is_quiet {
+        let summary = if report.passed && report.warning_count == 0 {
+            format!(
+                "Lint passed with 0 errors, 0 warnings, {} info in {}.",
+                report.info_count, report.project_path
+            )
+        } else {
+            format!(
+                "Lint found {} error(s), {} warning(s), {} info in {}.",
+                report.error_count, report.warning_count, report.info_count, report.project_path
+            )
+        };
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&summary);
+    }
+
+    out
 }
 
 fn should_ignore_path(path: &Path, root: &Path) -> bool {

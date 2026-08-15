@@ -4,12 +4,20 @@ pub mod catalog;
 pub mod circuit_breaker;
 pub mod cli;
 pub mod effects;
+pub mod lint;
 pub mod scaffold;
 pub mod script;
 pub mod secrets;
 pub mod state;
 pub mod wasm;
 pub mod worker;
+
+pub use lint::{
+    CheckedExtensionData, InspectionPolicy, LintDiagnostic, LintOptions, LintReport, LintSeverity,
+    MAX_FILE_BYTES, MAX_PACKAGE_BYTES, WASM_LARGE_THRESHOLD_BYTES, inspect_extension,
+    inspect_extension_checked, inspect_extension_full, inspect_extension_with_timeout,
+    validate_png_bytes, validate_svg_bytes,
+};
 
 pub use build::{
     ExtensionLanguage, ExtensionProjectConfig, OsProcessRunner, ProcessCommand, ProcessOutput,
@@ -1029,12 +1037,10 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.starts_with("error[wasm.invalid]"))
         );
-        assert!(
-            result
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.starts_with("error[settings.defaults]"))
-        );
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("settings.invalid-defaults")
+                || diagnostic.contains("settings.defaults")
+        }));
 
         fs::remove_dir_all(&temp_dir).unwrap();
     }

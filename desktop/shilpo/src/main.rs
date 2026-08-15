@@ -844,6 +844,10 @@ async fn main() {
                 ExtCommands::Status => ext.status(),
                 ExtCommands::Build { path, release } => ext.build(path.as_deref(), release),
                 ExtCommands::Check { path } => ext.check(path.as_deref()),
+                ExtCommands::Lint {
+                    path,
+                    deny_warnings,
+                } => ext.lint(path.as_deref(), deny_warnings, cli.json, cli.quiet, timeout),
                 ExtCommands::Pack { path, output } => ext.pack(path.as_deref(), output.as_deref()),
                 ExtCommands::Dev { path } => ext.dev(path.as_deref(), cli.json, cli.quiet, timeout),
                 ExtCommands::Logs { id: _, follow } if cli.json && follow => {
