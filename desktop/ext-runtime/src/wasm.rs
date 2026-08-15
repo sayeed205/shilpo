@@ -853,10 +853,71 @@ impl WasmRuntime {
         })
     }
 
+    /// Default bounded validation timeout for component compilation and interface checking (30s).
+    pub const DEFAULT_VALIDATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Maximum component size accepted for validation (32 MiB).
+    pub const MAX_VALIDATION_COMPONENT_SIZE: usize = 32 * 1024 * 1024;
+
+    /// Validates a WebAssembly component binary against the canonical
+    /// `shilpo:extension@0.1.0` WIT contract within the default bounded timeout (30s).
     pub fn validate_module(bytes: &[u8]) -> Result<(), RuntimeError> {
-        let engine = configured_engine()?;
-        let component = compile_component(&engine, bytes)?;
-        validate_component_type(&engine, &component)
+        Self::validate_module_timeout(bytes, Self::DEFAULT_VALIDATION_TIMEOUT)
+    }
+
+    /// Validates a WebAssembly component binary against the canonical
+    /// `shilpo:extension@0.1.0` WIT contract within an explicit bounded duration.
+    pub fn validate_module_timeout(bytes: &[u8], timeout: Duration) -> Result<(), RuntimeError> {
+        if bytes.len() > Self::MAX_VALIDATION_COMPONENT_SIZE {
+            return Err(RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                format!(
+                    "component size ({} bytes) exceeds maximum supported validation limit of {} bytes",
+                    bytes.len(),
+                    Self::MAX_VALIDATION_COMPONENT_SIZE
+                ),
+            ));
+        }
+
+        let bytes_vec = bytes.to_vec();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::Builder::new()
+            .name("wasm-validator".into())
+            .spawn(move || {
+                let res = (|| {
+                    let engine = configured_engine()?;
+                    let component = compile_component(&engine, &bytes_vec)?;
+                    validate_component_type(&engine, &component)
+                })();
+                let _ = tx.send(res);
+            });
+
+        match handle {
+            Ok(join_handle) => match rx.recv_timeout(timeout) {
+                Ok(res) => {
+                    let _ = join_handle.join();
+                    res
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(RuntimeError::with_kind(
+                    RuntimeFailureKind::Timeout,
+                    format!(
+                        "component validation timed out after {}s",
+                        timeout.as_secs()
+                    ),
+                )),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = join_handle.join();
+                    Err(RuntimeError::with_kind(
+                        RuntimeFailureKind::Load,
+                        "component validation thread terminated unexpectedly".to_string(),
+                    ))
+                }
+            },
+            Err(error) => Err(RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                format!("failed to spawn validation thread: {error}"),
+            )),
+        }
     }
 
     /// Drops all watch registrations and undelivered state events for an
@@ -1288,6 +1349,7 @@ impl Drop for WasmRuntime {
 fn configured_engine() -> Result<Engine, RuntimeError> {
     let mut config = Config::new();
     config.wasm_component_model(true);
+    config.wasm_component_model_async(true);
     config.consume_fuel(true);
     config.epoch_interruption(true);
     config.max_wasm_stack(512 * 1024);
@@ -1308,10 +1370,32 @@ fn compile_component(engine: &Engine, bytes: &[u8]) -> Result<Component, Runtime
     })
 }
 
+const ALLOWED_SHILPO_INTERFACES: &[&str] = &[
+    "shilpo:extension/actions",
+    "shilpo:extension/clipboard",
+    "shilpo:extension/filesystem",
+    "shilpo:extension/http",
+    "shilpo:extension/location",
+    "shilpo:extension/notifications",
+    "shilpo:extension/state",
+    "shilpo:extension/secrets",
+    "shilpo:extension/theme",
+    "shilpo:extension/wallpaper",
+    "shilpo:extension/types",
+    "shilpo:extension/events",
+    "shilpo:extension/view",
+];
+
 fn validate_component_type(engine: &Engine, component: &Component) -> Result<(), RuntimeError> {
     let component_type = component.component_type();
     for (name, _) in component_type.imports(engine) {
-        if !name.starts_with("wasi:") && !name.starts_with("shilpo:extension") {
+        let is_wasi = name.starts_with("wasi:");
+        let is_valid_shilpo = ALLOWED_SHILPO_INTERFACES.iter().any(|prefix| {
+            name == *prefix
+                || name.starts_with(&format!("{prefix}@"))
+                || name.starts_with(&format!("{prefix}/"))
+        });
+        if !is_wasi && !is_valid_shilpo {
             return Err(RuntimeError::with_kind(
                 RuntimeFailureKind::Load,
                 format!("unsupported component import '{name}'"),

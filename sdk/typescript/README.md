@@ -141,14 +141,22 @@ export const view = ext.view;
 ### 3. Build WebAssembly Component
 
 Compile the TypeScript extension into a WebAssembly Component model binary targeting the
-`shilpo:extension@0.1.0` WIT world:
+`shilpo:extension@0.1.0` WIT world using the pinned QuickJS componentization backend:
 
 ```bash
 npx --yes @bytecodealliance/jco componentize src/extension.ts \
   --wit node_modules/@shilpo/ext-sdk/wit \
   --world-name extension \
+  --backend qjs \
+  --backend-qjs-disable-async \
   -o extension.wasm
 ```
+
+> **Note on Componentization Backend**: Shilpo extension tooling pins the QuickJS backend
+> (`--backend qjs --backend-qjs-disable-async`). QuickJS produces lightweight (~1.7 MiB) synchronous
+> WebAssembly components that load, validate, and execute in sub-second timeframes under Wasmtime,
+> whereas default StarlingMonkey binaries are significantly larger and incur substantial JIT
+> compilation overhead.
 
 ---
 

@@ -788,6 +788,9 @@ fn build_typescript(
         .arg(wit_abs.to_str().unwrap_or("wit"))
         .arg("--world-name")
         .arg("extension")
+        .arg("--backend")
+        .arg("qjs")
+        .arg("--backend-qjs-disable-async")
         .arg("-o")
         .arg(temp_dest_abs.to_str().unwrap_or("temp.wasm"))
         .cwd(dir);

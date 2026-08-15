@@ -1206,6 +1206,88 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_wasm_runtime_validate_module_valid_rust_component() {
+        let valid_bytes = test_component_bytes(&valid_component_wat());
+        assert!(WasmRuntime::validate_module(&valid_bytes).is_ok());
+    }
+
+    #[test]
+    fn test_wasm_runtime_validate_module_rejects_oversized_payload() {
+        let oversized = vec![0u8; WasmRuntime::MAX_VALIDATION_COMPONENT_SIZE + 1];
+        let err = WasmRuntime::validate_module(&oversized).unwrap_err();
+        assert_eq!(err.kind(), RuntimeFailureKind::Load);
+        assert!(
+            err.to_string()
+                .contains("exceeds maximum supported validation limit")
+        );
+    }
+
+    #[test]
+    fn test_wasm_runtime_validate_module_timeout_bounded() {
+        let valid_bytes = test_component_bytes(&valid_component_wat());
+        // Duration::ZERO or extremely tiny duration triggers timeout error cleanly
+        let err = WasmRuntime::validate_module_timeout(&valid_bytes, Duration::from_nanos(1))
+            .unwrap_err();
+        assert_eq!(err.kind(), RuntimeFailureKind::Timeout);
+        assert!(err.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn test_wasm_runtime_validate_module_rejects_missing_exports() {
+        let incomplete_wat = r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "activate") (result i32) i32.const 0))
+        "#;
+        let mut core_wasm = wat::parse_str(incomplete_wat).expect("core WAT must parse");
+        let mut resolve = wit_parser::Resolve::default();
+        let pkg_id = resolve
+            .push_str(
+                "dummy.wit",
+                "package test:dummy@0.1.0;\nworld dummy {\nexport activate: func() -> u32;\n}",
+            )
+            .expect("WIT string must parse");
+        let world_id = resolve
+            .select_world(&[pkg_id], Some("dummy"))
+            .expect("world dummy must exist");
+        let metadata = wit_component::metadata::encode(
+            &resolve,
+            world_id,
+            wit_component::StringEncoding::UTF8,
+            None,
+        )
+        .expect("metadata encode");
+        let name = "component-type:dummy";
+        let mut section = Vec::new();
+        section.push(0x00);
+        let mut payload = Vec::new();
+        payload.push(name.len() as u8);
+        payload.extend_from_slice(name.as_bytes());
+        payload.extend_from_slice(&metadata);
+        let mut len = payload.len();
+        while len >= 0x80 {
+            section.push(len as u8 | 0x80);
+            len >>= 7;
+        }
+        section.push(len as u8);
+        section.extend(payload);
+        core_wasm.extend(section);
+        let component_bytes = wit_component::ComponentEncoder::default()
+            .validate(false)
+            .module(&core_wasm)
+            .expect("module set must succeed")
+            .encode()
+            .expect("component encoding must succeed");
+
+        let err = WasmRuntime::validate_module(&component_bytes).unwrap_err();
+        assert_eq!(err.kind(), RuntimeFailureKind::Load);
+        assert!(
+            err.to_string()
+                .contains("missing required component export")
+        );
+    }
+
     fn make_temp_dir(name: &str) -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
