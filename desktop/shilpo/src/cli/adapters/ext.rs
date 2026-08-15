@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use shilpo_ext_api::ExtensionId;
+use shilpo_ext_api::{Capability, EventKind, ExtensionId, Subscription};
 use shilpo_ext_runtime::{
-    ExtensionCatalog, ExtensionCli, ExtensionCliResult, ReleaseChannel, UpdateState,
-    default_extension_state_dir, sign_package,
+    ExtensionCatalog, ExtensionCli, ExtensionCliResult, PackageManager, ReleaseChannel,
+    ScaffoldError, ScaffoldOptions, StarterContribution, StarterLanguage, UpdateState,
+    default_extension_state_dir, derive_package_name, scaffold_extension, sign_package,
 };
 
 use super::ipc::IpcAdapter;
@@ -34,6 +35,308 @@ impl ExtAdapter {
             ipc: IpcAdapter::new(),
             state_dir: default_extension_state_dir(),
             catalog: ExtensionCatalog::open_default(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn scaffold_new(
+        &self,
+        name: &str,
+        target: Option<PathBuf>,
+        language: Option<StarterLanguage>,
+        contribution: Option<StarterContribution>,
+        package_manager: Option<PackageManager>,
+        extension_id: Option<String>,
+        package_name: Option<String>,
+        description: Option<String>,
+        capabilities_raw: &[String],
+        subscriptions_raw: &[String],
+        install: bool,
+        build: bool,
+        git: bool,
+        yes: bool,
+        is_interactive: bool,
+        is_json: bool,
+        is_quiet: bool,
+    ) -> ExtOpResult {
+        let trimmed_name = name.trim();
+        if trimmed_name.is_empty() {
+            return ExtOpResult {
+                success: false,
+                data: serde_json::Value::Null,
+                human_message: "extension name cannot be empty".into(),
+                warnings: Vec::new(),
+                exit_code: crate::cli::output::EXIT_INVALID_ARGS,
+            };
+        }
+
+        // Parse capability JSONs
+        let mut capabilities = Vec::new();
+        for cap_json in capabilities_raw {
+            match serde_json::from_str::<Capability>(cap_json) {
+                Ok(cap) => capabilities.push(cap),
+                Err(e) => {
+                    return ExtOpResult {
+                        success: false,
+                        data: serde_json::Value::Null,
+                        human_message: format!("invalid capability JSON '{cap_json}': {e}"),
+                        warnings: Vec::new(),
+                        exit_code: crate::cli::output::EXIT_INVALID_ARGS,
+                    };
+                }
+            }
+        }
+
+        // Parse subscriptions
+        let mut subscriptions = Vec::new();
+        for sub_str in subscriptions_raw {
+            let event_json = format!("\"{sub_str}\"");
+            match serde_json::from_str::<EventKind>(&event_json) {
+                Ok(event) => subscriptions.push(Subscription { event }),
+                Err(_) => {
+                    return ExtOpResult {
+                        success: false,
+                        data: serde_json::Value::Null,
+                        human_message: format!(
+                            "invalid event '{sub_str}': expected one of 'outputs_changed', 'theme_changed', 'palette_generated', 'wallpaper_changed', 'network_changed', 'media_changed', 'power_changed', 'timer_fired', 'workspace_changed'"
+                        ),
+                        warnings: Vec::new(),
+                        exit_code: crate::cli::output::EXIT_INVALID_ARGS,
+                    };
+                }
+            }
+        }
+
+        // Resolve target directory
+        let target_dir = match target {
+            Some(t) => t,
+            None => {
+                let default_dir_name =
+                    derive_package_name(trimmed_name, StarterLanguage::Typescript, None)
+                        .unwrap_or_else(|_| "my-extension".into());
+                PathBuf::from(default_dir_name)
+            }
+        };
+
+        let mut chosen_language = language;
+        let mut chosen_contribution = contribution;
+        let mut chosen_pm = package_manager;
+        let mut chosen_git = git;
+        let mut chosen_install = install;
+        let mut chosen_description = description;
+
+        // Interactive / Non-interactive requirements
+        if chosen_language.is_none() || chosen_contribution.is_none() {
+            if !is_interactive || is_json {
+                return ExtOpResult {
+                    success: false,
+                    data: serde_json::Value::Null,
+                    human_message: "missing required arguments: --language and --contribution are required in non-interactive/json mode".into(),
+                    warnings: Vec::new(),
+                    exit_code: crate::cli::output::EXIT_INVALID_ARGS,
+                };
+            }
+
+            // Interactive prompts
+            println!("Creating new extension '{trimmed_name}'...\n");
+
+            if chosen_language.is_none() {
+                println!("Select implementation language:");
+                println!("  1) TypeScript (recommended)");
+                println!("  2) Rust");
+                print!("Selection [1]: ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                let choice = line.trim();
+                chosen_language = match choice {
+                    "2" | "rust" | "Rust" => Some(StarterLanguage::Rust),
+                    _ => Some(StarterLanguage::Typescript),
+                };
+            }
+
+            if chosen_contribution.is_none() {
+                println!("\nSelect starter template:");
+                println!("  1) bar-widget     - Status bar indicator widget with action");
+                println!("  2) desktop-widget - Desktop canvas widget container");
+                println!("  3) settings-page  - Settings configuration panel with schema");
+                println!("  4) side-panel     - Side drawer panel with layout");
+                println!("  5) action         - Custom desktop action handler");
+                println!("  6) empty          - Minimal compilable component");
+                print!("Selection [1]: ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                let choice = line.trim();
+                chosen_contribution = match choice {
+                    "2" | "desktop-widget" | "desktop" => Some(StarterContribution::DesktopWidget),
+                    "3" | "settings-page" | "settings" => Some(StarterContribution::SettingsPage),
+                    "4" | "side-panel" | "panel" => Some(StarterContribution::SidePanel),
+                    "5" | "action" => Some(StarterContribution::Action),
+                    "6" | "empty" => Some(StarterContribution::Empty),
+                    _ => Some(StarterContribution::BarWidget),
+                };
+            }
+
+            if chosen_language == Some(StarterLanguage::Typescript) && chosen_pm.is_none() {
+                println!("\nSelect package manager:");
+                println!("  1) npm (default)");
+                println!("  2) pnpm");
+                println!("  3) yarn");
+                println!("  4) bun");
+                print!("Selection [1]: ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                let choice = line.trim();
+                chosen_pm = match choice {
+                    "2" | "pnpm" => Some(PackageManager::Pnpm),
+                    "3" | "yarn" => Some(PackageManager::Yarn),
+                    "4" | "bun" => Some(PackageManager::Bun),
+                    _ => Some(PackageManager::Npm),
+                };
+            }
+
+            if !git {
+                print!("\nInitialize git repository? [y/N]: ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                if line.trim().eq_ignore_ascii_case("y") || line.trim().eq_ignore_ascii_case("yes")
+                {
+                    chosen_git = true;
+                }
+            }
+
+            if !install && !build && chosen_language == Some(StarterLanguage::Typescript) {
+                print!("\nInstall dependencies now? [y/N]: ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                if line.trim().eq_ignore_ascii_case("y") || line.trim().eq_ignore_ascii_case("yes")
+                {
+                    chosen_install = true;
+                }
+            }
+        }
+
+        if is_interactive && !is_json {
+            if chosen_description.is_none() {
+                print!("\nDescription (optional, press Enter to skip): ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                let value = line.trim().to_string();
+                if !value.is_empty() {
+                    chosen_description = Some(value);
+                }
+            }
+
+            let preview_language = chosen_language.unwrap_or(StarterLanguage::Typescript);
+            let preview_contribution =
+                chosen_contribution.unwrap_or(StarterContribution::BarWidget);
+            let preview_pm = chosen_pm.unwrap_or(PackageManager::Npm);
+            if !yes {
+                println!(
+                    "\nSummary:\n  name: {trimmed_name}\n  target: {}\n  language: {preview_language}\n  contribution: {preview_contribution}\n  package manager: {preview_pm}\n  git: {}\n  install: {}",
+                    target_dir.display(),
+                    chosen_git,
+                    chosen_install || build
+                );
+                print!("\nCreate this extension? [Y/n]: ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                let trimmed_resp = line.trim();
+                if !trimmed_resp.is_empty()
+                    && !trimmed_resp.eq_ignore_ascii_case("y")
+                    && !trimmed_resp.eq_ignore_ascii_case("yes")
+                {
+                    return ExtOpResult {
+                        success: false,
+                        data: serde_json::Value::Null,
+                        human_message: "operation cancelled by user".into(),
+                        warnings: Vec::new(),
+                        exit_code: 130,
+                    };
+                }
+            }
+        }
+
+        let final_language = chosen_language.unwrap_or(StarterLanguage::Typescript);
+        let final_contribution = chosen_contribution.unwrap_or(StarterContribution::BarWidget);
+        let final_pm = if final_language == StarterLanguage::Typescript {
+            chosen_pm.or(Some(PackageManager::Npm))
+        } else {
+            None
+        };
+
+        let options = ScaffoldOptions {
+            name: trimmed_name.to_string(),
+            target_dir,
+            language: final_language,
+            contribution: final_contribution,
+            package_manager: final_pm,
+            extension_id,
+            package_name,
+            description: chosen_description,
+            capabilities,
+            subscriptions,
+            install: chosen_install,
+            build,
+            git: chosen_git,
+        };
+
+        match scaffold_extension(&options, &shilpo_ext_runtime::OsProcessRunner) {
+            Ok(result) => {
+                if is_quiet {
+                    println!("{}", result.target_dir.display());
+                }
+
+                let mut human_lines = vec![format!(
+                    "Created extension '{}' ({}) at {}",
+                    result.name,
+                    result.extension_id,
+                    result.target_dir.display()
+                )];
+                human_lines.push(String::new());
+                human_lines.push("Next steps:".into());
+                for step in &result.next_steps {
+                    human_lines.push(format!("  {step}"));
+                }
+
+                ExtOpResult {
+                    success: true,
+                    data: serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
+                    human_message: human_lines.join("\n"),
+                    warnings: Vec::new(),
+                    exit_code: 0,
+                }
+            }
+            Err(err) => {
+                let exit_code = match &err {
+                    ScaffoldError::InvalidTarget(_)
+                    | ScaffoldError::InvalidExtensionId(_)
+                    | ScaffoldError::InvalidPackageName(_)
+                    | ScaffoldError::InvalidCapability(_)
+                    | ScaffoldError::InvalidSubscription(_)
+                    | ScaffoldError::CapabilityConflict(_)
+                    | ScaffoldError::TargetExistsAndNotEmpty(_)
+                    | ScaffoldError::TargetIsFile(_)
+                    | ScaffoldError::TargetIsSymlink(_)
+                    | ScaffoldError::PathTraversal(_) => crate::cli::output::EXIT_INVALID_ARGS,
+                    ScaffoldError::Cancelled => 130,
+                    _ => crate::cli::output::EXIT_FAILURE,
+                };
+
+                ExtOpResult {
+                    success: false,
+                    data: serde_json::Value::Null,
+                    human_message: err.to_string(),
+                    warnings: Vec::new(),
+                    exit_code,
+                }
+            }
         }
     }
 

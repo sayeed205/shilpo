@@ -272,6 +272,50 @@ pub enum ThemeWallpaperAction {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum ExtCommands {
+    /// Create a new extension project (alias: create)
+    #[command(alias = "create")]
+    New {
+        /// Human display name of the extension
+        name: String,
+        /// Optional target directory path (defaults to kebab-cased name)
+        target: Option<PathBuf>,
+        /// Extension implementation language
+        #[arg(long, value_enum)]
+        language: Option<StarterLanguageValue>,
+        /// Starter contribution kind
+        #[arg(long, value_enum)]
+        contribution: Option<StarterContributionValue>,
+        /// TypeScript package manager (npm, pnpm, yarn, bun)
+        #[arg(long, value_enum)]
+        package_manager: Option<PackageManagerValue>,
+        /// Explicit extension ID override (reverse-domain format, e.g. dev.local.my-extension)
+        #[arg(long)]
+        extension_id: Option<String>,
+        /// Explicit package/crate name override
+        #[arg(long)]
+        package_name: Option<String>,
+        /// Description of the extension
+        #[arg(long)]
+        description: Option<String>,
+        /// Canonical capability JSON object (repeatable)
+        #[arg(long = "capability", action = clap::ArgAction::Append)]
+        capabilities: Vec<String>,
+        /// Canonical event subscription (repeatable)
+        #[arg(long = "subscribe", action = clap::ArgAction::Append)]
+        subscriptions: Vec<String>,
+        /// Install dependencies after generation
+        #[arg(long)]
+        install: bool,
+        /// Build component after generation (implies --install)
+        #[arg(long)]
+        build: bool,
+        /// Initialize git repository
+        #[arg(long)]
+        git: bool,
+        /// Skip confirmation prompts in interactive mode
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
     /// Display extension host runtime status, supervisor state, and process diagnostics
     Status,
     /// Build extension WebAssembly component
@@ -391,4 +435,61 @@ pub enum ActionCommands {
         #[arg(long)]
         payload: Option<String>,
     },
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StarterLanguageValue {
+    Rust,
+    Typescript,
+}
+
+impl From<StarterLanguageValue> for shilpo_ext_runtime::StarterLanguage {
+    fn from(v: StarterLanguageValue) -> Self {
+        match v {
+            StarterLanguageValue::Rust => Self::Rust,
+            StarterLanguageValue::Typescript => Self::Typescript,
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StarterContributionValue {
+    BarWidget,
+    DesktopWidget,
+    SettingsPage,
+    SidePanel,
+    Action,
+    Empty,
+}
+
+impl From<StarterContributionValue> for shilpo_ext_runtime::StarterContribution {
+    fn from(v: StarterContributionValue) -> Self {
+        match v {
+            StarterContributionValue::BarWidget => Self::BarWidget,
+            StarterContributionValue::DesktopWidget => Self::DesktopWidget,
+            StarterContributionValue::SettingsPage => Self::SettingsPage,
+            StarterContributionValue::SidePanel => Self::SidePanel,
+            StarterContributionValue::Action => Self::Action,
+            StarterContributionValue::Empty => Self::Empty,
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageManagerValue {
+    Npm,
+    Pnpm,
+    Yarn,
+    Bun,
+}
+
+impl From<PackageManagerValue> for shilpo_ext_runtime::PackageManager {
+    fn from(v: PackageManagerValue) -> Self {
+        match v {
+            PackageManagerValue::Npm => Self::Npm,
+            PackageManagerValue::Pnpm => Self::Pnpm,
+            PackageManagerValue::Yarn => Self::Yarn,
+            PackageManagerValue::Bun => Self::Bun,
+        }
+    }
 }

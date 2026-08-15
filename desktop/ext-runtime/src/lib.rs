@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod circuit_breaker;
 pub mod cli;
 pub mod effects;
+pub mod scaffold;
 pub mod script;
 pub mod secrets;
 pub mod state;
@@ -14,6 +15,11 @@ pub use build::{
     ExtensionLanguage, ExtensionProjectConfig, OsProcessRunner, ProcessCommand, ProcessOutput,
     ProcessRunner, ResolvedBuildConfig, build_extension, find_canonical_wit_dir, find_local_jco,
     resolve_project_config,
+};
+pub use scaffold::{
+    PackageManager, ScaffoldError, ScaffoldOptions, ScaffoldResult, StarterContribution,
+    StarterLanguage, derive_extension_id, derive_package_name, scaffold_extension,
+    synchronize_capabilities_and_subscriptions, validate_target_path,
 };
 pub use secrets::{FakeSecretBroker, Oo7SecretBroker, SecretBroker, SecretBrokerError};
 

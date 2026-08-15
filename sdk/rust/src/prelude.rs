@@ -4,7 +4,7 @@
 //! sandboxed WebAssembly desktop extensions.
 
 pub use crate::bindings::shilpo::extension::{
-    events::ExtensionEvent,
+    events::{ExtensionEvent, InputEvent},
     state::{StateMutation, StateSnapshot, WatchRegistration},
     types::{Activation, DataValue, DeactivateReason, Error, ErrorKind, SecretRef},
     view::{
