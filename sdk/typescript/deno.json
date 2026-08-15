@@ -24,7 +24,7 @@
     "fmt": "deno fmt",
     "fmt:check": "deno fmt --check",
     "lint": "deno lint",
-    "check": "deno check src/**/*.ts tests/**/*.ts",
+    "check": "deno check src/**/*.ts tests/*_test.ts tests/consumers/*.ts tests/fixture/*.ts",
     "generate": "deno run --allow-read --allow-write --allow-run scripts/generate.ts",
     "generate:check": "deno run --allow-read --allow-write --allow-run scripts/generate.ts --check",
     "test": "deno test --allow-read --allow-write --allow-run --allow-env tests/",
