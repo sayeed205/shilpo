@@ -19,12 +19,13 @@ export type ViewChild =
   | FragmentSpec
   | string
   | number
-  | boolean
+  | false
   | null
   | undefined
   | ViewChild[];
 
 export type ViewChildren = ViewChild | ViewChild[];
+export type ViewElement = ViewNodeSpec | FragmentSpec | ViewElement[];
 
 export interface ContainerProps {
   direction?: ContainerDirection;
@@ -50,7 +51,13 @@ export interface TextProps {
   fontSize?: number;
   bold?: boolean;
   style?: ViewStyle;
-  children?: string | number | (string | number | boolean | null | undefined)[];
+  children?:
+    | string
+    | number
+    | false
+    | null
+    | undefined
+    | (string | number | false | null | undefined)[];
 }
 
 export interface IconProps {
@@ -70,7 +77,13 @@ export interface ButtonProps {
   label?: string;
   eventId: string;
   style?: ViewStyle;
-  children?: string | number | (string | number | boolean | null | undefined)[];
+  children?:
+    | string
+    | number
+    | false
+    | null
+    | undefined
+    | (string | number | false | null | undefined)[];
 }
 
 export interface IconButtonProps {
@@ -114,7 +127,13 @@ export type DividerProps = Record<string, never>;
 export interface BadgeProps {
   label?: string;
   style?: ViewStyle;
-  children?: string | number | (string | number | boolean | null | undefined)[];
+  children?:
+    | string
+    | number
+    | false
+    | null
+    | undefined
+    | (string | number | false | null | undefined)[];
 }
 
 export interface ProgressProps {
@@ -135,7 +154,7 @@ export interface FragmentProps {
 // Global and exported JSX namespace
 // deno-lint-ignore no-namespace
 export namespace JSX {
-  export type Element = ViewNodeSpec;
+  export type Element = ViewElement;
 
   export interface ElementChildrenAttribute {
     // deno-lint-ignore ban-types

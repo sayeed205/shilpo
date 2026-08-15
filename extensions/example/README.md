@@ -72,16 +72,8 @@ Compile the TypeScript source into a WebAssembly component using the pinned Quic
 shilpo ext build
 ```
 
-Or manually using `jco`:
-
-```bash
-node_modules/.bin/jco componentize src/extension.ts \
-  --wit node_modules/@shilpo/ext-sdk/wit \
-  --world-name extension \
-  --backend qjs \
-  --backend-qjs-disable-async \
-  -o extension.wasm
-```
+The entry point is `src/extension.tsx` and uses the SDK's automatic JSX runtime. The native
+`shilpo ext build` command performs the locked local TypeScript check before componentization.
 
 ### 3. Lint Manifest, Capabilities & Schemas
 

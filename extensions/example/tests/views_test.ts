@@ -1,6 +1,6 @@
 import { assertEquals, assertNotEquals } from "@std/assert";
 import { createTestHost } from "@shilpo/ext-sdk/testing";
-import { createShowcaseExtension } from "../src/extension.ts";
+import { createShowcaseExtension } from "../src/extension.tsx";
 
 Deno.test("Showcase Views - renders all 5 UI contributions and handles unknown IDs", () => {
   const { facade } = createTestHost();

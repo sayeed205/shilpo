@@ -149,9 +149,6 @@ export function normalizeChildren(children: unknown, componentName: string): Vie
 
 function assertNoChildren(props: { children?: unknown }, componentName: string): void {
   if (props.children !== undefined && props.children !== null) {
-    if (Array.isArray(props.children) && props.children.length === 0) {
-      return;
-    }
     throw new TypeError(`<${componentName}> is a leaf component and does not accept children.`);
   }
 }
@@ -255,7 +252,7 @@ export function Text(props: TextProps = {}): ViewNodeSpec {
   let content = props.content;
   const children = props.children;
 
-  if (content !== undefined && children !== undefined && children !== null && children !== "") {
+  if (content !== undefined && children !== undefined && children !== null) {
     throw new TypeError("Explicit 'content' prop and children are mutually exclusive on <Text>.");
   }
 
@@ -309,7 +306,7 @@ export function Button(props: ButtonProps): ViewNodeSpec {
   let label = props.label;
   const children = props.children;
 
-  if (label !== undefined && children !== undefined && children !== null && children !== "") {
+  if (label !== undefined && children !== undefined && children !== null) {
     throw new TypeError("Explicit 'label' prop and children are mutually exclusive on <Button>.");
   }
 
@@ -442,7 +439,7 @@ export function Badge(props: BadgeProps = {}): ViewNodeSpec {
   let label = props.label;
   const children = props.children;
 
-  if (label !== undefined && children !== undefined && children !== null && children !== "") {
+  if (label !== undefined && children !== undefined && children !== null) {
     throw new TypeError("Explicit 'label' prop and children are mutually exclusive on <Badge>.");
   }
 

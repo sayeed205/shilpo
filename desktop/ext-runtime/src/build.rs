@@ -116,6 +116,8 @@ pub static PROCESS_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 pub struct OsProcessRunner;
 
+const REQUIRED_TYPESCRIPT_VERSION: &str = "5.6.3";
+
 impl ProcessRunner for OsProcessRunner {
     fn run(&self, command: &ProcessCommand) -> Result<ProcessOutput, String> {
         let mut cmd = std::process::Command::new(&command.program);
@@ -589,35 +591,39 @@ pub fn find_local_jco(project_dir: &Path) -> Option<PathBuf> {
 }
 
 pub fn find_local_tsc(project_dir: &Path) -> Option<PathBuf> {
-    if let Some(env_tsc) = std::env::var_os("SHILPO_TSC_BIN") {
-        let path = PathBuf::from(env_tsc);
-        if is_safe_tool_path(&path, project_dir) && find_javascript_lockfile(project_dir).is_some()
-        {
-            return Some(path);
-        }
+    let root = project_dir.canonicalize().ok()?;
+    if find_javascript_lockfile(&root).is_none() || !root.join("package.json").is_file() {
+        return None;
     }
 
-    let mut current = Some(project_dir);
-    while let Some(dir) = current {
-        let candidate = dir.join("node_modules/.bin/tsc");
-        if is_safe_tool_path(&candidate, dir) && find_javascript_lockfile(dir).is_some() {
-            return Some(candidate);
-        }
-        #[cfg(windows)]
-        {
-            let candidate_cmd = dir.join("node_modules/.bin/tsc.cmd");
-            if is_safe_tool_path(&candidate_cmd, dir) && find_javascript_lockfile(dir).is_some() {
-                return Some(candidate_cmd);
-            }
-        }
-        let candidate_js = dir.join("node_modules/typescript/bin/tsc");
-        if is_safe_tool_path(&candidate_js, dir) && find_javascript_lockfile(dir).is_some() {
-            return Some(candidate_js);
-        }
-        current = dir.parent();
+    let package_source = fs::read_to_string(root.join("package.json")).ok()?;
+    let package_json: serde_json::Value = serde_json::from_str(&package_source).ok()?;
+    let declared_version = ["devDependencies", "dependencies", "optionalDependencies"]
+        .iter()
+        .find_map(|section| package_json.get(*section)?.get("typescript"))
+        .and_then(serde_json::Value::as_str)?;
+    if declared_version != REQUIRED_TYPESCRIPT_VERSION {
+        return None;
     }
 
-    None
+    let installed_package = root.join("node_modules/typescript/package.json");
+    let installed_source = fs::read_to_string(installed_package).ok()?;
+    let installed_json: serde_json::Value = serde_json::from_str(&installed_source).ok()?;
+    if installed_json
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        != Some(REQUIRED_TYPESCRIPT_VERSION)
+    {
+        return None;
+    }
+
+    let candidates = [
+        root.join("node_modules/.bin/tsc"),
+        root.join("node_modules/typescript/bin/tsc"),
+    ];
+    candidates
+        .into_iter()
+        .find(|candidate| is_safe_tool_path(candidate, &root))
 }
 
 fn is_safe_tool_path(path: &Path, root: &Path) -> bool {
@@ -631,24 +637,30 @@ fn is_safe_tool_path(path: &Path, root: &Path) -> bool {
 }
 
 fn find_javascript_lockfile(project_dir: &Path) -> Option<PathBuf> {
-    let mut current = Some(project_dir);
-    while let Some(dir) = current {
-        for name in [
-            "package-lock.json",
-            "npm-shrinkwrap.json",
-            "pnpm-lock.yaml",
-            "yarn.lock",
-            "bun.lockb",
-            "bun.lock",
-        ] {
-            let candidate = dir.join(name);
-            if candidate.is_file() && !candidate.is_symlink() {
-                return Some(candidate);
-            }
+    for name in [
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lockb",
+        "bun.lock",
+    ] {
+        let candidate = project_dir.join(name);
+        if candidate.is_file() && !candidate.is_symlink() {
+            return Some(candidate);
         }
-        current = dir.parent();
     }
     None
+}
+
+fn process_failure_diagnostic(error: &str, phase: &str) -> String {
+    if error.contains("timed out") {
+        format!("error[build.timeout]: {phase} {error}")
+    } else if error.contains("cancelled") {
+        format!("error[build.cancelled]: {phase} {error}")
+    } else {
+        format!("error[build.spawn]: {phase} {error}")
+    }
 }
 
 fn determine_rust_artifact(
@@ -879,7 +891,7 @@ fn build_typescript(
     let tsc_output = match runner.run_with_timeout(&tsc_cmd, timeout) {
         Ok(out) => out,
         Err(e) => {
-            diagnostics.push(format!("error[build.spawn]: {e}"));
+            diagnostics.push(process_failure_diagnostic(&e, "TypeScript type-check"));
             return Err(());
         }
     };
@@ -941,7 +953,7 @@ fn build_typescript(
         Ok(out) => out,
         Err(e) => {
             let _ = fs::remove_file(&temp_dest_abs);
-            diagnostics.push(format!("error[build.spawn]: {e}"));
+            diagnostics.push(process_failure_diagnostic(&e, "JCO componentization"));
             return Err(());
         }
     };
@@ -1305,6 +1317,20 @@ mod tests {
         fs::write(dir.join("extension.toml"), manifest).unwrap();
     }
 
+    fn write_typescript_toolchain_fixture(dir: &Path) {
+        fs::write(
+            dir.join("package.json"),
+            r#"{"devDependencies":{"typescript":"5.6.3"}}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("node_modules/typescript")).unwrap();
+        fs::write(
+            dir.join("node_modules/typescript/package.json"),
+            r#"{"version":"5.6.3"}"#,
+        )
+        .unwrap();
+    }
+
     #[test]
     fn test_resolve_project_config_shilpo_ext_json_typescript_default() {
         let temp = tempdir().unwrap();
@@ -1527,6 +1553,7 @@ mod tests {
         fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
 
         // WIT dir
         fs::create_dir_all(dir.join("core/ext-api/wit")).unwrap();
@@ -1585,6 +1612,7 @@ mod tests {
         fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("tsconfig.json"), "{}").unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
 
         let mock_runner = MockProcessRunner::new().with_binary("node", false);
         let res = build_extension(dir, false, &mock_runner);
@@ -1607,6 +1635,7 @@ mod tests {
         fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("tsconfig.json"), "{}").unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
 
         let mock_runner = MockProcessRunner::new().with_binary("node", true);
         let res = build_extension(dir, false, &mock_runner);
@@ -1615,6 +1644,63 @@ mod tests {
             res.diagnostics
                 .iter()
                 .any(|d| d.contains("TypeScript compiler not found"))
+        );
+    }
+
+    #[test]
+    fn test_find_local_tsc_requires_exact_project_local_package() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
+        fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
+        assert!(find_local_tsc(dir).is_some());
+
+        let nested = dir.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        assert!(find_local_tsc(&nested).is_none());
+
+        fs::write(
+            dir.join("package.json"),
+            r#"{"devDependencies":{"typescript":"^5.6.3"}}"#,
+        )
+        .unwrap();
+        assert!(find_local_tsc(dir).is_none());
+    }
+
+    #[test]
+    fn test_typescript_build_timeout_has_stable_diagnostic() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        write_manifest(dir, "org.shilpo.ts-test", "extension.wasm");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/extension.ts"), "export {}").unwrap();
+        fs::write(dir.join("tsconfig.json"), "{}").unwrap();
+        fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
+        fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
+
+        struct TimeoutRunner;
+        impl ProcessRunner for TimeoutRunner {
+            fn run(&self, _command: &ProcessCommand) -> Result<ProcessOutput, String> {
+                Err("process 'node' timed out after 1s".into())
+            }
+
+            fn which(&self, binary_name: &str) -> Option<PathBuf> {
+                (binary_name == "node").then(|| PathBuf::from("/usr/bin/node"))
+            }
+        }
+
+        let result = build_extension(dir, false, &TimeoutRunner);
+        assert!(!result.success);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| { d.starts_with("error[build.timeout]: TypeScript type-check") })
         );
     }
 
@@ -1629,6 +1715,7 @@ mod tests {
         fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
 
         let mock_runner = MockProcessRunner::new().with_binary("node", true);
         let res = build_extension(dir, false, &mock_runner);
@@ -1651,6 +1738,7 @@ mod tests {
         fs::write(dir.join("node_modules/.bin/tsc"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("tsconfig.json"), "{}").unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
 
         let mock_runner = MockProcessRunner::new().with_binary("node", true);
         let res = build_extension(dir, false, &mock_runner);
@@ -1674,6 +1762,7 @@ mod tests {
         fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("tsconfig.json"), "{}").unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
         fs::create_dir_all(dir.join("core/ext-api/wit")).unwrap();
         fs::write(
             dir.join("core/ext-api/wit/extension.wit"),
@@ -1747,6 +1836,7 @@ mod tests {
         fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("tsconfig.json"), "{}").unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
         fs::create_dir_all(dir.join("core/ext-api/wit")).unwrap();
         fs::write(
             dir.join("core/ext-api/wit/extension.wit"),
@@ -1987,6 +2077,7 @@ mod tests {
         fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
         fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
         fs::create_dir_all(dir.join("core/ext-api/wit")).unwrap();
         fs::write(
             dir.join("core/ext-api/wit/extension.wit"),
@@ -2013,6 +2104,7 @@ mod tests {
         let dir = temp.path();
         fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
         fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
         let outside = tempdir().unwrap();
         let outside_jco = outside.path().join("jco");
         fs::write(&outside_jco, "#!/usr/bin/env node").unwrap();

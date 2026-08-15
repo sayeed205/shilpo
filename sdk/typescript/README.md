@@ -72,7 +72,7 @@ event = "theme_changed"
 event = "workspace_changed"
 ```
 
-### 2. Implement Extension (`src/extension.ts`)
+### 2. Implement Extension (`src/extension.tsx`)
 
 ```typescript
 import {
@@ -144,12 +144,7 @@ Compile the TypeScript extension into a WebAssembly Component model binary targe
 `shilpo:extension@0.1.0` WIT world using the pinned QuickJS componentization backend:
 
 ```bash
-npx --yes @bytecodealliance/jco componentize src/extension.ts \
-  --wit node_modules/@shilpo/ext-sdk/wit \
-  --world-name extension \
-  --backend qjs \
-  --backend-qjs-disable-async \
-  -o extension.wasm
+shilpo ext build --release .
 ```
 
 > **Note on Componentization Backend**: Shilpo extension tooling pins the QuickJS backend
@@ -157,6 +152,41 @@ npx --yes @bytecodealliance/jco componentize src/extension.ts \
 > WebAssembly components that load, validate, and execute in sub-second timeframes under Wasmtime,
 > whereas default StarlingMonkey binaries are significantly larger and incur substantial JIT
 > compilation overhead.
+
+## JSX View Authoring
+
+New TypeScript projects use the SDK's automatic JSX runtime. Configure `tsconfig.json` with
+`"jsx": "react-jsx"` and `"jsxImportSource": "@shilpo/ext-sdk"`; the SDK does not include React, a
+virtual DOM, reconciliation, or stateful components. The native `shilpo ext build` command runs the
+exact project-local TypeScript compiler before componentization.
+
+Use the PascalCase components that map directly to canonical ViewTree builders:
+
+```tsx
+import { Button, Column, defineExtension, Text } from "@shilpo/ext-sdk";
+
+const ext = defineExtension({
+  view(contributionId) {
+    if (contributionId !== "status") return undefined;
+    return (
+      <Column gap={8}>
+        <Text bold>Sample Extension</Text>
+        <Text>{`Clicks: ${clickCount}`}</Text>
+        <Button eventId="btn_click">Click Me</Button>
+      </Column>
+    );
+  },
+});
+```
+
+Containers accept nested nodes, arrays, fragments, and conditional `null`, `undefined`, or `false`
+children. `Text`, `Button`, and `Badge` accept string/finite-number children as aliases for their
+`content`/`label` props; do not provide both. Leaf nodes reject children. Formatting-only whitespace
+is ignored, and a view must normalize to exactly one root node. Use `eventId` plus `onEvent` for
+interaction; DOM callbacks, HTML tags, CSS props, and `className` are not part of the extension API.
+
+The original builder functions remain supported. Use `--view-syntax builders` with `shilpo ext new`
+when generating a builder-based project; JSX is the default.
 
 ---
 
