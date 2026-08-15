@@ -12,6 +12,20 @@ use shilpo::cli::parse_duration;
 
 #[tokio::main]
 async fn main() {
+    if let Ok(path) = std::env::var("SHILPO_WASM_VALIDATOR") {
+        let result = std::fs::read(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                shilpo_ext_runtime::WasmRuntime::validate_module_unbounded(&bytes)
+                    .map_err(|error| error.to_string())
+            });
+        let _ = std::fs::remove_file(path);
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(EXIT_FAILURE);
+        }
+        std::process::exit(EXIT_SUCCESS);
+    }
     let raw_args: Vec<String> = std::env::args().collect();
     if raw_args.len() <= 1 {
         let mut cmd = Cli::command();
