@@ -18,7 +18,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
-use wasmtime::component::{Component, Linker, ResourceTable};
+use wasmtime::component::{Component, Linker, ResourceTable, types::ComponentItem};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
@@ -898,13 +898,19 @@ impl WasmRuntime {
                     let _ = join_handle.join();
                     res
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(RuntimeError::with_kind(
-                    RuntimeFailureKind::Timeout,
-                    format!(
-                        "component validation timed out after {}s",
-                        timeout.as_secs()
-                    ),
-                )),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    // Component compilation is synchronous and cannot be interrupted by
+                    // Wasmtime. Join before returning so a timed-out validation never leaves
+                    // compiler work running after its caller has gone away.
+                    let _ = join_handle.join();
+                    Err(RuntimeError::with_kind(
+                        RuntimeFailureKind::Timeout,
+                        format!(
+                            "component validation timed out after {:.3}s",
+                            timeout.as_secs_f64()
+                        ),
+                    ))
+                }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     let _ = join_handle.join();
                     Err(RuntimeError::with_kind(
@@ -1349,7 +1355,6 @@ impl Drop for WasmRuntime {
 fn configured_engine() -> Result<Engine, RuntimeError> {
     let mut config = Config::new();
     config.wasm_component_model(true);
-    config.wasm_component_model_async(true);
     config.consume_fuel(true);
     config.epoch_interruption(true);
     config.max_wasm_stack(512 * 1024);
@@ -1363,9 +1368,19 @@ fn configured_engine() -> Result<Engine, RuntimeError> {
 
 fn compile_component(engine: &Engine, bytes: &[u8]) -> Result<Component, RuntimeError> {
     Component::new(engine, bytes).map_err(|error| {
+        let message = format!("{error:#}");
+        let lowercase = message.to_ascii_lowercase();
+        if lowercase.contains("component model async")
+            || (lowercase.contains("requires") && lowercase.contains("async"))
+        {
+            return RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                "unsupported async component; rebuild with the synchronous QJS backend".to_string(),
+            );
+        }
         RuntimeError::with_kind(
             RuntimeFailureKind::Load,
-            format!("component compilation failed: {error:#}"),
+            format!("component compilation failed: {message}"),
         )
     })
 }
@@ -1403,10 +1418,16 @@ fn validate_component_type(engine: &Engine, component: &Component) -> Result<(),
         }
     }
     for export in ["activate", "deactivate", "on-event", "view"] {
-        if component_type.get_export(engine, export).is_none() {
+        let Some(component_export) = component_type.get_export(engine, export) else {
             return Err(RuntimeError::with_kind(
                 RuntimeFailureKind::Load,
                 format!("missing required component export '{export}'"),
+            ));
+        };
+        if !matches!(component_export.ty, ComponentItem::ComponentFunc(_)) {
+            return Err(RuntimeError::with_kind(
+                RuntimeFailureKind::Load,
+                format!("component export '{export}' has the wrong WIT type"),
             ));
         }
     }
