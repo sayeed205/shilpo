@@ -1,13 +1,10 @@
 use super::{
     matcher::fuzzy_match,
-    types::{
-        ResultCategory,
-        SearchCandidate,
-    },
+    types::{ResultCategory, SearchCandidate},
 };
 
 /// Configuration weights and priors for the host search ranker.
-#[derive(Debug, Clone,)]
+#[derive(Debug, Clone)]
 pub struct RankerConfig {
     /// Maximum number of final results returned to the view.
     pub top_k: usize,
@@ -69,33 +66,33 @@ impl Default for RankerConfig {
 /// Ranks and filters a merged set of search candidates from all providers,
 /// populating match positions on surviving candidates and truncating to `top_k` exactly once.
 pub fn rank(
-    candidates: Vec<SearchCandidate,>,
+    candidates: Vec<SearchCandidate>,
     query: &str,
     recent_apps: &[String],
     config: &RankerConfig,
-) -> Vec<SearchCandidate,> {
+) -> Vec<SearchCandidate> {
     let q = query.trim();
 
-    let mut scored: Vec<(SearchCandidate, i64,),> = candidates
+    let mut scored: Vec<(SearchCandidate, i64)> = candidates
         .into_iter()
         .filter_map(|mut cand| {
-            let (score, match_positions,) = score_candidate(&cand, q, recent_apps, config,)?;
+            let (score, match_positions) = score_candidate(&cand, q, recent_apps, config)?;
             cand.match_positions = match_positions;
-            Some((cand, score,),)
-        },)
+            Some((cand, score))
+        })
         .collect();
 
     // Deterministic total ordering: sort descending by score, breaking ties by canonical_id ascending.
-    scored.sort_by(|(a, score_a,), (b, score_b,)| {
+    scored.sort_by(|(a, score_a), (b, score_b)| {
         score_b
-            .cmp(score_a,)
-            .then_with(|| a.canonical_id.cmp(&b.canonical_id,),)
-    },);
+            .cmp(score_a)
+            .then_with(|| a.canonical_id.cmp(&b.canonical_id))
+    });
 
     // Truncate to top-k exactly once over the merged, ranked candidate set.
-    scored.truncate(config.top_k,);
+    scored.truncate(config.top_k);
 
-    scored.into_iter().map(|(cand, _,)| cand,).collect()
+    scored.into_iter().map(|(cand, _)| cand).collect()
 }
 
 /// Scores a single candidate against a query and recent app history.
@@ -105,7 +102,7 @@ fn score_candidate(
     query: &str,
     recent_apps: &[String],
     config: &RankerConfig,
-) -> Option<(i64, Vec<usize,>,),> {
+) -> Option<(i64, Vec<usize>)> {
     if query.is_empty() {
         // Universal fallbacks are suppressed on empty queries in default mode
         if matches!(
@@ -130,51 +127,51 @@ fn score_candidate(
 
         // Recency boost for apps in empty search mode
         if candidate.category == ResultCategory::Application
-            && let Some(pos,) = find_recent_position(candidate, recent_apps,)
+            && let Some(pos) = find_recent_position(candidate, recent_apps)
         {
-            score += 1000 - (pos as i64 * 20).min(500,);
+            score += 1000 - (pos as i64 * 20).min(500);
         }
 
-        return Some((score, Vec::new(),),);
+        return Some((score, Vec::new()));
     }
 
     // Universal fallbacks with dedicated triggers / explicit synthesis
     match candidate.category {
         ResultCategory::Calculator => {
             let score = 2000 + config.calc_prior;
-            return Some((score, Vec::new(),),);
+            return Some((score, Vec::new()));
         }
         ResultCategory::FilePath | ResultCategory::Uri => {
             let score = 1500 + config.path_uri_prior;
-            return Some((score, Vec::new(),),);
+            return Some((score, Vec::new()));
         }
         ResultCategory::Command => {
             let score = config.command_prior;
-            return Some((score, Vec::new(),),);
+            return Some((score, Vec::new()));
         }
         ResultCategory::WebSearch => {
             let score = config.web_prior;
-            return Some((score, Vec::new(),),);
+            return Some((score, Vec::new()));
         }
         _ => {}
     }
 
     // Match candidate fields using the Smith-Waterman / fzy fuzzy matcher
-    let title_match = fuzzy_match(query, &candidate.title,);
+    let title_match = fuzzy_match(query, &candidate.title);
     let best_alias_match = candidate
         .aliases
         .iter()
-        .filter_map(|alias| fuzzy_match(query, alias,),)
-        .max_by_key(|m| m.score,);
+        .filter_map(|alias| fuzzy_match(query, alias))
+        .max_by_key(|m| m.score);
     let best_keyword_match = candidate
         .keywords
         .iter()
-        .filter_map(|kw| fuzzy_match(query, kw,),)
-        .max_by_key(|m| m.score,);
+        .filter_map(|kw| fuzzy_match(query, kw))
+        .max_by_key(|m| m.score);
     let subtitle_match = candidate
         .subtitle
         .as_deref()
-        .and_then(|sub| fuzzy_match(query, sub,),);
+        .and_then(|sub| fuzzy_match(query, sub));
 
     if title_match.is_none()
         && best_alias_match.is_none()
@@ -186,25 +183,25 @@ fn score_candidate(
 
     let title_score = title_match
         .as_ref()
-        .map(|m| (m.score as f64 * config.title_weight) as i64,)
-        .unwrap_or(i64::MIN / 2,);
+        .map(|m| (m.score as f64 * config.title_weight) as i64)
+        .unwrap_or(i64::MIN / 2);
     let alias_score = best_alias_match
         .as_ref()
-        .map(|m| (m.score as f64 * config.alias_weight) as i64,)
-        .unwrap_or(i64::MIN / 2,);
+        .map(|m| (m.score as f64 * config.alias_weight) as i64)
+        .unwrap_or(i64::MIN / 2);
     let keyword_score = best_keyword_match
         .as_ref()
-        .map(|m| (m.score as f64 * config.keyword_weight) as i64,)
-        .unwrap_or(i64::MIN / 2,);
+        .map(|m| (m.score as f64 * config.keyword_weight) as i64)
+        .unwrap_or(i64::MIN / 2);
     let subtitle_score = subtitle_match
         .as_ref()
-        .map(|m| (m.score as f64 * config.subtitle_weight) as i64,)
-        .unwrap_or(i64::MIN / 2,);
+        .map(|m| (m.score as f64 * config.subtitle_weight) as i64)
+        .unwrap_or(i64::MIN / 2);
 
     let text_score = title_score
-        .max(alias_score,)
-        .max(keyword_score,)
-        .max(subtitle_score,);
+        .max(alias_score)
+        .max(keyword_score)
+        .max(subtitle_score);
 
     let prior = match candidate.category {
         ResultCategory::Window => config.window_prior,
@@ -220,7 +217,7 @@ fn score_candidate(
     };
 
     let recency_boost = if candidate.category == ResultCategory::Application
-        && find_recent_position(candidate, recent_apps,).is_some()
+        && find_recent_position(candidate, recent_apps).is_some()
     {
         config.recent_app_boost
     } else {
@@ -228,29 +225,25 @@ fn score_candidate(
     };
 
     let total_score = text_score + prior + recency_boost;
-    let match_positions = title_match.map(|m| m.positions,).unwrap_or_default();
+    let match_positions = title_match.map(|m| m.positions).unwrap_or_default();
 
-    Some((total_score, match_positions,),)
+    Some((total_score, match_positions))
 }
 
-fn find_recent_position(candidate: &SearchCandidate, recent_apps: &[String],) -> Option<usize,> {
+fn find_recent_position(candidate: &SearchCandidate, recent_apps: &[String]) -> Option<usize> {
     recent_apps.iter().position(|r| {
         r == &candidate.canonical_id
-            || candidate.canonical_id.strip_prefix("app:",) == Some(r.as_str(),)
+            || candidate.canonical_id.strip_prefix("app:") == Some(r.as_str())
             || r == &candidate.title
-            || candidate.aliases.iter().any(|a| a == r,)
-    },)
+            || candidate.aliases.iter().any(|a| a == r)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::shell::overview_search::types::{
-        CompletionState,
-        LatencyClass,
-        ProviderId,
-        SearchActivation,
-        SearchResultIcon,
+        CompletionState, LatencyClass, ProviderId, SearchActivation, SearchResultIcon,
     };
 
     fn make_test_candidate(
@@ -260,7 +253,7 @@ mod tests {
         category: ResultCategory,
     ) -> SearchCandidate {
         SearchCandidate {
-            provider_id: ProviderId::from_static(provider,),
+            provider_id: ProviderId::from_static(provider),
             canonical_id: canonical_id.to_string(),
             generation: 1,
             title: title.to_string(),
@@ -270,10 +263,10 @@ mod tests {
             category,
             latency: LatencyClass::Instant,
             completion: CompletionState::Complete,
-            icon: SearchResultIcon::Initial('T',),
+            icon: SearchResultIcon::Initial('T'),
             activation_verb: "Open".to_string(),
             match_positions: Vec::new(),
-            activation: SearchActivation::new(canonical_id,),
+            activation: SearchActivation::new(canonical_id),
         }
     }
 
@@ -287,10 +280,10 @@ mod tests {
             ResultCategory::Application,
         );
         // Action has lower prior (150), but exact title match for "fx"
-        let action = make_test_candidate("actions", "action:fx", "fx", ResultCategory::Action,);
+        let action = make_test_candidate("actions", "action:fx", "fx", ResultCategory::Action);
 
         let candidates = vec![app, action];
-        let ranked = rank(candidates, "fx", &[], &RankerConfig::default(),);
+        let ranked = rank(candidates, "fx", &[], &RankerConfig::default());
 
         assert_eq!(ranked.len(), 2);
         assert_eq!(
@@ -308,11 +301,10 @@ mod tests {
             "Firefox",
             ResultCategory::Application,
         );
-        let window =
-            make_test_candidate("windows", "window:42", "Firefox", ResultCategory::Window,);
+        let window = make_test_candidate("windows", "window:42", "Firefox", ResultCategory::Window);
 
         let candidates = vec![app, window];
-        let ranked = rank(candidates, "Firefox", &[], &RankerConfig::default(),);
+        let ranked = rank(candidates, "Firefox", &[], &RankerConfig::default());
 
         assert_eq!(ranked.len(), 2);
         assert_eq!(
@@ -331,23 +323,23 @@ mod tests {
                 "Calculator",
                 ResultCategory::Application,
             ),
-            make_test_candidate("apps", "app:term", "Terminal", ResultCategory::Application,),
+            make_test_candidate("apps", "app:term", "Terminal", ResultCategory::Application),
             make_test_candidate(
                 "actions",
                 "action:calc",
                 "Recalculate",
                 ResultCategory::Action,
             ),
-            make_test_candidate("apps", "app:files", "Files", ResultCategory::Application,),
+            make_test_candidate("apps", "app:files", "Files", ResultCategory::Application),
         ];
 
         let config = RankerConfig::default();
-        let first = rank(candidates.clone(), "calc", &[], &config,);
-        let first_ids: Vec<String,> = first.iter().map(|c| c.canonical_id.clone(),).collect();
+        let first = rank(candidates.clone(), "calc", &[], &config);
+        let first_ids: Vec<String> = first.iter().map(|c| c.canonical_id.clone()).collect();
 
         for _ in 0..50 {
-            let next = rank(candidates.clone(), "calc", &[], &config,);
-            let next_ids: Vec<String,> = next.iter().map(|c| c.canonical_id.clone(),).collect();
+            let next = rank(candidates.clone(), "calc", &[], &config);
+            let next_ids: Vec<String> = next.iter().map(|c| c.canonical_id.clone()).collect();
             assert_eq!(
                 first_ids, next_ids,
                 "Ordering must be byte-identical on repeated invocations"
@@ -382,15 +374,15 @@ mod tests {
         assert_eq!(ranked[1].canonical_id, "b-canonical");
 
         // Arrival order: c2 then c1
-        let ranked2 = rank(vec![c2, c1], "Duplicate", &[], &RankerConfig::default(),);
+        let ranked2 = rank(vec![c2, c1], "Duplicate", &[], &RankerConfig::default());
         assert_eq!(ranked2[0].canonical_id, "a-canonical");
         assert_eq!(ranked2[1].canonical_id, "b-canonical");
     }
 
     #[test]
     fn test_late_candidate_inserts_at_rank_without_reordering_unrelated_rows() {
-        let a = make_test_candidate("apps", "app:a", "Browser", ResultCategory::Application,);
-        let c = make_test_candidate("apps", "app:c", "Web Browser", ResultCategory::Application,);
+        let a = make_test_candidate("apps", "app:a", "Browser", ResultCategory::Application);
+        let c = make_test_candidate("apps", "app:c", "Web Browser", ResultCategory::Application);
         let d = make_test_candidate(
             "apps",
             "app:d",
@@ -404,18 +396,18 @@ mod tests {
             &[],
             &RankerConfig::default(),
         );
-        let initial_ids: Vec<&str,> = initial
+        let initial_ids: Vec<&str> = initial
             .iter()
-            .map(|item| item.canonical_id.as_str(),)
+            .map(|item| item.canonical_id.as_str())
             .collect();
         assert_eq!(initial_ids, vec!["app:a", "app:c", "app:d"]);
 
         // Late candidate arrives with score between a and c
-        let b = make_test_candidate("apps", "app:b", "A Browser", ResultCategory::Application,);
-        let updated = rank(vec![a, c, d, b], "Browser", &[], &RankerConfig::default(),);
-        let updated_ids: Vec<&str,> = updated
+        let b = make_test_candidate("apps", "app:b", "A Browser", ResultCategory::Application);
+        let updated = rank(vec![a, c, d, b], "Browser", &[], &RankerConfig::default());
+        let updated_ids: Vec<&str> = updated
             .iter()
-            .map(|item| item.canonical_id.as_str(),)
+            .map(|item| item.canonical_id.as_str())
             .collect();
 
         assert_eq!(updated_ids, vec!["app:a", "app:b", "app:c", "app:d"]);
@@ -428,10 +420,10 @@ mod tests {
         for i in 0..20 {
             candidates.push(make_test_candidate(
                 "provider-1",
-                Box::leak(format!("p1:{i}").into_boxed_str(),),
-                Box::leak(format!("Scattered match term {i}").into_boxed_str(),),
+                Box::leak(format!("p1:{i}").into_boxed_str()),
+                Box::leak(format!("Scattered match term {i}").into_boxed_str()),
                 ResultCategory::Application,
-            ),);
+            ));
         }
 
         // Provider 2 produces 2 exact/strong items
@@ -440,15 +432,15 @@ mod tests {
             "p2:exact",
             "Term Exact",
             ResultCategory::Action,
-        ),);
+        ));
         candidates.push(make_test_candidate(
             "provider-2",
             "p2:prefix",
             "Terminal App",
             ResultCategory::Action,
-        ),);
+        ));
 
-        let ranked = rank(candidates, "Term", &[], &RankerConfig::default(),);
+        let ranked = rank(candidates, "Term", &[], &RankerConfig::default());
 
         assert!(ranked.len() <= 8);
         assert_eq!(ranked[0].canonical_id, "p2:exact");
@@ -469,7 +461,7 @@ mod tests {
             "Gnome Calculator",
             ResultCategory::Application,
         );
-        let ranked = rank(vec![cand], "calc", &[], &RankerConfig::default(),);
+        let ranked = rank(vec![cand], "calc", &[], &RankerConfig::default());
 
         assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].match_positions, vec![6, 7, 8, 9]);
@@ -503,7 +495,7 @@ mod tests {
             ResultCategory::Application,
         );
         let win_term =
-            make_test_candidate("windows", "window:123", "Terminal", ResultCategory::Window,);
+            make_test_candidate("windows", "window:123", "Terminal", ResultCategory::Window);
         let act_toggle = make_test_candidate(
             "actions",
             "action:toggle-overview",
@@ -511,7 +503,7 @@ mod tests {
             ResultCategory::Action,
         );
         let cmd_fallback =
-            make_test_candidate("system", "cmd:term", "term", ResultCategory::Command,);
+            make_test_candidate("system", "cmd:term", "term", ResultCategory::Command);
         let web_fallback = make_test_candidate(
             "system",
             "web:https://google.com/search?q=term",
@@ -532,8 +524,8 @@ mod tests {
         let config = RankerConfig::default();
 
         // 1. Query: "" (empty query with recent app firefox)
-        let res_empty = rank(corpus.clone(), "", &["firefox".to_string(),], &config,);
-        let ids_empty: Vec<&str,> = res_empty.iter().map(|c| c.canonical_id.as_str(),).collect();
+        let res_empty = rank(corpus.clone(), "", &["firefox".to_string()], &config);
+        let ids_empty: Vec<&str> = res_empty.iter().map(|c| c.canonical_id.as_str()).collect();
         assert_eq!(
             ids_empty,
             vec![
@@ -546,8 +538,8 @@ mod tests {
         );
 
         // 2. Query: "calc" (App Calculator > Command > WebSearch)
-        let res_calc = rank(corpus.clone(), "calc", &[], &config,);
-        let ids_calc: Vec<&str,> = res_calc.iter().map(|c| c.canonical_id.as_str(),).collect();
+        let res_calc = rank(corpus.clone(), "calc", &[], &config);
+        let ids_calc: Vec<&str> = res_calc.iter().map(|c| c.canonical_id.as_str()).collect();
         assert_eq!(
             ids_calc,
             vec![
@@ -558,8 +550,8 @@ mod tests {
         );
 
         // 3. Query: "term" (Window Terminal > App Terminal > Command > WebSearch)
-        let res_term = rank(corpus.clone(), "term", &[], &config,);
-        let ids_term: Vec<&str,> = res_term.iter().map(|c| c.canonical_id.as_str(),).collect();
+        let res_term = rank(corpus.clone(), "term", &[], &config);
+        let ids_term: Vec<&str> = res_term.iter().map(|c| c.canonical_id.as_str()).collect();
         assert_eq!(
             ids_term,
             vec![
@@ -571,11 +563,8 @@ mod tests {
         );
 
         // 4. Query: "toggle" (Action Toggle > Command > WebSearch)
-        let res_toggle = rank(corpus, "toggle", &[], &config,);
-        let ids_toggle: Vec<&str,> = res_toggle
-            .iter()
-            .map(|c| c.canonical_id.as_str(),)
-            .collect();
+        let res_toggle = rank(corpus, "toggle", &[], &config);
+        let ids_toggle: Vec<&str> = res_toggle.iter().map(|c| c.canonical_id.as_str()).collect();
         assert_eq!(
             ids_toggle,
             vec![
@@ -594,7 +583,7 @@ mod tests {
             "🦀 Rust Rover",
             ResultCategory::Application,
         );
-        let ranked = rank(vec![cand], "rover", &[], &RankerConfig::default(),);
+        let ranked = rank(vec![cand], "rover", &[], &RankerConfig::default());
 
         assert_eq!(ranked.len(), 1);
         // '🦀' is 1 char (4 bytes), ' ' is 1 char, 'R', 'u', 's', 't', ' ', 'R', 'o', 'v', 'e', 'r'
@@ -613,11 +602,11 @@ mod tests {
         cand.aliases = vec!["code".to_string(), "vsc".to_string()];
         cand.keywords = vec!["development".to_string(), "editor".to_string()];
 
-        let res_code = rank(vec![cand.clone()], "code", &[], &RankerConfig::default(),);
+        let res_code = rank(vec![cand.clone()], "code", &[], &RankerConfig::default());
         assert_eq!(res_code.len(), 1);
         assert_eq!(res_code[0].canonical_id, "app:code");
 
-        let res_kw = rank(vec![cand], "editor", &[], &RankerConfig::default(),);
+        let res_kw = rank(vec![cand], "editor", &[], &RankerConfig::default());
         assert_eq!(res_kw.len(), 1);
         assert_eq!(res_kw[0].canonical_id, "app:code");
     }
@@ -629,69 +618,56 @@ mod tests {
         use crate::shell::overview_search::{
             coordinator::SearchCoordinator,
             sink::SearchSink,
-            types::{
-                ActionResult,
-                SearchError,
-                SearchProvider,
-                SearchRequest,
-            },
+            types::{ActionResult, SearchError, SearchProvider, SearchRequest},
         };
 
         struct ProlificProvider;
         impl SearchProvider for ProlificProvider {
-            fn id(&self,) -> ProviderId {
-                ProviderId::from_static("prolific",)
+            fn id(&self) -> ProviderId {
+                ProviderId::from_static("prolific")
             }
-            fn search(&self, _request: SearchRequest, sink: SearchSink,) {
+            fn search(&self, _request: SearchRequest, sink: SearchSink) {
                 for i in 0..50 {
                     sink.push(make_test_candidate(
                         "prolific",
-                        Box::leak(format!("prolific:{i}").into_boxed_str(),),
-                        Box::leak(format!("Prolific Item {i}").into_boxed_str(),),
+                        Box::leak(format!("prolific:{i}").into_boxed_str()),
+                        Box::leak(format!("Prolific Item {i}").into_boxed_str()),
                         ResultCategory::Application,
-                    ),);
+                    ));
                 }
             }
-            fn activate(
-                &self,
-                _activation: SearchActivation,
-            ) -> Result<ActionResult, SearchError,> {
+            fn activate(&self, _activation: SearchActivation) -> Result<ActionResult, SearchError> {
                 Ok(ActionResult::Handled {
                     close_overview: true,
-                },)
+                })
             }
         }
 
         struct TargetedProvider;
         impl SearchProvider for TargetedProvider {
-            fn id(&self,) -> ProviderId {
-                ProviderId::from_static("targeted",)
+            fn id(&self) -> ProviderId {
+                ProviderId::from_static("targeted")
             }
-            fn search(&self, _request: SearchRequest, sink: SearchSink,) {
+            fn search(&self, _request: SearchRequest, sink: SearchSink) {
                 sink.push(make_test_candidate(
                     "targeted",
                     "targeted:exact",
                     "Targeted Best Match",
                     ResultCategory::Action,
-                ),);
+                ));
             }
-            fn activate(
-                &self,
-                _activation: SearchActivation,
-            ) -> Result<ActionResult, SearchError,> {
+            fn activate(&self, _activation: SearchActivation) -> Result<ActionResult, SearchError> {
                 Ok(ActionResult::Handled {
                     close_overview: true,
-                },)
+                })
             }
         }
 
         // Order 1: Prolific registered first, Targeted registered second
-        let coord1 = SearchCoordinator::new(vec![
-            Arc::new(ProlificProvider,),
-            Arc::new(TargetedProvider,),
-        ],);
-        let sink1 = SearchSink::for_test(1,);
-        coord1.search("Targeted", 1, &sink1,);
+        let coord1 =
+            SearchCoordinator::new(vec![Arc::new(ProlificProvider), Arc::new(TargetedProvider)]);
+        let sink1 = SearchSink::for_test(1);
+        coord1.search("Targeted", 1, &sink1);
         let res1 = sink1.snapshot();
         assert_eq!(
             res1[0].canonical_id, "targeted:exact",
@@ -699,12 +675,10 @@ mod tests {
         );
 
         // Order 2: Targeted registered first, Prolific registered second
-        let coord2 = SearchCoordinator::new(vec![
-            Arc::new(TargetedProvider,),
-            Arc::new(ProlificProvider,),
-        ],);
-        let sink2 = SearchSink::for_test(1,);
-        coord2.search("Targeted", 1, &sink2,);
+        let coord2 =
+            SearchCoordinator::new(vec![Arc::new(TargetedProvider), Arc::new(ProlificProvider)]);
+        let sink2 = SearchSink::for_test(1);
+        coord2.search("Targeted", 1, &sink2);
         let res2 = sink2.snapshot();
         assert_eq!(
             res2[0].canonical_id, "targeted:exact",

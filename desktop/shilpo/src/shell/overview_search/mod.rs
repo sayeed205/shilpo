@@ -12,35 +12,13 @@ pub mod window_provider;
 
 pub use app_provider::AppSearchProvider;
 pub use coordinator::SearchCoordinator;
-pub use legacy_adapter::{
-    LegacyOverviewSearchProvider,
-    OverviewSearch,
-};
-pub use matcher::{
-    MatchResult,
-    fuzzy_match,
-    fuzzy_score,
-};
+pub use legacy_adapter::{LegacyOverviewSearchProvider, OverviewSearch};
+pub use matcher::{MatchResult, fuzzy_match, fuzzy_score};
 pub use parser::SearchMode;
-pub use ranker::{
-    RankerConfig,
-    rank,
-};
-pub use sink::{
-    SearchSink,
-    SinkConfig,
-};
+pub use ranker::{RankerConfig, rank};
+pub use sink::{SearchSink, SinkConfig};
 pub use types::{
-    ActionResult,
-    CompletionState,
-    LatencyClass,
-    ProviderId,
-    ResultCategory,
-    SearchActivation,
-    SearchCandidate,
-    SearchError,
-    SearchProvider,
-    SearchRequest,
-    SearchResultIcon,
+    ActionResult, CompletionState, LatencyClass, ProviderId, ResultCategory, SearchActivation,
+    SearchCandidate, SearchError, SearchProvider, SearchRequest, SearchResultIcon,
 };
 pub use window_provider::WindowSearchProvider;

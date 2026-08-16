@@ -1,60 +1,42 @@
 use std::{
-    collections::{
-        HashMap,
-        HashSet,
-    },
-    sync::{
-        Arc,
-        Mutex,
-    },
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
 };
 
-use shilpo_services::{
-    AppScanner,
-    Application,
-};
+use shilpo_services::{AppScanner, Application};
 
 use super::{
     parser::SearchMode,
     sink::SearchSink,
     types::{
-        ActionResult,
-        CompletionState,
-        LatencyClass,
-        ProviderId,
-        ResultCategory,
-        SearchActivation,
-        SearchCandidate,
-        SearchError,
-        SearchProvider,
-        SearchRequest,
-        SearchResultIcon,
+        ActionResult, CompletionState, LatencyClass, ProviderId, ResultCategory, SearchActivation,
+        SearchCandidate, SearchError, SearchProvider, SearchRequest, SearchResultIcon,
     },
 };
 
 /// Provider that searches desktop applications discovered by [`AppScanner`].
-#[derive(Clone,)]
+#[derive(Clone)]
 pub struct AppSearchProvider {
     scanner: AppScanner,
-    cached_apps: Arc<Mutex<HashMap<String, Application,>,>,>,
+    cached_apps: Arc<Mutex<HashMap<String, Application>>>,
 }
 
 impl AppSearchProvider {
     /// Creates a new application search provider over the given scanner.
-    pub fn new(scanner: AppScanner,) -> Self {
+    pub fn new(scanner: AppScanner) -> Self {
         Self {
             scanner,
-            cached_apps: Arc::new(Mutex::new(HashMap::new(),),),
+            cached_apps: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
 
 impl SearchProvider for AppSearchProvider {
-    fn id(&self,) -> ProviderId {
-        ProviderId::from_static("app-search",)
+    fn id(&self) -> ProviderId {
+        ProviderId::from_static("app-search")
     }
 
-    fn search(&self, request: SearchRequest, sink: SearchSink,) {
+    fn search(&self, request: SearchRequest, sink: SearchSink) {
         if !matches!(request.mode, SearchMode::Default | SearchMode::Apps) {
             return;
         }
@@ -69,23 +51,23 @@ impl SearchProvider for AppSearchProvider {
 
         for app in applications {
             // Dedup by desktop entry file path, fixing the exec-based collision bug
-            if !seen_entries.insert(app.desktop_file.clone(),) {
+            if !seen_entries.insert(app.desktop_file.clone()) {
                 continue;
             }
 
             let canonical_id = format!("app:{}", app.desktop_file.display());
             let act_key = format!("app:{query_generation}:{canonical_id}");
-            cached.insert(act_key.clone(), app.clone(),);
+            cached.insert(act_key.clone(), app.clone());
 
             let mut aliases = Vec::new();
             if !app.exec.is_empty() {
-                aliases.push(app.exec.clone(),);
+                aliases.push(app.exec.clone());
             }
-            if let Some(stem,) = app.desktop_file.file_stem().and_then(|s| s.to_str(),)
+            if let Some(stem) = app.desktop_file.file_stem().and_then(|s| s.to_str())
                 && stem != app.name
-                && !aliases.contains(&stem.to_string(),)
+                && !aliases.contains(&stem.to_string())
             {
-                aliases.push(stem.to_string(),);
+                aliases.push(stem.to_string());
             }
 
             let candidate = SearchCandidate {
@@ -93,32 +75,32 @@ impl SearchProvider for AppSearchProvider {
                 canonical_id,
                 generation: query_generation,
                 title: app.name.clone(),
-                subtitle: app.description.clone().or_else(|| Some(app.exec.clone(),),),
+                subtitle: app.description.clone().or_else(|| Some(app.exec.clone())),
                 aliases,
                 keywords: app.categories.clone(),
                 category: ResultCategory::Application,
                 latency: LatencyClass::Instant,
                 completion: CompletionState::Complete,
-                icon: SearchResultIcon::AppIcon(app.icon_path.clone(),),
+                icon: SearchResultIcon::AppIcon(app.icon_path.clone()),
                 activation_verb: "Launch".to_string(),
                 match_positions: Vec::new(),
-                activation: SearchActivation::new(act_key,),
+                activation: SearchActivation::new(act_key),
             };
 
-            sink.push(candidate,);
+            sink.push(candidate);
         }
     }
 
-    fn activate(&self, activation: SearchActivation,) -> Result<ActionResult, SearchError,> {
+    fn activate(&self, activation: SearchActivation) -> Result<ActionResult, SearchError> {
         let app = self
             .cached_apps
             .lock()
             .unwrap()
-            .get(&activation.payload,)
+            .get(&activation.payload)
             .cloned()
-            .ok_or_else(|| SearchError::NotFound(activation.payload.clone(),),)?;
+            .ok_or_else(|| SearchError::NotFound(activation.payload.clone()))?;
 
-        Ok(ActionResult::LaunchApp(app,),)
+        Ok(ActionResult::LaunchApp(app))
     }
 }
 
@@ -128,17 +110,15 @@ mod tests {
 
     use super::*;
 
-    fn make_app(
-        name: &str, exec: &str, desktop_path: &str, categories: Vec<&str,>,
-    ) -> Application {
+    fn make_app(name: &str, exec: &str, desktop_path: &str, categories: Vec<&str>) -> Application {
         Application {
             name: name.to_string(),
             exec: exec.to_string(),
             icon: None,
             icon_path: None,
-            description: Some(format!("{name} description"),),
-            categories: categories.into_iter().map(String::from,).collect(),
-            desktop_file: PathBuf::from(desktop_path,),
+            description: Some(format!("{name} description")),
+            categories: categories.into_iter().map(String::from).collect(),
+            desktop_file: PathBuf::from(desktop_path),
             working_dir: None,
             terminal: false,
             try_exec: None,
@@ -160,12 +140,12 @@ mod tests {
             vec![],
         );
 
-        let scanner = AppScanner::from_applications(vec![app1, app2],);
-        let provider = AppSearchProvider::new(scanner,);
-        let sink = SearchSink::for_test(1,);
+        let scanner = AppScanner::from_applications(vec![app1, app2]);
+        let provider = AppSearchProvider::new(scanner);
+        let sink = SearchSink::for_test(1);
 
-        let request = SearchRequest::new("test", SearchMode::Default, "test", 1,);
-        provider.search(request, sink.clone(),);
+        let request = SearchRequest::new("test", SearchMode::Default, "test", 1);
+        provider.search(request, sink.clone());
 
         let results = sink.snapshot();
         assert_eq!(
@@ -173,7 +153,7 @@ mod tests {
             2,
             "Both desktop entries sharing an exec must be emitted without collision"
         );
-        let ids: Vec<&str,> = results.iter().map(|r| r.canonical_id.as_str(),).collect();
+        let ids: Vec<&str> = results.iter().map(|r| r.canonical_id.as_str()).collect();
         assert!(ids.contains(&"app:/usr/share/applications/app1.desktop"));
         assert!(ids.contains(&"app:/usr/share/applications/app2.desktop"));
     }
@@ -187,12 +167,12 @@ mod tests {
             vec!["Development", "IDE"],
         );
 
-        let scanner = AppScanner::from_applications(vec![app],);
-        let provider = AppSearchProvider::new(scanner,);
-        let sink = SearchSink::for_test(1,);
+        let scanner = AppScanner::from_applications(vec![app]);
+        let provider = AppSearchProvider::new(scanner);
+        let sink = SearchSink::for_test(1);
 
-        let request = SearchRequest::new("code", SearchMode::Default, "code", 1,);
-        provider.search(request, sink.clone(),);
+        let request = SearchRequest::new("code", SearchMode::Default, "code", 1);
+        provider.search(request, sink.clone());
 
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
@@ -209,13 +189,13 @@ mod tests {
             "/usr/share/applications/app1.desktop",
             vec![],
         );
-        let scanner = AppScanner::from_applications(vec![app1.clone()],);
-        let provider = AppSearchProvider::new(scanner.clone(),);
+        let scanner = AppScanner::from_applications(vec![app1.clone()]);
+        let provider = AppSearchProvider::new(scanner.clone());
 
         // First search
-        let sink1 = SearchSink::for_test(1,);
+        let sink1 = SearchSink::for_test(1);
         provider.search(
-            SearchRequest::new("", SearchMode::Default, "", 1,),
+            SearchRequest::new("", SearchMode::Default, "", 1),
             sink1.clone(),
         );
         assert_eq!(sink1.snapshot().len(), 1);
@@ -227,12 +207,12 @@ mod tests {
             "/usr/share/applications/app2.desktop",
             vec![],
         );
-        scanner.set_applications(vec![app1, app2],);
+        scanner.replace_applications(vec![app1, app2]);
 
         // Second search on same provider instance
-        let sink2 = SearchSink::for_test(2,);
+        let sink2 = SearchSink::for_test(2);
         provider.search(
-            SearchRequest::new("", SearchMode::Default, "", 2,),
+            SearchRequest::new("", SearchMode::Default, "", 2),
             sink2.clone(),
         );
         assert_eq!(
@@ -250,21 +230,21 @@ mod tests {
             "/usr/share/applications/calc.desktop",
             vec![],
         );
-        let scanner = AppScanner::from_applications(vec![app.clone()],);
-        let provider = AppSearchProvider::new(scanner,);
+        let scanner = AppScanner::from_applications(vec![app.clone()]);
+        let provider = AppSearchProvider::new(scanner);
 
-        let sink = SearchSink::for_test(1,);
+        let sink = SearchSink::for_test(1);
         provider.search(
-            SearchRequest::new("calc", SearchMode::Default, "calc", 1,),
+            SearchRequest::new("calc", SearchMode::Default, "calc", 1),
             sink.clone(),
         );
 
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
 
-        let activation_res = provider.activate(results[0].activation.clone(),).unwrap();
+        let activation_res = provider.activate(results[0].activation.clone()).unwrap();
         match activation_res {
-            ActionResult::LaunchApp(launched,) => {
+            ActionResult::LaunchApp(launched) => {
                 assert_eq!(launched.name, "Calculator");
                 assert_eq!(launched.exec, "gnome-calc");
             }
@@ -272,7 +252,7 @@ mod tests {
         }
 
         // Unknown activation payload returns NotFound
-        let err = provider.activate(SearchActivation::new("unknown-key",),);
+        let err = provider.activate(SearchActivation::new("unknown-key"));
         assert!(matches!(err, Err(SearchError::NotFound(_))));
     }
 }

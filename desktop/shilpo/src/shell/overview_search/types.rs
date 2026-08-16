@@ -1,59 +1,49 @@
-use std::{
-    borrow::Cow,
-    fmt,
-    path::PathBuf,
-};
+use std::{borrow::Cow, fmt, path::PathBuf};
 
-use shilpo_services::{
-    Application,
-    ClipboardItem,
-};
+use shilpo_services::{Application, ClipboardItem};
 use shilpo_ui::IconName;
 
-use super::{
-    parser::SearchMode,
-    sink::SearchSink,
-};
+use super::{parser::SearchMode, sink::SearchSink};
 use crate::actions::ActionDescriptor;
 
 /// Unique identifier for a registered search provider.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash,)]
-pub struct ProviderId(Cow<'static, str,>,);
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProviderId(Cow<'static, str>);
 
 impl ProviderId {
-    pub const fn from_static(id: &'static str,) -> Self {
-        Self(Cow::Borrowed(id,),)
+    pub const fn from_static(id: &'static str) -> Self {
+        Self(Cow::Borrowed(id))
     }
 
-    pub fn new(id: impl Into<String,>,) -> Self {
-        Self(Cow::Owned(id.into(),),)
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(Cow::Owned(id.into()))
     }
 
-    pub fn as_str(&self,) -> &str {
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 impl fmt::Display for ProviderId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_,>,) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl From<&'static str,> for ProviderId {
-    fn from(s: &'static str,) -> Self {
-        Self::from_static(s,)
+impl From<&'static str> for ProviderId {
+    fn from(s: &'static str) -> Self {
+        Self::from_static(s)
     }
 }
 
-impl From<String,> for ProviderId {
-    fn from(s: String,) -> Self {
-        Self::new(s,)
+impl From<String> for ProviderId {
+    fn from(s: String) -> Self {
+        Self::new(s)
     }
 }
 
 /// Category classification for search candidates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash,)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultCategory {
     Window,
     Application,
@@ -69,7 +59,7 @@ pub enum ResultCategory {
 }
 
 impl ResultCategory {
-    pub fn as_str(&self,) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Window => "Window",
             Self::Application => "Application",
@@ -85,17 +75,17 @@ impl ResultCategory {
         }
     }
 
-    pub fn is_calculation(&self,) -> bool {
+    pub fn is_calculation(&self) -> bool {
         matches!(self, Self::Calculator)
     }
 
-    pub fn is_suggestion(&self,) -> bool {
+    pub fn is_suggestion(&self) -> bool {
         matches!(self, Self::Command | Self::WebSearch)
     }
 }
 
 /// Latency classification declared by search providers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LatencyClass {
     Instant,
     Fast,
@@ -104,22 +94,22 @@ pub enum LatencyClass {
 }
 
 /// Provider-declared completion state for query streams.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash,)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CompletionState {
     Complete,
     Partial,
 }
 
 /// Icon representation for search candidates.
-#[derive(Debug, Clone, PartialEq, Eq,)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchResultIcon {
-    AppIcon(Option<PathBuf,>,),
-    Named(IconName,),
-    Initial(char,),
+    AppIcon(Option<PathBuf>),
+    Named(IconName),
+    Initial(char),
 }
 
 /// Immutable request carrying monotonic query generation and parsed query text.
-#[derive(Debug, Clone, PartialEq, Eq,)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchRequest {
     pub raw_query: String,
     pub query: String,
@@ -129,9 +119,9 @@ pub struct SearchRequest {
 
 impl SearchRequest {
     pub fn new(
-        raw_query: impl Into<String,>,
+        raw_query: impl Into<String>,
         mode: SearchMode,
-        query: impl Into<String,>,
+        query: impl Into<String>,
         generation: u64,
     ) -> Self {
         Self {
@@ -144,13 +134,13 @@ impl SearchRequest {
 }
 
 /// Provider-owned activation payload passed to [`SearchProvider::activate`].
-#[derive(Debug, Clone, PartialEq, Eq,)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchActivation {
     pub payload: String,
 }
 
 impl SearchActivation {
-    pub fn new(payload: impl Into<String,>,) -> Self {
+    pub fn new(payload: impl Into<String>) -> Self {
         Self {
             payload: payload.into(),
         }
@@ -158,35 +148,35 @@ impl SearchActivation {
 }
 
 /// The concrete result or execution effect produced by [`SearchProvider::activate`].
-#[derive(Debug, Clone, PartialEq, Eq,)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionResult {
-    LaunchApp(Application,),
-    InvokeAction(ActionDescriptor,),
-    CopyClipboard(ClipboardItem,),
-    CopyCalculation(String,),
-    ExecuteCommand(String,),
-    OpenWeb(String,),
-    OpenPath(PathBuf,),
-    OpenUri(String,),
-    CopyKeybinding(String,),
-    Handled { close_overview: bool, },
+    LaunchApp(Application),
+    InvokeAction(ActionDescriptor),
+    CopyClipboard(ClipboardItem),
+    CopyCalculation(String),
+    ExecuteCommand(String),
+    OpenWeb(String),
+    OpenPath(PathBuf),
+    OpenUri(String),
+    CopyKeybinding(String),
+    Handled { close_overview: bool },
 }
 
 /// Error type returned during search query execution or item activation.
-#[derive(Debug, Clone, PartialEq, Eq,)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchError {
-    ProviderError(ProviderId, String,),
-    NotFound(String,),
-    ActivationFailed(String,),
+    ProviderError(ProviderId, String),
+    NotFound(String),
+    ActivationFailed(String),
     Cancelled,
 }
 
 impl fmt::Display for SearchError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_,>,) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ProviderError(id, msg,) => write!(f, "Provider '{id}' error: {msg}"),
-            Self::NotFound(item,) => write!(f, "Item not found for activation: {item}"),
-            Self::ActivationFailed(msg,) => write!(f, "Activation failed: {msg}"),
+            Self::ProviderError(id, msg) => write!(f, "Provider '{id}' error: {msg}"),
+            Self::NotFound(item) => write!(f, "Item not found for activation: {item}"),
+            Self::ActivationFailed(msg) => write!(f, "Activation failed: {msg}"),
             Self::Cancelled => write!(f, "Operation cancelled"),
         }
     }
@@ -195,21 +185,21 @@ impl fmt::Display for SearchError {
 impl std::error::Error for SearchError {}
 
 /// Search candidate emitted by a [`SearchProvider`] into a [`SearchSink`].
-#[derive(Debug, Clone,)]
+#[derive(Debug, Clone)]
 pub struct SearchCandidate {
     pub provider_id: ProviderId,
     pub canonical_id: String,
     pub generation: u64,
     pub title: String,
-    pub subtitle: Option<String,>,
-    pub aliases: Vec<String,>,
-    pub keywords: Vec<String,>,
+    pub subtitle: Option<String>,
+    pub aliases: Vec<String>,
+    pub keywords: Vec<String>,
     pub category: ResultCategory,
     pub latency: LatencyClass,
     pub completion: CompletionState,
     pub icon: SearchResultIcon,
     pub activation_verb: String,
-    pub match_positions: Vec<usize,>,
+    pub match_positions: Vec<usize>,
     pub activation: SearchActivation,
 }
 
@@ -217,13 +207,13 @@ impl SearchCandidate {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider_id: ProviderId,
-        canonical_id: impl Into<String,>,
+        canonical_id: impl Into<String>,
         generation: u64,
-        title: impl Into<String,>,
-        subtitle: Option<String,>,
+        title: impl Into<String>,
+        subtitle: Option<String>,
         category: ResultCategory,
         icon: SearchResultIcon,
-        activation_verb: impl Into<String,>,
+        activation_verb: impl Into<String>,
         activation: SearchActivation,
     ) -> Self {
         Self {
@@ -248,11 +238,11 @@ impl SearchCandidate {
 /// Core search provider trait implemented by individual query sources.
 pub trait SearchProvider: Send + Sync {
     /// Returns the unique identity of this provider.
-    fn id(&self,) -> ProviderId;
+    fn id(&self) -> ProviderId;
 
     /// Executes search and streams candidates into the provided sink.
-    fn search(&self, request: SearchRequest, sink: SearchSink,);
+    fn search(&self, request: SearchRequest, sink: SearchSink);
 
     /// Activates a search candidate previously emitted by this provider.
-    fn activate(&self, activation: SearchActivation,) -> Result<ActionResult, SearchError,>;
+    fn activate(&self, activation: SearchActivation) -> Result<ActionResult, SearchError>;
 }
