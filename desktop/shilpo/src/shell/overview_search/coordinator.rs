@@ -1,20 +1,47 @@
-use super::parser;
-use super::sink::{SearchSink, SinkConfig};
-use super::types::{
-    ActionResult, ProviderId, SearchActivation, SearchError, SearchProvider, SearchRequest,
-};
 use std::sync::Arc;
+
+use super::{
+    parser,
+    ranker::{self, RankerConfig},
+    sink::{SearchSink, SinkConfig},
+    types::{
+        ActionResult, ProviderId, SearchActivation, SearchError, SearchProvider, SearchRequest,
+    },
+};
 
 /// Host search coordinator that manages registered providers and fans out requests.
 #[derive(Clone, Default)]
 pub struct SearchCoordinator {
     providers: Vec<Arc<dyn SearchProvider>>,
+    recent_apps: Vec<String>,
+    ranker_config: RankerConfig,
 }
 
 impl SearchCoordinator {
     /// Creates a new coordinator with the given providers.
     pub fn new(providers: Vec<Arc<dyn SearchProvider>>) -> Self {
-        Self { providers }
+        Self {
+            providers,
+            recent_apps: Vec::new(),
+            ranker_config: RankerConfig::default(),
+        }
+    }
+
+    /// Sets the recent apps list used for scoring recency.
+    pub fn set_recent_apps(&mut self, recent_apps: Vec<String>) {
+        self.recent_apps = recent_apps;
+    }
+
+    /// Builder helper to set recent apps.
+    pub fn with_recent_apps(mut self, recent_apps: Vec<String>) -> Self {
+        self.recent_apps = recent_apps;
+        self
+    }
+
+    /// Builder helper to set ranker configuration.
+    pub fn with_ranker_config(mut self, ranker_config: RankerConfig) -> Self {
+        self.ranker_config = ranker_config;
+        self
     }
 
     /// Registers an additional provider.
@@ -22,14 +49,12 @@ impl SearchCoordinator {
         self.providers.push(provider);
     }
 
-    /// Fans out a search query to all registered providers using the provided sink.
+    /// Fans out a search query to all registered providers and ranks the merged results into the provided sink.
     ///
-    /// Each provider's `search` call runs on its own thread so a slow or
-    /// stalled provider cannot delay another provider's candidates from
-    /// being collected. Providers write into a private scratch sink; once
-    /// every thread has joined, accepted candidates are merged into the
-    /// caller's sink in provider-registration order, keeping ordering
-    /// deterministic until the host ranker (#201) takes ownership of it.
+    /// Each provider's `search` call runs concurrently on its own thread so a slow or
+    /// stalled provider cannot delay another provider's candidates from being collected.
+    /// Collected candidates are merged across all scratch sinks, scored, ordered by the
+    /// host ranker, and truncated to top-k once into the caller's sink.
     pub fn search(&self, raw_query: &str, generation: u64, sink: &SearchSink) {
         let (mode, query) = parser::parse_query(raw_query);
         let request = SearchRequest::new(raw_query, mode, query, generation);
@@ -48,10 +73,20 @@ impl SearchCoordinator {
             }
         });
 
+        let mut all_candidates = Vec::new();
         for scratch in &scratch_sinks {
-            for candidate in scratch.snapshot() {
-                sink.push(candidate);
-            }
+            all_candidates.extend(scratch.snapshot());
+        }
+
+        let ranked = ranker::rank(
+            all_candidates,
+            query,
+            &self.recent_apps,
+            &self.ranker_config,
+        );
+
+        for candidate in ranked {
+            sink.push(candidate);
         }
     }
 
@@ -217,7 +252,7 @@ mod tests {
         let sink = SearchSink::for_test(1);
 
         let start = std::time::Instant::now();
-        coordinator.search("query", 1, &sink);
+        coordinator.search("Result", 1, &sink);
         let elapsed = start.elapsed();
 
         let results = sink.snapshot();
@@ -265,7 +300,7 @@ mod tests {
 
         let coordinator = SearchCoordinator::new(vec![slow, fast]);
         let sink = SearchSink::for_test(1);
-        coordinator.search("query", 1, &sink);
+        coordinator.search("Result", 1, &sink);
 
         let results = sink.snapshot();
         assert!(results.iter().any(|c| c.title == "Fast Result"));

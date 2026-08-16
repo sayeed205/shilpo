@@ -1,21 +1,24 @@
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
+
 use super::types::{ProviderId, SearchCandidate};
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
 
 /// Configuration limits for a [`SearchSink`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SinkConfig {
-    /// Maximum candidates accepted from a single provider.
+    /// Maximum candidates accepted from a single provider (safety bound).
     pub max_per_provider: usize,
-    /// Maximum total candidates accepted across all providers.
+    /// Maximum total candidates accepted across all providers (safety bound before ranking).
     pub max_total: usize,
 }
 
 impl Default for SinkConfig {
     fn default() -> Self {
         Self {
-            max_per_provider: 8,
-            max_total: 8,
+            max_per_provider: 64,
+            max_total: 256,
         }
     }
 }
@@ -51,9 +54,14 @@ impl SearchSink {
         }
     }
 
+    /// Creates a sink with default configuration limits for the given query generation.
+    pub fn with_default_config(generation: u64) -> Self {
+        Self::new(generation, SinkConfig::default())
+    }
+
     /// Creates a default sink for testing with the given generation.
     pub fn for_test(generation: u64) -> Self {
-        Self::new(generation, SinkConfig::default())
+        Self::with_default_config(generation)
     }
 
     /// Returns the active query generation accepted by this sink.
@@ -135,12 +143,13 @@ impl SearchSink {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
     use crate::shell::overview_search::types::{
         ActionResult, ResultCategory, SearchActivation, SearchError, SearchProvider, SearchRequest,
         SearchResultIcon,
     };
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn make_test_candidate(
         provider: &str,

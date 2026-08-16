@@ -1,17 +1,23 @@
-use super::calculator;
-use super::parser::SearchMode;
-use super::ranking;
-use super::sink::SearchSink;
-use super::types::{
-    ActionResult, CompletionState, LatencyClass, ProviderId, ResultCategory, SearchActivation,
-    SearchCandidate, SearchError, SearchProvider, SearchRequest, SearchResultIcon,
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::{Arc, Mutex},
 };
-use crate::actions::ActionDescriptor;
+
 use shilpo_services::{AppScanner, Application, ClipboardItem};
 use shilpo_ui::IconName;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+
+use super::{
+    calculator,
+    parser::SearchMode,
+    ranking,
+    sink::SearchSink,
+    types::{
+        ActionResult, CompletionState, LatencyClass, ProviderId, ResultCategory, SearchActivation,
+        SearchCandidate, SearchError, SearchProvider, SearchRequest, SearchResultIcon,
+    },
+};
+use crate::actions::ActionDescriptor;
 
 /// Transitional legacy search intent enum.
 ///
@@ -37,7 +43,6 @@ pub(crate) enum SearchIntent {
 #[derive(Clone)]
 pub struct LegacyOverviewSearchProvider {
     scanner: AppScanner,
-    recent_apps: Vec<String>,
     actions: Vec<ActionDescriptor>,
     clipboard_history: Vec<ClipboardItem>,
     keybindings: Vec<(String, String)>,
@@ -49,14 +54,12 @@ pub type OverviewSearch = LegacyOverviewSearchProvider;
 impl LegacyOverviewSearchProvider {
     pub fn new(
         scanner: AppScanner,
-        recent_apps: Vec<String>,
         actions: Vec<ActionDescriptor>,
         clipboard_history: Vec<ClipboardItem>,
         keybindings: Vec<(String, String)>,
     ) -> Self {
         Self {
             scanner,
-            recent_apps,
             actions,
             clipboard_history,
             keybindings,
@@ -130,8 +133,11 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                     });
                 }
 
-                let apps = ranking::rank_applications(&self.scanner, query, &self.recent_apps);
-                for app in apps {
+                let mut seen_execs = HashSet::new();
+                for app in self.scanner.applications() {
+                    if !seen_execs.insert(app.exec.clone()) {
+                        continue;
+                    }
                     let canonical_id = format!("app:{}", app.exec);
                     let act_key = format!("legacy:{query_generation}:{canonical_id}");
                     intents.insert(act_key.clone(), SearchIntent::LaunchApp(app.clone()));
@@ -142,8 +148,8 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         generation: query_generation,
                         title: app.name.clone(),
                         subtitle: Some(app.description.clone().unwrap_or_else(|| app.exec.clone())),
-                        aliases: Vec::new(),
-                        keywords: Vec::new(),
+                        aliases: vec![app.exec.clone()],
+                        keywords: app.categories.clone(),
                         category: ResultCategory::Application,
                         latency: LatencyClass::Instant,
                         completion: CompletionState::Complete,
@@ -154,8 +160,10 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                     });
                 }
 
-                let actions = ranking::rank_actions(&self.actions, query);
-                for action in actions {
+                for action in &self.actions {
+                    if !action.input.can_invoke_without_input() {
+                        continue;
+                    }
                     let canonical_id = format!("action:{}", action.id);
                     let act_key = format!("legacy:{query_generation}:{canonical_id}");
                     intents.insert(act_key.clone(), SearchIntent::InvokeAction(action.clone()));
@@ -166,7 +174,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         generation: query_generation,
                         title: action.label.clone(),
                         subtitle: Some(format!("System Action ({})", action.name)),
-                        aliases: Vec::new(),
+                        aliases: vec![action.name.clone()],
                         keywords: Vec::new(),
                         category: ResultCategory::Action,
                         latency: LatencyClass::Instant,
@@ -176,11 +184,6 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
-                }
-
-                // Keep universal fallbacks visible at the end of default result list
-                if !query.trim().is_empty() {
-                    candidates.truncate(6);
                 }
 
                 if !query.trim().is_empty() {
@@ -237,12 +240,13 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         activation: SearchActivation::new(act_key),
                     });
                 }
-
-                candidates.truncate(8);
             }
             SearchMode::Apps => {
-                let apps = ranking::rank_applications(&self.scanner, query, &self.recent_apps);
-                for app in apps {
+                let mut seen_execs = HashSet::new();
+                for app in self.scanner.applications() {
+                    if !seen_execs.insert(app.exec.clone()) {
+                        continue;
+                    }
                     let canonical_id = format!("app:{}", app.exec);
                     let act_key = format!("legacy:{query_generation}:{canonical_id}");
                     intents.insert(act_key.clone(), SearchIntent::LaunchApp(app.clone()));
@@ -253,8 +257,8 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         generation: query_generation,
                         title: app.name.clone(),
                         subtitle: Some(app.description.clone().unwrap_or_else(|| app.exec.clone())),
-                        aliases: Vec::new(),
-                        keywords: Vec::new(),
+                        aliases: vec![app.exec.clone()],
+                        keywords: app.categories.clone(),
                         category: ResultCategory::Application,
                         latency: LatencyClass::Instant,
                         completion: CompletionState::Complete,
@@ -264,11 +268,12 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         activation: SearchActivation::new(act_key),
                     });
                 }
-                candidates.truncate(8);
             }
             SearchMode::Actions => {
-                let actions = ranking::rank_actions(&self.actions, query);
-                for action in actions {
+                for action in &self.actions {
+                    if !action.input.can_invoke_without_input() {
+                        continue;
+                    }
                     let canonical_id = format!("action:{}", action.id);
                     let act_key = format!("legacy:{query_generation}:{canonical_id}");
                     intents.insert(act_key.clone(), SearchIntent::InvokeAction(action.clone()));
@@ -279,7 +284,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         generation: query_generation,
                         title: action.label.clone(),
                         subtitle: Some(format!("System Action ({})", action.name)),
-                        aliases: Vec::new(),
+                        aliases: vec![action.name.clone()],
                         keywords: Vec::new(),
                         category: ResultCategory::Action,
                         latency: LatencyClass::Instant,
@@ -290,36 +295,29 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         activation: SearchActivation::new(act_key),
                     });
                 }
-                candidates.truncate(8);
             }
             SearchMode::Clipboard => {
-                let q = query.to_lowercase();
                 for item in &self.clipboard_history {
-                    if q.is_empty() || item.text.to_lowercase().contains(&q) {
-                        let canonical_id = format!("clipboard:{}", item.id);
-                        let act_key = format!("legacy:{query_generation}:{canonical_id}");
-                        intents.insert(act_key.clone(), SearchIntent::CopyClipboard(item.clone()));
+                    let canonical_id = format!("clipboard:{}", item.id);
+                    let act_key = format!("legacy:{query_generation}:{canonical_id}");
+                    intents.insert(act_key.clone(), SearchIntent::CopyClipboard(item.clone()));
 
-                        candidates.push(SearchCandidate {
-                            provider_id: provider_id.clone(),
-                            canonical_id,
-                            generation: query_generation,
-                            title: item.text.clone(),
-                            subtitle: Some(format!("Copied at {}", item.timestamp)),
-                            aliases: Vec::new(),
-                            keywords: Vec::new(),
-                            category: ResultCategory::Clipboard,
-                            latency: LatencyClass::Instant,
-                            completion: CompletionState::Complete,
-                            icon: SearchResultIcon::Named(IconName::Star),
-                            activation_verb: "Copy".to_string(),
-                            match_positions: Vec::new(),
-                            activation: SearchActivation::new(act_key),
-                        });
-                        if candidates.len() >= 8 {
-                            break;
-                        }
-                    }
+                    candidates.push(SearchCandidate {
+                        provider_id: provider_id.clone(),
+                        canonical_id,
+                        generation: query_generation,
+                        title: item.text.clone(),
+                        subtitle: Some(format!("Copied at {}", item.timestamp)),
+                        aliases: Vec::new(),
+                        keywords: Vec::new(),
+                        category: ResultCategory::Clipboard,
+                        latency: LatencyClass::Instant,
+                        completion: CompletionState::Complete,
+                        icon: SearchResultIcon::Named(IconName::Star),
+                        activation_verb: "Copy".to_string(),
+                        match_positions: Vec::new(),
+                        activation: SearchActivation::new(act_key),
+                    });
                 }
             }
             SearchMode::Calculator => {
@@ -398,39 +396,30 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                 }
             }
             SearchMode::Keybindings => {
-                let q = query.to_lowercase();
                 for (shortcut, label) in &self.keybindings {
-                    if q.is_empty()
-                        || shortcut.to_lowercase().contains(&q)
-                        || label.to_lowercase().contains(&q)
-                    {
-                        let canonical_id = format!("keybinding:{}", shortcut);
-                        let act_key = format!("legacy:{query_generation}:{canonical_id}");
-                        intents.insert(
-                            act_key.clone(),
-                            SearchIntent::CopyKeybinding(shortcut.clone()),
-                        );
+                    let canonical_id = format!("keybinding:{}", shortcut);
+                    let act_key = format!("legacy:{query_generation}:{canonical_id}");
+                    intents.insert(
+                        act_key.clone(),
+                        SearchIntent::CopyKeybinding(shortcut.clone()),
+                    );
 
-                        candidates.push(SearchCandidate {
-                            provider_id: provider_id.clone(),
-                            canonical_id,
-                            generation: query_generation,
-                            title: shortcut.clone(),
-                            subtitle: Some(label.clone()),
-                            aliases: Vec::new(),
-                            keywords: Vec::new(),
-                            category: ResultCategory::Keybinding,
-                            latency: LatencyClass::Instant,
-                            completion: CompletionState::Complete,
-                            icon: SearchResultIcon::Named(IconName::Star),
-                            activation_verb: "Copy shortcut".to_string(),
-                            match_positions: Vec::new(),
-                            activation: SearchActivation::new(act_key),
-                        });
-                        if candidates.len() >= 8 {
-                            break;
-                        }
-                    }
+                    candidates.push(SearchCandidate {
+                        provider_id: provider_id.clone(),
+                        canonical_id,
+                        generation: query_generation,
+                        title: shortcut.clone(),
+                        subtitle: Some(label.clone()),
+                        aliases: Vec::new(),
+                        keywords: Vec::new(),
+                        category: ResultCategory::Keybinding,
+                        latency: LatencyClass::Instant,
+                        completion: CompletionState::Complete,
+                        icon: SearchResultIcon::Named(IconName::Star),
+                        activation_verb: "Copy shortcut".to_string(),
+                        match_positions: Vec::new(),
+                        activation: SearchActivation::new(act_key),
+                    });
                 }
             }
         }
@@ -483,7 +472,10 @@ fn percent_encode_query(query: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::actions::{ActionCategory, ActionDescriptor, ActionId, ActionInputRequirement};
+    use crate::{
+        actions::{ActionCategory, ActionDescriptor, ActionId, ActionInputRequirement},
+        shell::overview_search::coordinator::SearchCoordinator,
+    };
 
     fn create_test_provider() -> LegacyOverviewSearchProvider {
         let app1 = Application {
@@ -511,7 +503,6 @@ mod tests {
             try_exec: None,
         };
         let scanner = AppScanner::from_applications(vec![app1, app2]);
-        let recent_apps = vec!["firefox".to_string()];
         let actions = vec![ActionDescriptor {
             id: ActionId::ToggleOverview,
             name: "toggle-overview".to_string(),
@@ -527,13 +518,7 @@ mod tests {
         }];
         let keybindings = vec![("Super+Q".to_string(), "Close Window".to_string())];
 
-        LegacyOverviewSearchProvider::new(
-            scanner,
-            recent_apps,
-            actions,
-            clipboard_history,
-            keybindings,
-        )
+        LegacyOverviewSearchProvider::new(scanner, actions, clipboard_history, keybindings)
     }
 
     #[test]
@@ -545,15 +530,14 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_provider_reproduces_pre_refactor_results() {
+    fn test_legacy_provider_with_coordinator_reproduces_ranked_results() {
         let provider = create_test_provider();
+        let coordinator = SearchCoordinator::new(vec![Arc::new(provider.clone())])
+            .with_recent_apps(vec!["firefox".to_string()]);
 
         // 1. Default mode - empty query
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new("", SearchMode::Default, "", 1),
-            sink.clone(),
-        );
+        coordinator.search("", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].title, "Firefox");
@@ -563,10 +547,7 @@ mod tests {
 
         // 2. Default mode - calc query with fallbacks
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new("calc", SearchMode::Default, "calc", 1),
-            sink.clone(),
-        );
+        coordinator.search("calc", 1, &sink);
         let results = sink.snapshot();
         assert!(!results.is_empty());
         assert_eq!(results[0].title, "Calculator");
@@ -583,70 +564,49 @@ mod tests {
 
         // 3. Apps mode
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new(">firefox", SearchMode::Apps, "firefox", 1),
-            sink.clone(),
-        );
+        coordinator.search(">firefox", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Firefox");
 
         // 4. Actions mode
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new("/toggle", SearchMode::Actions, "toggle", 1),
-            sink.clone(),
-        );
+        coordinator.search("/toggle", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Toggle Overview");
 
         // 5. Clipboard mode
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new(";hello", SearchMode::Clipboard, "hello", 1),
-            sink.clone(),
-        );
+        coordinator.search(";hello", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "hello world from clipboard");
 
         // 6. Explicit calculator mode
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new("=2+2", SearchMode::Calculator, "2+2", 1),
-            sink.clone(),
-        );
+        coordinator.search("=2+2", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "4");
 
         // 7. Implicit calculator mode
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new("2 + 2", SearchMode::Calculator, "2 + 2", 1),
-            sink.clone(),
-        );
+        coordinator.search("2 + 2", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "4");
 
         // 8. Web search mode
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new("?rust lang", SearchMode::WebSearch, "rust lang", 1),
-            sink.clone(),
-        );
+        coordinator.search("?rust lang", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert!(results[0].subtitle.as_ref().unwrap().contains("google.com"));
 
         // 9. Keybindings mode
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new("<Super+", SearchMode::Keybindings, "super+", 1),
-            sink.clone(),
-        );
+        coordinator.search("<Super+", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Super+Q");
@@ -655,23 +615,18 @@ mod tests {
     #[test]
     fn test_activation_through_activate_produces_same_effects() {
         let provider = create_test_provider();
+        let coordinator = SearchCoordinator::new(vec![Arc::new(provider.clone())]);
 
         // 1. App activation
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new(">firefox", SearchMode::Apps, "firefox", 1),
-            sink.clone(),
-        );
+        coordinator.search(">firefox", 1, &sink);
         let cand = &sink.snapshot()[0];
         let action_res = provider.activate(cand.activation.clone()).unwrap();
         assert!(matches!(action_res, ActionResult::LaunchApp(app) if app.name == "Firefox"));
 
         // 2. Action activation
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new("/toggle", SearchMode::Actions, "toggle", 1),
-            sink.clone(),
-        );
+        coordinator.search("/toggle", 1, &sink);
         let cand = &sink.snapshot()[0];
         let action_res = provider.activate(cand.activation.clone()).unwrap();
         assert!(
@@ -680,10 +635,7 @@ mod tests {
 
         // 3. Clipboard activation
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new(";hello", SearchMode::Clipboard, "hello", 1),
-            sink.clone(),
-        );
+        coordinator.search(";hello", 1, &sink);
         let cand = &sink.snapshot()[0];
         let action_res = provider.activate(cand.activation.clone()).unwrap();
         assert!(
@@ -692,20 +644,14 @@ mod tests {
 
         // 4. Calculator activation
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new("=2+2", SearchMode::Calculator, "2+2", 1),
-            sink.clone(),
-        );
+        coordinator.search("=2+2", 1, &sink);
         let cand = &sink.snapshot()[0];
         let action_res = provider.activate(cand.activation.clone()).unwrap();
         assert!(matches!(action_res, ActionResult::CopyCalculation(val) if val == "4"));
 
         // 5. Keybinding activation
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new("<Super+", SearchMode::Keybindings, "super+", 1),
-            sink.clone(),
-        );
+        coordinator.search("<Super+", 1, &sink);
         let cand = &sink.snapshot()[0];
         let action_res = provider.activate(cand.activation.clone()).unwrap();
         assert!(
@@ -714,10 +660,7 @@ mod tests {
 
         // 6. Web search activation
         let sink = SearchSink::for_test(1);
-        provider.search(
-            SearchRequest::new("?rust", SearchMode::WebSearch, "rust", 1),
-            sink.clone(),
-        );
+        coordinator.search("?rust", 1, &sink);
         let cand = &sink.snapshot()[0];
         let action_res = provider.activate(cand.activation.clone()).unwrap();
         assert!(matches!(action_res, ActionResult::OpenWeb(url) if url.contains("google.com")));
