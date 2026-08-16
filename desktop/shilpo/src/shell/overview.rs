@@ -1,6 +1,7 @@
 use crate::app_icons::{app_icon, build_app_icon_index, resolve_app_icon_path};
 use crate::overview_search::{
-    OverviewSearch, SearchIntent, SearchMode, SearchResult, SearchResultIcon,
+    ActionResult, OverviewSearch, SearchCandidate, SearchCoordinator, SearchMode, SearchResultIcon,
+    SearchSink,
 };
 use crate::runtime::{ShellRuntime, ShellSurfaces};
 use crate::workspace_miniature::{
@@ -216,8 +217,8 @@ pub struct WorkspaceOverview {
     drag_target_workspace_id: Option<u64>,
     workspace_view_start: usize,
     input_state: Option<Entity<InputState>>,
-    search: Option<OverviewSearch>,
-    search_results: Vec<SearchResult>,
+    search: Option<Arc<SearchCoordinator>>,
+    search_results: Vec<SearchCandidate>,
     selected_result_index: Option<usize>,
     result_scroll_handle: ScrollHandle,
     query_generation: u64,
@@ -427,7 +428,7 @@ impl WorkspaceOverview {
 
     fn set_search_results(
         &mut self,
-        results: Vec<SearchResult>,
+        results: Vec<SearchCandidate>,
         generation: u64,
         cx: &mut Context<Self>,
     ) {
@@ -461,26 +462,37 @@ impl WorkspaceOverview {
             return;
         }
 
-        let immediate_results = if let Some(search) = &self.search {
-            search.search(&text)
-        } else {
-            Vec::new()
+        self.search_state = LauncherSearchState::Pending {
+            generation: query_gen,
         };
-
-        if !immediate_results.is_empty() {
-            self.search_results = immediate_results;
-            self.selected_result_index = Some(0);
-            self.search_state = LauncherSearchState::Ready {
-                generation: query_gen,
-            };
-        } else {
-            self.search_state = LauncherSearchState::Pending {
-                generation: query_gen,
-            };
-        }
         cx.notify();
 
+        let coordinator = self.search.clone();
         let task = cx.spawn(async move |this, cx| {
+            // Built-in providers are dispatched off the UI thread so a slow
+            // or stalled provider cannot freeze the shell. The sink's
+            // generation check discards any delivery from a since-superseded
+            // query before it is ever published.
+            let sink = SearchSink::for_test(query_gen);
+            if let Some(coordinator) = coordinator.clone() {
+                let bg_sink = sink.clone();
+                let bg_text = text.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        coordinator.search(&bg_text, query_gen, &bg_sink);
+                    })
+                    .await;
+            }
+            cx.update(|cx| {
+                if let Some(entity) = this.upgrade() {
+                    entity.update(cx, |view, cx| {
+                        if view.query_generation == query_gen {
+                            view.set_search_results(sink.snapshot(), query_gen, cx);
+                        }
+                    });
+                }
+            });
+
             cx.background_executor()
                 .timer(Duration::from_millis(60))
                 .await;
@@ -504,12 +516,27 @@ impl WorkspaceOverview {
                                 );
                                 debug_assert_eq!(generation, query_gen);
                             }
-                            let results = if let Some(search) = &view.search {
-                                search.search(&text)
-                            } else {
-                                Vec::new()
-                            };
-                            view.set_search_results(results, query_gen, cx);
+                        }
+                    });
+                }
+            });
+
+            let sink = SearchSink::for_test(query_gen);
+            if let Some(coordinator) = &coordinator {
+                let bg_sink = sink.clone();
+                let bg_text = text.clone();
+                let coordinator = coordinator.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        coordinator.search(&bg_text, query_gen, &bg_sink);
+                    })
+                    .await;
+            }
+            cx.update(|cx| {
+                if let Some(entity) = this.upgrade() {
+                    entity.update(cx, |view, cx| {
+                        if view.query_generation == query_gen {
+                            view.set_search_results(sink.snapshot(), query_gen, cx);
                         }
                     });
                 }
@@ -526,15 +553,22 @@ impl WorkspaceOverview {
             return;
         }
         if index < self.search_results.len() {
-            match &self.search_results[index].intent {
-                SearchIntent::LaunchApp(app) => {
+            let candidate = &self.search_results[index];
+            let activation_result = if let Some(coordinator) = &self.search {
+                coordinator.activate(&candidate.provider_id, candidate.activation.clone())
+            } else {
+                return;
+            };
+
+            match activation_result {
+                Ok(ActionResult::LaunchApp(app)) => {
                     ShellRuntime::record_recent_app(cx, &app.exec);
                     app.launch_with_feedback(|err_msg| {
                         tracing::warn!(error = %err_msg, "application launch failed");
                     });
                     self.begin_close(OverviewCloseReason::Selection, cx);
                 }
-                SearchIntent::InvokeAction(action) => {
+                Ok(ActionResult::InvokeAction(action)) => {
                     if let Ok(invocation) = crate::actions::ActionInvocation::from_id_and_payload(
                         action.id.clone(),
                         None,
@@ -543,21 +577,21 @@ impl WorkspaceOverview {
                         self.begin_close(OverviewCloseReason::Selection, cx);
                     }
                 }
-                SearchIntent::CopyClipboard(item) => {
+                Ok(ActionResult::CopyClipboard(item)) => {
                     ShellRuntime::copy_clipboard_text(cx, &item.text);
                     self.begin_close(OverviewCloseReason::Selection, cx);
                 }
-                SearchIntent::CopyCalculation(val) => {
-                    ShellRuntime::copy_clipboard_text(cx, val);
+                Ok(ActionResult::CopyCalculation(val)) => {
+                    ShellRuntime::copy_clipboard_text(cx, &val);
                     self.begin_close(OverviewCloseReason::Selection, cx);
                 }
-                SearchIntent::ExecuteCommand(cmd) => {
+                Ok(ActionResult::ExecuteCommand(cmd)) => {
                     let terminal = std::env::var("TERMINAL")
                         .ok()
                         .or_else(shilpo_services::find_terminal_emulator);
                     if let Some(terminal) = terminal {
                         if let Err(error) = std::process::Command::new(terminal)
-                            .args(["-e", "sh", "-lc", cmd])
+                            .args(["-e", "sh", "-lc", &cmd])
                             .spawn()
                         {
                             tracing::warn!(%error, "failed to launch command terminal");
@@ -569,27 +603,35 @@ impl WorkspaceOverview {
                         );
                     }
                 }
-                SearchIntent::OpenWeb(url) => {
-                    match std::process::Command::new("xdg-open").arg(url).spawn() {
+                Ok(ActionResult::OpenWeb(url)) => {
+                    match std::process::Command::new("xdg-open").arg(&url).spawn() {
                         Ok(_) => self.begin_close(OverviewCloseReason::Selection, cx),
                         Err(error) => tracing::warn!(%error, "failed to open web search"),
                     }
                 }
-                SearchIntent::OpenPath(path) => {
-                    match std::process::Command::new("xdg-open").arg(path).spawn() {
+                Ok(ActionResult::OpenPath(path)) => {
+                    match std::process::Command::new("xdg-open").arg(&path).spawn() {
                         Ok(_) => self.begin_close(OverviewCloseReason::Selection, cx),
                         Err(error) => tracing::warn!(%error, "failed to open path"),
                     }
                 }
-                SearchIntent::OpenUri(uri) => {
-                    match std::process::Command::new("xdg-open").arg(uri).spawn() {
+                Ok(ActionResult::OpenUri(uri)) => {
+                    match std::process::Command::new("xdg-open").arg(&uri).spawn() {
                         Ok(_) => self.begin_close(OverviewCloseReason::Selection, cx),
                         Err(error) => tracing::warn!(%error, "failed to open URI"),
                     }
                 }
-                SearchIntent::CopyKeybinding(shortcut) => {
-                    ShellRuntime::copy_clipboard_text(cx, shortcut);
+                Ok(ActionResult::CopyKeybinding(shortcut)) => {
+                    ShellRuntime::copy_clipboard_text(cx, &shortcut);
                     self.begin_close(OverviewCloseReason::Selection, cx);
+                }
+                Ok(ActionResult::Handled { close_overview }) => {
+                    if close_overview {
+                        self.begin_close(OverviewCloseReason::Selection, cx);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "search candidate activation failed");
                 }
             }
         }
@@ -693,13 +735,14 @@ impl WorkspaceOverview {
         let actions = ShellRuntime::action_descriptors(cx);
         let clipboard_history = ShellRuntime::clipboard_history(cx);
         let keybindings = ShellRuntime::keybinding_descriptors(cx);
-        let search_engine = OverviewSearch::new(
+        let legacy_provider = Arc::new(OverviewSearch::new(
             scanner,
             recent_apps,
             actions,
             clipboard_history,
             keybindings,
-        );
+        ));
+        let search_coordinator = Arc::new(SearchCoordinator::new(vec![legacy_provider]));
 
         window.on_window_should_close(cx, move |_, cx| {
             lifecycle.window_closed(cx);
@@ -734,7 +777,7 @@ impl WorkspaceOverview {
             focus_handle.focus(window, cx);
             ov.focus_handle = Some(focus_handle);
             ov.input_state = Some(input_state);
-            ov.search = Some(search_engine);
+            ov.search = Some(search_coordinator);
 
             let catalog_rx = scanner_for_catalog.subscribe();
             ov._catalog_task = Some(cx.spawn(async move |this, cx| {
@@ -758,9 +801,10 @@ impl WorkspaceOverview {
                                 .unwrap_or_default();
                             if !query.trim().is_empty() {
                                 let generation = view.query_generation;
-                                if let Some(search) = &view.search {
-                                    let results = search.search(&query);
-                                    view.set_search_results(results, generation, cx);
+                                if let Some(coordinator) = &view.search {
+                                    let sink = SearchSink::for_test(generation);
+                                    coordinator.search(&query, generation, &sink);
+                                    view.set_search_results(sink.snapshot(), generation, cx);
                                 }
                             } else {
                                 cx.notify();
@@ -1244,11 +1288,8 @@ impl Render for WorkspaceOverview {
                         INTER_WORKSPACE_RADIUS
                     });
                     let is_selected = self.selected_result_index == Some(index);
-                    let is_calculation = matches!(&result.intent, SearchIntent::CopyCalculation(_));
-                    let is_suggestion = matches!(
-                        &result.intent,
-                        SearchIntent::ExecuteCommand(_) | SearchIntent::OpenWeb(_)
-                    );
+                    let is_calculation = result.category.is_calculation();
+                    let is_suggestion = result.category.is_suggestion();
                     let (bg, title_color, desc_color, border_color) = if is_selected {
                         (
                             theme.primary_container,
@@ -1289,6 +1330,8 @@ impl Render for WorkspaceOverview {
                         }
                     };
 
+                    let subtitle_text = result.subtitle.clone().unwrap_or_default();
+
                     h_flex()
                         .id(ElementId::NamedInteger(
                             "search-result-item".into(),
@@ -1310,7 +1353,7 @@ impl Render for WorkspaceOverview {
                         .hover(|item| item.bg(theme.primary_container.opacity(0.2)).shadow_sm())
                         .active(|item| item.bg(theme.primary_container.opacity(0.28)))
                         .role(Role::Button)
-                        .aria_label(format!("{}: {}", result.result_type, result.title))
+                        .aria_label(format!("{}: {}", result.category.as_str(), result.title))
                         .child(
                             div()
                                 .w(px(32.))
@@ -1331,23 +1374,13 @@ impl Render for WorkspaceOverview {
                                         .text_color(title_color)
                                         .child(result.title.clone()),
                                 )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(desc_color)
-                                        .child(result.description.clone()),
-                                )
+                                .child(div().text_xs().text_color(desc_color).child(subtitle_text))
                                 .into_any_element()
                         } else if is_suggestion {
                             v_flex()
                                 .flex_1()
                                 .gap_0()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(desc_color)
-                                        .child(result.description.clone()),
-                                )
+                                .child(div().text_xs().text_color(desc_color).child(subtitle_text))
                                 .child(
                                     div()
                                         .text_sm()
@@ -1367,12 +1400,7 @@ impl Render for WorkspaceOverview {
                                         .text_color(title_color)
                                         .child(result.title.clone()),
                                 )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(desc_color)
-                                        .child(result.description.clone()),
-                                )
+                                .child(div().text_xs().text_color(desc_color).child(subtitle_text))
                                 .into_any_element()
                         })
                         .when(is_interactive, |el| {

@@ -1,7 +1,16 @@
 pub mod calculator;
-pub mod engine;
+pub mod coordinator;
+pub mod legacy_adapter;
 pub mod parser;
 pub mod ranking;
+pub mod sink;
+pub mod types;
 
-pub use engine::{OverviewSearch, SearchIntent, SearchResult, SearchResultIcon};
+pub use coordinator::SearchCoordinator;
+pub use legacy_adapter::{LegacyOverviewSearchProvider, OverviewSearch};
 pub use parser::SearchMode;
+pub use sink::{SearchSink, SinkConfig};
+pub use types::{
+    ActionResult, CompletionState, LatencyClass, ProviderId, ResultCategory, SearchActivation,
+    SearchCandidate, SearchError, SearchProvider, SearchRequest, SearchResultIcon,
+};
