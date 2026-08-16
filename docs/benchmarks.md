@@ -2,7 +2,7 @@
 
 Shilpo uses a dual-engine benchmarking infrastructure:
 - **[Criterion.rs](https://bheisler.github.io/criterion.rs/book/)**: Local and native wall-clock statistical profiling with HTML/JSON report generation.
-- **[CodSpeed](https://codspeed.io/)**: Continuous, hardware-agnostic CPU simulation and memory tracking with differential flamegraphs in CI.
+- **[CodSpeed](https://codspeed.io/)**: Continuous CPU simulation and memory tracking with differential flamegraphs in CI.
 
 ---
 
@@ -108,11 +108,10 @@ cargo bench -p shilpo-theme --bench theme -- --test
 ### CodSpeed Continuous Benchmarking (`.github/workflows/codspeed.yml`)
 
 - **Triggers**: Pull requests targeting `main`, pushes to `main`, and `workflow_dispatch`.
-- **Mechanism**: Instruments benchmark binaries using Valgrind-based CPU cycle and memory simulation.
+- **Mechanism**: Instruments the core benchmark binaries using CodSpeed simulation mode.
 - **Benefits**:
-  - Deterministic measurements with <1% variance across runs.
-  - Eliminates noise caused by shared GitHub Actions runners.
-  - Automatically generates differential flamegraphs for pull requests.
+  - Low-variance CPU measurements that are comparable across ordinary CI runners.
+  - Differential flamegraphs and public performance history for pull requests.
 - **Permissions**: Minimal least-privilege tokens (`contents: read`, `id-token: write` for OIDC authentication).
 
 ### Native Wall-Clock Benchmarks (`.github/workflows/benchmarks.yml`)
@@ -120,7 +119,7 @@ cargo bench -p shilpo-theme --bench theme -- --test
 - **Triggers**: Weekly schedule on `main` (Sundays at 00:00 UTC) and manual `workflow_dispatch`.
 - **Environment Metadata**: Each run captures commit SHA, Rust version, OS, kernel, CPU model, timestamp, and fixture identity in `target/criterion/metadata/environment.json`.
 - **Artifact Retention**:
-  - Pull request and manual dispatches: **30 days**.
+  - Manual dispatches: **30 days**.
   - Scheduled `main` branch runs: **90 days**.
 - **Reports**: Machine-readable JSON data and interactive HTML reports uploaded under `target/criterion/`.
 
@@ -135,3 +134,5 @@ cargo bench -p shilpo-theme --bench theme -- --test
   - Execution times out or panics.
   - Generated reports are malformed or missing.
   - Tracked source files are dirtied or uncommitted files are produced.
+
+The pull-request smoke job has a 15-minute command budget inside a 20-minute job budget. CodSpeed installation, compilation, and execution each have their own smaller command timeout inside a 30-minute job. Scheduled/manual native measurement has a 50-minute command budget inside a 60-minute job. A timeout is reported as an infrastructure failure, never as a performance regression.

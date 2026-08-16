@@ -40,6 +40,7 @@ jobs:
       - name: Collect Environment Metadata
         run: |
           mkdir -p target/criterion/metadata
+          fixture_lock_sha256="$(sha256sum desktop/ext-runtime/tests/fixtures/sdk-component/Cargo.lock | cut -d' ' -f1)"
           cat <<EOF > target/criterion/metadata/environment.json
           {
             "commit_sha": "${{ github.sha }}",
@@ -48,13 +49,14 @@ jobs:
             "run_id": "${{ github.run_id }}",
             "run_attempt": "${{ github.run_attempt }}",
             "event_name": "${{ github.event_name }}",
+            "measurement_mode": "native-wall-clock",
             "rust_version": "$(rustc --version)",
             "os": "$(uname -s)",
             "os_release": "$(uname -r)",
             "architecture": "$(uname -m)",
             "cpu_model": "$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs || echo 'unknown')",
             "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
-            "fixture_identity": "tests/fixtures/sdk-component (wasm32-wasip2)"
+            "fixture_identity": "desktop/ext-runtime/tests/fixtures/sdk-component/Cargo.lock:${fixture_lock_sha256}"
           }
           EOF
           cat target/criterion/metadata/environment.json
@@ -63,7 +65,17 @@ jobs:
         env:
           SUITE: ${{ github.event.inputs.suite || 'all' }}
         run: |
-          ./scripts/bench.sh "$SUITE"
+          timeout 50m ./scripts/bench.sh "$SUITE"
+
+      - name: Verify Criterion reports
+        run: |
+          test -f target/criterion/report/index.html
+          mapfile -t estimates < <(find target/criterion -type f -name estimates.json)
+          test "${#estimates[@]}" -gt 0
+          jq empty "${estimates[@]}"
+
+      - name: Verify clean worktree
+        run: test -z "$(git status --porcelain --untracked-files=all)"
 
       - name: Determine Artifact Retention Days
         id: retention
@@ -81,4 +93,4 @@ jobs:
           name: criterion-reports-${{ github.sha }}-${{ github.run_id }}
           path: target/criterion/
           retention-days: ${{ steps.retention.outputs.days }}
-          if-no-files-found: warn
+          if-no-files-found: error

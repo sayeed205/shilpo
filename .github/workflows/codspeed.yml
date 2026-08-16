@@ -17,6 +17,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  smoke:
+    name: Benchmark smoke check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Compile and execute benchmark smoke suite
+        run: timeout 15m ./scripts/bench.sh smoke
+
+      - name: Verify clean worktree
+        run: test -z "$(git status --porcelain --untracked-files=all)"
+
   benchmarks:
     name: Run CodSpeed Benchmarks
     runs-on: ubuntu-latest
@@ -34,12 +53,20 @@ jobs:
           targets: wasm32-wasip2
 
       - name: Install cargo-codspeed
-        run: cargo install cargo-codspeed --locked
+        run: timeout 5m cargo install cargo-codspeed --version 5.0.1 --locked
 
-      - name: Build benchmarks
-        run: cargo codspeed build
+      - name: Build core benchmarks
+        run: |
+          timeout 8m cargo codspeed build -p shilpo-theme --bench theme
+          timeout 8m cargo codspeed build -p shilpo-ext-api --bench identity --bench view_tree
 
-      - name: Run CodSpeed benchmarks
+      - name: Run core CodSpeed benchmarks
         uses: CodSpeedHQ/action@v5
         with:
-          run: cargo codspeed run
+          mode: simulation
+          run: |
+            timeout 5m cargo codspeed run -p shilpo-theme --bench theme
+            timeout 5m cargo codspeed run -p shilpo-ext-api --bench identity --bench view_tree
+
+      - name: Verify clean worktree
+        run: test -z "$(git status --porcelain --untracked-files=all)"

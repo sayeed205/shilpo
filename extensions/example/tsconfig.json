@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "jsx": "react-jsx",
     "jsxImportSource": "@shilpo/ext-sdk",
     "allowImportingTsExtensions": true,
@@ -10,13 +10,7 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "paths": {
-      "@shilpo/ext-sdk": ["../../sdk/typescript/src/index.ts"],
-      "@shilpo/ext-sdk/jsx-runtime": ["../../sdk/typescript/src/jsx-runtime/index.ts"],
-      "@shilpo/ext-sdk/jsx-dev-runtime": ["../../sdk/typescript/src/jsx-dev-runtime/index.ts"],
-      "@shilpo/ext-sdk/*": ["../../sdk/typescript/src/*"]
-    }
+    "forceConsistentCasingInFileNames": true
   },
   "include": ["src/**/*"]
 }

@@ -14,6 +14,7 @@ fn bench_wasm_cold_load(c: &mut Criterion) {
         WasmRuntime::with_broker(broker).expect("WasmRuntime with fake broker must succeed");
     let module = WasmModule::from_bytes(SDK_FIXTURE);
     let budget = RuntimeBudget::default();
+    let ext_id = ExtensionId::new("io.shilpo.bench-cold-load").unwrap();
 
     // Verify initial load and unload outside timing
     let test_id = ExtensionId::new("io.shilpo.bench-preflight").unwrap();
@@ -32,12 +33,12 @@ fn bench_wasm_cold_load(c: &mut Criterion) {
     group.bench_function("sdk_fixture", |b| {
         b.iter_custom(|iters| {
             let mut total_duration = Duration::ZERO;
-            for i in 0..iters {
-                let ext_id = ExtensionId::new(format!("io.shilpo.bench-{}", i)).unwrap();
+            for _ in 0..iters {
+                let iteration_module = module.clone();
                 let start = Instant::now();
                 let load_res = runtime.load(
                     black_box(&ext_id),
-                    black_box(module.clone()),
+                    black_box(iteration_module),
                     black_box(budget),
                 );
                 let elapsed = start.elapsed();
