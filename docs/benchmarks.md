@@ -135,4 +135,4 @@ cargo bench -p shilpo-theme --bench theme -- --test
   - Generated reports are malformed or missing.
   - Tracked source files are dirtied or uncommitted files are produced.
 
-The pull-request smoke job has a 20-minute command budget inside a 30-minute job budget. CodSpeed installation, compilation, and execution each have their own smaller command timeout inside a 30-minute job. Scheduled/manual native measurement has a 50-minute command budget inside a 60-minute job. A timeout is reported as an infrastructure failure, never as a performance regression.
+Pull-request smoke runs the core, config, and Wasm suites in parallel Criterion test-mode jobs. Core has an 8-minute command budget; config and Wasm each have a 20-minute command budget, all inside 30-minute jobs. CodSpeed installation, compilation, and execution each have their own smaller command timeout inside a 30-minute job. Scheduled/manual native measurement has a 50-minute command budget inside a 60-minute job. A timeout is reported as an infrastructure failure, never as a performance regression.
