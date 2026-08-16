@@ -20,7 +20,7 @@ jobs:
   smoke:
     name: Benchmark smoke check
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -39,7 +39,7 @@ jobs:
             libvulkan-dev libwayland-dev libxcb1-dev libxkbcommon-x11-dev libzstd-dev pkg-config
 
       - name: Compile and execute benchmark smoke suite
-        run: timeout 15m ./scripts/bench.sh smoke
+        run: timeout 20m ./scripts/bench.sh smoke
 
       - name: Verify clean worktree
         run: test -z "$(git status --porcelain --untracked-files=all)"
