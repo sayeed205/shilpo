@@ -1,17 +1,11 @@
-use crate::app_icons::{app_icon, build_app_icon_index, resolve_app_icon_path};
-use crate::overview_search::{
-    ActionResult, OverviewSearch, SearchCandidate, SearchCoordinator, SearchMode, SearchResultIcon,
-    SearchSink,
-};
-use crate::runtime::{ShellRuntime, ShellSurfaces};
-use crate::workspace_miniature::{
-    PREVIEW_HEIGHT, PREVIEW_WIDTH, WorkspaceMiniature, WorkspaceMiniatureModel,
-};
+use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc, time::Duration};
+
 use gpui::{
     Animation, AnimationExt as _, App, AppContext, Context, DragMoveEvent, ElementId, Entity,
-    FocusHandle, Focusable, ImageSource, InteractiveElement, IntoElement, KeyDownEvent,
-    MouseButton, ParentElement, Render, Role, ScrollHandle, ScrollWheelEvent, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
+    FocusHandle, Focusable, FontWeight, HighlightStyle, ImageSource, InteractiveElement,
+    IntoElement, KeyDownEvent, MouseButton, ParentElement, Render, Role, ScrollHandle,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, StyledText, Window, div,
+    prelude::FluentBuilder, px,
 };
 use shilpo_ext_api::CanonicalId;
 use shilpo_services::{CompositorSnapshot, WindowInfo, WorkspaceInfo};
@@ -22,7 +16,18 @@ use shilpo_ui::{
     input::{Input, InputEvent, InputState, InputVariant},
     v_flex,
 };
-use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc, time::Duration};
+
+use crate::{
+    app_icons::{app_icon, build_app_icon_index, resolve_app_icon_path},
+    overview_search::{
+        ActionResult, OverviewSearch, SearchCandidate, SearchCoordinator, SearchMode,
+        SearchResultIcon, SearchSink,
+    },
+    runtime::{ShellRuntime, ShellSurfaces},
+    workspace_miniature::{
+        PREVIEW_HEIGHT, PREVIEW_WIDTH, WorkspaceMiniature, WorkspaceMiniatureModel,
+    },
+};
 
 // ── Animation constants ────────────────────────────────────────────────────
 const ENTER_DURATION: Duration = Duration::from_millis(250);
@@ -473,7 +478,7 @@ impl WorkspaceOverview {
             // or stalled provider cannot freeze the shell. The sink's
             // generation check discards any delivery from a since-superseded
             // query before it is ever published.
-            let sink = SearchSink::for_test(query_gen);
+            let sink = SearchSink::with_default_config(query_gen);
             if let Some(coordinator) = coordinator.clone() {
                 let bg_sink = sink.clone();
                 let bg_text = text.clone();
@@ -521,7 +526,7 @@ impl WorkspaceOverview {
                 }
             });
 
-            let sink = SearchSink::for_test(query_gen);
+            let sink = SearchSink::with_default_config(query_gen);
             if let Some(coordinator) = &coordinator {
                 let bg_sink = sink.clone();
                 let bg_text = text.clone();
@@ -737,12 +742,12 @@ impl WorkspaceOverview {
         let keybindings = ShellRuntime::keybinding_descriptors(cx);
         let legacy_provider = Arc::new(OverviewSearch::new(
             scanner,
-            recent_apps,
             actions,
             clipboard_history,
             keybindings,
         ));
-        let search_coordinator = Arc::new(SearchCoordinator::new(vec![legacy_provider]));
+        let search_coordinator =
+            Arc::new(SearchCoordinator::new(vec![legacy_provider]).with_recent_apps(recent_apps));
 
         window.on_window_should_close(cx, move |_, cx| {
             lifecycle.window_closed(cx);
@@ -802,7 +807,7 @@ impl WorkspaceOverview {
                             if !query.trim().is_empty() {
                                 let generation = view.query_generation;
                                 if let Some(coordinator) = &view.search {
-                                    let sink = SearchSink::for_test(generation);
+                                    let sink = SearchSink::with_default_config(generation);
                                     coordinator.search(&query, generation, &sink);
                                     view.set_search_results(sink.snapshot(), generation, cx);
                                 }
@@ -1332,6 +1337,19 @@ impl Render for WorkspaceOverview {
 
                     let subtitle_text = result.subtitle.clone().unwrap_or_default();
 
+                    let highlight_color = if is_selected {
+                        theme.on_primary_container
+                    } else {
+                        theme.primary
+                    };
+                    let title_el = render_title_element(
+                        &result.title,
+                        &result.match_positions,
+                        title_color,
+                        highlight_color,
+                        is_calculation,
+                    );
+
                     h_flex()
                         .id(ElementId::NamedInteger(
                             "search-result-item".into(),
@@ -1367,13 +1385,7 @@ impl Render for WorkspaceOverview {
                             v_flex()
                                 .flex_1()
                                 .gap_0()
-                                .child(
-                                    div()
-                                        .text_base()
-                                        .font_bold()
-                                        .text_color(title_color)
-                                        .child(result.title.clone()),
-                                )
+                                .child(title_el)
                                 .child(div().text_xs().text_color(desc_color).child(subtitle_text))
                                 .into_any_element()
                         } else if is_suggestion {
@@ -1381,25 +1393,13 @@ impl Render for WorkspaceOverview {
                                 .flex_1()
                                 .gap_0()
                                 .child(div().text_xs().text_color(desc_color).child(subtitle_text))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_semibold()
-                                        .text_color(title_color)
-                                        .child(result.title.clone()),
-                                )
+                                .child(title_el)
                                 .into_any_element()
                         } else {
                             v_flex()
                                 .flex_1()
                                 .gap_0()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_semibold()
-                                        .text_color(title_color)
-                                        .child(result.title.clone()),
-                                )
+                                .child(title_el)
                                 .child(div().text_xs().text_color(desc_color).child(subtitle_text))
                                 .into_any_element()
                         })
@@ -1611,10 +1611,98 @@ impl Focusable for WorkspaceOverview {
     }
 }
 
+fn render_title_element(
+    title: &str,
+    match_positions: &[usize],
+    title_color: gpui::Hsla,
+    highlight_color: gpui::Hsla,
+    font_size_is_base: bool,
+) -> gpui::AnyElement {
+    let byte_ranges = char_positions_to_byte_ranges(title, match_positions);
+    let highlights = if byte_ranges.is_empty() {
+        None
+    } else {
+        Some(
+            byte_ranges
+                .into_iter()
+                .map(|r| {
+                    (
+                        r,
+                        HighlightStyle {
+                            color: Some(highlight_color),
+                            font_weight: Some(FontWeight::BOLD),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
+
+    let base = div().text_color(title_color).child(
+        StyledText::new(title.to_string()).when_some(highlights, |st, hl| st.with_highlights(hl)),
+    );
+
+    if font_size_is_base {
+        base.text_base().font_bold().into_any_element()
+    } else {
+        base.text_sm().font_semibold().into_any_element()
+    }
+}
+
+fn char_positions_to_byte_ranges(text: &str, char_positions: &[usize]) -> Vec<Range<usize>> {
+    if char_positions.is_empty() {
+        return Vec::new();
+    }
+    let char_to_byte: Vec<usize> = text.char_indices().map(|(b, _)| b).collect();
+    let text_byte_len = text.len();
+
+    let mut ranges = Vec::new();
+    let mut curr_start: Option<usize> = None;
+    let mut prev_char_idx: Option<usize> = None;
+
+    for &c_idx in char_positions {
+        if c_idx >= char_to_byte.len() {
+            continue;
+        }
+        if let Some(prev) = prev_char_idx {
+            if c_idx == prev + 1 {
+                prev_char_idx = Some(c_idx);
+            } else {
+                let start_byte = char_to_byte[curr_start.unwrap()];
+                let end_byte = if prev + 1 < char_to_byte.len() {
+                    char_to_byte[prev + 1]
+                } else {
+                    text_byte_len
+                };
+                ranges.push(start_byte..end_byte);
+                curr_start = Some(c_idx);
+                prev_char_idx = Some(c_idx);
+            }
+        } else {
+            curr_start = Some(c_idx);
+            prev_char_idx = Some(c_idx);
+        }
+    }
+
+    if let (Some(start), Some(prev)) = (curr_start, prev_char_idx) {
+        let start_byte = char_to_byte[start];
+        let end_byte = if prev + 1 < char_to_byte.len() {
+            char_to_byte[prev + 1]
+        } else {
+            text_byte_len
+        };
+        ranges.push(start_byte..end_byte);
+    }
+
+    ranges
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use shilpo_services::Application;
+
+    use super::*;
 
     #[test]
     fn test_workspace_overview_navigation() {
