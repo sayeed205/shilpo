@@ -9,6 +9,17 @@ use super::{
     },
 };
 
+/// Bound on candidates collected from a single provider before ranking.
+///
+/// Each scratch sink below is written to by exactly one provider, so
+/// `max_per_provider` has no cross-provider-fairness role there — only
+/// `max_total` matters, as a safety net against a runaway or hostile
+/// provider. This value must comfortably exceed any realistic single
+/// provider's output (hundreds of installed applications, dozens of
+/// actions, clipboard history, keybindings) so a real candidate is never
+/// dropped before the ranker gets to see it.
+const SCRATCH_SINK_CAPACITY: usize = 4096;
+
 /// Host search coordinator that manages registered providers and fans out requests.
 #[derive(Clone, Default)]
 pub struct SearchCoordinator {
@@ -53,16 +64,23 @@ impl SearchCoordinator {
     ///
     /// Each provider's `search` call runs concurrently on its own thread so a slow or
     /// stalled provider cannot delay another provider's candidates from being collected.
+    /// Each provider writes into a private scratch sink sized well above any realistic
+    /// single-provider output (see [`SCRATCH_SINK_CAPACITY`]), so a provider that returns
+    /// many legitimate candidates cannot have any of them silently dropped before ranking.
     /// Collected candidates are merged across all scratch sinks, scored, ordered by the
     /// host ranker, and truncated to top-k once into the caller's sink.
     pub fn search(&self, raw_query: &str, generation: u64, sink: &SearchSink) {
         let (mode, query) = parser::parse_query(raw_query);
         let request = SearchRequest::new(raw_query, mode, query, generation);
 
+        let scratch_config = SinkConfig {
+            max_per_provider: SCRATCH_SINK_CAPACITY,
+            max_total: SCRATCH_SINK_CAPACITY,
+        };
         let scratch_sinks: Vec<SearchSink> = self
             .providers
             .iter()
-            .map(|_| SearchSink::new(generation, SinkConfig::default()))
+            .map(|_| SearchSink::new(generation, scratch_config.clone()))
             .collect();
 
         std::thread::scope(|scope| {
@@ -305,5 +323,65 @@ mod tests {
         let results = sink.snapshot();
         assert!(results.iter().any(|c| c.title == "Fast Result"));
         assert!(results.iter().any(|c| c.title == "Slow Result"));
+    }
+
+    #[test]
+    fn test_a_prolific_single_provider_does_not_starve_its_own_late_candidates() {
+        // A provider producing far more than the old 64-item scratch-sink
+        // quota must still have every one of its candidates reach the
+        // ranker. Regression test for the intra-provider starvation bug:
+        // sink.push()'s return value was discarded, so a provider emitting
+        // more than SCRATCH_SINK_CAPACITY candidates used to lose the tail
+        // silently before ranking ever saw them.
+        struct ManyCandidatesProvider;
+        impl SearchProvider for ManyCandidatesProvider {
+            fn id(&self) -> ProviderId {
+                ProviderId::from_static("many")
+            }
+            fn search(&self, request: SearchRequest, sink: SearchSink) {
+                // One order of magnitude past the old 64-candidate cap, and
+                // still comfortably under SCRATCH_SINK_CAPACITY.
+                for i in 0..(SCRATCH_SINK_CAPACITY / 4) {
+                    sink.push(SearchCandidate::new(
+                        self.id(),
+                        format!("many:{i}"),
+                        request.generation,
+                        format!("Filler {i}"),
+                        None,
+                        ResultCategory::Custom,
+                        SearchResultIcon::Initial('M'),
+                        "Open",
+                        SearchActivation::new(format!("payload-many-{i}")),
+                    ));
+                }
+                // The target sits well past the old 64-item quota.
+                sink.push(SearchCandidate::new(
+                    self.id(),
+                    "many:target",
+                    request.generation,
+                    "Zzzedge Unique Target",
+                    None,
+                    ResultCategory::Custom,
+                    SearchResultIcon::Initial('Z'),
+                    "Open",
+                    SearchActivation::new("payload-target"),
+                ));
+            }
+            fn activate(&self, _activation: SearchActivation) -> Result<ActionResult, SearchError> {
+                Ok(ActionResult::Handled {
+                    close_overview: true,
+                })
+            }
+        }
+
+        let coordinator = SearchCoordinator::new(vec![Arc::new(ManyCandidatesProvider)]);
+        let sink = SearchSink::for_test(1);
+        coordinator.search("Zzzedge", 1, &sink);
+
+        let results = sink.snapshot();
+        assert!(
+            results.iter().any(|c| c.canonical_id == "many:target"),
+            "candidate past the old scratch-sink quota was dropped before ranking"
+        );
     }
 }
