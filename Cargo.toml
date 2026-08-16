@@ -125,6 +125,7 @@ libpulse-binding = "2"
 ddc = "0.2"
 ddc-i2c = { version = "0.2", features = ["i2c-linux"] }
 proptest = "1"
+divan = { version = "5", package = "codspeed-divan-compat" }
 heed = "0.22"
 tempfile = "3"
 oo7 = { version = "0.6", default-features = false, features = ["async-std", "native_crypto"] }

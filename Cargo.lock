@@ -289,6 +289,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "approx"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "ar_archive_writer"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1296,6 +1305,7 @@ dependencies = [
  "anstyle",
  "clap_lex",
  "strsim",
+ "terminal_size",
 ]
 
 [[package]]
@@ -1415,6 +1425,66 @@ dependencies = [
 ]
 
 [[package]]
+name = "codspeed"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7083f253260bcb4aaa3b4aa4c52973703dabc1a85c2f193997e2689aafa8a919"
+dependencies = [
+ "anyhow",
+ "cc",
+ "colored",
+ "getrandom 0.4.3",
+ "glob",
+ "libc",
+ "nix",
+ "serde",
+ "serde_json",
+ "statrs",
+]
+
+[[package]]
+name = "codspeed-divan-compat"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc1065d507e1cbab731a7976db4cef7e47e49b87b4dbc0a925df07d343558420"
+dependencies = [
+ "clap",
+ "codspeed",
+ "codspeed-divan-compat-macros",
+ "codspeed-divan-compat-walltime",
+ "regex",
+]
+
+[[package]]
+name = "codspeed-divan-compat-macros"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fd05482a95823ffe421e8a9ba24fa22a6a30d594e2c60455cbb43a41bf2d8fa"
+dependencies = [
+ "divan-macros",
+ "itertools 0.14.0",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "codspeed-divan-compat-walltime"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2f8eae75b8fa85357020a404899c4280d590c9fd1c47640b3ce53106c62d2ee"
+dependencies = [
+ "cfg-if",
+ "clap",
+ "codspeed",
+ "condtype",
+ "divan-macros",
+ "libc",
+ "regex-lite",
+]
+
+[[package]]
 name = "collections"
 version = "0.1.0"
 source = "git+https://github.com/zed-industries/zed#a8fafdd7ee36fb3fb98ebbfe5d3be983301d9e74"
@@ -1447,6 +1517,15 @@ name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
+
+[[package]]
+name = "colored"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
+dependencies = [
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "combine"
@@ -1484,6 +1563,12 @@ checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
 ]
+
+[[package]]
+name = "condtype"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baf0a07a401f374238ab8e2f11a104d2851bf9ce711ec69804834de8af45c7af"
 
 [[package]]
 name = "console_error_panic_hook"
@@ -2201,6 +2286,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "divan-macros"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8dc51d98e636f5e3b0759a39257458b22619cac7e96d932da6eeb052891bb67c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -5227,6 +5323,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags 2.13.1",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "no_std_io2"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7007,6 +7115,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
+
+[[package]]
 name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7855,6 +7969,7 @@ dependencies = [
 name = "shilpo-ext-api"
 version = "0.1.0"
 dependencies = [
+ "codspeed-divan-compat",
  "proptest 1.11.0",
  "schemars",
  "semver",
@@ -7981,6 +8096,7 @@ dependencies = [
 name = "shilpo-theme"
 version = "0.1.0"
 dependencies = [
+ "codspeed-divan-compat",
  "mcu-material-color",
  "proptest 1.11.0",
  "schemars",
@@ -8324,6 +8440,16 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "statrs"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a3fe7c28c6512e766b0874335db33c94ad7b8f9054228ae1c2abd47ce7d335e"
+dependencies = [
+ "approx",
+ "num-traits",
+]
 
 [[package]]
 name = "storybook"
@@ -8788,6 +8914,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
+ "rustix 1.1.4",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

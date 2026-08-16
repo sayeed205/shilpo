@@ -1,5 +1,7 @@
 # Shilpo
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/sayeed205/shilpo?utm_source=badge)
+
 ## Install from source
 
 Shilpo includes an automated source installer for its system dependencies, release binaries, user services, and bundled
@@ -136,6 +138,24 @@ cargo nextest run --workspace
 ```bash
 PROPTEST_RNG_SEED="0123456789abcdef..." cargo test -p shilpo-theme
 ```
+
+### Benchmarking
+
+Performance is tracked continuously with [CodSpeed](https://codspeed.io). Benchmarks cover the pure computation crates
+that sit on the hot paths: `shilpo-theme` (M3 palette generation, OKLCH transitions, state reduction) and
+`shilpo-ext-api` (manifest parsing/validation, identifier parsing, view-tree decode and validation).
+
+```bash
+# Run the benchmarks natively through divan
+cargo bench -p shilpo-theme -p shilpo-ext-api
+
+# Run them the way CI does, under CodSpeed's CPU simulation
+cargo codspeed build -p shilpo-theme -p shilpo-ext-api
+codspeed run --mode simulation -- cargo codspeed run
+```
+
+Every pull request runs the same suite in the `CodSpeed` workflow and reports the performance delta against the base
+commit.
 
 ---
 

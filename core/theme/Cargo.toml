@@ -12,4 +12,9 @@ mcu-material-color = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+divan = { workspace = true }
 proptest = { workspace = true }
+
+[[bench]]
+name = "theme"
+harness = false

@@ -17,5 +17,10 @@ toml.workspace = true
 wit-bindgen.workspace = true
 
 [dev-dependencies]
+divan = { workspace = true }
 proptest = { workspace = true }
 wit-parser = { workspace = true }
+
+[[bench]]
+name = "ext_api"
+harness = false
