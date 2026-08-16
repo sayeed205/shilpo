@@ -1,0 +1,104 @@
+name: Native Benchmarks
+
+on:
+  schedule:
+    - cron: "0 0 * * 0" # Weekly on Sundays at 00:00 UTC
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Benchmark suite to run (core, config, wasm, all)"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - core
+          - config
+          - wasm
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-benchmarks-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: Run Native Criterion Benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Install desktop build dependencies
+        run: |
+          timeout 5m sudo apt-get update
+          timeout 5m sudo apt-get install --yes \
+            clang cmake libasound2-dev libdrm-dev libfontconfig1-dev libglib2.0-dev \
+            libpipewire-0.3-dev libpulse-dev libsqlite3-dev libssl-dev libudev-dev libva-dev \
+            libvulkan-dev libwayland-dev libxcb1-dev libxkbcommon-x11-dev libzstd-dev pkg-config
+
+      - name: Collect Environment Metadata
+        run: |
+          mkdir -p target/criterion/metadata
+          fixture_lock_sha256="$(sha256sum desktop/ext-runtime/tests/fixtures/sdk-component/Cargo.lock | cut -d' ' -f1)"
+          cat <<EOF > target/criterion/metadata/environment.json
+          {
+            "commit_sha": "${{ github.sha }}",
+            "ref": "${{ github.ref }}",
+            "workflow": "${{ github.workflow }}",
+            "run_id": "${{ github.run_id }}",
+            "run_attempt": "${{ github.run_attempt }}",
+            "event_name": "${{ github.event_name }}",
+            "measurement_mode": "native-wall-clock",
+            "rust_version": "$(rustc --version)",
+            "os": "$(uname -s)",
+            "os_release": "$(uname -r)",
+            "architecture": "$(uname -m)",
+            "cpu_model": "$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs || echo 'unknown')",
+            "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+            "fixture_identity": "desktop/ext-runtime/tests/fixtures/sdk-component/Cargo.lock:${fixture_lock_sha256}"
+          }
+          EOF
+          cat target/criterion/metadata/environment.json
+
+      - name: Run Benchmarks
+        env:
+          SUITE: ${{ github.event.inputs.suite || 'all' }}
+        run: |
+          timeout 50m ./scripts/bench.sh "$SUITE"
+
+      - name: Verify Criterion reports
+        run: |
+          test -f target/criterion/report/index.html
+          mapfile -t estimates < <(find target/criterion -type f -name estimates.json)
+          test "${#estimates[@]}" -gt 0
+          jq empty "${estimates[@]}"
+
+      - name: Verify clean worktree
+        run: test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Determine Artifact Retention Days
+        id: retention
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "days=90" >> "$GITHUB_OUTPUT"
+          else
+            echo "days=30" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload Criterion Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: criterion-reports-${{ github.sha }}-${{ github.run_id }}
+          path: target/criterion/
+          retention-days: ${{ steps.retention.outputs.days }}
+          if-no-files-found: error

@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "shilpo"
 path = "src/main.rs"
 
+[[bench]]
+name = "config"
+harness = false
+
 [dependencies]
 gpui.workspace = true
 gpui_platform.workspace = true
@@ -54,6 +58,7 @@ schemars.workspace = true
 niri-ipc.workspace = true
 
 [dev-dependencies]
+criterion = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 roxmltree.workspace = true

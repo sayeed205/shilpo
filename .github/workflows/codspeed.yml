@@ -1,0 +1,93 @@
+name: CodSpeed Benchmarks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codspeed-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Benchmark smoke (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: core
+            command_timeout: 8m
+          - suite: config
+            command_timeout: 20m
+          - suite: wasm
+            command_timeout: 20m
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Install desktop build dependencies
+        run: |
+          timeout 5m sudo apt-get update
+          timeout 5m sudo apt-get install --yes \
+            clang cmake libasound2-dev libdrm-dev libfontconfig1-dev libglib2.0-dev \
+            libpipewire-0.3-dev libpulse-dev libsqlite3-dev libssl-dev libudev-dev libva-dev \
+            libvulkan-dev libwayland-dev libxcb1-dev libxkbcommon-x11-dev libzstd-dev pkg-config
+
+      - name: Compile and execute benchmark smoke suite
+        env:
+          BENCH_SUITE: ${{ matrix.suite }}
+          BENCH_TIMEOUT: ${{ matrix.command_timeout }}
+        run: timeout "$BENCH_TIMEOUT" ./scripts/bench.sh "$BENCH_SUITE" -- --test
+
+      - name: Verify clean worktree
+        run: test -z "$(git status --porcelain --untracked-files=all)"
+
+  benchmarks:
+    name: Run CodSpeed Benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # Required for trusted CodSpeed OIDC authentication
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Install cargo-codspeed
+        run: timeout 5m cargo install cargo-codspeed --version 5.0.1 --locked
+
+      - name: Build core benchmarks
+        run: |
+          timeout 8m cargo codspeed build -p shilpo-theme --bench theme
+          timeout 8m cargo codspeed build -p shilpo-ext-api --bench identity --bench view_tree
+
+      - name: Run core CodSpeed benchmarks
+        uses: CodSpeedHQ/action@v5
+        with:
+          mode: simulation
+          run: |
+            timeout 5m cargo codspeed run -p shilpo-theme --bench theme
+            timeout 5m cargo codspeed run -p shilpo-ext-api --bench identity --bench view_tree
+
+      - name: Verify clean worktree
+        run: test -z "$(git status --porcelain --untracked-files=all)"
