@@ -37,6 +37,11 @@ jobs:
         with:
           targets: wasm32-wasip2
 
+      - name: Install desktop build dependencies
+        run: |
+          timeout 5m sudo apt-get update
+          timeout 5m sudo apt-get install --yes libfontconfig1-dev
+
       - name: Collect Environment Metadata
         run: |
           mkdir -p target/criterion/metadata
