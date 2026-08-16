@@ -1,6 +1,5 @@
 pub mod icons;
 
-use anyhow::Result;
 use std::{
     fs::{self, File},
     io::{BufRead, BufReader},
@@ -9,6 +8,8 @@ use std::{
     sync::{Arc, Mutex, mpsc},
     thread,
 };
+
+use anyhow::Result;
 
 /// Represents an installed desktop application parsed from a .desktop file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -547,7 +548,10 @@ impl AppScanner {
         }
     }
 
-    fn replace_applications(&self, applications: Vec<Application>) {
+    /// Replaces the current applications with the given list and notifies subscribers.
+    ///
+    /// Also used by tests and dynamic-reload paths to set a fixture application list.
+    pub fn replace_applications(&self, applications: Vec<Application>) {
         *self.apps.lock().unwrap() = applications;
         self.subscribers
             .lock()

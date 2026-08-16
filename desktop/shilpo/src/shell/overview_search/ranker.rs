@@ -16,6 +16,8 @@ pub struct RankerConfig {
     pub keyword_weight: f64,
     /// Multiplier weight for matches in candidate subtitles / descriptions.
     pub subtitle_weight: f64,
+    /// Prior score for open window candidates.
+    pub window_prior: i64,
     /// Prior score for application candidates.
     pub app_prior: i64,
     /// Prior score for action candidates.
@@ -46,6 +48,7 @@ impl Default for RankerConfig {
             alias_weight: 0.85,
             keyword_weight: 0.6,
             subtitle_weight: 0.4,
+            window_prior: 250,
             app_prior: 200,
             action_prior: 150,
             keybinding_prior: 120,
@@ -110,6 +113,7 @@ fn score_candidate(
         }
 
         let mut score = match candidate.category {
+            ResultCategory::Window => config.window_prior,
             ResultCategory::Application => config.app_prior,
             ResultCategory::Action => config.action_prior,
             ResultCategory::Keybinding => config.keybinding_prior,
@@ -200,6 +204,7 @@ fn score_candidate(
         .max(subtitle_score);
 
     let prior = match candidate.category {
+        ResultCategory::Window => config.window_prior,
         ResultCategory::Application => config.app_prior,
         ResultCategory::Action => config.action_prior,
         ResultCategory::Keybinding => config.keybinding_prior,
@@ -286,6 +291,27 @@ mod tests {
             "Exact match from lower prior provider must outrank subsequence match from higher prior provider"
         );
         assert_eq!(ranked[1].canonical_id, "app:firefox");
+    }
+
+    #[test]
+    fn test_open_window_outranks_launching_duplicate_app_instance() {
+        let app = make_test_candidate(
+            "apps",
+            "app:firefox.desktop",
+            "Firefox",
+            ResultCategory::Application,
+        );
+        let window = make_test_candidate("windows", "window:42", "Firefox", ResultCategory::Window);
+
+        let candidates = vec![app, window];
+        let ranked = rank(candidates, "Firefox", &[], &RankerConfig::default());
+
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(
+            ranked[0].canonical_id, "window:42",
+            "Open window (prior 250) must outrank launching a new app instance (prior 200)"
+        );
+        assert_eq!(ranked[1].canonical_id, "app:firefox.desktop");
     }
 
     #[test]
@@ -468,6 +494,8 @@ mod tests {
             "Terminal",
             ResultCategory::Application,
         );
+        let win_term =
+            make_test_candidate("windows", "window:123", "Terminal", ResultCategory::Window);
         let act_toggle = make_test_candidate(
             "actions",
             "action:toggle-overview",
@@ -487,6 +515,7 @@ mod tests {
             app_calc_full,
             app_ff_full,
             app_term,
+            win_term,
             act_toggle,
             cmd_fallback,
             web_fallback,
@@ -501,6 +530,7 @@ mod tests {
             ids_empty,
             vec![
                 "app:firefox",
+                "window:123",
                 "app:gnome-calculator",
                 "app:terminal",
                 "action:toggle-overview",
@@ -519,12 +549,13 @@ mod tests {
             ]
         );
 
-        // 3. Query: "term" (App Terminal > Command > WebSearch)
+        // 3. Query: "term" (Window Terminal > App Terminal > Command > WebSearch)
         let res_term = rank(corpus.clone(), "term", &[], &config);
         let ids_term: Vec<&str> = res_term.iter().map(|c| c.canonical_id.as_str()).collect();
         assert_eq!(
             ids_term,
             vec![
+                "window:123",
                 "app:terminal",
                 "cmd:term",
                 "web:https://google.com/search?q=term"

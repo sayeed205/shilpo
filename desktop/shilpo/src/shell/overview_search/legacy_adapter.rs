@@ -1,10 +1,10 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-use shilpo_services::{AppScanner, Application, ClipboardItem};
+use shilpo_services::ClipboardItem;
 use shilpo_ui::IconName;
 
 use super::{
@@ -24,7 +24,6 @@ use crate::actions::ActionDescriptor;
 /// Kept strictly private to this legacy adapter. Will be deleted in #204 (Part of #133).
 #[derive(Debug, Clone)]
 pub(crate) enum SearchIntent {
-    LaunchApp(Application),
     InvokeAction(ActionDescriptor),
     CopyClipboard(ClipboardItem),
     CopyCalculation(String),
@@ -42,7 +41,6 @@ pub(crate) enum SearchIntent {
 /// in #204 (Part of #133).
 #[derive(Clone)]
 pub struct LegacyOverviewSearchProvider {
-    scanner: AppScanner,
     actions: Vec<ActionDescriptor>,
     clipboard_history: Vec<ClipboardItem>,
     keybindings: Vec<(String, String)>,
@@ -53,13 +51,11 @@ pub type OverviewSearch = LegacyOverviewSearchProvider;
 
 impl LegacyOverviewSearchProvider {
     pub fn new(
-        scanner: AppScanner,
         actions: Vec<ActionDescriptor>,
         clipboard_history: Vec<ClipboardItem>,
         keybindings: Vec<(String, String)>,
     ) -> Self {
         Self {
-            scanner,
             actions,
             clipboard_history,
             keybindings,
@@ -128,33 +124,6 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         completion: CompletionState::Complete,
                         icon: SearchResultIcon::Named(IconName::Star),
                         activation_verb: "Open link".to_string(),
-                        match_positions: Vec::new(),
-                        activation: SearchActivation::new(act_key),
-                    });
-                }
-
-                let mut seen_execs = HashSet::new();
-                for app in self.scanner.applications() {
-                    if !seen_execs.insert(app.exec.clone()) {
-                        continue;
-                    }
-                    let canonical_id = format!("app:{}", app.exec);
-                    let act_key = format!("legacy:{query_generation}:{canonical_id}");
-                    intents.insert(act_key.clone(), SearchIntent::LaunchApp(app.clone()));
-
-                    candidates.push(SearchCandidate {
-                        provider_id: provider_id.clone(),
-                        canonical_id,
-                        generation: query_generation,
-                        title: app.name.clone(),
-                        subtitle: Some(app.description.clone().unwrap_or_else(|| app.exec.clone())),
-                        aliases: vec![app.exec.clone()],
-                        keywords: app.categories.clone(),
-                        category: ResultCategory::Application,
-                        latency: LatencyClass::Instant,
-                        completion: CompletionState::Complete,
-                        icon: SearchResultIcon::AppIcon(app.icon_path.clone()),
-                        activation_verb: "Launch".to_string(),
                         match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
@@ -242,32 +211,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                 }
             }
             SearchMode::Apps => {
-                let mut seen_execs = HashSet::new();
-                for app in self.scanner.applications() {
-                    if !seen_execs.insert(app.exec.clone()) {
-                        continue;
-                    }
-                    let canonical_id = format!("app:{}", app.exec);
-                    let act_key = format!("legacy:{query_generation}:{canonical_id}");
-                    intents.insert(act_key.clone(), SearchIntent::LaunchApp(app.clone()));
-
-                    candidates.push(SearchCandidate {
-                        provider_id: provider_id.clone(),
-                        canonical_id,
-                        generation: query_generation,
-                        title: app.name.clone(),
-                        subtitle: Some(app.description.clone().unwrap_or_else(|| app.exec.clone())),
-                        aliases: vec![app.exec.clone()],
-                        keywords: app.categories.clone(),
-                        category: ResultCategory::Application,
-                        latency: LatencyClass::Instant,
-                        completion: CompletionState::Complete,
-                        icon: SearchResultIcon::AppIcon(app.icon_path.clone()),
-                        activation_verb: "Launch".to_string(),
-                        match_positions: Vec::new(),
-                        activation: SearchActivation::new(act_key),
-                    });
-                }
+                // Application search is handled by AppSearchProvider (#202)
             }
             SearchMode::Actions => {
                 for action in &self.actions {
@@ -441,7 +385,6 @@ impl SearchProvider for LegacyOverviewSearchProvider {
             .ok_or_else(|| SearchError::NotFound(activation.payload.clone()))?;
 
         match intent {
-            SearchIntent::LaunchApp(app) => Ok(ActionResult::LaunchApp(app)),
             SearchIntent::InvokeAction(action) => Ok(ActionResult::InvokeAction(action)),
             SearchIntent::CopyClipboard(item) => Ok(ActionResult::CopyClipboard(item)),
             SearchIntent::CopyCalculation(val) => Ok(ActionResult::CopyCalculation(val)),
@@ -478,31 +421,6 @@ mod tests {
     };
 
     fn create_test_provider() -> LegacyOverviewSearchProvider {
-        let app1 = Application {
-            name: "Calculator".to_string(),
-            exec: "gnome-calculator".to_string(),
-            icon: Some("accessories-calculator".to_string()),
-            icon_path: None,
-            description: Some("Perform arithmetic calculations".to_string()),
-            categories: vec!["Utility".to_string(), "Calculator".to_string()],
-            desktop_file: PathBuf::from("/usr/share/applications/org.gnome.Calculator.desktop"),
-            working_dir: None,
-            terminal: false,
-            try_exec: None,
-        };
-        let app2 = Application {
-            name: "Firefox".to_string(),
-            exec: "firefox".to_string(),
-            icon: Some("firefox".to_string()),
-            icon_path: None,
-            description: Some("Web Browser".to_string()),
-            categories: vec!["Network".to_string(), "WebBrowser".to_string()],
-            desktop_file: PathBuf::from("/usr/share/applications/firefox.desktop"),
-            working_dir: None,
-            terminal: false,
-            try_exec: None,
-        };
-        let scanner = AppScanner::from_applications(vec![app1, app2]);
         let actions = vec![ActionDescriptor {
             id: ActionId::ToggleOverview,
             name: "toggle-overview".to_string(),
@@ -518,7 +436,7 @@ mod tests {
         }];
         let keybindings = vec![("Super+Q".to_string(), "Close Window".to_string())];
 
-        LegacyOverviewSearchProvider::new(scanner, actions, clipboard_history, keybindings)
+        LegacyOverviewSearchProvider::new(actions, clipboard_history, keybindings)
     }
 
     #[test]
@@ -532,79 +450,51 @@ mod tests {
     #[test]
     fn test_legacy_provider_with_coordinator_reproduces_ranked_results() {
         let provider = create_test_provider();
-        let coordinator = SearchCoordinator::new(vec![Arc::new(provider.clone())])
-            .with_recent_apps(vec!["firefox".to_string()]);
+        let coordinator = SearchCoordinator::new(vec![Arc::new(provider.clone())]);
 
         // 1. Default mode - empty query
         let sink = SearchSink::for_test(1);
         coordinator.search("", 1, &sink);
         let results = sink.snapshot();
-        assert_eq!(results.len(), 3);
-        assert_eq!(results[0].title, "Firefox");
-        assert_eq!(results[0].category, ResultCategory::Application);
-        assert_eq!(results[1].title, "Calculator");
-        assert_eq!(results[2].title, "Toggle Overview");
-
-        // 2. Default mode - calc query with fallbacks
-        let sink = SearchSink::for_test(1);
-        coordinator.search("calc", 1, &sink);
-        let results = sink.snapshot();
-        assert!(!results.is_empty());
-        assert_eq!(results[0].title, "Calculator");
-        assert!(
-            results
-                .iter()
-                .any(|r| r.category == ResultCategory::Command)
-        );
-        assert!(
-            results
-                .iter()
-                .any(|r| r.category == ResultCategory::WebSearch)
-        );
-
-        // 3. Apps mode
-        let sink = SearchSink::for_test(1);
-        coordinator.search(">firefox", 1, &sink);
-        let results = sink.snapshot();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].title, "Firefox");
+        assert_eq!(results[0].title, "Toggle Overview");
 
-        // 4. Actions mode
+        // 2. Actions mode
         let sink = SearchSink::for_test(1);
         coordinator.search("/toggle", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Toggle Overview");
 
-        // 5. Clipboard mode
+        // 3. Clipboard mode
         let sink = SearchSink::for_test(1);
         coordinator.search(";hello", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "hello world from clipboard");
 
-        // 6. Explicit calculator mode
+        // 4. Explicit calculator mode
         let sink = SearchSink::for_test(1);
         coordinator.search("=2+2", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "4");
 
-        // 7. Implicit calculator mode
+        // 5. Implicit calculator mode
         let sink = SearchSink::for_test(1);
         coordinator.search("2 + 2", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "4");
 
-        // 8. Web search mode
+        // 6. Web search mode
         let sink = SearchSink::for_test(1);
         coordinator.search("?rust lang", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert!(results[0].subtitle.as_ref().unwrap().contains("google.com"));
 
-        // 9. Keybindings mode
+        // 7. Keybindings mode
         let sink = SearchSink::for_test(1);
         coordinator.search("<Super+", 1, &sink);
         let results = sink.snapshot();
@@ -617,14 +507,7 @@ mod tests {
         let provider = create_test_provider();
         let coordinator = SearchCoordinator::new(vec![Arc::new(provider.clone())]);
 
-        // 1. App activation
-        let sink = SearchSink::for_test(1);
-        coordinator.search(">firefox", 1, &sink);
-        let cand = &sink.snapshot()[0];
-        let action_res = provider.activate(cand.activation.clone()).unwrap();
-        assert!(matches!(action_res, ActionResult::LaunchApp(app) if app.name == "Firefox"));
-
-        // 2. Action activation
+        // 1. Action activation
         let sink = SearchSink::for_test(1);
         coordinator.search("/toggle", 1, &sink);
         let cand = &sink.snapshot()[0];
@@ -633,7 +516,7 @@ mod tests {
             matches!(action_res, ActionResult::InvokeAction(action) if action.name == "toggle-overview")
         );
 
-        // 3. Clipboard activation
+        // 2. Clipboard activation
         let sink = SearchSink::for_test(1);
         coordinator.search(";hello", 1, &sink);
         let cand = &sink.snapshot()[0];
@@ -642,14 +525,14 @@ mod tests {
             matches!(action_res, ActionResult::CopyClipboard(item) if item.text.contains("hello world"))
         );
 
-        // 4. Calculator activation
+        // 3. Calculator activation
         let sink = SearchSink::for_test(1);
         coordinator.search("=2+2", 1, &sink);
         let cand = &sink.snapshot()[0];
         let action_res = provider.activate(cand.activation.clone()).unwrap();
         assert!(matches!(action_res, ActionResult::CopyCalculation(val) if val == "4"));
 
-        // 5. Keybinding activation
+        // 4. Keybinding activation
         let sink = SearchSink::for_test(1);
         coordinator.search("<Super+", 1, &sink);
         let cand = &sink.snapshot()[0];
@@ -658,14 +541,14 @@ mod tests {
             matches!(action_res, ActionResult::CopyKeybinding(shortcut) if shortcut == "Super+Q")
         );
 
-        // 6. Web search activation
+        // 5. Web search activation
         let sink = SearchSink::for_test(1);
         coordinator.search("?rust", 1, &sink);
         let cand = &sink.snapshot()[0];
         let action_res = provider.activate(cand.activation.clone()).unwrap();
         assert!(matches!(action_res, ActionResult::OpenWeb(url) if url.contains("google.com")));
 
-        // 7. Unknown activation payload
+        // 6. Unknown activation payload
         let err = provider.activate(SearchActivation::new("nonexistent-key"));
         assert!(matches!(err, Err(SearchError::NotFound(_))));
     }

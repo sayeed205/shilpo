@@ -1,11 +1,10 @@
-use super::parser::SearchMode;
-use super::sink::SearchSink;
-use crate::actions::ActionDescriptor;
+use std::{borrow::Cow, fmt, path::PathBuf};
+
 use shilpo_services::{Application, ClipboardItem};
 use shilpo_ui::IconName;
-use std::borrow::Cow;
-use std::fmt;
-use std::path::PathBuf;
+
+use super::{parser::SearchMode, sink::SearchSink};
+use crate::actions::ActionDescriptor;
 
 /// Unique identifier for a registered search provider.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -46,6 +45,7 @@ impl From<String> for ProviderId {
 /// Category classification for search candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultCategory {
+    Window,
     Application,
     Action,
     Clipboard,
@@ -61,6 +61,7 @@ pub enum ResultCategory {
 impl ResultCategory {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Window => "Window",
             Self::Application => "Application",
             Self::Action => "Action",
             Self::Clipboard => "Clipboard",

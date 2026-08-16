@@ -20,8 +20,8 @@ use shilpo_ui::{
 use crate::{
     app_icons::{app_icon, build_app_icon_index, resolve_app_icon_path},
     overview_search::{
-        ActionResult, OverviewSearch, SearchCandidate, SearchCoordinator, SearchMode,
-        SearchResultIcon, SearchSink,
+        ActionResult, AppSearchProvider, OverviewSearch, SearchCandidate, SearchCoordinator,
+        SearchMode, SearchResultIcon, SearchSink, WindowSearchProvider,
     },
     runtime::{ShellRuntime, ShellSurfaces},
     workspace_miniature::{
@@ -736,18 +736,20 @@ impl WorkspaceOverview {
         let scanner =
             ShellRuntime::app_scanner(cx).unwrap_or_else(shilpo_services::AppScanner::new_empty);
         let scanner_for_catalog = scanner.clone();
+        let compositor = ShellRuntime::compositor(cx);
         let recent_apps = ShellRuntime::recent_apps(cx);
         let actions = ShellRuntime::action_descriptors(cx);
         let clipboard_history = ShellRuntime::clipboard_history(cx);
         let keybindings = ShellRuntime::keybinding_descriptors(cx);
-        let legacy_provider = Arc::new(OverviewSearch::new(
-            scanner,
-            actions,
-            clipboard_history,
-            keybindings,
-        ));
-        let search_coordinator =
-            Arc::new(SearchCoordinator::new(vec![legacy_provider]).with_recent_apps(recent_apps));
+
+        let app_provider = Arc::new(AppSearchProvider::new(scanner));
+        let window_provider = Arc::new(WindowSearchProvider::new(compositor));
+        let legacy_provider =
+            Arc::new(OverviewSearch::new(actions, clipboard_history, keybindings));
+        let search_coordinator = Arc::new(
+            SearchCoordinator::new(vec![window_provider, app_provider, legacy_provider])
+                .with_recent_apps(recent_apps),
+        );
 
         window.on_window_should_close(cx, move |_, cx| {
             lifecycle.window_closed(cx);
