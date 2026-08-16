@@ -198,6 +198,7 @@ pub struct SearchCandidate {
     pub completion: CompletionState,
     pub icon: SearchResultIcon,
     pub activation_verb: String,
+    pub match_positions: Vec<usize>,
     pub activation: SearchActivation,
 }
 
@@ -227,6 +228,7 @@ impl SearchCandidate {
             completion: CompletionState::Complete,
             icon,
             activation_verb: activation_verb.into(),
+            match_positions: Vec::new(),
             activation,
         }
     }

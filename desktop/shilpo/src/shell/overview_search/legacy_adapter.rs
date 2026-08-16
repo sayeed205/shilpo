@@ -103,6 +103,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         completion: CompletionState::Complete,
                         icon: SearchResultIcon::Named(IconName::Folder),
                         activation_verb: "Open path".to_string(),
+                        match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
                 } else if ranking::is_uri_spec(&request.raw_query) {
@@ -124,6 +125,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         completion: CompletionState::Complete,
                         icon: SearchResultIcon::Named(IconName::Star),
                         activation_verb: "Open link".to_string(),
+                        match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
                 }
@@ -147,6 +149,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         completion: CompletionState::Complete,
                         icon: SearchResultIcon::AppIcon(app.icon_path.clone()),
                         activation_verb: "Launch".to_string(),
+                        match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
                 }
@@ -170,6 +173,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         completion: CompletionState::Complete,
                         icon: SearchResultIcon::Named(IconName::Settings),
                         activation_verb: "Run".to_string(),
+                        match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
                 }
@@ -201,6 +205,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         completion: CompletionState::Complete,
                         icon: SearchResultIcon::Named(IconName::Terminal),
                         activation_verb: "Run".to_string(),
+                        match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
                 }
@@ -228,6 +233,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         completion: CompletionState::Complete,
                         icon: SearchResultIcon::Named(IconName::Search),
                         activation_verb: "Search".to_string(),
+                        match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
                 }
@@ -254,6 +260,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         completion: CompletionState::Complete,
                         icon: SearchResultIcon::AppIcon(app.icon_path.clone()),
                         activation_verb: "Launch".to_string(),
+                        match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
                 }
@@ -279,6 +286,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         completion: CompletionState::Complete,
                         icon: SearchResultIcon::Named(IconName::Settings),
                         activation_verb: "Run".to_string(),
+                        match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
                 }
@@ -305,6 +313,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                             completion: CompletionState::Complete,
                             icon: SearchResultIcon::Named(IconName::Star),
                             activation_verb: "Copy".to_string(),
+                            match_positions: Vec::new(),
                             activation: SearchActivation::new(act_key),
                         });
                         if candidates.len() >= 8 {
@@ -332,6 +341,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         completion: CompletionState::Complete,
                         icon: SearchResultIcon::Named(IconName::Star),
                         activation_verb: "Copy result".to_string(),
+                        match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
                 }
@@ -356,6 +366,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         completion: CompletionState::Complete,
                         icon: SearchResultIcon::Named(IconName::Terminal),
                         activation_verb: "Run command".to_string(),
+                        match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
                 }
@@ -381,6 +392,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                         completion: CompletionState::Complete,
                         icon: SearchResultIcon::Named(IconName::Search),
                         activation_verb: "Search".to_string(),
+                        match_positions: Vec::new(),
                         activation: SearchActivation::new(act_key),
                     });
                 }
@@ -412,6 +424,7 @@ impl SearchProvider for LegacyOverviewSearchProvider {
                             completion: CompletionState::Complete,
                             icon: SearchResultIcon::Named(IconName::Star),
                             activation_verb: "Copy shortcut".to_string(),
+                            match_positions: Vec::new(),
                             activation: SearchActivation::new(act_key),
                         });
                         if candidates.len() >= 8 {
