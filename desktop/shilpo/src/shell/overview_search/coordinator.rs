@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::{
+    learning::{NoopSearchLearningStore, SearchLearningStore},
     parser,
     ranker::{self, RankerConfig},
     sink::{SearchSink, SinkConfig},
@@ -21,11 +22,21 @@ use super::{
 const SCRATCH_SINK_CAPACITY: usize = 4096;
 
 /// Host search coordinator that manages registered providers and fans out requests.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct SearchCoordinator {
     providers: Vec<Arc<dyn SearchProvider>>,
-    recent_apps: Vec<String>,
+    learning_store: Arc<dyn SearchLearningStore>,
     ranker_config: RankerConfig,
+}
+
+impl Default for SearchCoordinator {
+    fn default() -> Self {
+        Self {
+            providers: Vec::new(),
+            learning_store: Arc::new(NoopSearchLearningStore),
+            ranker_config: RankerConfig::default(),
+        }
+    }
 }
 
 impl SearchCoordinator {
@@ -33,19 +44,14 @@ impl SearchCoordinator {
     pub fn new(providers: Vec<Arc<dyn SearchProvider>>) -> Self {
         Self {
             providers,
-            recent_apps: Vec::new(),
+            learning_store: Arc::new(NoopSearchLearningStore),
             ranker_config: RankerConfig::default(),
         }
     }
 
-    /// Sets the recent apps list used for scoring recency.
-    pub fn set_recent_apps(&mut self, recent_apps: Vec<String>) {
-        self.recent_apps = recent_apps;
-    }
-
-    /// Builder helper to set recent apps.
-    pub fn with_recent_apps(mut self, recent_apps: Vec<String>) -> Self {
-        self.recent_apps = recent_apps;
+    /// Builder helper to set the search learning store.
+    pub fn with_learning_store(mut self, learning_store: Arc<dyn SearchLearningStore>) -> Self {
+        self.learning_store = learning_store;
         self
     }
 
@@ -99,7 +105,7 @@ impl SearchCoordinator {
         let ranked = ranker::rank(
             all_candidates,
             query,
-            &self.recent_apps,
+            self.learning_store.as_ref(),
             &self.ranker_config,
         );
 
@@ -108,10 +114,12 @@ impl SearchCoordinator {
         }
     }
 
-    /// Routes an activation request to the appropriate provider by ID.
+    /// Routes an activation request to the appropriate provider by ID and records the activation
+    /// in the learning store upon success.
     pub fn activate(
         &self,
         provider_id: &ProviderId,
+        canonical_id: &str,
         activation: SearchActivation,
     ) -> Result<ActionResult, SearchError> {
         let provider = self
@@ -120,7 +128,9 @@ impl SearchCoordinator {
             .find(|p| p.id() == *provider_id)
             .ok_or_else(|| SearchError::NotFound(provider_id.to_string()))?;
 
-        provider.activate(activation)
+        let result = provider.activate(activation)?;
+        self.learning_store.record_activation(canonical_id);
+        Ok(result)
     }
 }
 
@@ -188,6 +198,7 @@ mod tests {
         // Test activation routing
         let act1 = coordinator.activate(
             &ProviderId::from_static("p1"),
+            &results[0].canonical_id,
             results[0].activation.clone(),
         );
         assert!(matches!(
@@ -199,6 +210,7 @@ mod tests {
 
         let act2 = coordinator.activate(
             &ProviderId::from_static("p2"),
+            &results[1].canonical_id,
             results[1].activation.clone(),
         );
         assert!(matches!(
@@ -211,9 +223,48 @@ mod tests {
         // Test unknown provider activation
         let unknown = coordinator.activate(
             &ProviderId::from_static("unknown"),
+            "unknown:x",
             SearchActivation::new("x"),
         );
         assert!(matches!(unknown, Err(SearchError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_coordinator_activation_records_learning_exactly_once() {
+        use crate::shell::overview_search::learning::{
+            DEFAULT_HALF_LIFE_SECS, HeedSearchLearningStore, TestLearningClock,
+        };
+
+        let p1 = Arc::new(TestProvider {
+            id: "p1",
+            prefix: "Provider One",
+        });
+
+        let clock = Arc::new(TestLearningClock::new(1000));
+        let learning = Arc::new(HeedSearchLearningStore::with_config(
+            None,
+            clock,
+            512,
+            DEFAULT_HALF_LIFE_SECS,
+        ));
+
+        let coordinator = SearchCoordinator::new(vec![p1]).with_learning_store(learning.clone());
+        let sink = SearchSink::for_test(1);
+
+        // Searching generates impressions but records 0 activations in learning store
+        coordinator.search("query", 1, &sink);
+        let results = sink.snapshot();
+        assert_eq!(results.len(), 1);
+        assert_eq!(learning.score_boost(&results[0].canonical_id), 0);
+
+        // One activation records exactly one increment (boost = 10)
+        let act_res = coordinator.activate(
+            &ProviderId::from_static("p1"),
+            &results[0].canonical_id,
+            results[0].activation.clone(),
+        );
+        assert!(act_res.is_ok());
+        assert_eq!(learning.score_boost(&results[0].canonical_id), 10);
     }
 
     struct SleepingProvider {

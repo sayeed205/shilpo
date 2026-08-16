@@ -20,8 +20,8 @@ use shilpo_ui::{
 use crate::{
     app_icons::{app_icon, build_app_icon_index, resolve_app_icon_path},
     overview_search::{
-        ActionResult, AppSearchProvider, OverviewSearch, SearchCandidate, SearchCoordinator,
-        SearchMode, SearchResultIcon, SearchSink, WindowSearchProvider,
+        ActionResult, AppSearchProvider, HeedSearchLearningStore, OverviewSearch, SearchCandidate,
+        SearchCoordinator, SearchMode, SearchResultIcon, SearchSink, WindowSearchProvider,
     },
     runtime::{ShellRuntime, ShellSurfaces},
     workspace_miniature::{
@@ -560,14 +560,17 @@ impl WorkspaceOverview {
         if index < self.search_results.len() {
             let candidate = &self.search_results[index];
             let activation_result = if let Some(coordinator) = &self.search {
-                coordinator.activate(&candidate.provider_id, candidate.activation.clone())
+                coordinator.activate(
+                    &candidate.provider_id,
+                    &candidate.canonical_id,
+                    candidate.activation.clone(),
+                )
             } else {
                 return;
             };
 
             match activation_result {
                 Ok(ActionResult::LaunchApp(app)) => {
-                    ShellRuntime::record_recent_app(cx, &app.exec);
                     app.launch_with_feedback(|err_msg| {
                         tracing::warn!(error = %err_msg, "application launch failed");
                     });
@@ -737,7 +740,8 @@ impl WorkspaceOverview {
             ShellRuntime::app_scanner(cx).unwrap_or_else(shilpo_services::AppScanner::new_empty);
         let scanner_for_catalog = scanner.clone();
         let compositor = ShellRuntime::compositor(cx);
-        let recent_apps = ShellRuntime::recent_apps(cx);
+        let heed_store = ShellRuntime::session_heed_store(cx);
+        let learning_store = Arc::new(HeedSearchLearningStore::new(heed_store));
         let actions = ShellRuntime::action_descriptors(cx);
         let clipboard_history = ShellRuntime::clipboard_history(cx);
         let keybindings = ShellRuntime::keybinding_descriptors(cx);
@@ -748,7 +752,7 @@ impl WorkspaceOverview {
             Arc::new(OverviewSearch::new(actions, clipboard_history, keybindings));
         let search_coordinator = Arc::new(
             SearchCoordinator::new(vec![window_provider, app_provider, legacy_provider])
-                .with_recent_apps(recent_apps),
+                .with_learning_store(learning_store),
         );
 
         window.on_window_should_close(cx, move |_, cx| {

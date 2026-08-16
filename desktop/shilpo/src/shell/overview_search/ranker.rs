@@ -1,4 +1,5 @@
 use super::{
+    learning::SearchLearningStore,
     matcher::fuzzy_match,
     types::{ResultCategory, SearchCandidate},
 };
@@ -36,8 +37,6 @@ pub struct RankerConfig {
     pub web_prior: i64,
     /// Prior score for custom/extension candidates.
     pub custom_prior: i64,
-    /// Recency boost for recently launched applications.
-    pub recent_app_boost: i64,
 }
 
 impl Default for RankerConfig {
@@ -58,7 +57,6 @@ impl Default for RankerConfig {
             command_prior: -100,
             web_prior: -200,
             custom_prior: 100,
-            recent_app_boost: 50,
         }
     }
 }
@@ -68,7 +66,7 @@ impl Default for RankerConfig {
 pub fn rank(
     candidates: Vec<SearchCandidate>,
     query: &str,
-    recent_apps: &[String],
+    learning: &dyn SearchLearningStore,
     config: &RankerConfig,
 ) -> Vec<SearchCandidate> {
     let q = query.trim();
@@ -76,7 +74,7 @@ pub fn rank(
     let mut scored: Vec<(SearchCandidate, i64)> = candidates
         .into_iter()
         .filter_map(|mut cand| {
-            let (score, match_positions) = score_candidate(&cand, q, recent_apps, config)?;
+            let (score, match_positions) = score_candidate(&cand, q, learning, config)?;
             cand.match_positions = match_positions;
             Some((cand, score))
         })
@@ -95,12 +93,12 @@ pub fn rank(
     scored.into_iter().map(|(cand, _)| cand).collect()
 }
 
-/// Scores a single candidate against a query and recent app history.
+/// Scores a single candidate against a query and learning store.
 /// Returns `Some((score, match_positions))` if the candidate matches the query, or `None` if it should be dropped.
 fn score_candidate(
     candidate: &SearchCandidate,
     query: &str,
-    recent_apps: &[String],
+    learning: &dyn SearchLearningStore,
     config: &RankerConfig,
 ) -> Option<(i64, Vec<usize>)> {
     if query.is_empty() {
@@ -125,12 +123,8 @@ fn score_candidate(
             ResultCategory::Custom => config.custom_prior,
         };
 
-        // Recency boost for apps in empty search mode
-        if candidate.category == ResultCategory::Application
-            && let Some(pos) = find_recent_position(candidate, recent_apps)
-        {
-            score += 1000 - (pos as i64 * 20).min(500);
-        }
+        let learning_boost = learning.score_boost(&candidate.canonical_id);
+        score += learning_boost;
 
         return Some((score, Vec::new()));
     }
@@ -138,71 +132,68 @@ fn score_candidate(
     // Universal fallbacks with dedicated triggers / explicit synthesis
     match candidate.category {
         ResultCategory::Calculator => {
-            let score = 2000 + config.calc_prior;
-            return Some((score, Vec::new()));
-        }
-        ResultCategory::FilePath | ResultCategory::Uri => {
-            let score = 1500 + config.path_uri_prior;
+            let score = config.calc_prior + learning.score_boost(&candidate.canonical_id);
             return Some((score, Vec::new()));
         }
         ResultCategory::Command => {
-            let score = config.command_prior;
+            let score = config.command_prior + learning.score_boost(&candidate.canonical_id);
             return Some((score, Vec::new()));
         }
         ResultCategory::WebSearch => {
-            let score = config.web_prior;
+            let score = config.web_prior + learning.score_boost(&candidate.canonical_id);
             return Some((score, Vec::new()));
         }
         _ => {}
     }
 
-    // Match candidate fields using the Smith-Waterman / fzy fuzzy matcher
-    let title_match = fuzzy_match(query, &candidate.title);
-    let best_alias_match = candidate
-        .aliases
-        .iter()
-        .filter_map(|alias| fuzzy_match(query, alias))
-        .max_by_key(|m| m.score);
-    let best_keyword_match = candidate
-        .keywords
-        .iter()
-        .filter_map(|kw| fuzzy_match(query, kw))
-        .max_by_key(|m| m.score);
-    let subtitle_match = candidate
-        .subtitle
-        .as_deref()
-        .and_then(|sub| fuzzy_match(query, sub));
+    let mut best_field_score: f64 = 0.0;
+    let mut title_match = None;
 
-    if title_match.is_none()
-        && best_alias_match.is_none()
-        && best_keyword_match.is_none()
-        && subtitle_match.is_none()
+    // 1. Title match
+    if let Some(res) = fuzzy_match(query, &candidate.title) {
+        let weighted = res.score as f64 * config.title_weight;
+        if weighted > best_field_score {
+            best_field_score = weighted;
+        }
+        title_match = Some(res);
+    }
+
+    // 2. Alias matches
+    for alias in &candidate.aliases {
+        if let Some(res) = fuzzy_match(query, alias) {
+            let weighted = res.score as f64 * config.alias_weight;
+            if weighted > best_field_score {
+                best_field_score = weighted;
+            }
+        }
+    }
+
+    // 3. Keyword matches
+    for keyword in &candidate.keywords {
+        if let Some(res) = fuzzy_match(query, keyword) {
+            let weighted = res.score as f64 * config.keyword_weight;
+            if weighted > best_field_score {
+                best_field_score = weighted;
+            }
+        }
+    }
+
+    // 4. Subtitle match
+    if let Some(subtitle) = &candidate.subtitle
+        && let Some(res) = fuzzy_match(query, subtitle)
     {
+        let weighted = res.score as f64 * config.subtitle_weight;
+        if weighted > best_field_score {
+            best_field_score = weighted;
+        }
+    }
+
+    // If no field matched, drop this candidate from the results
+    if best_field_score <= 0.0 {
         return None;
     }
 
-    let title_score = title_match
-        .as_ref()
-        .map(|m| (m.score as f64 * config.title_weight) as i64)
-        .unwrap_or(i64::MIN / 2);
-    let alias_score = best_alias_match
-        .as_ref()
-        .map(|m| (m.score as f64 * config.alias_weight) as i64)
-        .unwrap_or(i64::MIN / 2);
-    let keyword_score = best_keyword_match
-        .as_ref()
-        .map(|m| (m.score as f64 * config.keyword_weight) as i64)
-        .unwrap_or(i64::MIN / 2);
-    let subtitle_score = subtitle_match
-        .as_ref()
-        .map(|m| (m.score as f64 * config.subtitle_weight) as i64)
-        .unwrap_or(i64::MIN / 2);
-
-    let text_score = title_score
-        .max(alias_score)
-        .max(keyword_score)
-        .max(subtitle_score);
-
+    let text_score = best_field_score.round() as i64;
     let prior = match candidate.category {
         ResultCategory::Window => config.window_prior,
         ResultCategory::Application => config.app_prior,
@@ -216,35 +207,24 @@ fn score_candidate(
         ResultCategory::Custom => config.custom_prior,
     };
 
-    let recency_boost = if candidate.category == ResultCategory::Application
-        && find_recent_position(candidate, recent_apps).is_some()
-    {
-        config.recent_app_boost
-    } else {
-        0
-    };
-
-    let total_score = text_score + prior + recency_boost;
+    let learning_boost = learning.score_boost(&candidate.canonical_id);
+    let total_score = text_score + prior + learning_boost;
     let match_positions = title_match.map(|m| m.positions).unwrap_or_default();
 
     Some((total_score, match_positions))
 }
 
-fn find_recent_position(candidate: &SearchCandidate, recent_apps: &[String]) -> Option<usize> {
-    recent_apps.iter().position(|r| {
-        r == &candidate.canonical_id
-            || candidate.canonical_id.strip_prefix("app:") == Some(r.as_str())
-            || r == &candidate.title
-            || candidate.aliases.iter().any(|a| a == r)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shell::overview_search::types::{
-        CompletionState, LatencyClass, ProviderId, SearchActivation, SearchResultIcon,
+    use crate::shell::overview_search::{
+        learning::{
+            DEFAULT_HALF_LIFE_SECS, HeedSearchLearningStore, NoopSearchLearningStore,
+            TestLearningClock,
+        },
+        types::{CompletionState, LatencyClass, ProviderId, SearchActivation, SearchResultIcon},
     };
+    use std::sync::Arc;
 
     fn make_test_candidate(
         provider: &'static str,
@@ -283,7 +263,12 @@ mod tests {
         let action = make_test_candidate("actions", "action:fx", "fx", ResultCategory::Action);
 
         let candidates = vec![app, action];
-        let ranked = rank(candidates, "fx", &[], &RankerConfig::default());
+        let ranked = rank(
+            candidates,
+            "fx",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        );
 
         assert_eq!(ranked.len(), 2);
         assert_eq!(
@@ -304,7 +289,12 @@ mod tests {
         let window = make_test_candidate("windows", "window:42", "Firefox", ResultCategory::Window);
 
         let candidates = vec![app, window];
-        let ranked = rank(candidates, "Firefox", &[], &RankerConfig::default());
+        let ranked = rank(
+            candidates,
+            "Firefox",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        );
 
         assert_eq!(ranked.len(), 2);
         assert_eq!(
@@ -334,11 +324,21 @@ mod tests {
         ];
 
         let config = RankerConfig::default();
-        let first = rank(candidates.clone(), "calc", &[], &config);
+        let first = rank(
+            candidates.clone(),
+            "calc",
+            &NoopSearchLearningStore,
+            &config,
+        );
         let first_ids: Vec<String> = first.iter().map(|c| c.canonical_id.clone()).collect();
 
         for _ in 0..50 {
-            let next = rank(candidates.clone(), "calc", &[], &config);
+            let next = rank(
+                candidates.clone(),
+                "calc",
+                &NoopSearchLearningStore,
+                &config,
+            );
             let next_ids: Vec<String> = next.iter().map(|c| c.canonical_id.clone()).collect();
             assert_eq!(
                 first_ids, next_ids,
@@ -367,14 +367,19 @@ mod tests {
         let ranked = rank(
             vec![c1.clone(), c2.clone()],
             "Duplicate",
-            &[],
+            &NoopSearchLearningStore,
             &RankerConfig::default(),
         );
         assert_eq!(ranked[0].canonical_id, "a-canonical");
         assert_eq!(ranked[1].canonical_id, "b-canonical");
 
         // Arrival order: c2 then c1
-        let ranked2 = rank(vec![c2, c1], "Duplicate", &[], &RankerConfig::default());
+        let ranked2 = rank(
+            vec![c2, c1],
+            "Duplicate",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        );
         assert_eq!(ranked2[0].canonical_id, "a-canonical");
         assert_eq!(ranked2[1].canonical_id, "b-canonical");
     }
@@ -393,7 +398,7 @@ mod tests {
         let initial = rank(
             vec![a.clone(), c.clone(), d.clone()],
             "Browser",
-            &[],
+            &NoopSearchLearningStore,
             &RankerConfig::default(),
         );
         let initial_ids: Vec<&str> = initial
@@ -404,7 +409,12 @@ mod tests {
 
         // Late candidate arrives with score between a and c
         let b = make_test_candidate("apps", "app:b", "A Browser", ResultCategory::Application);
-        let updated = rank(vec![a, c, d, b], "Browser", &[], &RankerConfig::default());
+        let updated = rank(
+            vec![a, c, d, b],
+            "Browser",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        );
         let updated_ids: Vec<&str> = updated
             .iter()
             .map(|item| item.canonical_id.as_str())
@@ -440,7 +450,12 @@ mod tests {
             ResultCategory::Action,
         ));
 
-        let ranked = rank(candidates, "Term", &[], &RankerConfig::default());
+        let ranked = rank(
+            candidates,
+            "Term",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        );
 
         assert!(ranked.len() <= 8);
         assert_eq!(ranked[0].canonical_id, "p2:exact");
@@ -461,7 +476,12 @@ mod tests {
             "Gnome Calculator",
             ResultCategory::Application,
         );
-        let ranked = rank(vec![cand], "calc", &[], &RankerConfig::default());
+        let ranked = rank(
+            vec![cand],
+            "calc",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        );
 
         assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].match_positions, vec![6, 7, 8, 9]);
@@ -522,15 +542,21 @@ mod tests {
         ];
 
         let config = RankerConfig::default();
+        let clock = Arc::new(TestLearningClock::new(1000));
+        let learning =
+            HeedSearchLearningStore::with_config(None, clock, 512, DEFAULT_HALF_LIFE_SECS);
+        for _ in 0..4 {
+            learning.record_activation("app:firefox");
+        }
 
-        // 1. Query: "" (empty query with recent app firefox)
-        let res_empty = rank(corpus.clone(), "", &["firefox".to_string()], &config);
+        // 1. Query: "" (empty query with activated app firefox)
+        let res_empty = rank(corpus.clone(), "", &learning, &config);
         let ids_empty: Vec<&str> = res_empty.iter().map(|c| c.canonical_id.as_str()).collect();
         assert_eq!(
             ids_empty,
             vec![
-                "app:firefox",
                 "window:123",
+                "app:firefox",
                 "app:gnome-calculator",
                 "app:terminal",
                 "action:toggle-overview",
@@ -538,7 +564,7 @@ mod tests {
         );
 
         // 2. Query: "calc" (App Calculator > Command > WebSearch)
-        let res_calc = rank(corpus.clone(), "calc", &[], &config);
+        let res_calc = rank(corpus.clone(), "calc", &NoopSearchLearningStore, &config);
         let ids_calc: Vec<&str> = res_calc.iter().map(|c| c.canonical_id.as_str()).collect();
         assert_eq!(
             ids_calc,
@@ -550,7 +576,7 @@ mod tests {
         );
 
         // 3. Query: "term" (Window Terminal > App Terminal > Command > WebSearch)
-        let res_term = rank(corpus.clone(), "term", &[], &config);
+        let res_term = rank(corpus.clone(), "term", &NoopSearchLearningStore, &config);
         let ids_term: Vec<&str> = res_term.iter().map(|c| c.canonical_id.as_str()).collect();
         assert_eq!(
             ids_term,
@@ -563,7 +589,7 @@ mod tests {
         );
 
         // 4. Query: "toggle" (Action Toggle > Command > WebSearch)
-        let res_toggle = rank(corpus, "toggle", &[], &config);
+        let res_toggle = rank(corpus, "toggle", &NoopSearchLearningStore, &config);
         let ids_toggle: Vec<&str> = res_toggle.iter().map(|c| c.canonical_id.as_str()).collect();
         assert_eq!(
             ids_toggle,
@@ -583,7 +609,12 @@ mod tests {
             "🦀 Rust Rover",
             ResultCategory::Application,
         );
-        let ranked = rank(vec![cand], "rover", &[], &RankerConfig::default());
+        let ranked = rank(
+            vec![cand],
+            "rover",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        );
 
         assert_eq!(ranked.len(), 1);
         // '🦀' is 1 char (4 bytes), ' ' is 1 char, 'R', 'u', 's', 't', ' ', 'R', 'o', 'v', 'e', 'r'
@@ -602,13 +633,144 @@ mod tests {
         cand.aliases = vec!["code".to_string(), "vsc".to_string()];
         cand.keywords = vec!["development".to_string(), "editor".to_string()];
 
-        let res_code = rank(vec![cand.clone()], "code", &[], &RankerConfig::default());
+        let res_code = rank(
+            vec![cand.clone()],
+            "code",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        );
         assert_eq!(res_code.len(), 1);
         assert_eq!(res_code[0].canonical_id, "app:code");
 
-        let res_kw = rank(vec![cand], "editor", &[], &RankerConfig::default());
+        let res_kw = rank(
+            vec![cand],
+            "editor",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        );
         assert_eq!(res_kw.len(), 1);
         assert_eq!(res_kw[0].canonical_id, "app:code");
+    }
+
+    #[test]
+    fn test_repeated_activation_saturates_at_plus_40_and_raises_rank() {
+        let clock = Arc::new(TestLearningClock::new(1000));
+        let learning =
+            HeedSearchLearningStore::with_config(None, clock, 512, DEFAULT_HALF_LIFE_SECS);
+        let config = RankerConfig::default();
+
+        let cand_a = make_test_candidate("apps", "app:a", "App", ResultCategory::Application);
+        let cand_b = make_test_candidate("apps", "app:b", "App", ResultCategory::Application);
+
+        // Initially, alphabetical / canonical tie-breaker applies (app:a ranks before app:b)
+        let initial = rank(
+            vec![cand_a.clone(), cand_b.clone()],
+            "App",
+            &learning,
+            &config,
+        );
+        assert_eq!(initial[0].canonical_id, "app:a");
+        assert_eq!(initial[1].canonical_id, "app:b");
+
+        // Activate App Beta 2 times (+20 boost) -> App Beta rises above App Alpha
+        learning.record_activation("app:b");
+        learning.record_activation("app:b");
+        let trained_2 = rank(
+            vec![cand_a.clone(), cand_b.clone()],
+            "App",
+            &learning,
+            &config,
+        );
+        assert_eq!(trained_2[0].canonical_id, "app:b");
+        assert_eq!(trained_2[1].canonical_id, "app:a");
+
+        // Activate App Beta 10 more times -> boost saturates at +40 exactly
+        for _ in 0..10 {
+            learning.record_activation("app:b");
+        }
+        assert_eq!(learning.score_boost("app:b"), 40);
+    }
+
+    #[test]
+    fn test_higher_category_tier_still_outranks_saturated_lower_tier_candidate() {
+        let clock = Arc::new(TestLearningClock::new(1000));
+        let learning =
+            HeedSearchLearningStore::with_config(None, clock, 512, DEFAULT_HALF_LIFE_SECS);
+        let config = RankerConfig::default();
+
+        let app_cand =
+            make_test_candidate("apps", "app:search", "Search", ResultCategory::Application);
+        let action_cand =
+            make_test_candidate("actions", "action:search", "Search", ResultCategory::Action);
+
+        // Fully train action_cand (+40 saturation boost)
+        for _ in 0..10 {
+            learning.record_activation("action:search");
+        }
+        assert_eq!(learning.score_boost("action:search"), 40);
+
+        // App prior (200) vs Action prior (150) + learning boost (40) = 190.
+        // App (200) must still strictly outrank Action (190) on same match quality.
+        let ranked = rank(vec![app_cand, action_cand], "Search", &learning, &config);
+        assert_eq!(ranked[0].canonical_id, "app:search");
+        assert_eq!(ranked[1].canonical_id, "action:search");
+    }
+
+    #[test]
+    fn test_learning_applies_to_non_application_window_candidates() {
+        let clock = Arc::new(TestLearningClock::new(1000));
+        let learning =
+            HeedSearchLearningStore::with_config(None, clock, 512, DEFAULT_HALF_LIFE_SECS);
+        let config = RankerConfig::default();
+
+        let win_1 = make_test_candidate("windows", "window:1", "Terminal", ResultCategory::Window);
+        let win_2 = make_test_candidate("windows", "window:2", "Terminal", ResultCategory::Window);
+
+        // Initial order: window:1 before window:2 by canonical_id
+        let initial = rank(
+            vec![win_1.clone(), win_2.clone()],
+            "Terminal",
+            &learning,
+            &config,
+        );
+        assert_eq!(initial[0].canonical_id, "window:1");
+        assert_eq!(initial[1].canonical_id, "window:2");
+
+        // Train window:2
+        learning.record_activation("window:2");
+        let updated = rank(vec![win_1, win_2], "Terminal", &learning, &config);
+        assert_eq!(updated[0].canonical_id, "window:2");
+        assert_eq!(updated[1].canonical_id, "window:1");
+    }
+
+    #[test]
+    fn test_time_decay_lowers_older_activation_boost_relative_to_recent() {
+        let clock = Arc::new(TestLearningClock::new(1_000_000));
+        let learning =
+            HeedSearchLearningStore::with_config(None, clock.clone(), 512, DEFAULT_HALF_LIFE_SECS);
+        let config = RankerConfig::default();
+
+        let cand_old =
+            make_test_candidate("apps", "app:old", "Editor", ResultCategory::Application);
+        let cand_new =
+            make_test_candidate("apps", "app:new", "Editor", ResultCategory::Application);
+
+        // At t0: activate cand_old once (boost = 10)
+        learning.record_activation("app:old");
+        assert_eq!(learning.score_boost("app:old"), 10);
+
+        // Advance time by 14 days (half-life): cand_old decays to 5 boost
+        clock.advance_secs(DEFAULT_HALF_LIFE_SECS);
+        assert_eq!(learning.score_boost("app:old"), 5);
+
+        // Now activate cand_new once at the new timestamp (boost = 10)
+        learning.record_activation("app:new");
+        assert_eq!(learning.score_boost("app:new"), 10);
+
+        // cand_new with 1 recent activation (boost 10) outranks cand_old with 1 decayed activation (boost 5)
+        let ranked = rank(vec![cand_old, cand_new], "Editor", &learning, &config);
+        assert_eq!(ranked[0].canonical_id, "app:new");
+        assert_eq!(ranked[1].canonical_id, "app:old");
     }
 
     #[test]

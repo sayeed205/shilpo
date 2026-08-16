@@ -402,7 +402,7 @@ start = ["builtin:workspaces"]
         let resolver = ConfigResolver::new(dir.path());
         let (snapshot, _report) = resolver.resolve_initial().unwrap();
 
-        assert!(snapshot.provenance.get("recent_apps").is_none());
+        assert!(snapshot.provenance.get("pinned_apps").is_none());
         assert!(snapshot.provenance.get("launch_counts").is_none());
         assert!(snapshot.provenance.get("dnd_active").is_none());
     }
@@ -441,8 +441,8 @@ start = ["builtin:workspaces"]
         let _ = std::fs::remove_file(&path);
 
         let mut session = ShellSessionState::default();
-        session.record_recent_app("org.gnome.Terminal");
-        session.record_recent_app("firefox");
+        session.record_app_launch("org.gnome.Terminal");
+        session.record_app_launch("firefox");
         session.pinned_apps.push("org.gnome.Terminal".into());
         session.dnd_active = true;
 
@@ -450,7 +450,7 @@ start = ["builtin:workspaces"]
 
         let loaded = ShellSessionState::load_or_default(&path);
         assert_eq!(loaded, session);
-        assert_eq!(loaded.recent_apps, vec!["firefox", "org.gnome.Terminal"]);
+        assert_eq!(loaded.pinned_apps, vec!["org.gnome.Terminal"]);
         assert!(loaded.dnd_active);
 
         let _ = std::fs::remove_file(&path);
@@ -765,9 +765,9 @@ margin = { horizontal = 600, vertical = 6 }
     #[test]
     fn test_app_launch_frequency_ranking_and_privacy_purge() {
         let mut session = ShellSessionState::default();
-        session.record_recent_app("firefox");
-        session.record_recent_app("firefox");
-        session.record_recent_app("org.gnome.Terminal");
+        session.record_app_launch("firefox");
+        session.record_app_launch("firefox");
+        session.record_app_launch("org.gnome.Terminal");
 
         assert_eq!(session.app_launch_count("firefox"), 2);
         assert_eq!(session.app_launch_count("org.gnome.Terminal"), 1);
@@ -775,7 +775,6 @@ margin = { horizontal = 600, vertical = 6 }
 
         session.purge_usage_history();
         assert_eq!(session.app_launch_count("firefox"), 0);
-        assert!(session.recent_apps.is_empty());
     }
 
     #[test]
@@ -802,10 +801,10 @@ margin = { horizontal = 600, vertical = 6 }
 
     #[test]
     fn test_schema_migration_pipeline_and_fixture_recovery() {
-        let legacy_json = r#"{"version": 0, "recent_apps": ["code"]}"#;
+        let legacy_json = r#"{"version": 0, "pinned_apps": ["code"]}"#;
         let migrated = ShellSessionState::migrate_to_latest(legacy_json);
         assert_eq!(migrated.version, 1);
-        assert_eq!(migrated.recent_apps, vec!["code"]);
+        assert_eq!(migrated.pinned_apps, vec!["code"]);
 
         let invalid_json = r#"{"version": 9999, "invalid": true}"#;
         let fallback = ShellSessionState::migrate_to_latest(invalid_json);
@@ -834,8 +833,7 @@ margin = { horizontal = 600, vertical = 6 }
 
         let valid_session = ShellSessionState {
             version: 1,
-            recent_apps: vec!["gimp".to_string()],
-            pinned_apps: Vec::new(),
+            pinned_apps: vec!["gimp".to_string()],
             launch_counts: std::collections::HashMap::new(),
             dnd_active: false,
             night_light_active: false,
@@ -845,7 +843,7 @@ margin = { horizontal = 600, vertical = 6 }
 
         let (restored_state, ok) = ShellSessionState::restore_with_fallback(&temp_file);
         assert!(ok);
-        assert_eq!(restored_state.recent_apps, vec!["gimp"]);
+        assert_eq!(restored_state.pinned_apps, vec!["gimp"]);
 
         let _ = std::fs::remove_file(temp_file);
     }
@@ -853,12 +851,12 @@ margin = { horizontal = 600, vertical = 6 }
     #[test]
     fn test_transient_and_sensitive_state_exclusion_audit() {
         let mut session = ShellSessionState::default();
-        session.recent_apps.push("code".to_string());
-        session.recent_apps.push("app-with-secret-key".to_string());
-        session.recent_apps.push("app-with-token-auth".to_string());
+        session.pinned_apps.push("code".to_string());
+        session.pinned_apps.push("app-with-secret-key".to_string());
+        session.pinned_apps.push("app-with-token-auth".to_string());
 
         session.sanitize_sensitive_state();
-        assert_eq!(session.recent_apps, vec!["code".to_string()]);
+        assert_eq!(session.pinned_apps, vec!["code".to_string()]);
     }
 
     #[test]
@@ -881,10 +879,10 @@ margin = { horizontal = 600, vertical = 6 }
 
     #[test]
     fn test_config_migration_fixtures_integration() {
-        let legacy_json = r#"{"version": 0, "recent_apps": ["terminal"], "pinned_apps": [], "launch_counts": {}, "dnd_active": false, "night_light_active": false}"#;
+        let legacy_json = r#"{"version": 0, "pinned_apps": ["terminal"], "launch_counts": {}, "dnd_active": false, "night_light_active": false}"#;
         let migrated = ShellSessionState::migrate_to_latest(legacy_json);
         assert_eq!(migrated.version, 1);
-        assert_eq!(migrated.recent_apps, vec!["terminal".to_string()]);
+        assert_eq!(migrated.pinned_apps, vec!["terminal".to_string()]);
     }
 
     #[test]
