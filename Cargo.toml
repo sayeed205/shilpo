@@ -157,6 +157,9 @@ codegen-units = 16
 debug = "limited"
 split-debuginfo = "unpacked"
 
+[build]
+rustflags = ["-Z", "threads=4"]
+
 [profile.dev.package]
 resvg = { opt-level = 3 }
 rustybuzz = { opt-level = 3 }
