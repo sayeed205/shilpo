@@ -292,7 +292,14 @@ mod tests {
     }
 
     #[test]
-    fn test_slow_or_stalled_provider_does_not_block_fast_provider() {
+    fn test_stalled_provider_invocation_does_not_prevent_fast_provider_from_pushing() {
+        // Covers the sink's own contract in isolation: a provider that never
+        // pushes a candidate must not corrupt or block subsequent pushes
+        // from another provider sharing the same sink. Real cross-provider
+        // concurrency (a provider whose `search` call blocks the calling
+        // thread) is covered at the coordinator level, where dispatch is
+        // actually parallelized: see
+        // coordinator::tests::test_slow_provider_does_not_delay_dispatch_beyond_the_slowest_provider.
         let sink = SearchSink::for_test(1);
         let request = SearchRequest::new(
             "query",
@@ -307,12 +314,46 @@ mod tests {
         };
         let fast = FastProvider;
 
-        // Execute both providers deterministically without sleeping
         stalled.search(request.clone(), sink.clone());
         fast.search(request, sink.clone());
 
         assert!(stalled_invoked.load(Ordering::SeqCst));
         assert_eq!(sink.len(), 1);
         assert_eq!(sink.snapshot()[0].title, "Fast Result");
+    }
+
+    #[test]
+    fn test_concurrent_pushes_from_multiple_threads_are_race_free() {
+        use std::thread;
+
+        let config = SinkConfig {
+            max_per_provider: 100,
+            max_total: 1000,
+        };
+        let sink = SearchSink::new(1, config);
+
+        let thread_count = 8;
+        let per_thread = 20;
+
+        thread::scope(|scope| {
+            for t in 0..thread_count {
+                let sink = sink.clone();
+                scope.spawn(move || {
+                    for i in 0..per_thread {
+                        sink.push(make_test_candidate(
+                            &format!("provider-{t}"),
+                            &format!("provider-{t}:item-{i}"),
+                            "Item",
+                            1,
+                        ));
+                    }
+                });
+            }
+        });
+
+        // Every push had a unique canonical id and a distinct provider quota,
+        // so every one of them must have been accepted with no data loss or
+        // corruption from concurrent access.
+        assert_eq!(sink.len(), thread_count * per_thread);
     }
 }

@@ -462,27 +462,37 @@ impl WorkspaceOverview {
             return;
         }
 
-        let sink = SearchSink::for_test(query_gen);
-        if let Some(coordinator) = &self.search {
-            coordinator.search(&text, query_gen, &sink);
-        }
-        let immediate_results = sink.snapshot();
-
-        if !immediate_results.is_empty() {
-            self.search_results = immediate_results;
-            self.selected_result_index = Some(0);
-            self.search_state = LauncherSearchState::Ready {
-                generation: query_gen,
-            };
-        } else {
-            self.search_state = LauncherSearchState::Pending {
-                generation: query_gen,
-            };
-        }
+        self.search_state = LauncherSearchState::Pending {
+            generation: query_gen,
+        };
         cx.notify();
 
         let coordinator = self.search.clone();
         let task = cx.spawn(async move |this, cx| {
+            // Built-in providers are dispatched off the UI thread so a slow
+            // or stalled provider cannot freeze the shell. The sink's
+            // generation check discards any delivery from a since-superseded
+            // query before it is ever published.
+            let sink = SearchSink::for_test(query_gen);
+            if let Some(coordinator) = coordinator.clone() {
+                let bg_sink = sink.clone();
+                let bg_text = text.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        coordinator.search(&bg_text, query_gen, &bg_sink);
+                    })
+                    .await;
+            }
+            cx.update(|cx| {
+                if let Some(entity) = this.upgrade() {
+                    entity.update(cx, |view, cx| {
+                        if view.query_generation == query_gen {
+                            view.set_search_results(sink.snapshot(), query_gen, cx);
+                        }
+                    });
+                }
+            });
+
             cx.background_executor()
                 .timer(Duration::from_millis(60))
                 .await;
@@ -506,10 +516,26 @@ impl WorkspaceOverview {
                                 );
                                 debug_assert_eq!(generation, query_gen);
                             }
-                            let sink = SearchSink::for_test(query_gen);
-                            if let Some(coordinator) = &coordinator {
-                                coordinator.search(&text, query_gen, &sink);
-                            }
+                        }
+                    });
+                }
+            });
+
+            let sink = SearchSink::for_test(query_gen);
+            if let Some(coordinator) = &coordinator {
+                let bg_sink = sink.clone();
+                let bg_text = text.clone();
+                let coordinator = coordinator.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        coordinator.search(&bg_text, query_gen, &bg_sink);
+                    })
+                    .await;
+            }
+            cx.update(|cx| {
+                if let Some(entity) = this.upgrade() {
+                    entity.update(cx, |view, cx| {
+                        if view.query_generation == query_gen {
                             view.set_search_results(sink.snapshot(), query_gen, cx);
                         }
                     });
