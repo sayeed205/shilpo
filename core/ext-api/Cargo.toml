@@ -8,6 +8,14 @@ publish.workspace = true
 name = "generate_schema"
 path = "examples/generate_schema.rs"
 
+[[bench]]
+name = "identity"
+harness = false
+
+[[bench]]
+name = "view_tree"
+harness = false
+
 [dependencies]
 schemars.workspace = true
 semver.workspace = true
@@ -17,5 +25,6 @@ toml.workspace = true
 wit-bindgen.workspace = true
 
 [dev-dependencies]
+criterion = { workspace = true }
 proptest = { workspace = true }
 wit-parser = { workspace = true }

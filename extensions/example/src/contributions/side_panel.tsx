@@ -3,7 +3,7 @@ import type { ViewElement } from "@shilpo/ext-sdk";
 import type { ShowcaseState } from "../state.ts";
 
 export function renderSidePanel(state: ShowcaseState): ViewElement {
-  const logNodes = state.logs.slice(0, 8).map((log) => <Text fontSize={12}>{log}</Text>);
+  const logNodes = state.logs.slice(0, 8).map((log) => <Text key={log} fontSize={12}>{log}</Text>);
 
   return (
     <Column gap={10} style={{ padding: 16 }}>

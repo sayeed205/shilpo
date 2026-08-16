@@ -1,12 +1,12 @@
 {
   "minimumDependencyAge": 0,
   "imports": {
-    "@shilpo/ext-sdk": "jsr:@shilpo/ext-sdk@0.1.0",
-    "@shilpo/ext-sdk/jsx-runtime": "jsr:@shilpo/ext-sdk@0.1.0/jsx-runtime",
-    "@shilpo/ext-sdk/jsx-dev-runtime": "jsr:@shilpo/ext-sdk@0.1.0/jsx-dev-runtime",
-    "@shilpo/ext-sdk/builder": "jsr:@shilpo/ext-sdk@0.1.0/builder",
-    "@shilpo/ext-sdk/manifest": "jsr:@shilpo/ext-sdk@0.1.0/manifest",
-    "@shilpo/ext-sdk/testing": "jsr:@shilpo/ext-sdk@0.1.0/testing",
+    "@shilpo/ext-sdk": "../../sdk/typescript/src/index.ts",
+    "@shilpo/ext-sdk/jsx-runtime": "../../sdk/typescript/src/jsx-runtime/index.ts",
+    "@shilpo/ext-sdk/jsx-dev-runtime": "../../sdk/typescript/src/jsx-dev-runtime/index.ts",
+    "@shilpo/ext-sdk/builder": "../../sdk/typescript/src/builder/index.ts",
+    "@shilpo/ext-sdk/manifest": "../../sdk/typescript/src/manifest/index.ts",
+    "@shilpo/ext-sdk/testing": "../../sdk/typescript/src/testing/index.ts",
     "@std/assert": "jsr:@std/assert@1"
   },
   "tasks": {

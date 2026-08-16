@@ -35,6 +35,7 @@ shilpo-services = { path = "desktop/services" }
 shilpo-ext-runtime = { path = "desktop/ext-runtime" }
 shilpo-theme-daemon = { path = "desktop/theme-daemon" }
 shilpo-observability = { path = "desktop/observability" }
+criterion = { version = "*", package = "codspeed-criterion-compat" }
 tracing-chrome = "0.7"
 arc-swap = "1"
 roxmltree = "0.21"

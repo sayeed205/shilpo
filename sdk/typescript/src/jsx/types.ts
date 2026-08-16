@@ -14,6 +14,10 @@ export interface FragmentSpec {
   children?: unknown;
 }
 
+export interface BaseProps {
+  key?: string | number | null | undefined;
+}
+
 export type ViewChild =
   | ViewNodeSpec
   | FragmentSpec
@@ -27,7 +31,7 @@ export type ViewChild =
 export type ViewChildren = ViewChild | ViewChild[];
 export type ViewElement = ViewNodeSpec | FragmentSpec | ViewElement[];
 
-export interface ContainerProps {
+export interface ContainerProps extends BaseProps {
   direction?: ContainerDirection;
   style?: ViewStyle;
   gap?: number;
@@ -46,7 +50,7 @@ export interface GridProps extends Omit<ContainerProps, "direction"> {
   columns: number;
 }
 
-export interface TextProps {
+export interface TextProps extends BaseProps {
   content?: string;
   fontSize?: number;
   bold?: boolean;
@@ -60,20 +64,20 @@ export interface TextProps {
     | (string | number | false | null | undefined)[];
 }
 
-export interface IconProps {
+export interface IconProps extends BaseProps {
   name: string;
   size?: number;
   style?: ViewStyle;
 }
 
-export interface ImageProps {
+export interface ImageProps extends BaseProps {
   assetPath: string;
   width?: number;
   height?: number;
   style?: ViewStyle;
 }
 
-export interface ButtonProps {
+export interface ButtonProps extends BaseProps {
   label?: string;
   eventId: string;
   style?: ViewStyle;
@@ -86,19 +90,19 @@ export interface ButtonProps {
     | (string | number | false | null | undefined)[];
 }
 
-export interface IconButtonProps {
+export interface IconButtonProps extends BaseProps {
   iconName: string;
   eventId: string;
   style?: ViewStyle;
 }
 
-export interface ToggleProps {
+export interface ToggleProps extends BaseProps {
   value: boolean;
   eventId: string;
   style?: ViewStyle;
 }
 
-export interface SliderProps {
+export interface SliderProps extends BaseProps {
   value: number;
   min: number;
   max: number;
@@ -106,26 +110,29 @@ export interface SliderProps {
   style?: ViewStyle;
 }
 
-export interface TextInputProps {
+export interface TextInputProps extends BaseProps {
   value: string;
-  eventId: string;
   placeholder?: string;
+  eventId: string;
   style?: ViewStyle;
 }
 
-export interface ListProps {
-  style?: ViewStyle;
+export interface ListProps extends BaseProps {
   children?: ViewChildren;
+  style?: ViewStyle;
 }
 
-export interface SpacerProps {
+export interface SpacerProps extends BaseProps {
   size?: number;
 }
 
-export type DividerProps = Record<string, never>;
+export interface DividerProps extends BaseProps {
+  style?: ViewStyle;
+}
 
-export interface BadgeProps {
+export interface BadgeProps extends BaseProps {
   label?: string;
+  color?: SemanticColorToken;
   style?: ViewStyle;
   children?:
     | string
@@ -136,18 +143,18 @@ export interface BadgeProps {
     | (string | number | false | null | undefined)[];
 }
 
-export interface ProgressProps {
+export interface ProgressProps extends BaseProps {
   value: number;
   style?: ViewStyle;
 }
 
-export interface LoadingIndicatorProps {
+export interface LoadingIndicatorProps extends BaseProps {
   size?: number;
   color?: SemanticColorToken;
   style?: ViewStyle;
 }
 
-export interface FragmentProps {
+export interface FragmentProps extends BaseProps {
   children?: ViewChildren;
 }
 

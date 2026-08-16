@@ -9,6 +9,10 @@ build = "build.rs"
 name = "generate_distribution_schemas"
 path = "examples/generate_distribution_schemas.rs"
 
+[[bench]]
+name = "wasm"
+harness = false
+
 [dependencies]
 base64.workspace = true
 flate2.workspace = true
@@ -40,5 +44,6 @@ wit-parser.workspace = true
 wat.workspace = true
 
 [dev-dependencies]
+criterion = { workspace = true }
 proptest.workspace = true
 tempfile.workspace = true

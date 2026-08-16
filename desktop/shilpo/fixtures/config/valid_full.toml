@@ -1,0 +1,93 @@
+version = 1
+clock_format = "%Y-%m-%d %H:%M:%S"
+temperature_unit = "celsius"
+locale = "en_US.UTF-8"
+
+[theme]
+font_family = "Inter"
+heading_font_family = "Inter Display"
+mono_font_family = "JetBrains Mono"
+corner_radius_scale = 1.0
+high_contrast = false
+reduced_motion = false
+transition_duration_ms = 300
+scheme_variant = "tonal-spot"
+gtk_theme_light = "Adwaita"
+gtk_theme_dark = "Adwaita-dark"
+
+[bar]
+position = "Top"
+style = "Hug"
+height = 40
+padding = 8
+widget_spacing = 8
+opacity = 0.92
+exclusive_zone = 40
+
+[bar.margin]
+horizontal = 12
+vertical = 6
+
+[bar.widgets]
+start = [
+    "builtin:workspaces",
+    "builtin:running_apps",
+]
+center = [
+    "builtin:clock",
+]
+end = [
+    "builtin:audio",
+    "builtin:network",
+    "builtin:bluetooth",
+    "builtin:battery",
+]
+
+[desktop]
+wallpaper_dir = "~/Pictures/Wallpapers"
+
+[extensions.settings."io.github.alice.world-clock"]
+show_seconds = true
+timezones = ["UTC", "America/New_York", "Asia/Tokyo"]
+
+[outputs.eDP-1]
+enabled = true
+scale = 1.0
+position = "Top"
+style = "Hug"
+height = 40
+padding = 8
+widget_spacing = 8
+opacity = 0.92
+
+[outputs.HDMI-A-1]
+enabled = true
+scale = 1.0
+position = "Top"
+style = "Rect"
+height = 36
+padding = 6
+widget_spacing = 6
+opacity = 0.95
+
+[startup]
+autostart_apps = [
+    "waybar",
+    "kitty",
+]
+compositor_wait_timeout_ms = 3000
+
+[capture]
+screenshot_dir = "~/Pictures/Screenshots"
+show_pointer = true
+default_selection = "rectangle"
+
+[[keybindings]]
+action = "toggle_launcher"
+shortcut = "Super+Space"
+enabled = true
+
+[[keybindings]]
+action = "toggle_settings"
+shortcut = "Super+Comma"
+enabled = true

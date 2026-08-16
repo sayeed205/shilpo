@@ -1,14 +1,10 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@shilpo/ext-sdk@0.1.0": "0.1.0",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.14"
   },
   "jsr": {
-    "@shilpo/ext-sdk@0.1.0": {
-      "integrity": "439ae5794053f3a163ccc443d408f5ac62774b312372b26386114ea3ca46a9b1"
-    },
     "@std/assert@1.0.19": {
       "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
       "dependencies": [
@@ -21,15 +17,22 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@shilpo/ext-sdk@0.1.0",
       "jsr:@std/assert@1"
     ],
     "packageJson": {
       "dependencies": [
         "npm:@bytecodealliance/jco@1.28.1",
-        "npm:@jsr/shilpo__ext-sdk@0.1.0",
         "npm:typescript@5.6.3"
       ]
+    },
+    "links": {
+      "jsr:@shilpo/ext-sdk@0.1.0": {
+        "dependencies": [
+          "jsr:@std/assert@1",
+          "jsr:@std/path@1",
+          "jsr:@std/testing@1"
+        ]
+      }
     }
   }
 }

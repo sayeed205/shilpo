@@ -137,6 +137,24 @@ cargo nextest run --workspace
 PROPTEST_RNG_SEED="0123456789abcdef..." cargo test -p shilpo-theme
 ```
 
+### Benchmarking
+
+Shilpo includes Criterion wall-clock and CodSpeed continuous benchmark suites covering theme generation, extension identities, ViewTree validation, configuration resolution, and Wasm component cold loading.
+
+Run the benchmarks locally:
+
+```bash
+# Fast smoke verification of all benchmark targets
+./scripts/bench.sh smoke
+
+# Run individual suites
+./scripts/bench.sh core
+./scripts/bench.sh config
+./scripts/bench.sh wasm
+```
+
+See [the benchmarking documentation](docs/benchmarks.md) for measured boundaries, stable identifiers, CI architecture, and artifact retention policies.
+
 ---
 
 ## Guidelines for AI Assistants & Contributors
