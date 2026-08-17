@@ -25,12 +25,9 @@ use super::{
     DomainVersion, ExecutorAck, RejectionReason, SupervisorState, WindowInfo, WorkspaceInfo,
     broker::{CommandCancellation, StreamCancelHandle, create_stream_cancel_handle},
 };
-
-const INITIAL_BACKOFF_MS: u64 = 250;
-const MAX_BACKOFF_MS: u64 = 30_000;
-const FAILURE_WINDOW_MS: u64 = 60_000;
-const STABLE_RESET_MS: u64 = 300_000;
-const QUARANTINE_FAILURES: usize = 5;
+use crate::domain::{
+    FAILURE_WINDOW_MS, INITIAL_BACKOFF_MS, MAX_BACKOFF_MS, QUARANTINE_FAILURES, STABLE_RESET_MS,
+};
 
 #[derive(Debug)]
 struct CompositorSupervisor {

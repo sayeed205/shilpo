@@ -87,4 +87,5 @@ pub trait Debug {
     async fn set_log_filter(&self, filter: String) -> zbus::Result<()>;
     async fn get_log_filter(&self) -> zbus::Result<String>;
     async fn emit_test_notification(&self, title: String, body: String) -> zbus::Result<()>;
+    async fn reset_notification_quarantine(&self) -> zbus::Result<()>;
 }

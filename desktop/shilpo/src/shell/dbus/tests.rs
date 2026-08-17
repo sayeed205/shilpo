@@ -217,8 +217,23 @@ async fn test_introspection_exact_contract() {
                     (Some("body"), "s", Some("in")),
                 ],
             ),
+            ("ResetNotificationQuarantine", &[]),
         ],
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_reset_notification_quarantine_dispatch() {
+    let mut harness = TestDbusHarness::new().await;
+
+    bounded!(
+        "ResetNotificationQuarantine response",
+        harness.debug_proxy.reset_notification_quarantine()
+    )
+    .unwrap();
+
+    let cmd = bounded!("reset command", harness.mailbox_rx.recv()).unwrap();
+    assert_eq!(cmd, ShellCommand::ResetNotificationQuarantine);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

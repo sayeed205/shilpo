@@ -7,6 +7,7 @@ pub mod capture;
 pub mod clipboard;
 pub mod compositor;
 pub mod device_daemon;
+pub mod domain;
 pub mod error;
 pub use shilpo_device as device;
 pub use shilpo_device as device_protocol;
@@ -45,15 +46,17 @@ pub use device_daemon::{
     DeviceAdapter, DeviceDaemonService, DeviceDbusService, InMemoryDeviceAdapter,
     SystemDeviceAdapter,
 };
+pub use domain::*;
 pub use error::ServiceError;
 pub use location::{LocationInfo, LocationService};
 pub use media::{MediaCommand, MediaInfo, MediaService, PlaybackState};
 pub use network::{NetworkCommand, NetworkInfo, NetworkService, VpnConnection};
 pub use night_light::{NightLightInfo, NightLightService, ThemeSchedule, should_use_dark_mode};
 pub use notifications::{
-    Notification, NotificationCloseReason, NotificationCommand, NotificationCommandOutcome,
-    NotificationDomainState, NotificationPort, NotificationRejectionReason, NotificationService,
-    NotificationSnapshot, NotificationUrgency,
+    MonotonicTimeSource, Notification, NotificationCloseReason, NotificationCommand,
+    NotificationCommandOutcome, NotificationDomainState, NotificationPort,
+    NotificationRejectionReason, NotificationService, NotificationSnapshot, NotificationUrgency,
+    TimeSource,
 };
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
 pub use session_store::*;
