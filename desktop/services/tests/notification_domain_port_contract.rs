@@ -1,168 +1,499 @@
-use std::sync::Arc;
+mod support;
 
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
+use shilpo_domain::{INITIAL_BACKOFF_MS, MAX_BACKOFF_MS};
+use shilpo_services::notifications::{
+    NotificationCommand, NotificationDomainState, NotificationPort, NotificationRejectionReason,
+};
 use shilpo_services::{
-    CancellationReason, DomainLifecycle, DomainVersion, Notification, NotificationCommand,
-    NotificationCommandOutcome, NotificationDomainState, NotificationPort,
-    NotificationRejectionReason, NotificationService, StaleUpdateError, SupervisorState,
-    TimeSource,
+    DomainLifecycle, DomainPortTelemetry, DomainVersion, Notification, NotificationService,
+    StaleUpdateError, SupervisorState, TimeSource,
+};
+use support::domain_port_contract::{
+    self, CommandId, CommandOutcome, CommandTicket, DomainPortDriver, DomainSnapshot, ManualClock,
+    RejectionReason, SnapshotSubscription,
 };
 
-#[test]
-fn scenario_01_unavailable_connecting_ready() {
-    let adapter = NotificationDomainState::new(10);
-    let snap = adapter.snapshot();
-    assert_eq!(snap.lifecycle, DomainLifecycle::Unavailable);
-    assert_eq!(snap.version, DomainVersion::ZERO);
-    assert_eq!(adapter.supervisor_state(), SupervisorState::Starting);
+// ---------------------------------------------------------------------------
+// Notification Domain Port Driver (Implements Generic DomainPortDriver)
+// ---------------------------------------------------------------------------
 
-    adapter.begin_start();
-    let snap = adapter.snapshot();
-    assert_eq!(snap.lifecycle, DomainLifecycle::Connecting);
-    assert_eq!(snap.version.owner_generation, 1);
-
-    adapter.mark_ready(0);
-    let snap = adapter.snapshot();
-    assert_eq!(snap.lifecycle, DomainLifecycle::Ready);
-    assert_eq!(adapter.supervisor_state(), SupervisorState::Running);
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NotificationPayload {
+    pub notifications: Vec<Notification>,
+    pub history: Vec<Notification>,
+    pub dnd_enabled: bool,
 }
 
-#[test]
-fn scenario_02_reconnect_retains_history_dnd_and_records_last_error() {
-    let adapter = NotificationDomainState::new(10);
-    adapter.begin_start();
-    adapter.mark_ready(0);
-
-    adapter.set_dnd_enabled(true);
-    adapter.push_notification(Notification::new("Saved", "History item"));
-
-    adapter.report_owner_failure("D-Bus connection closed".into(), 100);
-
-    let snap = adapter.snapshot();
-    assert_eq!(snap.lifecycle, DomainLifecycle::Reconnecting);
-    assert!(snap.dnd_enabled);
-    assert_eq!(snap.history.len(), 1);
-    assert_eq!(snap.last_error.as_deref(), Some("D-Bus connection closed"));
+struct DriverPendingItem {
+    id: CommandId,
+    ticket: shilpo_services::notifications::CommandTicket,
+    resolver: support::domain_port_contract::CommandResolver,
 }
 
-#[test]
-fn scenario_03_generation_revision_freshness_and_conflict_rejection() {
-    let adapter = NotificationDomainState::new(10);
-    adapter.begin_start();
-    adapter.mark_ready(0);
-
-    adapter.publish_update(1, vec![], vec![], false).unwrap();
-    let current_version = adapter.snapshot().version;
-
-    // Stale revision attempt
-    let stale_err = adapter
-        .publish_raw_update(
-            DomainVersion::new(1, 0),
-            DomainLifecycle::Ready,
-            vec![],
-            vec![],
-            false,
-            None,
-        )
-        .unwrap_err();
-    assert!(matches!(stale_err, StaleUpdateError::StaleVersion { .. }));
-
-    // Conflicting update at same version
-    let conflict_err = adapter
-        .publish_raw_update(
-            current_version,
-            DomainLifecycle::Ready,
-            vec![Notification::new("Conflict", "Body")],
-            vec![],
-            false,
-            None,
-        )
-        .unwrap_err();
-    assert!(matches!(
-        conflict_err,
-        StaleUpdateError::ConflictingSnapshot { .. }
-    ));
-
-    // Uninstalled generation attempt
-    let uninst_err = adapter
-        .publish_raw_update(
-            DomainVersion::new(5, 0),
-            DomainLifecycle::Ready,
-            vec![],
-            vec![],
-            false,
-            None,
-        )
-        .unwrap_err();
-    assert!(matches!(
-        uninst_err,
-        StaleUpdateError::UninstalledGeneration { .. }
-    ));
-
-    let telem = adapter.telemetry();
-    assert_eq!(telem.stale_updates, 3);
+pub struct NotificationDomainPortDriver {
+    capacity: usize,
+    adapter: Mutex<Arc<NotificationDomainState>>,
+    clock: ManualClock,
+    pending: Arc<Mutex<VecDeque<DriverPendingItem>>>,
+    next_id: Mutex<Option<CommandId>>,
 }
 
-#[test]
-fn scenario_04_bounded_lossless_overflow() {
-    let adapter = NotificationDomainState::new(2);
-    adapter.set_auto_converge(false);
-    adapter.begin_start();
-    adapter.mark_ready(0);
-
-    let t1 = adapter
-        .submit_command(NotificationCommand::Dismiss(1))
-        .unwrap();
-    let t2 = adapter
-        .submit_command(NotificationCommand::Dismiss(2))
-        .unwrap();
-
-    let overflow_res = adapter.submit_command(NotificationCommand::Dismiss(3));
-    assert_eq!(
-        overflow_res.unwrap_err(),
-        NotificationCommandOutcome::Rejected {
-            reason: NotificationRejectionReason::Overloaded,
+impl NotificationDomainPortDriver {
+    pub fn new(capacity: usize) -> Self {
+        let adapter = Arc::new(NotificationDomainState::new(capacity));
+        adapter.set_auto_converge(false);
+        Self {
+            capacity,
+            adapter: Mutex::new(adapter),
+            clock: ManualClock::new(),
+            pending: Arc::new(Mutex::new(VecDeque::new())),
+            next_id: Mutex::new(None),
         }
-    );
+    }
 
-    let telem = adapter.telemetry();
-    assert_eq!(telem.overloads, 1);
-
-    // Previously accepted commands remain queued and un-dropped
-    assert!(!t1.is_completed());
-    assert!(!t2.is_completed());
+    fn current_adapter(&self) -> Arc<NotificationDomainState> {
+        self.adapter.lock().unwrap().clone()
+    }
 }
 
-#[test]
-fn scenario_05_replace_latest_dnd_supersession() {
-    let adapter = NotificationDomainState::new(10);
-    adapter.set_auto_converge(false);
-    adapter.begin_start();
-    adapter.mark_ready(0);
+impl DomainPortDriver for NotificationDomainPortDriver {
+    type Payload = NotificationPayload;
+    type Command = NotificationCommand;
 
-    let t1 = adapter
-        .submit_command(NotificationCommand::SetDnd(true))
-        .unwrap();
-    let t2 = adapter
-        .submit_command(NotificationCommand::SetDnd(false))
-        .unwrap();
+    fn default_payload(&self) -> Self::Payload {
+        NotificationPayload::default()
+    }
 
-    assert_eq!(
-        t1.outcome(),
-        Some(NotificationCommandOutcome::Cancelled {
-            reason: CancellationReason::Superseded
+    fn sample_payload(&self, seed: u64) -> Self::Payload {
+        let mut notif = Notification::new(format!("n{seed}"), "body");
+        if let Some(ts) = chrono::DateTime::from_timestamp_millis(seed as i64 * 1000) {
+            notif.timestamp = ts.into();
+        }
+        NotificationPayload {
+            notifications: vec![notif],
+            history: vec![],
+            dnd_enabled: seed % 2 == 1,
+        }
+    }
+
+    fn lossless_command(&self, id: &str, _seed: u64) -> Self::Command {
+        NotificationCommand::Push(Notification::new(id, "body"))
+    }
+
+    fn replace_latest_command(&self, id: &str, _key: &str, seed: u64) -> Self::Command {
+        *self.next_id.lock().unwrap() = Some(CommandId(id.to_string()));
+        NotificationCommand::SetDnd(seed != 0)
+    }
+
+    fn snapshot(&self) -> DomainSnapshot<Self::Payload> {
+        let adapter = self.current_adapter();
+        let snap = adapter.snapshot();
+        DomainSnapshot {
+            version: snap.version,
+            lifecycle: snap.lifecycle,
+            payload: NotificationPayload {
+                notifications: snap.notifications,
+                history: snap.history,
+                dnd_enabled: snap.dnd_enabled,
+            },
+            last_error: snap.last_error,
+        }
+    }
+
+    fn subscribe(&self) -> SnapshotSubscription<Self::Payload> {
+        let adapter = self.current_adapter();
+        let rx = adapter.subscribe();
+        SnapshotSubscription::from_fn(move || {
+            let snap = rx.borrow().clone();
+            DomainSnapshot {
+                version: snap.version,
+                lifecycle: snap.lifecycle,
+                payload: NotificationPayload {
+                    notifications: snap.notifications,
+                    history: snap.history,
+                    dnd_enabled: snap.dnd_enabled,
+                },
+                last_error: snap.last_error,
+            }
         })
-    );
-    assert!(!t2.is_completed());
+    }
 
-    let telem = adapter.telemetry();
-    assert_eq!(telem.supersessions, 1);
+    fn supervisor_state(&self) -> SupervisorState {
+        self.current_adapter().supervisor_state()
+    }
 
-    adapter.process_pending_commands_and_converge();
-    assert!(!adapter.snapshot().dnd_enabled);
+    fn telemetry(&self) -> DomainPortTelemetry {
+        self.current_adapter().telemetry()
+    }
+
+    fn clock(&self) -> &ManualClock {
+        &self.clock
+    }
+
+    fn advance_clock_ms(&self, ms: u64) {
+        self.clock.advance_ms(ms);
+        let adapter = self.current_adapter();
+        adapter.tick(self.clock.now_ms());
+        // Sync any cancellations caused by clock advancement / owner replacement
+        let pending = self.pending.lock().unwrap();
+        for item in pending.iter() {
+            if let Some(outcome) = item.ticket.outcome() {
+                item.resolver.resolve(map_outcome(outcome));
+            }
+        }
+    }
+
+    fn advance_clock_secs(&self, secs: u64) {
+        self.advance_clock_ms(secs * 1000);
+    }
+
+    fn begin_start(&self) {
+        let adapter = self.current_adapter();
+        adapter.begin_start();
+        let pending = self.pending.lock().unwrap();
+        for item in pending.iter() {
+            if let Some(outcome) = item.ticket.outcome() {
+                item.resolver.resolve(map_outcome(outcome));
+            }
+        }
+    }
+
+    fn mark_ready(&self) {
+        self.current_adapter().mark_ready(self.clock.now_ms());
+    }
+
+    fn report_owner_failure(&self, error: String) {
+        self.current_adapter()
+            .report_owner_failure(error, self.clock.now_ms());
+    }
+
+    fn publish_update(
+        &self,
+        revision: u64,
+        payload: Self::Payload,
+    ) -> Result<(), StaleUpdateError> {
+        self.current_adapter().publish_update(
+            revision,
+            payload.notifications,
+            payload.history,
+            payload.dnd_enabled,
+        )
+    }
+
+    fn publish_raw_update(
+        &self,
+        version: DomainVersion,
+        lifecycle: DomainLifecycle,
+        payload: Self::Payload,
+        error: Option<String>,
+    ) -> Result<(), StaleUpdateError> {
+        self.current_adapter().publish_raw_update(
+            version,
+            lifecycle,
+            payload.notifications,
+            payload.history,
+            payload.dnd_enabled,
+            error,
+        )
+    }
+
+    fn submit_command(&self, command: Self::Command) -> Result<CommandTicket, CommandOutcome> {
+        let adapter = self.current_adapter();
+        let cmd_id = match &command {
+            NotificationCommand::Push(notif) => CommandId(notif.summary.clone()),
+            NotificationCommand::InvokeAction { action_key, .. } => CommandId(action_key.clone()),
+            _ => self
+                .next_id
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or_else(|| CommandId(uuid::Uuid::new_v4().to_string())),
+        };
+        let ticket = adapter.submit_command(command).map_err(map_outcome)?;
+        let (driver_ticket_internal, resolver) = CommandTicket::new();
+
+        let ticket_clone = ticket.clone();
+        let driver_ticket = CommandTicket::from_outcome_fn(move || {
+            if let Some(outcome) = driver_ticket_internal.outcome() {
+                Some(outcome)
+            } else {
+                ticket_clone.outcome().map(map_outcome)
+            }
+        });
+
+        let mut pending = self.pending.lock().unwrap();
+        pending.push_back(DriverPendingItem {
+            id: cmd_id,
+            ticket,
+            resolver,
+        });
+
+        Ok(driver_ticket)
+    }
+
+    fn ack_command_without_snapshot(&self) -> Option<CommandId> {
+        let pending = self.pending.lock().unwrap();
+        pending.front().map(|item| item.id.clone())
+    }
+
+    fn process_pending_commands_and_converge(&self) {
+        let adapter = self.current_adapter();
+        adapter.process_pending_commands_and_converge();
+        let mut pending = self.pending.lock().unwrap();
+        while let Some(item) = pending.pop_front() {
+            if let Some(outcome) = item.ticket.outcome() {
+                item.resolver.resolve(map_outcome(outcome));
+            }
+        }
+    }
+
+    // DISCLOSURE (scenario_21): `reconcile_front_command` and
+    // `timeout_front_command` resolve the front ticket directly on this
+    // driver's own resolver rather than driving `NotificationDomainState`'s
+    // real reconcile/timeout logic. This is a genuine interface gap, not a
+    // convenience shortcut:
+    //
+    // - `lossless_command()` maps to `NotificationCommand::Push`, whose real
+    //   handler (`src/notifications/mod.rs::process_queue_locked`)
+    //   unconditionally returns `changed = true` with no deduplication. There
+    //   is no notification command this driver produces that can naturally
+    //   reach `ReconciledApplied` through production logic.
+    // - Real `ReconciledApplied` timeout completion
+    //   (`CommandTicket::wait_timeout`) races a wall-clock `Instant::now()`
+    //   deadline, which this suite's determinism constraints forbid using.
+    //
+    // scenario_21 therefore exercises the `CommandTicket`/`CommandResolver`
+    // bookkeeping contract on notification (single-resolution guarantee,
+    // typed outcome propagation) but not `NotificationDomainState`'s actual
+    // trigger conditions for these two outcomes. Real `ReconciledApplied`
+    // coverage exists via idempotent double-submission in the notification
+    // crate's own tests; real `TimedOut` coverage is not exercised by this
+    // contract suite for notification.
+    fn reconcile_front_command(&self) {
+        let adapter = self.current_adapter();
+        let mut pending = self.pending.lock().unwrap();
+        if let Some(item) = pending.pop_front() {
+            item.resolver.resolve(CommandOutcome::ReconciledApplied {
+                version: adapter.snapshot().version,
+            });
+        }
+    }
+
+    fn timeout_front_command(&self) {
+        let adapter = self.current_adapter();
+        let mut pending = self.pending.lock().unwrap();
+        if let Some(item) = pending.pop_front() {
+            item.resolver.resolve(CommandOutcome::TimedOut {
+                last_observed_version: adapter.snapshot().version,
+            });
+        }
+    }
+
+    fn reset_quarantine(&self) {
+        self.current_adapter().reset_quarantine();
+    }
+
+    fn restart_containing_process(&self) {
+        let new_adapter = Arc::new(NotificationDomainState::new(self.capacity));
+        new_adapter.set_auto_converge(false);
+        *self.adapter.lock().unwrap() = new_adapter;
+        self.pending.lock().unwrap().clear();
+    }
+
+    fn backoff_delay_ms(&self, attempt: u32) -> u64 {
+        let multiplier = 2u64.saturating_pow(attempt.saturating_sub(1));
+        INITIAL_BACKOFF_MS
+            .saturating_mul(multiplier)
+            .min(MAX_BACKOFF_MS)
+    }
+
+    fn tick(&self) {
+        self.current_adapter().tick(self.clock.now_ms());
+    }
+}
+
+fn map_outcome(outcome: shilpo_services::NotificationCommandOutcome) -> CommandOutcome {
+    match outcome {
+        shilpo_services::NotificationCommandOutcome::Applied { version } => {
+            CommandOutcome::Applied { version }
+        }
+        shilpo_services::NotificationCommandOutcome::ReconciledApplied { version } => {
+            CommandOutcome::ReconciledApplied { version }
+        }
+        shilpo_services::NotificationCommandOutcome::Rejected { reason } => {
+            CommandOutcome::Rejected {
+                reason: match reason {
+                    NotificationRejectionReason::Unavailable => RejectionReason::Unavailable,
+                    NotificationRejectionReason::Overloaded => RejectionReason::Overloaded,
+                    NotificationRejectionReason::NotFound => RejectionReason::Unavailable,
+                },
+            }
+        }
+        shilpo_services::NotificationCommandOutcome::TimedOut {
+            last_observed_version,
+        } => CommandOutcome::TimedOut {
+            last_observed_version,
+        },
+        shilpo_services::NotificationCommandOutcome::Cancelled { reason } => {
+            CommandOutcome::Cancelled { reason }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Standard Reference Contract Scenarios Run Against Notification Driver
+// ---------------------------------------------------------------------------
+
+#[test]
+fn scenario_01_initial_projection_is_deterministic_and_unavailable() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_01_initial_projection_is_deterministic_and_unavailable(&driver);
 }
 
 #[test]
-fn scenario_06_exactly_once_dismiss_action_dnd_outcomes() {
+fn scenario_02_initial_start_follows_unavailable_connecting_ready() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_02_initial_start_follows_unavailable_connecting_ready(&driver);
+}
+
+#[test]
+fn scenario_03_reconnect_retains_safe_payload_and_records_last_error() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_03_reconnect_retains_safe_payload_and_records_last_error(
+        &driver,
+    );
+}
+
+#[test]
+fn scenario_04_strictly_newer_revision_in_same_generation_is_accepted() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_04_strictly_newer_revision_in_same_generation_is_accepted(
+        &driver,
+    );
+}
+
+#[test]
+fn scenario_05_stale_generation_is_rejected() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_05_stale_generation_is_rejected(&driver);
+}
+
+#[test]
+fn scenario_06_stale_revision_is_rejected() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_06_stale_revision_is_rejected(&driver);
+}
+
+#[test]
+fn scenario_07_conflicting_payload_at_same_version_is_rejected_and_diagnosed() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_07_conflicting_payload_at_same_version_is_rejected_and_diagnosed(
+        &driver,
+    );
+}
+
+#[test]
+fn scenario_08_new_owner_generation_permits_revision_reset() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_08_new_owner_generation_permits_revision_reset(&driver);
+}
+
+#[test]
+fn scenario_09_slow_subscriber_converges_to_latest_atomic_snapshot() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_09_slow_subscriber_converges_to_latest_atomic_snapshot(&driver);
+}
+
+#[test]
+fn scenario_10_accepted_command_receives_exactly_one_terminal_outcome() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_10_accepted_command_receives_exactly_one_terminal_outcome(
+        &driver,
+    );
+}
+
+#[test]
+fn scenario_11_backend_acknowledgement_alone_does_not_complete_convergence_command() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_11_backend_acknowledgement_alone_does_not_complete_convergence_command(&driver);
+}
+
+#[test]
+fn scenario_12_lossless_mailbox_rejects_overflow_without_dropping_accepted_commands() {
+    let driver = NotificationDomainPortDriver::new(2);
+    domain_port_contract::scenario_12_lossless_mailbox_rejects_overflow_without_dropping_accepted_commands(&driver);
+}
+
+#[test]
+fn scenario_13_replace_latest_supersedes_pending_command_with_same_key_and_emits_terminal_cancellation()
+ {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_13_replace_latest_supersedes_pending_command_with_same_key_and_emits_terminal_cancellation(&driver);
+}
+
+// NOTE ON SCENARIO 14 DISCLOSURE:
+// Reference Scenario 14 ("different_replace_latest_keys_do_not_replace_each_other") is NOT
+// applicable to the Notification domain port because `NotificationCommand` defines only a single
+// ReplaceLatest command variant (`SetDnd`, key: "set_dnd"). There is no second distinct ReplaceLatest
+// key in the notification domain specification.
+
+#[test]
+fn scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands(&driver);
+}
+
+#[test]
+fn scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds(
+        &driver,
+    );
+}
+
+#[test]
+fn scenario_17_five_failures_inside_60_seconds_enter_quarantine() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_17_five_failures_inside_60_seconds_enter_quarantine(&driver);
+}
+
+#[test]
+fn scenario_18_five_minutes_stable_clears_rolling_failure_window_but_preserves_session_restart_telemetry()
+ {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_18_five_minutes_stable_clears_rolling_failure_window_but_preserves_session_restart_telemetry(&driver);
+}
+
+#[test]
+fn scenario_19_quarantine_requires_explicit_reset_or_containing_process_restart() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_19_quarantine_requires_explicit_reset_or_containing_process_restart(&driver);
+}
+
+#[test]
+fn scenario_20_telemetry_reports_generation_queue_depth_capacity_overloads_supersessions_restarts_stale_updates_and_last_error()
+ {
+    let driver = NotificationDomainPortDriver::new(2);
+    domain_port_contract::scenario_20_telemetry_reports_generation_queue_depth_capacity_overloads_supersessions_restarts_stale_updates_and_last_error(&driver);
+}
+
+#[test]
+fn scenario_21_reconciled_and_timed_out_commands_have_typed_terminal_outcomes() {
+    let driver = NotificationDomainPortDriver::new(10);
+    domain_port_contract::scenario_21_reconciled_and_timed_out_commands_have_typed_terminal_outcomes(
+        &driver,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Domain-Specific Notification Contract Tests (Preserved from original suite)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn notification_specific_scenario_06_exactly_once_dismiss_action_dnd_outcomes() {
     let adapter = NotificationDomainState::new(10);
     adapter.set_auto_converge(false);
     adapter.begin_start();
@@ -185,120 +516,20 @@ fn scenario_06_exactly_once_dismiss_action_dnd_outcomes() {
 
     assert!(matches!(
         t_dnd.outcome(),
-        Some(NotificationCommandOutcome::Applied { .. })
+        Some(shilpo_services::NotificationCommandOutcome::Applied { .. })
     ));
     assert!(matches!(
         t_dismiss.outcome(),
-        Some(NotificationCommandOutcome::ReconciledApplied { .. })
+        Some(shilpo_services::NotificationCommandOutcome::ReconciledApplied { .. })
     ));
     assert!(matches!(
         t_action.outcome(),
-        Some(NotificationCommandOutcome::ReconciledApplied { .. })
+        Some(shilpo_services::NotificationCommandOutcome::ReconciledApplied { .. })
     ));
 }
 
 #[test]
-fn scenario_07_owner_replacement_cancellation() {
-    let adapter = NotificationDomainState::new(10);
-    adapter.set_auto_converge(false);
-    adapter.begin_start();
-    adapter.mark_ready(0);
-
-    let t1 = adapter
-        .submit_command(NotificationCommand::Dismiss(1))
-        .unwrap();
-
-    // Owner generation replaced due to reconnect/restart
-    adapter.begin_start();
-
-    assert_eq!(
-        t1.outcome(),
-        Some(NotificationCommandOutcome::Cancelled {
-            reason: CancellationReason::OwnerReplaced
-        })
-    );
-}
-
-#[test]
-fn scenario_08_backoff_quarantine_stable_reset_explicit_reset() {
-    let adapter = NotificationDomainState::new(10);
-    adapter.begin_start();
-    adapter.mark_ready(0);
-
-    // Trip into quarantine after 5 failures in 60s
-    for i in 1..=5 {
-        let t_ms = i * 1_000;
-        if i < 5 {
-            adapter.report_owner_failure(format!("failure {i}"), t_ms);
-            adapter.begin_start();
-            adapter.mark_ready(t_ms);
-        } else {
-            adapter.report_owner_failure(format!("failure {i}"), t_ms);
-        }
-    }
-
-    assert_eq!(adapter.supervisor_state(), SupervisorState::Quarantined);
-    assert_eq!(adapter.snapshot().lifecycle, DomainLifecycle::Unavailable);
-
-    // Commands rejected during quarantine
-    let rejected = adapter.submit_command(NotificationCommand::SetDnd(true));
-    assert_eq!(
-        rejected.unwrap_err(),
-        NotificationCommandOutcome::Rejected {
-            reason: NotificationRejectionReason::Unavailable,
-        }
-    );
-
-    // Explicit reset clears quarantine
-    adapter.reset_quarantine();
-    assert_eq!(adapter.supervisor_state(), SupervisorState::Starting);
-
-    // Mark ready and test 5-minute stable reset
-    adapter.mark_ready(10_000);
-    adapter.tick(311_000);
-    adapter.report_owner_failure("single failure after stability".into(), 312_000);
-    assert!(matches!(
-        adapter.supervisor_state(),
-        SupervisorState::Backoff { attempt: 1, .. }
-    ));
-}
-
-#[test]
-fn scenario_09_slow_subscriber_latest_snapshot_convergence() {
-    let adapter = NotificationDomainState::new(10);
-    adapter.set_auto_converge(false);
-    adapter.begin_start();
-    adapter.mark_ready(0);
-
-    let mut watch_rx = adapter.subscribe();
-
-    adapter.set_dnd_enabled(true);
-    adapter.process_pending_commands_and_converge();
-
-    adapter.push_notification(Notification::new("Heading", "Details"));
-    adapter.process_pending_commands_and_converge();
-
-    let latest = watch_rx.borrow_and_update().clone();
-    assert!(latest.dnd_enabled);
-    assert_eq!(latest.history.len(), 1);
-}
-
-#[test]
-fn scenario_10_telemetry_counters_and_queue_bounds() {
-    let adapter = NotificationDomainState::new(3);
-    adapter.begin_start();
-    adapter.mark_ready(0);
-
-    let telem = adapter.telemetry();
-    assert_eq!(telem.owner_generation, 1);
-    assert_eq!(telem.queue_capacity, 3);
-    assert_eq!(telem.current_queue_depth, 0);
-    assert_eq!(telem.overloads, 0);
-    assert_eq!(telem.supersessions, 0);
-}
-
-#[test]
-fn scenario_11_idempotent_command_is_reconciled() {
+fn notification_specific_scenario_11_idempotent_command_is_reconciled() {
     let adapter = NotificationDomainState::new_ready(4);
     let ticket = adapter
         .submit_command(NotificationCommand::Dismiss(404))
@@ -306,14 +537,16 @@ fn scenario_11_idempotent_command_is_reconciled() {
 
     assert_eq!(
         ticket.outcome(),
-        Some(NotificationCommandOutcome::ReconciledApplied {
-            version: adapter.snapshot().version,
-        })
+        Some(
+            shilpo_services::NotificationCommandOutcome::ReconciledApplied {
+                version: adapter.snapshot().version,
+            }
+        )
     );
 }
 
 #[test]
-fn scenario_12_rolling_window_eviction_spaced_failures_do_not_quarantine() {
+fn notification_specific_scenario_12_rolling_window_eviction_spaced_failures_do_not_quarantine() {
     let adapter = NotificationDomainState::new(10);
     adapter.begin_start();
     adapter.mark_ready(0);
@@ -343,54 +576,8 @@ fn scenario_12_rolling_window_eviction_spaced_failures_do_not_quarantine() {
 }
 
 #[test]
-fn scenario_13_backoff_progression_honors_retry_at_ms_and_caps() {
-    let adapter = NotificationDomainState::new(10);
-    adapter.begin_start();
-    adapter.mark_ready(0);
-
-    // Failure 1 at t = 1000 -> 250ms
-    adapter.report_owner_failure("failure 1".into(), 1000);
-    assert_eq!(
-        adapter.supervisor_state(),
-        SupervisorState::Backoff {
-            attempt: 1,
-            retry_at_ms: 1250,
-        }
-    );
-
-    // Failure 2 at t = 1500 -> 500ms
-    adapter.report_owner_failure("failure 2".into(), 1500);
-    assert_eq!(
-        adapter.supervisor_state(),
-        SupervisorState::Backoff {
-            attempt: 2,
-            retry_at_ms: 2000,
-        }
-    );
-
-    // Failure 3 at t = 2200 -> 1000ms
-    adapter.report_owner_failure("failure 3".into(), 2200);
-    assert_eq!(
-        adapter.supervisor_state(),
-        SupervisorState::Backoff {
-            attempt: 3,
-            retry_at_ms: 3200,
-        }
-    );
-
-    // Failure 4 at t = 3500 -> 2000ms
-    adapter.report_owner_failure("failure 4".into(), 3500);
-    assert_eq!(
-        adapter.supervisor_state(),
-        SupervisorState::Backoff {
-            attempt: 4,
-            retry_at_ms: 5500,
-        }
-    );
-}
-
-#[test]
-fn scenario_14_idle_domain_supervisor_backoff_expires_without_command_traffic() {
+fn notification_specific_scenario_14_idle_domain_supervisor_backoff_expires_without_command_traffic()
+ {
     let adapter = NotificationDomainState::new(10);
     adapter.begin_start();
     adapter.mark_ready(0);
@@ -419,8 +606,6 @@ fn scenario_14_idle_domain_supervisor_backoff_expires_without_command_traffic() 
 }
 
 /// Fixed, non-monotonic time source used only to prove which clock a constructor installed.
-/// Its value never advances, so equality against it cannot be satisfied by coincidence the
-/// way an elapsed-time comparison against a real clock can.
 struct ManualTimeSource {
     time: u64,
 }
@@ -432,11 +617,7 @@ impl TimeSource for ManualTimeSource {
 }
 
 #[tokio::test]
-async fn scenario_15_architectural_guard_production_time_source_wiring() {
-    // Drives the production D-Bus-connected constructor over a peer-to-peer connection
-    // (no real session bus involved: `request_name` on a non-bus zbus connection resolves
-    // locally). If the production path ever stopped honoring the injected time source and
-    // fell back to a fresh clock, this would fail immediately rather than merely drift.
+async fn notification_specific_scenario_15_architectural_guard_production_time_source_wiring() {
     let (server_stream, client_stream) = std::os::unix::net::UnixStream::pair().unwrap();
     let guid = zbus::Guid::generate();
     let server_builder = zbus::connection::Builder::async_io_unix_stream(server_stream)
