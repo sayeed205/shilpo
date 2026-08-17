@@ -1,8 +1,6 @@
-# ADR-0009: Transactional Layered Configuration with Provenance and Scoped Recovery
+# ADR-0007: Transactional Layered Configuration with Provenance and Scoped Recovery
 
-## Status
-
-Accepted
+- **Status**: Accepted
 
 ## Context
 

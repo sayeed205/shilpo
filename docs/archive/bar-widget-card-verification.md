@@ -1,5 +1,8 @@
 # Bar widget card verification record
 
+> **Archived.** Point-in-time test-run record. Paths (`shilpo-shell`) reflect the pre-consolidation layout, before
+> `shell` moved into `desktop/shilpo/src/shell/`. Not living documentation.
+
 Verification date: 2026-08-09  
 Delivery issues: [#58](https://github.com/sayeed205/shilpo/issues/58) and
 [#59](https://github.com/sayeed205/shilpo/issues/59)

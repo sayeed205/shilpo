@@ -27,8 +27,8 @@ cargo build --manifest-path extensions/Cargo.toml \
   -p shilpo-weather-extension --target wasm32-wasip2 --release
 cp extensions/target/wasm32-wasip2/release/shilpo_weather_extension.wasm \
   extensions/weather/extension.wasm
-cargo run -p shilpo-cli -- ext check extensions/weather
-cargo run -p shilpo-cli -- ext dev "$(pwd)/extensions/weather"
+cargo run -p shilpo -- ext check extensions/weather
+cargo run -p shilpo -- ext dev "$(pwd)/extensions/weather"
 ```
 
 Development mode grants the manifest's declared capabilities. Installed packages start disabled and require permission
@@ -39,12 +39,12 @@ review before the network capability is granted.
 Build the component first, then create and install the same package an end user receives:
 
 ```bash
-cargo run -p shilpo-cli -- ext pack extensions/weather \
+cargo run -p shilpo -- ext pack extensions/weather \
   --output extensions/target/packages
-cargo run -p shilpo-cli -- ext install \
+cargo run -p shilpo -- ext install \
   extensions/target/packages/org.shilpo.weather-1.0.0.shilpo-ext
-cargo run -p shilpo-cli -- ext approve org.shilpo.weather --grant-all
-cargo run -p shilpo-cli -- ext enable org.shilpo.weather
+cargo run -p shilpo -- ext approve org.shilpo.weather --grant-all
+cargo run -p shilpo -- ext enable org.shilpo.weather
 ```
 
 An official release signs and publishes that package through Shilpo's official registry. Source location alone never
@@ -107,7 +107,7 @@ The shell does not need to restart. Run `ext dev` from the build section once to
 iterations only need `ext reload`. If no release binary exists, the final command can instead be run as:
 
 ```bash
-cargo run -p shilpo-cli -- ext reload org.shilpo.weather
+cargo run -p shilpo -- ext reload org.shilpo.weather
 ```
 
 The widget normally moves through these states:

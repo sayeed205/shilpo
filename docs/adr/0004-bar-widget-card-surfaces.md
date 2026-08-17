@@ -1,20 +1,24 @@
-# Bar widget card surfaces
+# ADR-0004: Bar Widget Card Surfaces
+
+- **Status**: Accepted
 
 Bar widgets expose supplementary content through cards rendered on dedicated layer-shell surfaces rather than inside the
 bar window. This ADR records the structural decisions that span all widgets; widget-specific content and behavior details
-live in the [design record](../bar-widget-cards-grill.md). Parent delivery tracker: [#50](https://github.com/sayeed205/shilpo/issues/50).
+live in the [design record](../archive/bar-widget-cards-grill.md). Parent delivery
+tracker: [#50](https://github.com/sayeed205/shilpo/issues/50).
 
 ## Dedicated per-monitor surfaces
 
 Each active monitor may lazily create up to two reusable card surfaces — one for the persistent-click channel and one for
-the temporary-hover channel. Surfaces are Wayland layer-shell windows managed by `shilpo-shell`. Hidden surfaces clear
+the temporary-hover channel. Surfaces are Wayland layer-shell windows managed by the shell (`desktop/shilpo`). Hidden
+surfaces clear
 their content; surfaces are destroyed when their monitor disappears or the shell configuration is rebuilt.
 
 **Rejected alternative: rendering cards inside the bar window.** The bar is a narrow, auto-sized layer-shell surface.
 Expanding it to contain arbitrary card content would fight the compositor's layer-shell sizing model, require the bar to
 manage focus semantics it currently avoids, and couple card layout to bar geometry.
 
-## Two-channel coordinator in `shilpo-shell`
+## Two-channel coordinator in `desktop/shilpo`
 
 A central coordinator owns a shell-wide persistent-click channel (zero or one card) and a temporary-hover channel (zero
 or one card). Each open entry carries owner identity, monitor, anchor geometry, and lifecycle state. Channel limits are
@@ -72,10 +76,10 @@ exclusivity, placement, and focus rules, creating an unsandboxable escape hatch.
 - Escape, source-widget toggle, outside click, and focus loss dismiss a persistent card. Dismissal restores focus to the
   previously focused application when that application remains available.
 - All surface policy — layer-shell creation, placement, focus, collision, dismissal — remains Linux-specific inside
-  `shilpo-shell` (ADR-0001 principle).
+  `desktop/shilpo` (ADR-0001 principle).
 - Existing `shilpo-ui` presentation primitives (`Card`, `Popover`, `HoverCard`) are reused for card content where
   applicable; genuinely missing generic primitives are added to `shilpo-ui` with interactive Storybook stories.
 - The provider contract serves built-ins only. Extension bar menus use a separate declarative adapter with host-measured,
   host-bounded intrinsic sizing rather than raw surface control or direct access to the provider contract.
 - Widget-specific Battery, Workspace, and Running Apps behavior is recorded in the
-  [design record](../bar-widget-cards-grill.md), not in this ADR.
+  [design record](../archive/bar-widget-cards-grill.md), not in this ADR.

@@ -1,4 +1,4 @@
-# ADR-0014: Standardized D-Bus Shell Control Plane
+# ADR-0012: Standardized D-Bus Shell Control Plane
 
 - **Status**: Accepted
 - **Date**: 2026-08-12

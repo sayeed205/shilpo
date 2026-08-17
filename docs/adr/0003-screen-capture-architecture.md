@@ -1,4 +1,6 @@
-# Screen capture crate architecture (Screenshot-Only)
+# ADR-0003: Screen Capture Crate Architecture (Screenshot-Only)
+
+- **Status**: Accepted
 
 Shilpo's screen capture feature is a native implementation replacing the
 legacy `grim` shell-out approach. Originally in `desktop/capture`, screen capture has been absorbed into `shilpo-services::capture` as a focused domain module.

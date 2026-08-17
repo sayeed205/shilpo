@@ -1,8 +1,6 @@
-# ADR-0017: Extension Keyboard Shortcuts & Opt-In Niri KDL Projection
+# ADR-0015: Extension Keyboard Shortcuts & Opt-In Niri KDL Projection
 
-## Status
-
-Accepted
+- **Status**: Accepted
 
 ## Context
 

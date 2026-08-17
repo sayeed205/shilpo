@@ -1,7 +1,12 @@
 # Bar Widget Cards — Design Grill
 
+> **Archived, 2026-08.** This is a point-in-time design record, not living documentation. Paths and crate names
+> below (`shilpo-shell`, `desktop/shell/...`) reflect the pre-consolidation layout, before `shell` moved into
+> `desktop/shilpo/src/shell/`. Structural decisions live in [ADR-0004](../adr/0004-bar-widget-card-surfaces.md);
+> current contributor guidance lives in [bar-widget-card-provider-guide.md](../bar-widget-card-provider-guide.md).
+
 Status: **accepted design baseline**. Architectural decisions are recorded in
-[ADR-0006](adr/0006-bar-widget-card-surfaces.md). Parent delivery tracker:
+[ADR-0004](../adr/0004-bar-widget-card-surfaces.md). Parent delivery tracker:
 [#50](https://github.com/sayeed205/shilpo/issues/50). This document records settled design decisions and widget-specific
 behavior; it is not an implementation plan or authorization to change product code.
 
@@ -222,8 +227,8 @@ completion.
 ## Verification contract
 
 Developer integration guidance is maintained in
-[bar-widget-card-integration.md](bar-widget-card-integration.md). Recorded results and environment limitations are
-maintained in
+[bar-widget-card-provider-guide.md](../bar-widget-card-provider-guide.md). Recorded results and environment limitations
+are maintained in
 [bar-widget-card-verification.md](bar-widget-card-verification.md).
 
 Coordinator and placement tests cover hover timing/cancellation, two-channel coexistence, same-owner suppression,

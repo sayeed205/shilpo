@@ -1,4 +1,6 @@
-# Theme crate split into cross-platform core and Linux daemon
+# ADR-0002: Theme Crate Split into Cross-Platform Core and Linux Daemon
+
+- **Status**: Accepted
 
 `shilpo-theme` is split into two crates: a cross-platform core (`shilpo-theme` in `core/theme`) containing M3 color
 math, scheme generation, and pure data types (`ThemeMode`, `SchemeVariant`, `ThemeState`, `ThemeCommand`, `reduce()`),

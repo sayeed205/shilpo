@@ -1,4 +1,6 @@
-# Unified executable with explicit process roles
+# ADR-0005: Unified Executable with Explicit Process Roles
+
+- **Status**: Accepted
 
 Shilpo ships one desktop executable, `shilpo`, but uses separate operating-system processes for failure isolation.
 Packaging and process topology are intentionally different decisions.

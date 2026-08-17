@@ -1,6 +1,6 @@
-# Canonical WIT Extension Contract and Process Execution Removal
+# ADR-0016: Canonical WIT Extension Contract and Process Execution Removal
 
-**Status**: Accepted
+- **Status**: Accepted
 
 ## Context
 

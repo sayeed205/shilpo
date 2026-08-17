@@ -1,4 +1,4 @@
-# ADR-0016: Animated Material 3 Theme Transitions
+# ADR-0014: Animated Material 3 Theme Transitions
 
 - **Status**: Accepted
 - **Date**: 2026-08-13

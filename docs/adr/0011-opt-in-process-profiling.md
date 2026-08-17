@@ -1,4 +1,4 @@
-# ADR-0013: Opt-in Process Profiling Infrastructure
+# ADR-0011: Opt-in Process Profiling Infrastructure
 
 - **Status**: Accepted
 - **Date**: 2026-08-12

@@ -23,15 +23,23 @@ The workspace is split into two tiers (see [ADR-0001](docs/adr/0001-cross-platfo
 - **[`shilpo-ui`](core/ui)**: M3 GPUI component library. Generic, publishable UI primitives.
 - **[`shilpo-theme`](core/theme)**: M3 color math, scheme generation, and theme data types. Pure computation, no I/O.
 - **[`shilpo-macros`](core/macros)**: Procedural macros (`icon_named!`, `#[derive(IntoPlot)]`).
-- **[`shilpo-ext-api`](core/ext-api)**: Extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`, `IdError`), manifest, events, guest host effects, ViewTree, WIT interface, schema files, and validation.
+- **[`shilpo-ext-api`](core/ext-api)**: Extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`,
+  `IdError`), manifest, events, guest host effects, ViewTree, WIT interface, schema files, and validation.
 
 #### Linux Desktop (`desktop/` — internal, never published)
 
-- **[`shilpo`](desktop/shilpo)**: Consolidated desktop product — Shell daemon, Settings app, CLI dispatch, and declarative TOML config in one executable binary target (`shilpo`).
-- **[`shilpo-device`](desktop/device)**: Presentation-neutral versioned device domain protocol and typed DBus client with degraded/reconnect projections and client-side debounce.
-- **[`shilpo-services`](desktop/services)**: System service integrations — Wayland/Niri, audio, bluetooth, brightness, network, notifications, media, tray, upower, IPC, screen capture domain, and LMDB session store.
-- **[`shilpo-ext-runtime`](desktop/ext-runtime)**: Wasmtime-sandboxed extension runtime with capability authorization, catalog, and worker process protocol.
-- **[`shilpo-theme-daemon`](desktop/theme-daemon)**: Theme DBus daemon, XDG portal sync, persistence, third-party adapters (see [ADR-0002](docs/adr/0002-theme-crate-split.md)).
+- **[`shilpo`](desktop/shilpo)**: Consolidated desktop product — Shell daemon, Settings app, CLI dispatch, and
+  declarative TOML config in one executable binary target (`shilpo`).
+- **[`shilpo-device`](desktop/device)**: Presentation-neutral versioned device domain protocol and typed DBus client
+  with degraded/reconnect projections and client-side debounce.
+- **[`shilpo-services`](desktop/services)**: System service integrations — Wayland/Niri, audio, bluetooth, brightness,
+  network, notifications, media, tray, upower, IPC, screen capture domain, and LMDB session store.
+- **[`shilpo-ext-runtime`](desktop/ext-runtime)**: Wasmtime-sandboxed extension runtime with capability authorization,
+  catalog, and worker process protocol.
+- **[`shilpo-theme-daemon`](desktop/theme-daemon)**: Theme DBus daemon, XDG portal sync, persistence, third-party
+  adapters (see [ADR-0002](docs/adr/0002-theme-crate-split.md)).
+- **[`shilpo-observability`](desktop/observability)**: Internal process observability — subscriber init, reloadable log
+  filter, opt-in Chrome trace profiling.
 
 #### Applications (`apps/`)
 
@@ -275,64 +283,41 @@ How the engineering skills should consume this repo's domain documentation when 
 
 #### Before exploring, read these
 
-- **`CONTEXT-MAP.md`** at the repo root — it points at one `CONTEXT.md` per crate/app context. Read each one relevant to
-  the topic.
-- **`docs/adr/`** at the repo root — workspace-wide architectural decisions.
-- **Per-crate `docs/adr/`** — read ADRs in the specific crate you're about to work in.
+- **`CONTEXT-MAP.md`** at the repo root — it summarizes every crate/app context and links out to that crate's
+  `CONTEXT.md` where one exists.
+- **`docs/adr/`** at the repo root — the single, workspace-wide set of architectural decisions. See
+  `docs/adr/README.md` for the index. There are no per-crate `docs/adr/` directories in this repo; all ADRs live at the
+  workspace root regardless of which crate they concern.
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront.
-The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily
-when terms or decisions actually get resolved.
+Not every crate has a `CONTEXT.md` yet — `core/ui`, `core/macros`, `core/assets`, `desktop/services`,
+`desktop/theme-daemon`, and `apps/storybook` currently don't. If one doesn't exist, **proceed silently**: read
+`CONTEXT-MAP.md`'s own summary of that crate instead, don't flag the gap, and don't suggest creating one upfront. The
+`/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when
+terms or decisions actually get resolved.
 
 #### File structure
 
-Multi-context repo (one `CONTEXT.md` per crate/app):
-
 ```
 /
-├── CONTEXT-MAP.md                        ← maps contexts to crates
-├── docs/adr/                             ← workspace-wide decisions
+├── CONTEXT-MAP.md                        ← summarizes every context, links to CONTEXT.md where present
+├── docs/adr/                             ← the only docs/adr/ directory — workspace-wide, not per-crate
 ├── core/
-│   ├── ui/
-│   │   ├── CONTEXT.md
-│   │   └── docs/adr/
-│   ├── theme/
-│   │   ├── CONTEXT.md
-│   │   └── docs/adr/
-│   ├── macros/
-│   │   ├── CONTEXT.md
-│   │   └── docs/adr/
-│   ├── assets/
-│   │   ├── CONTEXT.md
-│   │   └── docs/adr/
-│   └── ext-api/
-│       ├── CONTEXT.md
-│       └── docs/adr/
+│   ├── ui/                               (no CONTEXT.md yet)
+│   ├── theme/            CONTEXT.md
+│   ├── macros/                           (no CONTEXT.md yet)
+│   ├── assets/                           (no CONTEXT.md yet)
+│   └── ext-api/          CONTEXT.md
 ├── desktop/
-│   ├── shell/
-│   │   ├── CONTEXT.md
-│   │   └── docs/adr/
-│   ├── settings/
-│   │   ├── CONTEXT.md
-│   │   └── docs/adr/
-│   ├── services/
-│   │   ├── CONTEXT.md
-│   │   └── docs/adr/
-│   ├── config/
-│   │   ├── CONTEXT.md
-│   │   └── docs/adr/
-│   ├── ext-runtime/
-│   │   ├── CONTEXT.md
-│   │   └── docs/adr/
-│   ├── theme-daemon/
-│   │   ├── CONTEXT.md
-│   │   └── docs/adr/
-│   └── cli/
-│       ├── CONTEXT.md
-│       └── docs/adr/
-└── apps/storybook/
-    ├── CONTEXT.md
-    └── docs/adr/
+│   ├── shilpo/            CONTEXT.md     ← consolidated Shell + Settings + CLI + config
+│   ├── device/            CONTEXT.md
+│   ├── services/                         (no CONTEXT.md yet)
+│   ├── ext-runtime/       CONTEXT.md
+│   ├── theme-daemon/                     (no CONTEXT.md yet)
+│   └── observability/     CONTEXT.md
+├── sdk/
+│   ├── rust/              CONTEXT.md
+│   └── typescript/        CONTEXT.md
+└── apps/storybook/                       (no CONTEXT.md yet)
 ```
 
 #### Use the glossary's vocabulary
@@ -347,5 +332,5 @@ doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
 
 If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
 
-> _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_
+> _Contradicts ADR-0003 (event-sourced orders) — but worth reopening because…_
 

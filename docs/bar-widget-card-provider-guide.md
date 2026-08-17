@@ -4,12 +4,12 @@ Bar widget cards are internal Linux-shell surfaces. A widget supplies identity, 
 preferred dimensions, and lazy content; the card coordinator owns timing, placement, focus, dismissal, collision
 handling, animation, and layer-shell window lifetime.
 
-Read [ADR-0006](adr/0006-bar-widget-card-surfaces.md) and the
-[accepted design record](bar-widget-cards-grill.md) before adding a provider.
+Read [ADR-0004](adr/0004-bar-widget-card-surfaces.md) and the
+[accepted design record](archive/bar-widget-cards-grill.md) before adding a provider.
 
 ## Provider and source identity
 
-Implement `CardProvider` under `desktop/shell/src/bar/cards/` and register one provider instance in
+Implement `CardProvider` under `desktop/shilpo/src/shell/bar/cards/` and register one provider instance in
 `ShellSurfaces::new`. Centralize the typed owner and source constructors in the provider module; other modules should
 not repeat primitive owner strings.
 

@@ -1,4 +1,4 @@
-# ADR-0015: Runtime Debug Control Interface
+# ADR-0013: Runtime Debug Control Interface
 
 - **Status**: Accepted
 - **Date**: 2026-08-13

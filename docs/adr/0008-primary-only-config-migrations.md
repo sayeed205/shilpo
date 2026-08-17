@@ -1,14 +1,12 @@
-# ADR-0010: Primary-Only Ordered Configuration Version Migrations
+# ADR-0008: Primary-Only Ordered Configuration Version Migrations
 
-## Status
-
-Accepted
+- **Status**: Accepted
 
 ## Context
 
-ADR-0009 established transactional layered configuration: defaults -> `config.toml` -> ordered
+ADR-0007 established transactional layered configuration: defaults -> `config.toml` -> ordered
 `conf.d/*.toml` fragments -> `overrides.toml`, resolved into a single validated `ShellConfig`
-candidate with provenance and scoped recovery. ADR-0009 delegated schema version migrations and
+candidate with provenance and scoped recovery. ADR-0007 delegated schema version migrations and
 configuration backup machinery to #77.
 
 `ShellConfig` already requires a `version` field that validation restricts to `1`. Before #77 there
@@ -41,7 +39,7 @@ planning, diagnostics, and tests.
 - A version greater than `LATEST_CONFIG_VERSION` is a hard `FutureVersion` error; it is never
   downgraded, and startup never silently falls back to defaults over the source.
 - A version older than the oldest registered migration is `UnsupportedOldVersion`.
-- Missing or empty primaries retain ADR-0009 behavior: missing files may be created on first run,
+- Missing or empty primaries retain ADR-0007 behavior: missing files may be created on first run,
   empty hand-authored files are never rewritten.
 
 `version` is metadata, not an ordinary recoverable leaf: `classify_diagnostic` already maps the
