@@ -29,14 +29,8 @@ impl ActionDispatcher {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn keybinding_manager(&self) -> &crate::actions::KeybindingManager {
         &self.keybindings
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn keybinding_manager_mut(&mut self) -> &mut crate::actions::KeybindingManager {
-        &mut self.keybindings
     }
 
     pub(crate) fn reconcile_keybindings(

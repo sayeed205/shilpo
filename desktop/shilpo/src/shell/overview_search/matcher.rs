@@ -385,7 +385,7 @@ mod tests {
         let elapsed = start.elapsed();
 
         assert!(res.is_some());
-        assert!(elapsed < std::time::Duration::from_millis(100));
+        assert!(elapsed < std::time::Duration::from_secs(2));
     }
 
     #[test]

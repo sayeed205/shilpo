@@ -126,7 +126,6 @@ impl CardCoordinator {
 
     /// Remove a provider. Dispatches `OwnerRemoved` dismiss into the state
     /// machine to cleanly close any open card for that owner.
-    #[allow(dead_code)]
     pub(crate) fn remove_provider(cx: &mut App, owner_id: &CardOwnerId) {
         tracing::debug!(owner = %owner_id, "card provider removed");
         Self::dispatch(
@@ -220,7 +219,6 @@ impl CardCoordinator {
     }
 
     /// Query the source state for a given source.
-    #[allow(dead_code)]
     pub(crate) fn source_state(cx: &App, source: &CardSourceId) -> CardSourceState {
         if !cx.has_global::<ShellRuntime>() {
             return CardSourceState::Idle;

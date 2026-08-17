@@ -225,12 +225,6 @@ impl CardBandView {
         cx.notify();
     }
 
-    /// Whether the band currently has content (or is animating out).
-    #[allow(dead_code)]
-    pub fn is_visible(&self) -> bool {
-        self.content.is_some()
-    }
-
     // ── Animation tick ────────────────────────────────────────────
 
     fn start_animation_task(&mut self, cx: &mut Context<Self>) {

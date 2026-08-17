@@ -163,7 +163,6 @@ impl ShellRuntime {
         &mut self.extension_host
     }
 
-    #[allow(dead_code)]
     pub(crate) fn wallpaper_coordinator(&self) -> &WallpaperCoordinator {
         &self.wallpaper_coordinator
     }

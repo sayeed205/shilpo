@@ -1,22 +1,11 @@
 use serde::Serialize;
 use serde_json::Value;
 
-#[allow(dead_code)]
 pub const EXIT_SUCCESS: i32 = 0;
-#[allow(dead_code)]
 pub const EXIT_FAILURE: i32 = 1;
-#[allow(dead_code)]
 pub const EXIT_INVALID_ARGS: i32 = 2;
-#[allow(dead_code)]
 pub const EXIT_UNAVAILABLE: i32 = 3;
-#[allow(dead_code)]
 pub const EXIT_TIMEOUT: i32 = 4;
-#[allow(dead_code)]
-pub const EXIT_PROTOCOL_MISMATCH: i32 = 5;
-#[allow(dead_code)]
-pub const EXIT_AUTH_FAILURE: i32 = 6;
-#[allow(dead_code)]
-pub const EXIT_INTERNAL_ERROR: i32 = 70;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct JsonEnvelope {

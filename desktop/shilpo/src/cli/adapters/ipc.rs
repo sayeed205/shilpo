@@ -1,5 +1,6 @@
 //! D-Bus adapter for shell commands and status queries over `org.shilpo.Shell`.
 
+use crate::cli::output::{EXIT_FAILURE, EXIT_INVALID_ARGS, EXIT_TIMEOUT, EXIT_UNAVAILABLE};
 use crate::shell::dbus::{CommandResult, ShellProxy, ShellStatus, ShellTelemetry};
 use std::sync::{Mutex, OnceLock};
 use zbus::Connection;
@@ -208,10 +209,10 @@ fn map_command_result(res: CommandResult) -> Result<(), (i32, String)> {
         Ok(())
     } else {
         match res.outcome.as_str() {
-            "rejected" => Err((1, format!("command rejected: {}", res.reason))),
-            "timed_out" => Err((4, "command timed out".to_string())),
-            "cancelled" => Err((1, format!("command cancelled: {}", res.reason))),
-            _ => Err((1, format!("command failed: {}", res.outcome))),
+            "rejected" => Err((EXIT_FAILURE, format!("command rejected: {}", res.reason))),
+            "timed_out" => Err((EXIT_TIMEOUT, "command timed out".to_string())),
+            "cancelled" => Err((EXIT_FAILURE, format!("command cancelled: {}", res.reason))),
+            _ => Err((EXIT_FAILURE, format!("command failed: {}", res.outcome))),
         }
     }
 }
@@ -222,13 +223,17 @@ pub fn map_dbus_error(err: zbus::Error) -> (i32, String) {
             zbus::fdo::Error::UnknownMethod(msg)
             | zbus::fdo::Error::ServiceUnknown(msg)
             | zbus::fdo::Error::NameHasNoOwner(msg) => {
-                (3, format!("shell daemon unavailable: {msg}"))
+                (EXIT_UNAVAILABLE, format!("shell daemon unavailable: {msg}"))
             }
-            zbus::fdo::Error::InvalidArgs(msg) => (2, format!("invalid arguments: {msg}")),
-            zbus::fdo::Error::LimitsExceeded(msg) => (1, format!("limits exceeded: {msg}")),
-            zbus::fdo::Error::Failed(msg) => (1, format!("operation failed: {msg}")),
-            _ => (1, format!("{fdo_err}")),
+            zbus::fdo::Error::InvalidArgs(msg) => {
+                (EXIT_INVALID_ARGS, format!("invalid arguments: {msg}"))
+            }
+            zbus::fdo::Error::LimitsExceeded(msg) => {
+                (EXIT_FAILURE, format!("limits exceeded: {msg}"))
+            }
+            zbus::fdo::Error::Failed(msg) => (EXIT_FAILURE, format!("operation failed: {msg}")),
+            _ => (EXIT_FAILURE, format!("{fdo_err}")),
         },
-        _ => (3, format!("shell daemon unavailable: {err}")),
+        _ => (EXIT_UNAVAILABLE, format!("shell daemon unavailable: {err}")),
     }
 }

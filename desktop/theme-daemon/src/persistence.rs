@@ -96,14 +96,17 @@ mod tests {
             ..Default::default()
         };
 
-        let path = write_state_snapshot(&state).expect("Failed to write snapshot");
+        let temp = tempfile::tempdir().unwrap();
+        let target_path = temp.path().join("colors.json");
+
+        let path = write_state_snapshot_to(&state, &target_path).expect("Failed to write snapshot");
         assert!(path.exists());
 
         let metadata = fs::metadata(&path).unwrap();
         let permissions = metadata.permissions();
         assert_eq!(permissions.mode() & 0o777, 0o600);
 
-        let read_back = read_state_snapshot().expect("Failed to read snapshot");
+        let read_back = read_state_snapshot_from(&target_path).expect("Failed to read snapshot");
         assert_eq!(read_back.theme.revision, 42);
         assert_eq!(read_back, state);
     }

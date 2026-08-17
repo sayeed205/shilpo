@@ -1,6 +1,7 @@
 //! Systemd adapter for managing `shilpo-shell.service` user unit and polling D-Bus status.
 
 use super::ipc::IpcAdapter;
+use crate::cli::output::{EXIT_FAILURE, EXIT_UNAVAILABLE};
 use crate::shell::dbus::ShellStatus;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -206,11 +207,17 @@ impl SystemdAdapter {
         if let Some(lines) = lines {
             cmd.arg("-n").arg(lines.to_string());
         }
-        let output = cmd
-            .output()
-            .map_err(|error| (3, format!("failed to execute journalctl: {error}")))?;
+        let output = cmd.output().map_err(|error| {
+            (
+                EXIT_UNAVAILABLE,
+                format!("failed to execute journalctl: {error}"),
+            )
+        })?;
         if !output.status.success() {
-            return Err((1, String::from_utf8_lossy(&output.stderr).trim().to_owned()));
+            return Err((
+                EXIT_FAILURE,
+                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            ));
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }

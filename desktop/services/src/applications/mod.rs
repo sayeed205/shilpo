@@ -26,6 +26,52 @@ pub struct Application {
     pub try_exec: Option<String>,
 }
 
+/// Sanitizes an application name into a `systemd-run --unit` unit-name-safe token.
+fn sanitize_unit_name_component(app_name: &str) -> String {
+    app_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Builds the `systemd-run` command that launches `program` in its own
+/// user scope, so it outlives `shilpo-shell.service` restarts/upgrades
+/// instead of being terminated alongside it.
+fn build_scoped_command(
+    program: &str,
+    args: &[String],
+    working_dir: Option<&PathBuf>,
+    app_name: &str,
+    unit_suffix: &str,
+) -> Command {
+    let unit_name = format!(
+        "app-{}-{}",
+        sanitize_unit_name_component(app_name),
+        unit_suffix
+    );
+
+    let mut systemd_cmd = Command::new("systemd-run");
+    systemd_cmd
+        .arg("--user")
+        .arg("--scope")
+        .arg(format!("--unit={}", unit_name))
+        .arg("--")
+        .arg(program)
+        .args(args);
+
+    if let Some(dir) = working_dir {
+        systemd_cmd.current_dir(dir);
+    }
+
+    systemd_cmd
+}
+
 fn spawn_scoped_command(
     program: &str,
     args: &[String],
@@ -33,34 +79,12 @@ fn spawn_scoped_command(
     app_name: &str,
 ) -> std::io::Result<std::process::Child> {
     if binary_exists("systemd-run") {
-        let clean_name: String = app_name
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-        let unit_name = format!("app-{}-{}", clean_name, timestamp);
-
-        let mut systemd_cmd = Command::new("systemd-run");
-        systemd_cmd
-            .arg("--user")
-            .arg("--scope")
-            .arg(format!("--unit={}", unit_name))
-            .arg("--")
-            .arg(program)
-            .args(args);
-
-        if let Some(dir) = working_dir {
-            systemd_cmd.current_dir(dir);
-        }
+        let mut systemd_cmd =
+            build_scoped_command(program, args, working_dir, app_name, &timestamp.to_string());
 
         if let Ok(child) = systemd_cmd.spawn() {
             return Ok(child);
@@ -171,17 +195,6 @@ impl Application {
             }
         });
     }
-}
-
-/// Launch desktop applications in their own systemd scope. Otherwise they
-/// inherit `shilpo-shell.service` and are terminated whenever the shell is
-/// restarted or upgraded.
-#[allow(dead_code)]
-fn scoped_app_command(argv: &[String]) -> Command {
-    let mut command = Command::new("systemd-run");
-    command.args(["--user", "--scope", "--quiet", "--collect", "--"]);
-    command.args(argv);
-    command
 }
 
 pub fn binary_exists(bin: &str) -> bool {
@@ -805,7 +818,8 @@ mod tests {
 
     #[test]
     fn desktop_apps_launch_outside_the_shell_service_cgroup() {
-        let command = scoped_app_command(&["zed".into(), "--new".into()]);
+        let command =
+            build_scoped_command("zed", &["--new".into()], None, "Zed Editor!", "test-suffix");
         assert_eq!(command.get_program(), "systemd-run");
         assert_eq!(
             command
@@ -815,13 +829,19 @@ mod tests {
             [
                 "--user",
                 "--scope",
-                "--quiet",
-                "--collect",
+                "--unit=app-Zed_Editor_-test-suffix",
                 "--",
                 "zed",
                 "--new"
             ]
         );
+    }
+
+    #[test]
+    fn scoped_command_working_dir_is_applied_when_present() {
+        let dir = PathBuf::from("/tmp");
+        let command = build_scoped_command("zed", &[], Some(&dir), "zed", "suffix");
+        assert_eq!(command.get_current_dir(), Some(dir.as_path()));
     }
 
     #[test]

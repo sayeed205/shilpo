@@ -1673,6 +1673,7 @@ mod tests {
             })),
             wallpaper_backend: Some(Arc::new(|_| Ok(()))),
             headless: true,
+            state_path: Some(temp_dir.path().join("colors.json")),
             ..Default::default()
         };
 
@@ -1712,6 +1713,7 @@ mod tests {
                 Ok(())
             })),
             headless: true,
+            state_path: Some(temp_dir.path().join("colors.json")),
             ..Default::default()
         };
 
@@ -1752,6 +1754,7 @@ mod tests {
 
         let file = tempfile::NamedTempFile::new().unwrap();
         let path = file.path().to_path_buf();
+        let state_dir = tempfile::tempdir().unwrap();
 
         let decode_count = Arc::new(AtomicUsize::new(0));
         let decode_count_clone = decode_count.clone();
@@ -1767,6 +1770,7 @@ mod tests {
             })),
             wallpaper_backend: Some(Arc::new(|_| Ok(()))),
             headless: true,
+            state_path: Some(state_dir.path().join("colors.json")),
             ..Default::default()
         };
 
@@ -1802,6 +1806,7 @@ mod tests {
 
         let file = tempfile::NamedTempFile::new().unwrap();
         let path = file.path().to_path_buf();
+        let state_dir = tempfile::tempdir().unwrap();
 
         let decode_count = Arc::new(AtomicUsize::new(0));
         let decode_count_clone = decode_count.clone();
@@ -1813,6 +1818,7 @@ mod tests {
             })),
             wallpaper_backend: Some(Arc::new(|_| Ok(()))),
             headless: true,
+            state_path: Some(state_dir.path().join("colors.json")),
             ..Default::default()
         };
 
@@ -1852,6 +1858,7 @@ mod tests {
 
         let file = tempfile::NamedTempFile::new().unwrap();
         let path = file.path().to_path_buf();
+        let state_dir = tempfile::tempdir().unwrap();
 
         let decode_count = Arc::new(AtomicUsize::new(0));
         let decode_count_clone = decode_count.clone();
@@ -1867,6 +1874,7 @@ mod tests {
             })),
             wallpaper_backend: Some(Arc::new(|_| Ok(()))),
             headless: true,
+            state_path: Some(state_dir.path().join("colors.json")),
             ..Default::default()
         };
 
@@ -1897,6 +1905,7 @@ mod tests {
 
         let file = tempfile::NamedTempFile::new().unwrap();
         let path = file.path().to_path_buf();
+        let state_dir = tempfile::tempdir().unwrap();
 
         let decode_count = Arc::new(AtomicUsize::new(0));
         let decode_count_clone = decode_count.clone();
@@ -1916,6 +1925,7 @@ mod tests {
                 }
             })),
             headless: true,
+            state_path: Some(state_dir.path().join("colors.json")),
             ..Default::default()
         };
 
@@ -1951,11 +1961,13 @@ mod tests {
     async fn test_15_cache_hit_produces_identical_state() {
         let file = tempfile::NamedTempFile::new().unwrap();
         let path = file.path().to_path_buf();
+        let state_dir = tempfile::tempdir().unwrap();
 
         let options = ThemeDaemonOptions {
             wallpaper_extractor: Some(Arc::new(|_| Ok((0xff778899, SchemeVariant::Expressive)))),
             wallpaper_backend: Some(Arc::new(|_| Ok(()))),
             headless: true,
+            state_path: Some(state_dir.path().join("colors.json")),
             ..Default::default()
         };
 
@@ -1988,6 +2000,7 @@ mod tests {
         let file2 = tempfile::NamedTempFile::new().unwrap();
         let path1 = file1.path().to_path_buf();
         let path2 = file2.path().to_path_buf();
+        let state_dir = tempfile::tempdir().unwrap();
 
         let options = ThemeDaemonOptions {
             wallpaper_extractor: Some(Arc::new(|p| {
@@ -1999,6 +2012,7 @@ mod tests {
             })),
             wallpaper_backend: Some(Arc::new(|_| Ok(()))),
             headless: true,
+            state_path: Some(state_dir.path().join("colors.json")),
             ..Default::default()
         };
 
@@ -2075,6 +2089,7 @@ mod tests {
             })),
             wallpaper_backend: Some(Arc::new(|_| Ok(()))),
             headless: true,
+            state_path: Some(temp_dir.path().join("colors.json")),
             ..Default::default()
         };
 
