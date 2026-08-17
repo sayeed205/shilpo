@@ -224,6 +224,93 @@ async fn run_clipboard_monitoring(
     }
 }
 
+/// Maximum size in bytes a single clipboard offer's content is read up to before
+/// being discarded as oversized.
+const CLIPBOARD_MAX_BYTES: usize = 1_048_576;
+
+/// The kind of clipboard offer selected for capture, and the MIME type to request it as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OfferKind {
+    UriList,
+    Text(String),
+}
+
+/// Returns true if the offer's MIME types carry the password-manager sensitive-content
+/// hint. Such offers must never be persisted or published to the watch stream.
+fn is_password_manager_offer(mime_types: &[String]) -> bool {
+    mime_types.iter().any(|m| m == "x-kde-passwordManagerHint")
+}
+
+/// Classifies a selection offer's MIME types into a capturable kind, or `None` if the
+/// offer carries no capturable content. URI lists take priority over plain text.
+fn classify_offer(mime_types: &[String]) -> Option<OfferKind> {
+    if mime_types.iter().any(|m| m == "text/uri-list") {
+        return Some(OfferKind::UriList);
+    }
+    let text_mime = mime_types.iter().find(|mime| {
+        mime.as_str() == "text/plain;charset=utf-8"
+            || mime.as_str() == "text/plain"
+            || mime.as_str() == "UTF8_STRING"
+            || mime.as_str() == "STRING"
+    })?;
+    let target_mime = mime_types
+        .iter()
+        .find(|m| m.as_str() == "text/plain;charset=utf-8")
+        .unwrap_or(text_mime)
+        .clone();
+    Some(OfferKind::Text(target_mime))
+}
+
+/// Parses a `text/uri-list` payload into file paths, skipping comments and blank lines
+/// and percent-decoding `file://` URIs.
+fn parse_uri_list(raw: &str) -> Vec<std::path::PathBuf> {
+    raw.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|uri_str| {
+            if let Some(file_path) = url::Url::parse(uri_str)
+                .ok()
+                .and_then(|u| u.to_file_path().ok())
+            {
+                return file_path;
+            }
+            if let Some(stripped) = uri_str.strip_prefix("file://") {
+                std::path::PathBuf::from(stripped)
+            } else {
+                std::path::PathBuf::from(uri_str)
+            }
+        })
+        .collect()
+}
+
+/// Reads `reader` to completion, retrying on `WouldBlock`, up to `cap` bytes.
+/// Returns `None` if the stream is empty, exceeds `cap`, or errors; the caller must
+/// discard the offer in either case rather than persisting a truncated payload.
+fn read_bounded_stream(
+    mut reader: impl std::io::Read,
+    cap: usize,
+    is_cancelled: impl Fn() -> bool,
+) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 4096];
+    while !is_cancelled() {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                bytes.extend_from_slice(&buffer[..read]);
+                if bytes.len() > cap {
+                    return None;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(_) => return None,
+        }
+    }
+    if bytes.is_empty() { None } else { Some(bytes) }
+}
+
 #[cfg(target_os = "linux")]
 fn wayland_data_control_loop(
     ctx: StateContext<Vec<ClipboardItem>>,
@@ -327,33 +414,23 @@ fn wayland_data_control_loop(
                         .unwrap_or_default();
 
                     // Sensitive-content exclusion: x-kde-passwordManagerHint must never be persisted or published
-                    if mime_types.iter().any(|m| m == "x-kde-passwordManagerHint") {
+                    if is_password_manager_offer(&mime_types) {
                         return;
                     }
 
-                    let is_uri_list = mime_types.iter().any(|m| m == "text/uri-list");
-                    let is_text = !is_uri_list
-                        && mime_types.iter().any(|mime| {
-                            mime == "text/plain;charset=utf-8"
-                                || mime == "text/plain"
-                                || mime == "UTF8_STRING"
-                                || mime == "STRING"
-                        });
+                    let Some(kind) = classify_offer(&mime_types) else {
+                        return;
+                    };
 
-                    if (is_uri_list || is_text) && !state.ctx.cancellation.is_cancelled() {
+                    if !state.ctx.cancellation.is_cancelled() {
                         let (read_fd, write_fd) = match rustix::pipe::pipe() {
                             Ok(fds) => fds,
                             Err(_) => return,
                         };
 
-                        let target_mime = if is_uri_list {
-                            "text/uri-list".to_string()
-                        } else {
-                            mime_types
-                                .iter()
-                                .find(|m| m.as_str() == "text/plain;charset=utf-8")
-                                .cloned()
-                                .unwrap_or_else(|| "text/plain".to_string())
+                        let target_mime = match &kind {
+                            OfferKind::UriList => "text/uri-list".to_string(),
+                            OfferKind::Text(mime) => mime.clone(),
                         };
 
                         use std::os::fd::AsFd;
@@ -363,41 +440,19 @@ fn wayland_data_control_loop(
                         // reading, otherwise the compositor cannot write the offer.
                         let _ = conn.flush();
 
-                        use std::io::Read;
                         if let Ok(flags) = rustix::fs::fcntl_getfl(&read_fd) {
                             let _ = rustix::fs::fcntl_setfl(
                                 &read_fd,
                                 flags | rustix::fs::OFlags::NONBLOCK,
                             );
                         }
-                        let mut file = std::fs::File::from(read_fd);
-                        let mut bytes = Vec::new();
-                        let mut buffer = [0u8; 4096];
-                        let mut exceeded_cap = false;
-                        while !state.ctx.cancellation.is_cancelled() {
-                            match file.read(&mut buffer) {
-                                Ok(0) => break,
-                                Ok(read) => {
-                                    bytes.extend_from_slice(&buffer[..read]);
-                                    if bytes.len() > 1_048_576 {
-                                        exceeded_cap = true;
-                                        bytes.clear();
-                                        break;
-                                    }
-                                }
-                                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                                    std::thread::sleep(std::time::Duration::from_millis(5));
-                                }
-                                Err(_) => {
-                                    bytes.clear();
-                                    break;
-                                }
-                            }
-                        }
-
-                        if exceeded_cap || bytes.is_empty() {
+                        let file = std::fs::File::from(read_fd);
+                        let cancellation = state.ctx.cancellation.clone();
+                        let Some(bytes) = read_bounded_stream(file, CLIPBOARD_MAX_BYTES, || {
+                            cancellation.is_cancelled()
+                        }) else {
                             return;
-                        }
+                        };
 
                         if let Ok(raw_text) = String::from_utf8(bytes) {
                             let limit = state
@@ -405,36 +460,22 @@ fn wayland_data_control_loop(
                                 .load(std::sync::atomic::Ordering::SeqCst);
                             let now = chrono::Utc::now();
 
-                            let item = if is_uri_list {
-                                let paths: Vec<std::path::PathBuf> = raw_text
-                                    .lines()
-                                    .map(|l| l.trim())
-                                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
-                                    .map(|uri_str| {
-                                        if let Some(file_path) = url::Url::parse(uri_str)
-                                            .ok()
-                                            .and_then(|u| u.to_file_path().ok())
-                                        {
-                                            return file_path;
-                                        }
-                                        if let Some(stripped) = uri_str.strip_prefix("file://") {
-                                            std::path::PathBuf::from(stripped)
-                                        } else {
-                                            std::path::PathBuf::from(uri_str)
-                                        }
-                                    })
-                                    .collect();
-                                if paths.is_empty() {
-                                    None
-                                } else {
-                                    Some(ClipboardItem::new_file_reference(paths, now))
+                            let item = match &kind {
+                                OfferKind::UriList => {
+                                    let paths = parse_uri_list(&raw_text);
+                                    if paths.is_empty() {
+                                        None
+                                    } else {
+                                        Some(ClipboardItem::new_file_reference(paths, now))
+                                    }
                                 }
-                            } else {
-                                let text = raw_text.trim().to_string();
-                                if text.is_empty() {
-                                    None
-                                } else {
-                                    Some(ClipboardItem::new_text(text, now))
+                                OfferKind::Text(_) => {
+                                    let text = raw_text.trim().to_string();
+                                    if text.is_empty() {
+                                        None
+                                    } else {
+                                        Some(ClipboardItem::new_text(text, now))
+                                    }
                                 }
                             };
 
@@ -691,35 +732,34 @@ mod tests {
         ];
         let mimes_without_hint = vec!["text/plain;charset=utf-8".to_string()];
 
-        let is_sensitive =
-            |mimes: &[String]| mimes.iter().any(|m| m == "x-kde-passwordManagerHint");
+        assert!(is_password_manager_offer(&mimes_with_hint));
+        assert!(!is_password_manager_offer(&mimes_without_hint));
+    }
 
-        assert!(is_sensitive(&mimes_with_hint));
-        assert!(!is_sensitive(&mimes_without_hint));
+    #[test]
+    fn test_classify_offer_prefers_uri_list_over_text() {
+        let mixed = vec![
+            "text/plain".to_string(),
+            "text/uri-list".to_string(),
+            "text/plain;charset=utf-8".to_string(),
+        ];
+        assert_eq!(classify_offer(&mixed), Some(OfferKind::UriList));
+
+        let text_only = vec!["STRING".to_string(), "text/plain;charset=utf-8".to_string()];
+        assert_eq!(
+            classify_offer(&text_only),
+            Some(OfferKind::Text("text/plain;charset=utf-8".to_string()))
+        );
+
+        let uncapturable = vec!["image/png".to_string()];
+        assert_eq!(classify_offer(&uncapturable), None);
     }
 
     #[test]
     fn test_uri_list_parser_decoding_and_filtering() {
         let raw_payload =
             "# Comment line\r\nfile:///home/user/document%201.pdf\r\nfile:///tmp/image.png\r\n\r\n";
-        let paths: Vec<std::path::PathBuf> = raw_payload
-            .lines()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(|uri_str| {
-                if let Some(file_path) = url::Url::parse(uri_str)
-                    .ok()
-                    .and_then(|u| u.to_file_path().ok())
-                {
-                    return file_path;
-                }
-                if let Some(stripped) = uri_str.strip_prefix("file://") {
-                    std::path::PathBuf::from(stripped)
-                } else {
-                    std::path::PathBuf::from(uri_str)
-                }
-            })
-            .collect();
+        let paths = parse_uri_list(raw_payload);
 
         assert_eq!(paths.len(), 2);
         assert_eq!(
@@ -727,5 +767,27 @@ mod tests {
             std::path::PathBuf::from("/home/user/document 1.pdf")
         );
         assert_eq!(paths[1], std::path::PathBuf::from("/tmp/image.png"));
+    }
+
+    #[test]
+    fn test_read_bounded_stream_rejects_oversized_payload_without_corrupting_history() {
+        let oversized = std::io::Cursor::new(vec![b'x'; CLIPBOARD_MAX_BYTES + 1]);
+        assert_eq!(
+            read_bounded_stream(oversized, CLIPBOARD_MAX_BYTES, || false),
+            None,
+            "content exceeding the cap must be rejected, not truncated and kept"
+        );
+
+        let within_cap = std::io::Cursor::new(b"hello clipboard".to_vec());
+        assert_eq!(
+            read_bounded_stream(within_cap, CLIPBOARD_MAX_BYTES, || false),
+            Some(b"hello clipboard".to_vec())
+        );
+
+        let empty = std::io::Cursor::new(Vec::new());
+        assert_eq!(
+            read_bounded_stream(empty, CLIPBOARD_MAX_BYTES, || false),
+            None
+        );
     }
 }
