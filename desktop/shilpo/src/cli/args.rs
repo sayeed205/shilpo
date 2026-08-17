@@ -285,7 +285,7 @@ pub enum ExtCommands {
         /// Starter contribution kind
         #[arg(long, value_enum)]
         contribution: Option<StarterContributionValue>,
-        /// TypeScript package manager (npm, pnpm, yarn, bun)
+        /// TypeScript package manager (npm, pnpm, yarn, bun, deno)
         #[arg(long, value_enum)]
         package_manager: Option<PackageManagerValue>,
         /// View authoring syntax for TypeScript extensions (jsx, builders)
@@ -492,6 +492,7 @@ pub enum PackageManagerValue {
     Pnpm,
     Yarn,
     Bun,
+    Deno,
 }
 
 impl From<PackageManagerValue> for shilpo_ext_runtime::PackageManager {
@@ -501,6 +502,7 @@ impl From<PackageManagerValue> for shilpo_ext_runtime::PackageManager {
             PackageManagerValue::Pnpm => Self::Pnpm,
             PackageManagerValue::Yarn => Self::Yarn,
             PackageManagerValue::Bun => Self::Bun,
+            PackageManagerValue::Deno => Self::Deno,
         }
     }
 }
@@ -516,6 +518,48 @@ impl From<ViewSyntaxValue> for shilpo_ext_runtime::ViewSyntax {
         match v {
             ViewSyntaxValue::Jsx => Self::Jsx,
             ViewSyntaxValue::Builders => Self::Builders,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_package_manager_value_deno_conversion() {
+        let pm: shilpo_ext_runtime::PackageManager = PackageManagerValue::Deno.into();
+        assert_eq!(pm, shilpo_ext_runtime::PackageManager::Deno);
+    }
+
+    #[test]
+    fn test_cli_ext_new_package_manager_deno_parsed() {
+        let args = Cli::try_parse_from([
+            "shilpo",
+            "ext",
+            "new",
+            "my-deno-ext",
+            "--language",
+            "typescript",
+            "--package-manager",
+            "deno",
+        ])
+        .unwrap();
+
+        match args.command {
+            Some(Commands::Ext {
+                command:
+                    ExtCommands::New {
+                        name,
+                        package_manager,
+                        ..
+                    },
+            }) => {
+                assert_eq!(name, "my-deno-ext");
+                assert_eq!(package_manager, Some(PackageManagerValue::Deno));
+            }
+            _ => panic!("Expected ExtCommands::New"),
         }
     }
 }

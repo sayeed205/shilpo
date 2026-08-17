@@ -214,6 +214,7 @@ impl ExtAdapter {
                 println!("  2) pnpm");
                 println!("  3) yarn");
                 println!("  4) bun");
+                println!("  5) deno");
                 print!("Selection [1]: ");
                 let _ = std::io::Write::flush(&mut std::io::stdout());
                 let mut line = String::new();
@@ -223,6 +224,7 @@ impl ExtAdapter {
                     "2" | "pnpm" => Some(PackageManager::Pnpm),
                     "3" | "yarn" => Some(PackageManager::Yarn),
                     "4" | "bun" => Some(PackageManager::Bun),
+                    "5" | "deno" => Some(PackageManager::Deno),
                     _ => Some(PackageManager::Npm),
                 };
             }

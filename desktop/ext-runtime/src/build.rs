@@ -644,6 +644,7 @@ fn find_javascript_lockfile(project_dir: &Path) -> Option<PathBuf> {
         "yarn.lock",
         "bun.lockb",
         "bun.lock",
+        "deno.lock",
     ] {
         let candidate = project_dir.join(name);
         if candidate.is_file() && !candidate.is_symlink() {
@@ -1208,6 +1209,10 @@ pub fn build_extension_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scaffold::{
+        PackageManager, ScaffoldOptions, StarterContribution, StarterLanguage, ViewSyntax,
+        scaffold_extension,
+    };
     use std::collections::HashMap;
     use std::sync::Mutex;
     use tempfile::tempdir;
@@ -2114,6 +2119,80 @@ mod tests {
     }
 
     #[test]
+    fn test_find_local_jco_with_deno_lock_resolved() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("deno.lock"), "{}").unwrap();
+        fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
+        write_typescript_toolchain_fixture(dir);
+
+        assert!(find_javascript_lockfile(dir).is_some());
+        assert!(find_local_jco(dir).is_some());
+    }
+
+    #[test]
+    fn test_find_local_jco_with_deno_lock_missing_jco_returns_none() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        fs::write(dir.join("deno.lock"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
+
+        assert!(find_javascript_lockfile(dir).is_some());
+        assert!(find_local_jco(dir).is_none());
+    }
+
+    #[test]
+    fn test_find_local_jco_no_lockfile_returns_none() {
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
+        write_typescript_toolchain_fixture(dir);
+
+        assert!(find_javascript_lockfile(dir).is_none());
+        assert!(find_local_jco(dir).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_find_javascript_lockfile_deno_lock_symlink_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("node_modules/.bin/jco"), "#!/usr/bin/env node").unwrap();
+        write_typescript_toolchain_fixture(dir);
+
+        let outside = tempdir().unwrap();
+        let outside_lock = outside.path().join("deno.lock");
+        fs::write(&outside_lock, "{}").unwrap();
+        symlink(&outside_lock, dir.join("deno.lock")).unwrap();
+
+        assert!(find_javascript_lockfile(dir).is_none());
+        assert!(find_local_jco(dir).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_local_jco_deno_lock_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let dir = temp.path();
+        fs::create_dir_all(dir.join("node_modules/.bin")).unwrap();
+        fs::write(dir.join("deno.lock"), "{}").unwrap();
+        write_typescript_toolchain_fixture(dir);
+        let outside = tempdir().unwrap();
+        let outside_jco = outside.path().join("jco");
+        fs::write(&outside_jco, "#!/usr/bin/env node").unwrap();
+        symlink(&outside_jco, dir.join("node_modules/.bin/jco")).unwrap();
+
+        assert!(find_local_jco(dir).is_none());
+    }
+
+    #[test]
     fn test_rust_artifact_selection_matches_requested_manifest() {
         let temp = tempdir().unwrap();
         let dir = temp.path();
@@ -2221,6 +2300,75 @@ mod tests {
         let wasm_path = fixture_dir.join("extension.wasm");
         assert!(wasm_path.is_file());
         let bytes = fs::read(&wasm_path).unwrap();
+        assert!(bytes.len() > 1000);
+        assert_eq!(&bytes[0..4], b"\x00asm");
+    }
+
+    #[test]
+    fn test_integration_typescript_deno_fixture_build() {
+        let runner = OsProcessRunner;
+        if runner.which("deno").is_none() {
+            eprintln!(
+                "SKIPPED: TypeScript Deno build fixture integration test skipped: deno not found in PATH"
+            );
+            return;
+        }
+        if runner.which("node").is_none() {
+            eprintln!(
+                "SKIPPED: TypeScript Deno build fixture integration test skipped: node not found in PATH"
+            );
+            return;
+        }
+
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("ts-deno-fixture");
+        let options = ScaffoldOptions {
+            name: "TS Deno Fixture".into(),
+            target_dir: target.clone(),
+            language: StarterLanguage::Typescript,
+            contribution: StarterContribution::Empty,
+            package_manager: Some(PackageManager::Deno),
+            view_syntax: Some(ViewSyntax::Builders),
+            extension_id: Some("dev.local.ts-deno-fixture".into()),
+            package_name: None,
+            description: Some("Test Deno Fixture".into()),
+            capabilities: Vec::new(),
+            subscriptions: Vec::new(),
+            install: true,
+            build: false,
+            git: false,
+        };
+
+        let scaffold_res = scaffold_extension(&options, &runner);
+        if let Err(e) = scaffold_res {
+            eprintln!(
+                "SKIPPED: TypeScript Deno build fixture integration test skipped: scaffold/install failed: {e:?}"
+            );
+            return;
+        }
+
+        if find_local_tsc(&target).is_none() || find_local_jco(&target).is_none() {
+            eprintln!(
+                "SKIPPED: TypeScript Deno build fixture integration test skipped: local TSC or JCO not found"
+            );
+            return;
+        }
+
+        let res = build_extension(&target, false, &runner);
+        if !res.success {
+            panic!(
+                "TypeScript Deno fixture build failed:\n{}",
+                res.diagnostics.join("\n")
+            );
+        }
+        assert!(res.success);
+        assert_eq!(
+            res.extension_id.as_deref(),
+            Some("dev.local.ts-deno-fixture")
+        );
+        let wasm_path = res.artifact.as_ref().expect("artifact must be set");
+        assert!(wasm_path.is_file());
+        let bytes = fs::read(wasm_path).unwrap();
         assert!(bytes.len() > 1000);
         assert_eq!(&bytes[0..4], b"\x00asm");
     }
