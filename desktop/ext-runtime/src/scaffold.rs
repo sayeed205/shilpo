@@ -105,6 +105,7 @@ pub enum PackageManager {
     Pnpm,
     Yarn,
     Bun,
+    Deno,
 }
 
 impl PackageManager {
@@ -114,6 +115,7 @@ impl PackageManager {
             Self::Pnpm => "pnpm",
             Self::Yarn => "yarn",
             Self::Bun => "bun",
+            Self::Deno => "deno",
         }
     }
 }
@@ -133,8 +135,9 @@ impl std::str::FromStr for PackageManager {
             "pnpm" => Ok(Self::Pnpm),
             "yarn" => Ok(Self::Yarn),
             "bun" => Ok(Self::Bun),
+            "deno" => Ok(Self::Deno),
             other => Err(format!(
-                "unsupported package manager '{other}': expected 'npm', 'pnpm', 'yarn', or 'bun'"
+                "unsupported package manager '{other}': expected 'npm', 'pnpm', 'yarn', 'bun', or 'deno'"
             )),
         }
     }
@@ -1824,6 +1827,10 @@ fn generate_typescript_readme(
 
 {desc}
 
+## Prerequisites
+
+- Node.js (required for build and componentization tooling)
+
 ## Development
 
 ### Install Dependencies
@@ -2397,5 +2404,232 @@ mod tests {
         let runner = MockProcessRunner::new();
         let err = scaffold_extension(&options, &runner).unwrap_err();
         assert!(matches!(err, ScaffoldError::InvalidOption(_)));
+    }
+
+    #[test]
+    fn test_package_manager_deno_parsing_and_display() {
+        use std::str::FromStr;
+
+        assert_eq!(
+            PackageManager::from_str("deno").unwrap(),
+            PackageManager::Deno
+        );
+        assert_eq!(
+            PackageManager::from_str("DENO").unwrap(),
+            PackageManager::Deno
+        );
+        assert_eq!(
+            PackageManager::from_str("Deno").unwrap(),
+            PackageManager::Deno
+        );
+        assert_eq!(PackageManager::Deno.as_str(), "deno");
+        assert_eq!(format!("{}", PackageManager::Deno), "deno");
+
+        let err = PackageManager::from_str("unknown_pm").unwrap_err();
+        assert!(
+            err.contains("'npm', 'pnpm', 'yarn', 'bun', or 'deno'"),
+            "Error message must list deno: {err}"
+        );
+    }
+
+    #[test]
+    fn test_scaffold_typescript_deno_all_combinations() {
+        let contributions = [
+            StarterContribution::BarWidget,
+            StarterContribution::DesktopWidget,
+            StarterContribution::SettingsPage,
+            StarterContribution::SidePanel,
+            StarterContribution::Action,
+            StarterContribution::Empty,
+        ];
+        let syntaxes = [ViewSyntax::Jsx, ViewSyntax::Builders];
+
+        for contrib in contributions {
+            for syntax in syntaxes {
+                let temp = tempdir().unwrap();
+                let target = temp.path().join(format!("ext-deno-{contrib:?}-{syntax:?}"));
+                let options = ScaffoldOptions {
+                    name: format!("Deno {contrib:?} {syntax:?}"),
+                    target_dir: target.clone(),
+                    language: StarterLanguage::Typescript,
+                    contribution: contrib,
+                    package_manager: Some(PackageManager::Deno),
+                    view_syntax: Some(syntax),
+                    extension_id: None,
+                    package_name: None,
+                    description: Some("Test Deno description".into()),
+                    capabilities: Vec::new(),
+                    subscriptions: Vec::new(),
+                    install: false,
+                    build: false,
+                    git: false,
+                };
+
+                let runner = MockProcessRunner::new();
+                let res = scaffold_extension(&options, &runner).unwrap();
+                assert_eq!(res.language, StarterLanguage::Typescript);
+                assert_eq!(res.contribution, contrib);
+                assert!(!res.installed);
+                assert!(target.exists());
+
+                // Assert identical file set as npm / standard TS template
+                assert!(target.join("extension.toml").exists());
+                assert!(target.join("shilpo-ext.json").exists());
+                assert!(target.join("package.json").exists());
+                assert!(target.join("tsconfig.json").exists());
+                assert!(target.join(".npmrc").exists());
+                assert!(target.join(".gitignore").exists());
+                assert!(target.join("README.md").exists());
+
+                // Assert no deno.json or deno.jsonc is emitted
+                assert!(!target.join("deno.json").exists());
+                assert!(!target.join("deno.jsonc").exists());
+                assert!(!target.join("deno.lock").exists());
+
+                // Check entry file based on syntax
+                match syntax {
+                    ViewSyntax::Jsx => assert!(target.join("src/extension.tsx").exists()),
+                    ViewSyntax::Builders => assert!(target.join("src/extension.ts").exists()),
+                }
+
+                // Check next steps contains deno install
+                assert!(
+                    res.next_steps.iter().any(|step| step == "deno install"),
+                    "Next steps must contain 'deno install': {:?}",
+                    res.next_steps
+                );
+
+                // Check README.md contains deno install and Node prerequisite
+                let readme = fs::read_to_string(target.join("README.md")).unwrap();
+                assert!(readme.contains("deno install"));
+                assert!(readme.contains("Node.js"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_scaffold_with_deno_install_injected_runner() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("ts-deno-install");
+        let options = ScaffoldOptions {
+            name: "TS Deno Install".into(),
+            target_dir: target.clone(),
+            language: StarterLanguage::Typescript,
+            contribution: StarterContribution::BarWidget,
+            package_manager: Some(PackageManager::Deno),
+            view_syntax: None,
+            extension_id: None,
+            package_name: None,
+            description: None,
+            capabilities: Vec::new(),
+            subscriptions: Vec::new(),
+            install: true,
+            build: false,
+            git: false,
+        };
+
+        let runner = MockProcessRunner::new();
+        let res = scaffold_extension(&options, &runner).unwrap();
+        assert!(res.installed);
+
+        let cmds = runner.recorded_commands();
+        assert!(
+            cmds.iter().any(|c| c.program == "deno"
+                && c.args == vec!["install"]
+                && c.cwd == Some(target.clone())),
+            "Must run 'deno install' with cwd set to target directory"
+        );
+    }
+
+    #[test]
+    fn test_deno_install_failure_preserves_target_and_formats_recovery() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("deno-fail");
+        let options = ScaffoldOptions {
+            name: "Deno Fail".into(),
+            target_dir: target.clone(),
+            language: StarterLanguage::Typescript,
+            contribution: StarterContribution::Empty,
+            package_manager: Some(PackageManager::Deno),
+            view_syntax: None,
+            extension_id: None,
+            package_name: None,
+            description: None,
+            capabilities: Vec::new(),
+            subscriptions: Vec::new(),
+            install: true,
+            build: false,
+            git: false,
+        };
+
+        let runner = MockProcessRunner::new().with_response(
+            "deno",
+            Ok(ProcessOutput {
+                success: false,
+                exit_code: Some(1),
+                stdout: Vec::new(),
+                stderr: b"deno download error".to_vec(),
+            }),
+        );
+
+        let err = scaffold_extension(&options, &runner).unwrap_err();
+        match err {
+            ScaffoldError::StageFailed {
+                stage,
+                recovery_command,
+                message,
+            } => {
+                assert_eq!(stage, "install");
+                assert!(
+                    recovery_command.contains("deno install"),
+                    "Recovery command must suggest 'deno install': {recovery_command}"
+                );
+                assert!(message.contains("'deno install' exited with code Some(1)"));
+            }
+            other => panic!("Expected StageFailed, got {other:?}"),
+        }
+        assert!(
+            target.exists(),
+            "Target directory must be preserved on failure"
+        );
+    }
+
+    #[test]
+    fn test_deno_install_timeout_and_cancellation() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("deno-timeout");
+        let options = ScaffoldOptions {
+            name: "Deno Timeout".into(),
+            target_dir: target.clone(),
+            language: StarterLanguage::Typescript,
+            contribution: StarterContribution::Empty,
+            package_manager: Some(PackageManager::Deno),
+            view_syntax: None,
+            extension_id: None,
+            package_name: None,
+            description: None,
+            capabilities: Vec::new(),
+            subscriptions: Vec::new(),
+            install: true,
+            build: false,
+            git: false,
+        };
+
+        // Timeout
+        let runner = MockProcessRunner::new()
+            .with_response("deno", Err("process 'deno' timed out after 30s".into()));
+        let err = scaffold_extension(&options, &runner).unwrap_err();
+        assert!(matches!(err, ScaffoldError::StageFailed { ref stage, .. } if stage == "install"));
+        assert!(target.exists());
+
+        // Cancelled
+        let target_cancel = temp.path().join("deno-cancel");
+        let mut options_cancel = options.clone();
+        options_cancel.target_dir = target_cancel.clone();
+        let runner_cancel = MockProcessRunner::new()
+            .with_response("deno", Err("process 'deno' was cancelled".into()));
+        let err_cancel = scaffold_extension(&options_cancel, &runner_cancel).unwrap_err();
+        assert!(matches!(err_cancel, ScaffoldError::Cancelled));
+        assert!(target_cancel.exists());
     }
 }
