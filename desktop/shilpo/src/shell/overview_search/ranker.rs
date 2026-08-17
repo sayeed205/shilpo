@@ -132,7 +132,12 @@ fn score_candidate(
     // Universal fallbacks with dedicated triggers / explicit synthesis
     match candidate.category {
         ResultCategory::Calculator => {
-            let score = config.calc_prior + learning.score_boost(&candidate.canonical_id);
+            let score = 2000 + config.calc_prior + learning.score_boost(&candidate.canonical_id);
+            return Some((score, Vec::new()));
+        }
+        ResultCategory::FilePath | ResultCategory::Uri => {
+            let score =
+                1500 + config.path_uri_prior + learning.score_boost(&candidate.canonical_id);
             return Some((score, Vec::new()));
         }
         ResultCategory::Command => {
@@ -846,5 +851,108 @@ mod tests {
             res2[0].canonical_id, "targeted:exact",
             "Targeted item must rank at top regardless of registration order"
         );
+    }
+
+    #[test]
+    fn test_filepath_and_uri_candidates_keep_their_guaranteed_baseline_score() {
+        // Mirrors legacy_adapter.rs's construction: title is the filename/URI only,
+        // subtitle carries the full path. The query is the raw path/URI the user typed,
+        // which is not a subsequence of the bare filename title.
+        let mut path_cand = make_test_candidate(
+            "legacy",
+            "path:/home/user/Documents/report.txt",
+            "report.txt",
+            ResultCategory::FilePath,
+        );
+        path_cand.subtitle = Some("/home/user/Documents/report.txt".to_string());
+
+        let mut uri_cand = make_test_candidate(
+            "legacy",
+            "uri:https://example.com/x",
+            "https://example.com/x",
+            ResultCategory::Uri,
+        );
+        uri_cand.subtitle = Some("Web or protocol URI".to_string());
+
+        // A generic application match that would otherwise dominate on text score alone.
+        let unrelated_app = make_test_candidate(
+            "apps",
+            "app:unrelated",
+            "Some Unrelated App",
+            ResultCategory::Application,
+        );
+
+        let ranked = rank(
+            vec![unrelated_app, path_cand],
+            "/home/user/Documents/report.txt",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        );
+        assert_eq!(
+            ranked.len(),
+            1,
+            "unrelated app must not match a literal path query"
+        );
+        assert_eq!(
+            ranked[0].canonical_id,
+            "path:/home/user/Documents/report.txt"
+        );
+
+        let (path_score, _) = score_candidate(
+            &ranked[0].clone(),
+            "/home/user/Documents/report.txt",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            path_score, 1600,
+            "FilePath candidates must keep their fixed 1500 + path_uri_prior baseline"
+        );
+
+        let (uri_score, _) = score_candidate(
+            &uri_cand,
+            "https://example.com/x",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            uri_score, 1600,
+            "Uri candidates must keep their fixed 1500 + path_uri_prior baseline"
+        );
+    }
+
+    #[test]
+    fn test_calculator_candidates_keep_their_guaranteed_baseline_score() {
+        let calc_cand = make_test_candidate(
+            "legacy",
+            "calc:2+2",
+            "2 + 2 = 4",
+            ResultCategory::Calculator,
+        );
+
+        let (score, _) = score_candidate(
+            &calc_cand,
+            "2+2",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            score, 2500,
+            "Calculator candidates must keep their fixed 2000 + calc_prior baseline"
+        );
+
+        // Calculator must still dominate an application whose title happens to match.
+        let app_cand =
+            make_test_candidate("apps", "app:calc-app", "2+2", ResultCategory::Application);
+        let ranked = rank(
+            vec![app_cand, calc_cand],
+            "2+2",
+            &NoopSearchLearningStore,
+            &RankerConfig::default(),
+        );
+        assert_eq!(ranked[0].canonical_id, "calc:2+2");
     }
 }
