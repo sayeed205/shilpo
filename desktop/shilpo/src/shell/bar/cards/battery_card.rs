@@ -4,7 +4,7 @@ use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ParentElement, Pixels, Size,
     StatefulInteractiveElement, Styled, Window, div, px,
 };
-use shilpo_services::ServiceLifecycle;
+use shilpo_services::DomainLifecycle;
 use shilpo_services::{
     BatteryChargeState, BatteryDevicePayload, BatteryPayload, BatteryTechnology,
     BatteryWarningLevel,
@@ -62,7 +62,7 @@ impl CardProvider for BatteryCardProvider {
         cx: &mut App,
     ) -> AnyElement {
         let payload = ShellRuntime::device_snapshot(cx).battery;
-        let lifecycle = ShellRuntime::service_availability(cx).battery_state;
+        let lifecycle = ShellRuntime::domain_lifecycle(cx, shilpo_services::DeviceDomain::Battery);
 
         let selected = self.selected_device.lock().unwrap().clone();
         let selected_cell = self.selected_device.clone();
@@ -120,7 +120,7 @@ fn toggle_selected_device(selected: &mut Option<String>, device_id: &str) {
 }
 
 fn render_battery_card(
-    lifecycle: &ServiceLifecycle,
+    lifecycle: &DomainLifecycle,
     payload: &BatteryPayload,
     selected: Option<String>,
     selected_cell: Arc<Mutex<Option<String>>>,
@@ -128,21 +128,19 @@ fn render_battery_card(
     cx: &mut App,
 ) -> AnyElement {
     let theme = cx.theme().clone();
-    let is_reconnecting =
-        matches!(lifecycle, ServiceLifecycle::Connecting { .. }) || !payload.available;
+    let is_reconnecting = matches!(
+        lifecycle,
+        DomainLifecycle::Connecting | DomainLifecycle::Reconnecting
+    ) || !payload.available;
 
     if !payload.is_present {
         let (title, message) = if !payload.available {
             match lifecycle {
-                ServiceLifecycle::Connecting { .. } => (
+                DomainLifecycle::Connecting | DomainLifecycle::Reconnecting => (
                     "Reconnecting battery service",
                     "Waiting for updated battery information.",
                 ),
-                ServiceLifecycle::Unavailable => (
-                    "Battery unavailable",
-                    "Battery information is currently unavailable.",
-                ),
-                ServiceLifecycle::Ready => (
+                _ => (
                     "Battery unavailable",
                     "Battery information is currently unavailable.",
                 ),

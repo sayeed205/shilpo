@@ -95,9 +95,11 @@ impl DebouncedCommands {
 
 impl DeviceClient {
     pub fn spawn_command(client: Self, command: DeviceCommand) {
-        tokio::spawn(async move {
-            let _ = client.send_command(command).await;
-        });
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = client.send_command(command).await;
+            });
+        }
     }
 
     pub fn new() -> Self {
@@ -135,24 +137,26 @@ impl DeviceClient {
         let supersessions_counter = client.supersessions.clone();
         let debounce_depth_counter = client.debounce_depth.clone();
         let overload_counter = client.overloads.clone();
-        tokio::spawn(async move {
-            let mut pending = DebouncedCommands::default();
-            loop {
-                tokio::select! {
-                    Some((command, delay)) = debounce_rx.recv() => {
-                        if !pending.replace(command, tokio::time::Instant::now() + delay, &supersessions_counter, &debounce_depth_counter) {
-                            overload_counter.fetch_add(1, Ordering::SeqCst);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let mut pending = DebouncedCommands::default();
+                loop {
+                    tokio::select! {
+                        Some((command, delay)) = debounce_rx.recv() => {
+                            if !pending.replace(command, tokio::time::Instant::now() + delay, &supersessions_counter, &debounce_depth_counter) {
+                                overload_counter.fetch_add(1, Ordering::SeqCst);
+                            }
                         }
-                    }
-                    _ = tokio::time::sleep(Duration::from_millis(20)), if !pending.is_empty() => {
-                        for command in pending.take_due(tokio::time::Instant::now(), &debounce_depth_counter) {
-                            let _ = debounce_client.send_command(command).await;
+                        _ = tokio::time::sleep(Duration::from_millis(20)), if !pending.is_empty() => {
+                            for command in pending.take_due(tokio::time::Instant::now(), &debounce_depth_counter) {
+                                let _ = debounce_client.send_command(command).await;
+                            }
                         }
+                        else => break,
                     }
-                    else => break,
                 }
-            }
-        });
+            });
+        }
         client
     }
 

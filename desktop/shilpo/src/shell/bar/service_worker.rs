@@ -1,6 +1,5 @@
 use std::{
     path::{Path, PathBuf},
-    sync::mpsc,
     time::{Duration, Instant},
 };
 
@@ -9,13 +8,14 @@ use shilpo_services::DeviceClient;
 pub use shilpo_services::DeviceCommand;
 use shilpo_services::{self};
 use shilpo_services::{AudioInfo, BatteryInfo, BrightnessInfo, MediaInfo, NetworkInfo};
+use shilpo_services::{DomainPayload, DomainState};
 
 use crate::config::ShellConfig;
 
-pub type UpdateSender = mpsc::SyncSender<WorkerUpdate>;
-pub type UpdateReceiver = mpsc::Receiver<WorkerUpdate>;
-pub type CommandSender = mpsc::SyncSender<WorkerCommand>;
-pub type CommandReceiver = mpsc::Receiver<WorkerCommand>;
+pub type ConfigSender = tokio::sync::mpsc::Sender<ConfigUpdate>;
+pub type ConfigReceiver = tokio::sync::mpsc::Receiver<ConfigUpdate>;
+pub type CommandSender = tokio::sync::mpsc::Sender<WorkerCommand>;
+pub type CommandReceiver = tokio::sync::mpsc::Receiver<WorkerCommand>;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DeviceSnapshot {
@@ -27,34 +27,38 @@ pub struct DeviceSnapshot {
 }
 
 impl DeviceSnapshot {
-    pub fn apply(&mut self, update: &WorkerUpdate) -> bool {
-        match update {
-            WorkerUpdate::Battery(info) if !info.available && self.battery.is_present => {
-                if self.battery.available {
-                    self.battery.available = false;
-                    true
+    pub fn apply_domain_state(&mut self, state: &DomainState) -> bool {
+        match &state.payload {
+            DomainPayload::Battery(payload) => {
+                let info = payload.clone();
+                if !info.available && self.battery.is_present {
+                    if self.battery.available {
+                        self.battery.available = false;
+                        true
+                    } else {
+                        false
+                    }
                 } else {
-                    false
+                    replace_if_changed(&mut self.battery, &info)
                 }
             }
-            WorkerUpdate::Battery(info) => replace_if_changed(&mut self.battery, info),
-            WorkerUpdate::Audio(info) => replace_if_changed(&mut self.audio, info),
-            WorkerUpdate::Network(info) => replace_if_changed(&mut self.network, info),
-            WorkerUpdate::Media(info) => replace_if_changed(&mut self.media, info),
-            WorkerUpdate::Brightness(info) => replace_if_changed(&mut self.brightness, info),
-            WorkerUpdate::Config(_)
-            | WorkerUpdate::CommandRejected { .. }
-            | WorkerUpdate::CommandOutcome(_) => false,
-            WorkerUpdate::ServiceStateChange { service, state, .. } => {
-                let available = state.is_ready();
-                match *service {
-                    "audio" => self.audio.available = available,
-                    "network" => self.network.available = available,
-                    "brightness" => self.brightness.available = available,
-                    _ => return false,
-                }
-                true
+            DomainPayload::Audio(payload) => {
+                let info = audio_info(payload.clone());
+                replace_if_changed(&mut self.audio, &info)
             }
+            DomainPayload::Network(payload) => {
+                let info = network_info(payload.clone());
+                replace_if_changed(&mut self.network, &info)
+            }
+            DomainPayload::Media(payload) => {
+                let info = media_info(payload.clone());
+                replace_if_changed(&mut self.media, &info)
+            }
+            DomainPayload::Brightness(payload) => {
+                let info = brightness_info(payload.clone());
+                replace_if_changed(&mut self.brightness, &info)
+            }
+            _ => false,
         }
     }
 }
@@ -66,25 +70,6 @@ fn replace_if_changed<T: PartialEq + Clone>(target: &mut T, value: &T) -> bool {
         *target = value.clone();
         true
     }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ServiceAvailability {
-    pub battery_available: bool,
-    pub battery_state: shilpo_services::ServiceLifecycle,
-    pub battery_last_error: Option<String>,
-    pub audio_available: bool,
-    pub audio_state: shilpo_services::ServiceLifecycle,
-    pub audio_last_error: Option<String>,
-    pub network_available: bool,
-    pub network_state: shilpo_services::ServiceLifecycle,
-    pub network_last_error: Option<String>,
-    pub media_available: bool,
-    pub media_state: shilpo_services::ServiceLifecycle,
-    pub media_last_error: Option<String>,
-    pub brightness_available: bool,
-    pub brightness_state: shilpo_services::ServiceLifecycle,
-    pub brightness_last_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -103,26 +88,6 @@ pub enum ConfigUpdate {
         error: String,
         changeset: crate::config::ConfigChangeSet,
     },
-}
-
-#[derive(Debug, Clone)]
-pub enum WorkerUpdate {
-    Battery(BatteryInfo),
-    Audio(AudioInfo),
-    Network(NetworkInfo),
-    Media(MediaInfo),
-    Brightness(BrightnessInfo),
-    Config(ConfigUpdate),
-    ServiceStateChange {
-        service: &'static str,
-        state: shilpo_services::ServiceLifecycle,
-        last_error: Option<String>,
-    },
-    CommandRejected {
-        command: DeviceCommand,
-        reason: String,
-    },
-    CommandOutcome(shilpo_services::device_protocol::CommandOutcome),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,7 +109,7 @@ pub fn execute_reload_transaction(
     config_path: &Path,
     resolver: &crate::config::ConfigResolver,
     committed_snapshot: &mut crate::config::ConfigSnapshot,
-    updates: &UpdateSender,
+    updates: &ConfigSender,
     trigger: ReloadTrigger,
 ) {
     let start_time = Instant::now();
@@ -184,10 +149,10 @@ pub fn execute_reload_transaction(
             elapsed = ?start_time.elapsed(),
             "reload blocked by primary status / migration guard"
         );
-        let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+        let _ = updates.try_send(ConfigUpdate::Failed {
             error: reason,
             changeset: crate::config::ConfigChangeSet::default(),
-        }));
+        });
         return;
     }
 
@@ -228,10 +193,10 @@ pub fn execute_reload_transaction(
             "configuration reload failed (candidate rejected)"
         );
 
-        let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+        let _ = updates.try_send(ConfigUpdate::Failed {
             error: msg,
             changeset: crate::config::ConfigChangeSet::default(),
-        }));
+        });
     } else if changeset.is_empty() {
         reload_span.record("outcome", "no_op");
         // Successful candidate is byte/config equivalent; do not send redundant Loaded update
@@ -255,10 +220,10 @@ pub fn execute_reload_transaction(
         );
 
         *committed_snapshot = new_snapshot;
-        let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Loaded {
+        let _ = updates.try_send(ConfigUpdate::Loaded {
             config: Box::new(committed_snapshot.config.clone()),
             changeset,
-        }));
+        });
     }
 }
 
@@ -273,22 +238,22 @@ pub fn backoff_delay(attempt: u32) -> Duration {
     }
 }
 
-pub fn channels() -> (UpdateSender, UpdateReceiver, CommandSender, CommandReceiver) {
-    let (updates_tx, updates_rx) = mpsc::sync_channel(64);
-    let (commands_tx, commands_rx) = mpsc::sync_channel(32);
+pub fn channels() -> (ConfigSender, ConfigReceiver, CommandSender, CommandReceiver) {
+    let (updates_tx, updates_rx) = tokio::sync::mpsc::channel(64);
+    let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(32);
     (updates_tx, updates_rx, commands_tx, commands_rx)
 }
 
 pub fn try_send_command(
     sender: &CommandSender,
     command: WorkerCommand,
-) -> Result<(), mpsc::TrySendError<WorkerCommand>> {
+) -> Result<(), tokio::sync::mpsc::error::TrySendError<WorkerCommand>> {
     sender.try_send(command)
 }
 
 pub fn spawn(
     executor: BackgroundExecutor,
-    updates: UpdateSender,
+    updates: ConfigSender,
     commands: CommandReceiver,
     config_path: PathBuf,
     client: DeviceClient,
@@ -302,8 +267,8 @@ pub fn spawn(
 
 async fn run(
     executor: BackgroundExecutor,
-    updates: UpdateSender,
-    commands: CommandReceiver,
+    updates: ConfigSender,
+    mut commands: CommandReceiver,
     config_path: PathBuf,
     client: DeviceClient,
 ) {
@@ -311,17 +276,17 @@ async fn run(
     let mut committed_snapshot = match resolver.resolve_initial() {
         Ok((snapshot, report)) => {
             crate::config::unknown_keys::log_unknown_key_warnings(&report.unknown_keys);
-            let _ = updates.try_send(WorkerUpdate::Config(ConfigUpdate::Loaded {
+            let _ = updates.try_send(ConfigUpdate::Loaded {
                 config: Box::new(snapshot.config.clone()),
                 changeset: crate::config::ConfigChangeSet::all(),
-            }));
+            });
             snapshot
         }
         Err(e) => {
-            let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+            let _ = updates.try_send(ConfigUpdate::Failed {
                 error: e.to_string(),
                 changeset: crate::config::ConfigChangeSet::default(),
-            }));
+            });
             crate::config::ConfigSnapshot::default()
         }
     };
@@ -331,23 +296,22 @@ async fn run(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from(".config/shilpo"));
 
-    let (watch_tx, watch_rx) = mpsc::sync_channel(32);
+    let (watch_tx, watch_rx) = std::sync::mpsc::sync_channel(32);
     let mut watcher = match crate::config::watcher::ConfigWatcher::new(config_dir.clone(), watch_tx)
     {
         Ok(w) => Some(w),
         Err(err) => {
             tracing::error!(error = %err, path = ?config_dir, "failed to initialize configuration watcher");
-            let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+            let _ = updates.try_send(ConfigUpdate::Failed {
                 error: format!("Configuration watcher initialization failed: {err}"),
                 changeset: crate::config::ConfigChangeSet::default(),
-            }));
+            });
             None
         }
     };
 
     let mut debounce =
         crate::config::watcher::DebounceStateMachine::new(Duration::from_millis(100));
-    let mut versions = std::collections::HashMap::new();
 
     loop {
         let now = Instant::now();
@@ -363,10 +327,10 @@ async fn run(
                         tracing::debug!(?paths, "configuration source changed");
                     }
                     crate::config::watcher::ConfigWatchEvent::RuntimeError(error) => {
-                        let _ = updates.send(WorkerUpdate::Config(ConfigUpdate::Failed {
+                        let _ = updates.try_send(ConfigUpdate::Failed {
                             error: format!("Configuration watcher error: {error}"),
                             changeset: crate::config::ConfigChangeSet::default(),
-                        }));
+                        });
                     }
                 }
             }
@@ -390,16 +354,9 @@ async fn run(
                 }
                 WorkerCommand::Device(command) => {
                     let client = client.clone();
-                    let updates = updates.clone();
                     tokio::spawn(async move {
-                        match client.send_command(command.clone()).await {
-                            Ok(outcome) => {
-                                let _ = updates.try_send(WorkerUpdate::CommandOutcome(outcome));
-                            }
-                            Err(reason) => {
-                                let _ = updates
-                                    .try_send(WorkerUpdate::CommandRejected { command, reason });
-                            }
+                        if let Err(reason) = client.send_command(command).await {
+                            tracing::warn!(%reason, "device command rejected");
                         }
                     });
                 }
@@ -420,53 +377,7 @@ async fn run(
             debounce.on_reload_complete(Instant::now());
         }
 
-        emit_client_updates(&updates, &client, &mut versions);
         executor.timer(Duration::from_millis(25)).await;
-    }
-}
-
-fn emit_client_updates(
-    updates: &UpdateSender,
-    client: &DeviceClient,
-    versions: &mut std::collections::HashMap<
-        shilpo_services::DeviceDomain,
-        shilpo_device::DomainVersion,
-    >,
-) {
-    use shilpo_services::DeviceDomain;
-    for domain in [
-        DeviceDomain::Battery,
-        DeviceDomain::Audio,
-        DeviceDomain::Network,
-        DeviceDomain::Media,
-        DeviceDomain::Brightness,
-    ] {
-        let state = client.get_domain_state(domain);
-        if versions.get(&domain) == Some(&state.version) {
-            continue;
-        }
-        versions.insert(domain, state.version);
-        let update = match state.payload {
-            shilpo_services::DomainPayload::Battery(payload) => {
-                Some(WorkerUpdate::Battery(payload))
-            }
-            shilpo_services::DomainPayload::Audio(payload) => {
-                Some(WorkerUpdate::Audio(audio_info(payload)))
-            }
-            shilpo_services::DomainPayload::Network(payload) => {
-                Some(WorkerUpdate::Network(network_info(payload)))
-            }
-            shilpo_services::DomainPayload::Media(payload) => {
-                Some(WorkerUpdate::Media(media_info(payload)))
-            }
-            shilpo_services::DomainPayload::Brightness(payload) => {
-                Some(WorkerUpdate::Brightness(brightness_info(payload)))
-            }
-            _ => None,
-        };
-        if let Some(update) = update {
-            let _ = updates.try_send(update);
-        }
     }
 }
 
@@ -474,7 +385,7 @@ fn optional(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn audio_info(payload: shilpo_services::AudioPayload) -> AudioInfo {
+pub(crate) fn audio_info(payload: shilpo_services::AudioPayload) -> AudioInfo {
     fn device(v: shilpo_services::AudioDevicePayload) -> shilpo_services::AudioDevice {
         shilpo_services::AudioDevice {
             index: v.index,
@@ -524,7 +435,7 @@ fn audio_info(payload: shilpo_services::AudioPayload) -> AudioInfo {
     }
 }
 
-fn media_info(p: shilpo_services::MediaPayload) -> MediaInfo {
+pub(crate) fn media_info(p: shilpo_services::MediaPayload) -> MediaInfo {
     let playback_state = match p.playback_state.as_str() {
         "playing" => shilpo_services::PlaybackState::Playing,
         "paused" => shilpo_services::PlaybackState::Paused,
@@ -545,7 +456,7 @@ fn media_info(p: shilpo_services::MediaPayload) -> MediaInfo {
     }
 }
 
-fn brightness_info(p: shilpo_services::BrightnessPayload) -> BrightnessInfo {
+pub(crate) fn brightness_info(p: shilpo_services::BrightnessPayload) -> BrightnessInfo {
     BrightnessInfo {
         percentage: p.percentage,
         available: p.available,
@@ -571,7 +482,7 @@ fn brightness_info(p: shilpo_services::BrightnessPayload) -> BrightnessInfo {
     }
 }
 
-fn network_info(p: shilpo_services::NetworkPayload) -> NetworkInfo {
+pub(crate) fn network_info(p: shilpo_services::NetworkPayload) -> NetworkInfo {
     use shilpo_services::network::{IpConfig, NetworkDevice, NetworkState, WifiAccessPoint};
     let state = match p.state.as_str() {
         "Asleep" | "asleep" => NetworkState::Asleep,
@@ -642,6 +553,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use shilpo_services::{DomainLifecycle, DomainVersion};
 
     #[test]
     fn device_snapshot_applies_updates_correctly() {
@@ -653,23 +565,47 @@ mod tests {
             available: true,
             ..Default::default()
         };
-        assert!(snapshot.apply(&WorkerUpdate::Battery(battery.clone())));
+        assert!(snapshot.apply_domain_state(&DomainState {
+            domain: shilpo_services::DeviceDomain::Battery,
+            version: DomainVersion::new(1, 1),
+            lifecycle: DomainLifecycle::Ready,
+            payload: DomainPayload::Battery(battery.clone()),
+            error: None,
+        }));
         assert_eq!(snapshot.battery, battery);
-        assert!(!snapshot.apply(&WorkerUpdate::Battery(battery)));
+        assert!(!snapshot.apply_domain_state(&DomainState {
+            domain: shilpo_services::DeviceDomain::Battery,
+            version: DomainVersion::new(1, 2),
+            lifecycle: DomainLifecycle::Ready,
+            payload: DomainPayload::Battery(battery),
+            error: None,
+        }));
     }
 
     #[test]
     fn battery_snapshot_keeps_last_known_data_when_service_becomes_unavailable() {
         let mut snapshot = DeviceSnapshot::default();
-        snapshot.apply(&WorkerUpdate::Battery(BatteryInfo {
-            available: true,
-            is_present: true,
-            percentage: 73,
-            state: shilpo_services::BatteryChargeState::Discharging,
-            ..Default::default()
-        }));
+        snapshot.apply_domain_state(&DomainState {
+            domain: shilpo_services::DeviceDomain::Battery,
+            version: DomainVersion::new(1, 1),
+            lifecycle: DomainLifecycle::Ready,
+            payload: DomainPayload::Battery(BatteryInfo {
+                available: true,
+                is_present: true,
+                percentage: 73,
+                state: shilpo_services::BatteryChargeState::Discharging,
+                ..Default::default()
+            }),
+            error: None,
+        });
 
-        assert!(snapshot.apply(&WorkerUpdate::Battery(BatteryInfo::default())));
+        assert!(snapshot.apply_domain_state(&DomainState {
+            domain: shilpo_services::DeviceDomain::Battery,
+            version: DomainVersion::new(1, 2),
+            lifecycle: DomainLifecycle::Unavailable,
+            payload: DomainPayload::Battery(BatteryInfo::default()),
+            error: None,
+        }));
         assert_eq!(snapshot.battery.percentage, 73);
         assert!(snapshot.battery.is_present);
         assert!(!snapshot.battery.available);
@@ -688,7 +624,7 @@ mod tests {
 
         let resolver = crate::config::ConfigResolver::from_primary_path(&primary);
         let (mut snapshot, _) = resolver.resolve_initial().unwrap();
-        let (updates_tx, updates_rx) = mpsc::sync_channel(16);
+        let (updates_tx, mut updates_rx) = tokio::sync::mpsc::channel(16);
 
         // 1. Successful change
         std::fs::write(&primary, "version = 1\n[theme]\nfont_family = \"Roboto\"\n").unwrap();
@@ -701,8 +637,8 @@ mod tests {
         );
 
         assert_eq!(snapshot.config.theme.font_family, "Roboto");
-        let update = updates_rx.recv().unwrap();
-        if let WorkerUpdate::Config(ConfigUpdate::Loaded { config, changeset }) = update {
+        let update = updates_rx.try_recv().unwrap();
+        if let ConfigUpdate::Loaded { config, changeset } = update {
             assert_eq!(config.theme.font_family, "Roboto");
             assert!(changeset.theme);
             assert!(!changeset.bar);
@@ -730,11 +666,11 @@ mod tests {
             ReloadTrigger::Watcher { burst_size: 2 },
         );
         assert_eq!(snapshot.config.theme.font_family, "Roboto");
-        let update = updates_rx.recv().unwrap();
-        if let WorkerUpdate::Config(ConfigUpdate::Failed {
+        let update = updates_rx.try_recv().unwrap();
+        if let ConfigUpdate::Failed {
             error: msg,
             changeset,
-        }) = update
+        } = update
         {
             assert!(changeset.is_empty());
             assert!(
@@ -754,11 +690,11 @@ mod tests {
             ReloadTrigger::Manual,
         );
         assert_eq!(snapshot.config.theme.font_family, "Roboto");
-        let update = updates_rx.recv().unwrap();
-        if let WorkerUpdate::Config(ConfigUpdate::Failed {
+        let update = updates_rx.try_recv().unwrap();
+        if let ConfigUpdate::Failed {
             error: msg,
             changeset,
-        }) = update
+        } = update
         {
             assert!(changeset.is_empty());
             assert!(msg.contains("shilpo config migrate"));

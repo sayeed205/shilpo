@@ -16,7 +16,7 @@ use crate::bar::cards::{
     adapter::CardCoordinator,
     model::{CardRequest, CardSourceId, CardSourceState},
 };
-use crate::bar::service_worker::{self, ConfigUpdate, WorkerCommand, WorkerUpdate};
+use crate::bar::service_worker::{self, WorkerCommand};
 use crate::bar::widgets::clock::{format_clock, format_date};
 use crate::battery::BatteryIndicator;
 use crate::config::{BarPosition, BarWidget, ShellConfig};
@@ -291,56 +291,60 @@ impl BarView {
         })
     }
 
-    fn compute_worker_update(&mut self, update: &WorkerUpdate) -> BarUpdateResult {
+    fn compute_domain_update(
+        &mut self,
+        domain: shilpo_services::DeviceDomain,
+        state: &shilpo_services::DomainState,
+    ) -> BarUpdateResult {
         self.last_service_update = Instant::now();
         let mut changed = false;
         let mut effects = Vec::new();
 
-        match update {
-            WorkerUpdate::Battery(value) if &self.battery != value => {
-                self.battery = value.clone();
-                changed = true;
-            }
-            WorkerUpdate::Audio(value) if &self.audio != value => {
-                let show_osd = self.audio.available
-                    && value.available
-                    && (self.audio.volume != value.volume || self.audio.is_muted != value.is_muted);
-                self.audio = value.clone();
-                if show_osd {
-                    effects.push(BarViewEffect::ShowOsd(OsdKind::Volume {
-                        level: value.volume as u32,
-                        muted: value.is_muted,
-                    }));
+        match domain {
+            shilpo_services::DeviceDomain::Battery => {
+                if let shilpo_services::DomainPayload::Battery(ref value) = state.payload
+                    && &self.battery != value
+                {
+                    self.battery = value.clone();
+                    changed = true;
                 }
-                changed = true;
             }
-            WorkerUpdate::Network(value) if &self.network != value => {
-                self.network = value.clone();
-                changed = true;
-            }
-            WorkerUpdate::Media(value) if self.media_info.as_ref() != Some(value) => {
-                self.media_info = Some(value.clone());
-                changed = true;
-            }
-            WorkerUpdate::Config(ConfigUpdate::Loaded { config, changeset }) => {
-                self.config = (**config).clone();
-                self.last_error = None;
-                if changeset.theme {
-                    effects.push(BarViewEffect::ApplyConfigTheme(self.config.clone()));
+            shilpo_services::DeviceDomain::Audio => {
+                if let shilpo_services::DomainPayload::Audio(ref payload) = state.payload {
+                    let value = service_worker::audio_info(payload.clone());
+                    if self.audio != value {
+                        let show_osd = self.audio.available
+                            && value.available
+                            && (self.audio.volume != value.volume
+                                || self.audio.is_muted != value.is_muted);
+                        self.audio = value.clone();
+                        if show_osd {
+                            effects.push(BarViewEffect::ShowOsd(OsdKind::Volume {
+                                level: value.volume as u32,
+                                muted: value.is_muted,
+                            }));
+                        }
+                        changed = true;
+                    }
                 }
-                if changeset.clock_format || changeset.temperature_unit || changeset.locale {
-                    self.update_datetime();
-                }
-                changed = true;
             }
-            WorkerUpdate::Config(ConfigUpdate::Failed { error, .. }) => {
-                tracing::error!(error = %error, "config reload failed");
-                self.last_error = Some(error.clone());
-                effects.push(BarViewEffect::ShowNotificationToast(Notification::new(
-                    "Configuration Warning",
-                    error,
-                )));
-                changed = true;
+            shilpo_services::DeviceDomain::Network => {
+                if let shilpo_services::DomainPayload::Network(ref payload) = state.payload {
+                    let value = service_worker::network_info(payload.clone());
+                    if self.network != value {
+                        self.network = value;
+                        changed = true;
+                    }
+                }
+            }
+            shilpo_services::DeviceDomain::Media => {
+                if let shilpo_services::DomainPayload::Media(ref payload) = state.payload {
+                    let value = service_worker::media_info(payload.clone());
+                    if self.media_info.as_ref() != Some(&value) {
+                        self.media_info = Some(value);
+                        changed = true;
+                    }
+                }
             }
             _ => {}
         }
@@ -348,9 +352,76 @@ impl BarView {
         BarUpdateResult { changed, effects }
     }
 
-    pub fn apply_worker_update(&mut self, update: &WorkerUpdate, cx: &mut Context<Self>) {
-        let result = self.compute_worker_update(update);
-        for effect in result.effects {
+    fn compute_config_loaded(
+        &mut self,
+        config: &ShellConfig,
+        changeset: &crate::config::ConfigChangeSet,
+    ) -> BarUpdateResult {
+        self.last_service_update = Instant::now();
+        let mut effects = Vec::new();
+        self.config = config.clone();
+        self.last_error = None;
+        if changeset.theme {
+            effects.push(BarViewEffect::ApplyConfigTheme(self.config.clone()));
+        }
+        if changeset.clock_format || changeset.temperature_unit || changeset.locale {
+            self.update_datetime();
+        }
+        BarUpdateResult {
+            changed: true,
+            effects,
+        }
+    }
+
+    fn compute_config_failed(&mut self, error: &str) -> BarUpdateResult {
+        self.last_service_update = Instant::now();
+        tracing::error!(error = %error, "config reload failed");
+        self.last_error = Some(error.to_string());
+        BarUpdateResult {
+            changed: true,
+            effects: vec![BarViewEffect::ShowNotificationToast(Notification::new(
+                "Configuration Warning",
+                error,
+            ))],
+        }
+    }
+
+    pub fn apply_domain_update(
+        &mut self,
+        domain: shilpo_services::DeviceDomain,
+        state: &shilpo_services::DomainState,
+        cx: &mut Context<Self>,
+    ) {
+        let result = self.compute_domain_update(domain, state);
+        self.dispatch_effects(result.effects, cx);
+        if result.changed {
+            cx.notify();
+        }
+    }
+
+    pub fn apply_config_loaded(
+        &mut self,
+        config: &ShellConfig,
+        changeset: &crate::config::ConfigChangeSet,
+        cx: &mut Context<Self>,
+    ) {
+        let result = self.compute_config_loaded(config, changeset);
+        self.dispatch_effects(result.effects, cx);
+        if result.changed {
+            cx.notify();
+        }
+    }
+
+    pub fn apply_config_failed(&mut self, error: &str, cx: &mut Context<Self>) {
+        let result = self.compute_config_failed(error);
+        self.dispatch_effects(result.effects, cx);
+        if result.changed {
+            cx.notify();
+        }
+    }
+
+    fn dispatch_effects(&mut self, effects: Vec<BarViewEffect>, cx: &mut Context<Self>) {
+        for effect in effects {
             match effect {
                 BarViewEffect::ShowOsd(kind) => {
                     ShellSurfaces::request(cx, SurfaceRequest::ShowOsd(kind));
@@ -362,9 +433,6 @@ impl BarView {
                     apply_config_theme(&config, None, cx);
                 }
             }
-        }
-        if result.changed {
-            cx.notify();
         }
     }
 
@@ -1020,7 +1088,16 @@ mod bar_view_tests {
             ..Default::default()
         };
 
-        let result = view.compute_worker_update(&WorkerUpdate::Battery(battery.clone()));
+        let result = view.compute_domain_update(
+            shilpo_services::DeviceDomain::Battery,
+            &shilpo_services::DomainState {
+                domain: shilpo_services::DeviceDomain::Battery,
+                version: shilpo_services::DomainVersion::new(1, 1),
+                lifecycle: shilpo_services::DomainLifecycle::Ready,
+                payload: shilpo_services::DomainPayload::Battery(battery.clone()),
+                error: None,
+            },
+        );
         assert!(result.changed);
         assert_eq!(view.battery.percentage, 85);
         assert!(result.effects.is_empty());
@@ -1036,12 +1113,29 @@ mod bar_view_tests {
             ..Default::default()
         };
 
-        let new_audio = AudioInfo {
+        let new_audio = shilpo_services::AudioPayload {
+            available: true,
             volume: 70,
-            ..view.audio.clone()
+            is_muted: false,
+            default_sink_name: view.audio.default_sink_name.clone(),
+            default_source_name: view.audio.default_source_name.clone(),
+            input_volume: view.audio.input_volume,
+            is_input_muted: view.audio.is_input_muted,
+            sinks: Vec::new(),
+            sources: Vec::new(),
+            app_streams: Vec::new(),
         };
 
-        let result = view.compute_worker_update(&WorkerUpdate::Audio(new_audio));
+        let result = view.compute_domain_update(
+            shilpo_services::DeviceDomain::Audio,
+            &shilpo_services::DomainState {
+                domain: shilpo_services::DeviceDomain::Audio,
+                version: shilpo_services::DomainVersion::new(1, 1),
+                lifecycle: shilpo_services::DomainLifecycle::Ready,
+                payload: shilpo_services::DomainPayload::Audio(new_audio),
+                error: None,
+            },
+        );
         assert!(result.changed);
         assert_eq!(view.audio.volume, 70);
         assert_eq!(
@@ -1056,13 +1150,32 @@ mod bar_view_tests {
     #[test]
     fn test_apply_worker_update_network() {
         let (mut view, _commands_rx) = test_view(ShellConfig::default());
-        let net = NetworkInfo {
+        let net = shilpo_services::NetworkPayload {
+            available: true,
             is_connected: true,
-            ssid: Some("WiFi-Home".into()),
-            ..Default::default()
+            ssid: "WiFi-Home".into(),
+            connection_type: "wifi".into(),
+            wifi_enabled: true,
+            wwan_enabled: false,
+            airplane_mode: false,
+            state: "ConnectedGlobal".into(),
+            access_points: Vec::new(),
+            active_vpns: Vec::new(),
+            devices: Vec::new(),
+            has_ip_config: false,
+            ip_config: Default::default(),
         };
 
-        let result = view.compute_worker_update(&WorkerUpdate::Network(net.clone()));
+        let result = view.compute_domain_update(
+            shilpo_services::DeviceDomain::Network,
+            &shilpo_services::DomainState {
+                domain: shilpo_services::DeviceDomain::Network,
+                version: shilpo_services::DomainVersion::new(1, 1),
+                lifecycle: shilpo_services::DomainLifecycle::Ready,
+                payload: shilpo_services::DomainPayload::Network(net),
+                error: None,
+            },
+        );
         assert!(result.changed);
         assert_eq!(view.network.ssid.as_deref(), Some("WiFi-Home"));
     }
@@ -1070,22 +1183,32 @@ mod bar_view_tests {
     #[test]
     fn test_apply_worker_update_media() {
         let (mut view, _commands_rx) = test_view(ShellConfig::default());
-        let media = MediaInfo {
+        let media = shilpo_services::MediaPayload {
+            available: true,
             player_id: "spotify".into(),
             title: "Song".into(),
             artist: "Artist".into(),
             art_url: "".into(),
-            playback_state: shilpo_services::PlaybackState::Playing,
+            playback_state: "playing".into(),
             can_play_pause: true,
             can_go_next: true,
             position_secs: 0.0,
             length_secs: 180.0,
-            ..Default::default()
+            rate: 1.0,
         };
 
-        let result = view.compute_worker_update(&WorkerUpdate::Media(media.clone()));
+        let result = view.compute_domain_update(
+            shilpo_services::DeviceDomain::Media,
+            &shilpo_services::DomainState {
+                domain: shilpo_services::DeviceDomain::Media,
+                version: shilpo_services::DomainVersion::new(1, 1),
+                lifecycle: shilpo_services::DomainLifecycle::Ready,
+                payload: shilpo_services::DomainPayload::Media(media.clone()),
+                error: None,
+            },
+        );
         assert!(result.changed);
-        assert_eq!(view.media_info, Some(media));
+        assert_eq!(view.media_info, Some(service_worker::media_info(media)));
     }
 
     #[test]
@@ -1096,10 +1219,8 @@ mod bar_view_tests {
             ..Default::default()
         };
 
-        let result = view.compute_worker_update(&WorkerUpdate::Config(ConfigUpdate::Loaded {
-            config: Box::new(new_config.clone()),
-            changeset: crate::config::ConfigChangeSet::all(),
-        }));
+        let result =
+            view.compute_config_loaded(&new_config, &crate::config::ConfigChangeSet::all());
         assert!(result.changed);
         assert_eq!(view.config.clock_format.as_deref(), Some("%H:%M"));
         assert_eq!(
@@ -1111,14 +1232,11 @@ mod bar_view_tests {
     #[test]
     fn test_apply_worker_update_config_failed() {
         let (mut view, _commands_rx) = test_view(ShellConfig::default());
-        let err_msg = "Invalid TOML syntax".to_string();
+        let err_msg = "Invalid TOML syntax";
 
-        let result = view.compute_worker_update(&WorkerUpdate::Config(ConfigUpdate::Failed {
-            error: err_msg.clone(),
-            changeset: crate::config::ConfigChangeSet::default(),
-        }));
+        let result = view.compute_config_failed(err_msg);
         assert!(result.changed);
-        assert_eq!(view.last_error, Some(err_msg.clone()));
+        assert_eq!(view.last_error, Some(err_msg.to_string()));
         assert_eq!(result.effects.len(), 1);
         if let BarViewEffect::ShowNotificationToast(notif) = &result.effects[0] {
             assert_eq!(notif.summary, "Configuration Warning");

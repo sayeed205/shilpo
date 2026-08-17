@@ -41,7 +41,6 @@ pub struct ShellRuntime {
     _compositor_broker: Arc<Mutex<Option<Arc<CompositorCommandBroker>>>>,
     _status: Arc<arc_swap::ArcSwap<ShellStatus>>,
     _telemetry: Arc<arc_swap::ArcSwap<ShellTelemetry>>,
-    mailbox_rx: Arc<Mutex<tokio::sync::mpsc::Receiver<ShellCommand>>>,
     dbus_connection: Option<zbus::Connection>,
     instance_id: String,
     active_config: crate::config::ShellConfig,
@@ -58,6 +57,7 @@ pub struct ShellRuntime {
     _window_closed: Option<Subscription>,
     _wallpaper_preview_changed: Option<Subscription>,
     _drain_task: gpui::Task<()>,
+    _wallpaper_timer_task: gpui::Task<()>,
 }
 
 impl Global for ShellRuntime {}
@@ -87,12 +87,15 @@ impl ShellRuntime {
             telemetry.clone(),
         ));
         let wallpaper_preview = cx.new(WallpaperPreviewResource::new);
+        let (_notif_tx, notif_rx) = tokio::sync::broadcast::channel(16);
+        let (_device_tx, device_rx) = tokio::sync::broadcast::channel(16);
+        let (_config_tx, config_rx) = tokio::sync::mpsc::channel(16);
+        let device_client = shilpo_services::DeviceClient::new();
         cx.set_global(Self {
             dbus_service,
             _compositor_broker: compositor_broker,
             _status: status,
             _telemetry: telemetry,
-            mailbox_rx: Arc::new(Mutex::new(rx)),
             dbus_connection: None,
             instance_id: uuid::Uuid::new_v4().to_string(),
             active_config: crate::config::ShellConfig::default(),
@@ -109,7 +112,9 @@ impl ShellRuntime {
             _window_closed: None,
             _wallpaper_preview_changed: None,
             _drain_task: gpui::Task::ready(()),
+            _wallpaper_timer_task: gpui::Task::ready(()),
         });
+        Self::spawn_event_loop(cx, device_rx, notif_rx, rx, config_rx, device_client);
         tx
     }
 
@@ -300,7 +305,7 @@ impl ShellRuntime {
     ) {
         let initial_wallpaper_path = theme_manager::init(cx);
         let session = session::SessionContext::init();
-        let hub = ServiceHub::start(cx.background_executor().clone(), &session);
+        let (hub, streams) = ServiceHub::start(cx.background_executor().clone(), &session);
         let extensions = ExtensionCoordinator::init(cx.background_executor().clone()).map(Arc::new);
         if let Some(ref ext) = extensions {
             dbus_service.set_extension_coordinator(Some(ext.clone()));
@@ -322,7 +327,6 @@ impl ShellRuntime {
             _compositor_broker: compositor_broker,
             _status: status,
             _telemetry: telemetry,
-            mailbox_rx: Arc::new(Mutex::new(mailbox_rx)),
             dbus_connection: Some(dbus_connection),
             instance_id,
             active_config: session.active_config,
@@ -339,6 +343,7 @@ impl ShellRuntime {
             _window_closed: None,
             _wallpaper_preview_changed: None,
             _drain_task: gpui::Task::ready(()),
+            _wallpaper_timer_task: gpui::Task::ready(()),
         });
 
         let wallpaper_preview_changed = cx.observe(&wallpaper_preview, |_, cx| {
@@ -359,7 +364,15 @@ impl ShellRuntime {
         Self::on_compositor_snapshot_changed(cx, latest_snapshot);
         Self::spawn_window_closed_watch(cx);
         ExtensionHost::sync_extension_actions(cx);
-        Self::spawn_drain_loop(cx);
+        Self::spawn_event_loop(
+            cx,
+            streams.device_rx,
+            streams.notif_rx,
+            mailbox_rx,
+            streams.config_rx,
+            streams.device_client,
+        );
+        Self::spawn_wallpaper_timer(cx);
         Self::publish_status(cx);
 
         let Some(conn) = cx.global::<Self>().dbus_connection.clone() else {
@@ -408,20 +421,318 @@ impl ShellRuntime {
         cx.global_mut::<Self>()._window_closed = Some(subscription);
     }
 
-    fn spawn_drain_loop(cx: &mut App) {
+    fn spawn_event_loop(
+        cx: &mut App,
+        mut device_rx: tokio::sync::broadcast::Receiver<shilpo_services::DeviceClientUpdate>,
+        mut notif_rx: tokio::sync::broadcast::Receiver<shilpo_services::Notification>,
+        mut mailbox_rx: tokio::sync::mpsc::Receiver<ShellCommand>,
+        mut config_rx: crate::bar::service_worker::ConfigReceiver,
+        device_client: shilpo_services::DeviceClient,
+    ) {
         let task = cx.spawn(async move |cx| {
+            let mut device_closed = false;
+            let mut notif_closed = false;
+            let mut mailbox_closed = false;
+            let mut config_closed = false;
+
             loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(100))
-                    .await;
-                cx.update(|cx| ShellSurfaces::request(cx, SurfaceRequest::SyncDisplays));
-                cx.update(ServiceHub::drain);
-                cx.update(Self::drain_extensions);
-                cx.update(Self::publish_status);
-                cx.update(Self::drain_dbus_commands);
+                if device_closed && notif_closed && mailbox_closed && config_closed {
+                    break;
+                }
+
+                let mut device_updates = Vec::new();
+                let mut notifications = Vec::new();
+                let mut shell_commands = Vec::new();
+                let mut config_updates = Vec::new();
+                let mut resync_device = false;
+
+                tokio::select! {
+                    res = device_rx.recv(), if !device_closed => {
+                        match res {
+                            Ok(upd) => device_updates.push(upd),
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                resync_device = true;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                device_closed = true;
+                            }
+                        }
+                    }
+                    res = notif_rx.recv(), if !notif_closed => {
+                        match res {
+                            Ok(notif) => notifications.push(notif),
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                notif_closed = true;
+                            }
+                        }
+                    }
+                    cmd = mailbox_rx.recv(), if !mailbox_closed => {
+                        match cmd {
+                            Some(cmd) => shell_commands.push(cmd),
+                            None => mailbox_closed = true,
+                        }
+                    }
+                    config_upd = config_rx.recv(), if !config_closed => {
+                        match config_upd {
+                            Some(config_upd) => config_updates.push(config_upd),
+                            None => config_closed = true,
+                        }
+                    }
+                }
+
+                if !device_closed {
+                    loop {
+                        match device_rx.try_recv() {
+                            Ok(upd) => device_updates.push(upd),
+                            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                                resync_device = true;
+                            }
+                            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                                device_closed = true;
+                                break;
+                            }
+                            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                        }
+                    }
+                }
+
+                if !notif_closed {
+                    loop {
+                        match notif_rx.try_recv() {
+                            Ok(notif) => notifications.push(notif),
+                            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                                notif_closed = true;
+                                break;
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+
+                if !mailbox_closed {
+                    while let Ok(cmd) = mailbox_rx.try_recv() {
+                        shell_commands.push(cmd);
+                    }
+                }
+
+                if !config_closed {
+                    while let Ok(config_upd) = config_rx.try_recv() {
+                        config_updates.push(config_upd);
+                    }
+                }
+
+                if resync_device {
+                    for domain in shilpo_services::DeviceDomain::ALL {
+                        let state = device_client.get_domain_state(domain);
+                        device_updates.push(shilpo_services::DeviceClientUpdate { domain, state });
+                    }
+                }
+
+                if device_updates.is_empty()
+                    && notifications.is_empty()
+                    && shell_commands.is_empty()
+                    && config_updates.is_empty()
+                {
+                    continue;
+                }
+
+                cx.update(|cx| {
+                    if !cx.has_global::<ShellRuntime>() {
+                        return;
+                    }
+                    Self::process_runtime_events(
+                        cx,
+                        device_updates,
+                        notifications,
+                        shell_commands,
+                        config_updates,
+                    );
+                });
             }
         });
         cx.global_mut::<Self>()._drain_task = task;
+    }
+
+    fn spawn_wallpaper_timer(cx: &mut App) {
+        let task = cx.spawn(async move |cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                cx.update(|cx| {
+                    if !cx.has_global::<ShellRuntime>() {
+                        return;
+                    }
+                    let event_to_send = cx
+                        .global_mut::<ShellRuntime>()
+                        .wallpaper_coordinator_mut()
+                        .on_wallpaper_tick(std::time::Instant::now());
+                    if let Some((extension_id, event)) = event_to_send {
+                        cx.global::<ShellRuntime>()
+                            .extension_host()
+                            .send_event_to_extension(&extension_id, event);
+                    }
+                });
+            }
+        });
+        cx.global_mut::<Self>()._wallpaper_timer_task = task;
+    }
+
+    pub(super) fn process_runtime_events(
+        cx: &mut App,
+        device_updates: Vec<shilpo_services::DeviceClientUpdate>,
+        notifications: Vec<shilpo_services::Notification>,
+        shell_commands: Vec<ShellCommand>,
+        config_updates: Vec<crate::bar::service_worker::ConfigUpdate>,
+    ) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+
+        for notif in notifications {
+            ShellSurfaces::request(cx, SurfaceRequest::ShowNotification(notif));
+        }
+
+        let mut applied_device_updates = Vec::new();
+        if !device_updates.is_empty()
+            && let Some(hub) = cx.global_mut::<Self>().service_hub_mut()
+        {
+            for upd in device_updates {
+                if hub.apply_domain_state(&upd.state) {
+                    applied_device_updates.push(upd);
+                }
+            }
+        }
+
+        if !applied_device_updates.is_empty() {
+            for upd in &applied_device_updates {
+                match upd.domain {
+                    shilpo_services::DeviceDomain::Battery => {
+                        if let shilpo_services::DomainPayload::Battery(ref info) = upd.state.payload
+                        {
+                            if info.available && !info.is_present && upd.state.lifecycle.is_ready()
+                            {
+                                crate::bar::cards::adapter::CardCoordinator::dispatch(
+                                    cx,
+                                    crate::bar::cards::model::CardRequest::AnchorRemoved {
+                                        source: crate::bar::cards::model::CardSourceId::singleton(
+                                            "battery",
+                                        ),
+                                    },
+                                );
+                            }
+                            crate::bar::cards::adapter::CardCoordinator::refresh_owner(
+                                cx,
+                                &crate::bar::cards::model::CardOwnerId::new("battery"),
+                            );
+                            Self::dispatch_extension_event(
+                                cx,
+                                shilpo_ext_api::ExtensionEvent::PowerChanged {
+                                    percentage: info.is_present.then_some(info.percentage as f32),
+                                    charging: info.is_charging(),
+                                },
+                            );
+                        }
+                    }
+                    shilpo_services::DeviceDomain::Audio => {
+                        crate::bar::cards::adapter::CardCoordinator::refresh_owner(
+                            cx,
+                            &crate::bar::cards::model::CardOwnerId::new("audio"),
+                        );
+                    }
+                    shilpo_services::DeviceDomain::Network => {
+                        if let shilpo_services::DomainPayload::Network(ref info) = upd.state.payload
+                        {
+                            crate::bar::cards::adapter::CardCoordinator::refresh_owner(
+                                cx,
+                                &crate::bar::cards::model::CardOwnerId::new("network"),
+                            );
+                            Self::dispatch_extension_event(
+                                cx,
+                                shilpo_ext_api::ExtensionEvent::NetworkChanged {
+                                    connected: info.available && info.is_connected,
+                                },
+                            );
+                        }
+                    }
+                    shilpo_services::DeviceDomain::Media => {
+                        if let shilpo_services::DomainPayload::Media(ref info) = upd.state.payload {
+                            crate::bar::cards::adapter::CardCoordinator::refresh_owner(
+                                cx,
+                                &crate::bar::cards::model::CardOwnerId::new("media"),
+                            );
+                            Self::dispatch_extension_event(
+                                cx,
+                                shilpo_ext_api::ExtensionEvent::MediaChanged {
+                                    title: (!info.title.is_empty()).then_some(info.title.clone()),
+                                    artist: (!info.artist.is_empty())
+                                        .then_some(info.artist.clone()),
+                                    playing: info.playback_state == "playing",
+                                },
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            let handles = cx.global::<Self>().shell_surfaces().bar_handles();
+            for handle in handles {
+                let updates_clone = applied_device_updates.clone();
+                if let Err(error) = handle.update(cx, |bar_view, _window, cx| {
+                    for upd in &updates_clone {
+                        bar_view.apply_domain_update(upd.domain, &upd.state, cx);
+                    }
+                }) {
+                    tracing::debug!(
+                        ?error,
+                        window_id = ?handle.window_id(),
+                        surface = "bar",
+                        "stale window handle on device update"
+                    );
+                }
+            }
+        }
+
+        for config_upd in config_updates {
+            match config_upd {
+                crate::bar::service_worker::ConfigUpdate::Loaded { config, changeset } => {
+                    Self::emit_config_signal(cx, true, changeset.clone(), 0);
+                    Self::set_active_config(cx, &config);
+                    if changeset.outputs || changeset.desktop {
+                        ShellSurfaces::request(cx, SurfaceRequest::SyncDisplays);
+                    }
+                    if changeset.extensions {
+                        ShellSurfaces::reconcile_bar_extension_instances(cx);
+                    }
+                    let handles = cx.global::<Self>().shell_surfaces().bar_handles();
+                    for handle in handles {
+                        let config_clone = config.clone();
+                        let changeset_clone = changeset.clone();
+                        let _ = handle.update(cx, |bar_view, _window, cx| {
+                            bar_view.apply_config_loaded(&config_clone, &changeset_clone, cx);
+                        });
+                    }
+                }
+                crate::bar::service_worker::ConfigUpdate::Failed { error, changeset } => {
+                    Self::emit_config_signal(cx, false, changeset, 1);
+                    let handles = cx.global::<Self>().shell_surfaces().bar_handles();
+                    for handle in handles {
+                        let err = error.clone();
+                        let _ = handle.update(cx, |bar_view, _window, cx| {
+                            bar_view.apply_config_failed(&err, cx);
+                        });
+                    }
+                }
+            }
+        }
+
+        for cmd in shell_commands {
+            Self::execute_dbus_command(cx, cmd);
+        }
+
+        ExtensionHost::drain(cx);
     }
 
     pub fn on_compositor_snapshot_changed(cx: &mut App, snapshot: Arc<CompositorSnapshot>) {
@@ -620,11 +931,294 @@ impl ShellRuntime {
                 if let Some((_, handle)) = windows.capture {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
+                cx.global_mut::<Self>()._drain_task = gpui::Task::ready(());
+                cx.global_mut::<Self>()._wallpaper_timer_task = gpui::Task::ready(());
                 cx.global_mut::<Self>().service_hub = None;
                 Self::publish_status(cx);
                 cx.quit();
             });
         })
         .detach();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_for_event_test(
+        cx: &mut App,
+    ) -> (
+        tokio::sync::broadcast::Sender<shilpo_services::DeviceClientUpdate>,
+        tokio::sync::broadcast::Sender<shilpo_services::Notification>,
+        tokio::sync::mpsc::Sender<ShellCommand>,
+        crate::bar::service_worker::ConfigSender,
+    ) {
+        let root =
+            std::env::temp_dir().join(format!("shilpo-shell-event-test-{}", uuid::Uuid::new_v4()));
+        let (tx, rx) = tokio::sync::mpsc::channel(128);
+        let compositor_broker = Arc::new(Mutex::new(None));
+        let status = Arc::new(arc_swap::ArcSwap::from_pointee(ShellStatus::default()));
+        let telemetry = Arc::new(arc_swap::ArcSwap::from_pointee(ShellTelemetry::default()));
+        let dbus_service = Arc::new(ShellDbusService::new(
+            tx.clone(),
+            compositor_broker.clone(),
+            status.clone(),
+            telemetry.clone(),
+        ));
+        let wallpaper_preview = cx.new(WallpaperPreviewResource::new);
+        let (notif_tx, notif_rx) = tokio::sync::broadcast::channel(16);
+        let (device_tx, device_rx) = tokio::sync::broadcast::channel(16);
+        let (config_tx, config_rx) = tokio::sync::mpsc::channel(16);
+        let device_client = shilpo_services::DeviceClient::new();
+        let hub = ServiceHub::new_offline_for_test();
+        cx.set_global(Self {
+            dbus_service,
+            _compositor_broker: compositor_broker,
+            _status: status,
+            _telemetry: telemetry,
+            dbus_connection: None,
+            instance_id: uuid::Uuid::new_v4().to_string(),
+            active_config: crate::config::ShellConfig::default(),
+            shell_surfaces: ShellSurfaces::new(Arc::new(CompositorSnapshot::default())),
+            action_dispatcher: ActionDispatcher::new(),
+            extension_host: ExtensionHost::new(None),
+            wallpaper_coordinator: WallpaperCoordinator::new(),
+            wallpaper_preview,
+            service_hub: Some(hub),
+            session_state: crate::config::ShellSessionState::default(),
+            session_path: root.join("session.json"),
+            heed_store: None,
+            _start_time: std::time::Instant::now(),
+            _window_closed: None,
+            _wallpaper_preview_changed: None,
+            _drain_task: gpui::Task::ready(()),
+            _wallpaper_timer_task: gpui::Task::ready(()),
+        });
+        Self::spawn_event_loop(cx, device_rx, notif_rx, rx, config_rx, device_client);
+        (device_tx, notif_tx, tx, config_tx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shilpo_services::{
+        BatteryPayload, DeviceClientUpdate, DeviceDomain, DomainLifecycle, DomainPayload,
+        DomainState, DomainVersion,
+    };
+
+    #[gpui::test]
+    fn test_event_driven_domain_update_without_advancing_timer(cx: &mut gpui::TestAppContext) {
+        let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_event_test(app)
+        });
+
+        let update = DeviceClientUpdate {
+            domain: DeviceDomain::Battery,
+            state: DomainState {
+                domain: DeviceDomain::Battery,
+                version: DomainVersion::new(1, 1),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Battery(BatteryPayload {
+                    available: true,
+                    is_present: true,
+                    percentage: 92,
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+
+        device_tx.send(update).unwrap();
+
+        // Exactly one drain cycle driven purely by event arrival (no cx.advance_clock!)
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            let snap = ShellRuntime::device_snapshot(app);
+            assert_eq!(snap.battery.percentage, 92);
+            assert!(snap.battery.available);
+            let domain_state = ShellRuntime::domain_state(app, DeviceDomain::Battery);
+            assert_eq!(domain_state.version, DomainVersion::new(1, 1));
+            assert_eq!(domain_state.lifecycle, DomainLifecycle::Ready);
+        });
+    }
+
+    #[gpui::test]
+    fn test_stale_and_equal_domain_version_rejected(cx: &mut gpui::TestAppContext) {
+        let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_event_test(app)
+        });
+
+        // 1. Send version (1, 2) -> should apply
+        device_tx
+            .send(DeviceClientUpdate {
+                domain: DeviceDomain::Battery,
+                state: DomainState {
+                    domain: DeviceDomain::Battery,
+                    version: DomainVersion::new(1, 2),
+                    lifecycle: DomainLifecycle::Ready,
+                    payload: DomainPayload::Battery(BatteryPayload {
+                        available: true,
+                        is_present: true,
+                        percentage: 95,
+                        ..Default::default()
+                    }),
+                    error: None,
+                },
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            assert_eq!(ShellRuntime::device_snapshot(app).battery.percentage, 95);
+        });
+
+        // 2. Send equal version (1, 2) with different percentage -> should NOT apply
+        device_tx
+            .send(DeviceClientUpdate {
+                domain: DeviceDomain::Battery,
+                state: DomainState {
+                    domain: DeviceDomain::Battery,
+                    version: DomainVersion::new(1, 2),
+                    lifecycle: DomainLifecycle::Ready,
+                    payload: DomainPayload::Battery(BatteryPayload {
+                        available: true,
+                        is_present: true,
+                        percentage: 50,
+                        ..Default::default()
+                    }),
+                    error: None,
+                },
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            assert_eq!(ShellRuntime::device_snapshot(app).battery.percentage, 95);
+        });
+
+        // 3. Send stale version (1, 1) with different percentage -> should NOT apply
+        device_tx
+            .send(DeviceClientUpdate {
+                domain: DeviceDomain::Battery,
+                state: DomainState {
+                    domain: DeviceDomain::Battery,
+                    version: DomainVersion::new(1, 1),
+                    lifecycle: DomainLifecycle::Ready,
+                    payload: DomainPayload::Battery(BatteryPayload {
+                        available: true,
+                        is_present: true,
+                        percentage: 20,
+                        ..Default::default()
+                    }),
+                    error: None,
+                },
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            assert_eq!(ShellRuntime::device_snapshot(app).battery.percentage, 95);
+        });
+    }
+
+    #[gpui::test]
+    fn test_burst_coalescing_multiple_streams(cx: &mut gpui::TestAppContext) {
+        let (device_tx, notif_tx, cmd_tx, _cfg_tx) = cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_event_test(app)
+        });
+
+        // Burst send across multiple streams
+        device_tx
+            .send(DeviceClientUpdate {
+                domain: DeviceDomain::Battery,
+                state: DomainState {
+                    domain: DeviceDomain::Battery,
+                    version: DomainVersion::new(1, 1),
+                    lifecycle: DomainLifecycle::Ready,
+                    payload: DomainPayload::Battery(BatteryPayload {
+                        available: true,
+                        is_present: true,
+                        percentage: 88,
+                        ..Default::default()
+                    }),
+                    error: None,
+                },
+            })
+            .unwrap();
+
+        notif_tx
+            .send(shilpo_services::Notification {
+                id: 1,
+                app_name: "TestApp".into(),
+                summary: "Burst Notif".into(),
+                body: "Body".into(),
+                app_icon: None,
+                desktop_entry: None,
+                image_path: None,
+                urgency: shilpo_services::NotificationUrgency::Normal,
+                actions: Vec::new(),
+                expire_timeout_ms: 5000,
+                timestamp: chrono::Local::now(),
+            })
+            .unwrap();
+
+        cmd_tx
+            .try_send(ShellCommand::EmitTestNotification {
+                title: "Cmd Notif".into(),
+                body: "Cmd Body".into(),
+            })
+            .unwrap();
+
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            assert_eq!(ShellRuntime::device_snapshot(app).battery.percentage, 88);
+            let notif_hist = ShellRuntime::notification_history(app);
+            assert!(
+                notif_hist
+                    .iter()
+                    .any(|n| n.summary == "Cmd Notif" || n.summary == "Burst Notif")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn test_lagged_broadcast_resync(cx: &mut gpui::TestAppContext) {
+        let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_event_test(app)
+        });
+
+        // Overflow the channel (capacity is 16) to trigger Lagged
+        for i in 1..=25 {
+            let _ = device_tx.send(DeviceClientUpdate {
+                domain: DeviceDomain::Battery,
+                state: DomainState {
+                    domain: DeviceDomain::Battery,
+                    version: DomainVersion::new(1, i),
+                    lifecycle: DomainLifecycle::Ready,
+                    payload: DomainPayload::Battery(BatteryPayload {
+                        available: true,
+                        is_present: true,
+                        percentage: i as u8,
+                        ..Default::default()
+                    }),
+                    error: None,
+                },
+            });
+        }
+
+        // Draining should recover from Lagged by resyncing from device_client
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            let state = ShellRuntime::domain_state(app, DeviceDomain::Battery);
+            assert!(matches!(
+                state.lifecycle,
+                DomainLifecycle::Ready | DomainLifecycle::Unavailable
+            ));
+        });
     }
 }

@@ -56,143 +56,128 @@ impl ShellRuntime {
         }
     }
 
-    pub(super) fn drain_dbus_commands(cx: &mut App) {
+    pub(super) fn execute_dbus_command(cx: &mut App, cmd: ShellCommand) {
         if !cx.has_global::<Self>() {
             return;
         }
-        let commands = {
-            let runtime = cx.global::<Self>();
-            let mut rx = runtime.mailbox_rx.lock().unwrap();
-            let mut cmds = Vec::new();
-            while let Ok(cmd) = rx.try_recv() {
-                cmds.push(cmd);
-                if cmds.len() >= 128 {
-                    break;
-                }
-            }
-            cmds
-        };
-
-        for cmd in commands {
-            match cmd {
-                ShellCommand::ShowBar => {
-                    if !ShellSurfaces::has_bars(cx) {
-                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
-                    }
-                }
-                ShellCommand::HideBar => {
-                    if ShellSurfaces::has_bars(cx) {
-                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
-                    }
-                }
-                ShellCommand::ToggleBar => {
+        match cmd {
+            ShellCommand::ShowBar => {
+                if !ShellSurfaces::has_bars(cx) {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                 }
-                ShellCommand::ShowOverview => {
-                    if !ShellSurfaces::is_overview_open(cx) {
-                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
-                    }
+            }
+            ShellCommand::HideBar => {
+                if ShellSurfaces::has_bars(cx) {
+                    let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
                 }
-                ShellCommand::HideOverview => {
-                    if ShellSurfaces::is_overview_open(cx) {
-                        let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
-                    }
-                }
-                ShellCommand::ToggleOverview => {
+            }
+            ShellCommand::ToggleBar => {
+                let _ = Self::dispatch_action(cx, ActionInvocation::ToggleBar);
+            }
+            ShellCommand::ShowOverview => {
+                if !ShellSurfaces::is_overview_open(cx) {
                     let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
                 }
-                ShellCommand::ReloadConfig => {
-                    let _ = Self::dispatch_action(cx, ActionInvocation::ReloadConfig);
+            }
+            ShellCommand::HideOverview => {
+                if ShellSurfaces::is_overview_open(cx) {
+                    let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
                 }
-                ShellCommand::SetBrightness(pct) => {
-                    Self::dispatch_device_command(
-                        cx,
-                        shilpo_services::DeviceCommand::Brightness(
-                            shilpo_services::BrightnessAction::SetBrightness(pct),
-                        ),
-                    );
-                }
-                ShellCommand::SetDisplayBrightness {
-                    display_id,
-                    percentage,
-                } => {
-                    Self::dispatch_device_command(
-                        cx,
-                        shilpo_services::DeviceCommand::Brightness(
-                            shilpo_services::BrightnessAction::SetDisplay {
-                                id: display_id,
-                                percentage,
-                            },
-                        ),
-                    );
-                }
-                ShellCommand::Capture(intent) => {
-                    ShellSurfaces::request(cx, super::SurfaceRequest::OpenCapture(intent));
-                }
-                ShellCommand::InvokeAction {
-                    action_id,
-                    payload_json,
-                } => match action_id.parse::<crate::actions::ActionId>() {
-                    Ok(id) => {
-                        let payload = payload_json.and_then(|p| serde_json::from_str(&p).ok());
-                        match crate::actions::ActionInvocation::from_id_and_payload(id, payload) {
-                            Ok(invocation) => {
-                                if let Err(error) = ShellRuntime::dispatch_action(cx, invocation) {
-                                    tracing::warn!(%error, "D-Bus action dispatch failed");
-                                }
+            }
+            ShellCommand::ToggleOverview => {
+                let _ = Self::dispatch_action(cx, ActionInvocation::ToggleOverview);
+            }
+            ShellCommand::ReloadConfig => {
+                let _ = Self::dispatch_action(cx, ActionInvocation::ReloadConfig);
+            }
+            ShellCommand::SetBrightness(pct) => {
+                Self::dispatch_device_command(
+                    cx,
+                    shilpo_services::DeviceCommand::Brightness(
+                        shilpo_services::BrightnessAction::SetBrightness(pct),
+                    ),
+                );
+            }
+            ShellCommand::SetDisplayBrightness {
+                display_id,
+                percentage,
+            } => {
+                Self::dispatch_device_command(
+                    cx,
+                    shilpo_services::DeviceCommand::Brightness(
+                        shilpo_services::BrightnessAction::SetDisplay {
+                            id: display_id,
+                            percentage,
+                        },
+                    ),
+                );
+            }
+            ShellCommand::Capture(intent) => {
+                ShellSurfaces::request(cx, super::SurfaceRequest::OpenCapture(intent));
+            }
+            ShellCommand::InvokeAction {
+                action_id,
+                payload_json,
+            } => match action_id.parse::<crate::actions::ActionId>() {
+                Ok(id) => {
+                    let payload = payload_json.and_then(|p| serde_json::from_str(&p).ok());
+                    match crate::actions::ActionInvocation::from_id_and_payload(id, payload) {
+                        Ok(invocation) => {
+                            if let Err(error) = ShellRuntime::dispatch_action(cx, invocation) {
+                                tracing::warn!(%error, "D-Bus action dispatch failed");
                             }
-                            Err(error) => tracing::warn!(%error, "D-Bus action payload rejected"),
                         }
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, action = %action_id, "D-Bus action ID rejected")
-                    }
-                },
-                ShellCommand::NextWallpaper => {
-                    ShellRuntime::request_next_wallpaper(cx);
-                }
-                ShellCommand::EmitTestNotification { title, body } => {
-                    let notif = shilpo_services::Notification {
-                        id: 0,
-                        app_name: "Shilpo Debug".to_string(),
-                        summary: title,
-                        body,
-                        app_icon: Some("dialog-information".to_string()),
-                        desktop_entry: None,
-                        image_path: None,
-                        urgency: shilpo_services::NotificationUrgency::Normal,
-                        actions: Vec::new(),
-                        expire_timeout_ms: 5000,
-                        timestamp: chrono::Local::now(),
-                    };
-                    if let Some(hub) = cx.global::<Self>().service_hub() {
-                        hub.push_notification(notif);
-                    } else {
-                        tracing::warn!("service hub unavailable for test notification");
+                        Err(error) => tracing::warn!(%error, "D-Bus action payload rejected"),
                     }
                 }
-                ShellCommand::ForgetSearchResult(canonical_id) => {
-                    if cx.has_global::<Self>()
-                        && let Some(store) = cx.global::<Self>().heed_store()
-                        && let Err(error) = store.forget_search_result(&canonical_id)
-                    {
-                        tracing::warn!(%error, canonical_id = %canonical_id, "failed to forget search result");
-                    }
+                Err(error) => {
+                    tracing::warn!(%error, action = %action_id, "D-Bus action ID rejected")
                 }
-                ShellCommand::ClearSearchLearning => {
-                    if cx.has_global::<Self>()
-                        && let Some(store) = cx.global::<Self>().heed_store()
-                        && let Err(error) = store.clear_search_learning()
-                    {
-                        tracing::warn!(%error, "failed to clear search learning");
-                    }
+            },
+            ShellCommand::NextWallpaper => {
+                ShellRuntime::request_next_wallpaper(cx);
+            }
+            ShellCommand::EmitTestNotification { title, body } => {
+                let notif = shilpo_services::Notification {
+                    id: 0,
+                    app_name: "Shilpo Debug".to_string(),
+                    summary: title,
+                    body,
+                    app_icon: Some("dialog-information".to_string()),
+                    desktop_entry: None,
+                    image_path: None,
+                    urgency: shilpo_services::NotificationUrgency::Normal,
+                    actions: Vec::new(),
+                    expire_timeout_ms: 5000,
+                    timestamp: chrono::Local::now(),
+                };
+                if let Some(hub) = cx.global::<Self>().service_hub() {
+                    hub.push_notification(notif);
+                } else {
+                    tracing::warn!("service hub unavailable for test notification");
                 }
-                ShellCommand::ResetNotificationQuarantine => {
-                    if let Some(hub) = cx.global::<Self>().service_hub() {
-                        hub.reset_notification_quarantine();
-                    } else {
-                        tracing::warn!("service hub unavailable for notification quarantine reset");
-                    }
+            }
+            ShellCommand::ForgetSearchResult(canonical_id) => {
+                if cx.has_global::<Self>()
+                    && let Some(store) = cx.global::<Self>().heed_store()
+                    && let Err(error) = store.forget_search_result(&canonical_id)
+                {
+                    tracing::warn!(%error, canonical_id = %canonical_id, "failed to forget search result");
+                }
+            }
+            ShellCommand::ClearSearchLearning => {
+                if cx.has_global::<Self>()
+                    && let Some(store) = cx.global::<Self>().heed_store()
+                    && let Err(error) = store.clear_search_learning()
+                {
+                    tracing::warn!(%error, "failed to clear search learning");
+                }
+            }
+            ShellCommand::ResetNotificationQuarantine => {
+                if let Some(hub) = cx.global::<Self>().service_hub() {
+                    hub.reset_notification_quarantine();
+                } else {
+                    tracing::warn!("service hub unavailable for notification quarantine reset");
                 }
             }
         }
@@ -291,7 +276,7 @@ mod tests {
         })
         .unwrap();
 
-        cx.update(ShellRuntime::drain_dbus_commands);
+        cx.run_until_parked();
 
         let history = cx.update(|app| {
             app.global::<ShellRuntime>()
