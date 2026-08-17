@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use shilpo_ui::IconName;
+
 use super::{
     learning::{NoopSearchLearningStore, SearchLearningStore},
-    parser,
+    parser::{self, SearchMode},
     ranker::{self, RankerConfig},
     sink::{SearchSink, SinkConfig},
     types::{
@@ -66,10 +68,12 @@ impl SearchCoordinator {
         self.providers.push(provider);
     }
 
-    /// Fans out a search query to all registered providers and ranks the merged results into the provided sink.
+    /// Fans out a search query to registered providers supporting the parsed query mode
+    /// and ranks the merged results into the provided sink.
     ///
-    /// Each provider's `search` call runs concurrently on its own thread so a slow or
+    /// Each eligible provider's `search` call runs concurrently on its own thread so a slow or
     /// stalled provider cannot delay another provider's candidates from being collected.
+    /// Providers whose declared modes do not include `request.mode` are not spawned at all.
     /// Each provider writes into a private scratch sink sized well above any realistic
     /// single-provider output (see [`SCRATCH_SINK_CAPACITY`]), so a provider that returns
     /// many legitimate candidates cannot have any of them silently dropped before ranking.
@@ -79,20 +83,26 @@ impl SearchCoordinator {
         let (mode, query) = parser::parse_query(raw_query);
         let request = SearchRequest::new(raw_query, mode, query, generation);
 
+        let eligible_providers: Vec<&Arc<dyn SearchProvider>> = self
+            .providers
+            .iter()
+            .filter(|p| p.declared_modes().contains(&mode))
+            .collect();
+
         let scratch_config = SinkConfig {
             max_per_provider: SCRATCH_SINK_CAPACITY,
             max_total: SCRATCH_SINK_CAPACITY,
         };
-        let scratch_sinks: Vec<SearchSink> = self
-            .providers
+        let scratch_sinks: Vec<SearchSink> = eligible_providers
             .iter()
             .map(|_| SearchSink::new(generation, scratch_config.clone()))
             .collect();
 
         std::thread::scope(|scope| {
-            for (provider, scratch) in self.providers.iter().zip(&scratch_sinks) {
+            for (provider, scratch) in eligible_providers.iter().zip(&scratch_sinks) {
                 let request = request.clone();
                 let scratch = scratch.clone();
+                let provider = (*provider).clone();
                 scope.spawn(move || provider.search(request, scratch));
             }
         });
@@ -112,6 +122,22 @@ impl SearchCoordinator {
         for candidate in ranked {
             sink.push(candidate);
         }
+    }
+
+    /// Returns the prefix icon for the given raw query based on declared provider descriptors.
+    pub fn prefix_icon(&self, raw_query: &str) -> IconName {
+        let (mode, _) = parser::parse_query(raw_query);
+        if mode == SearchMode::Default {
+            return IconName::Search;
+        }
+        for provider in &self.providers {
+            if provider.declared_modes().contains(&mode)
+                && let Some(icon) = provider.prefix_icon(mode)
+            {
+                return icon;
+            }
+        }
+        mode.default_icon()
     }
 
     /// Routes an activation request to the appropriate provider by ID and records the activation
@@ -434,5 +460,548 @@ mod tests {
             results.iter().any(|c| c.canonical_id == "many:target"),
             "candidate past the old scratch-sink quota was dropped before ranking"
         );
+    }
+
+    #[test]
+    fn test_declared_mode_scoping_does_not_dispatch_non_matching_providers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct DispatchTrackingProvider {
+            id: &'static str,
+            modes: &'static [SearchMode],
+            dispatches: Arc<AtomicUsize>,
+        }
+
+        impl SearchProvider for DispatchTrackingProvider {
+            fn id(&self) -> ProviderId {
+                ProviderId::from_static(self.id)
+            }
+            fn declared_modes(&self) -> &'static [SearchMode] {
+                self.modes
+            }
+            fn search(&self, request: SearchRequest, sink: SearchSink) {
+                self.dispatches.fetch_add(1, Ordering::SeqCst);
+                sink.push(SearchCandidate::new(
+                    self.id(),
+                    format!("{}:{}", self.id, request.query),
+                    request.generation,
+                    format!("Title {}", self.id),
+                    None,
+                    ResultCategory::Custom,
+                    SearchResultIcon::Initial('D'),
+                    "Open",
+                    SearchActivation::new("act"),
+                ));
+            }
+            fn activate(&self, _activation: SearchActivation) -> Result<ActionResult, SearchError> {
+                Ok(ActionResult::Handled {
+                    close_overview: true,
+                })
+            }
+        }
+
+        let app_dispatches = Arc::new(AtomicUsize::new(0));
+        let calc_dispatches = Arc::new(AtomicUsize::new(0));
+        let clip_dispatches = Arc::new(AtomicUsize::new(0));
+
+        let app_prov = Arc::new(DispatchTrackingProvider {
+            id: "app-tracker",
+            modes: &[SearchMode::Default, SearchMode::Apps],
+            dispatches: app_dispatches.clone(),
+        });
+        let calc_prov = Arc::new(DispatchTrackingProvider {
+            id: "calc-tracker",
+            modes: &[SearchMode::Calculator],
+            dispatches: calc_dispatches.clone(),
+        });
+        let clip_prov = Arc::new(DispatchTrackingProvider {
+            id: "clip-tracker",
+            modes: &[SearchMode::Clipboard],
+            dispatches: clip_dispatches.clone(),
+        });
+
+        let coordinator = SearchCoordinator::new(vec![app_prov, calc_prov, clip_prov]);
+
+        // 1. Query with '>' scopes to Apps mode: only app_prov dispatched
+        let sink1 = SearchSink::for_test(1);
+        coordinator.search(">term", 1, &sink1);
+        assert_eq!(app_dispatches.load(Ordering::SeqCst), 1);
+        assert_eq!(calc_dispatches.load(Ordering::SeqCst), 0);
+        assert_eq!(clip_dispatches.load(Ordering::SeqCst), 0);
+
+        // 2. Query with '=' scopes to Calculator mode: only calc_prov dispatched
+        let sink2 = SearchSink::for_test(2);
+        coordinator.search("=2+2", 2, &sink2);
+        assert_eq!(app_dispatches.load(Ordering::SeqCst), 1);
+        assert_eq!(calc_dispatches.load(Ordering::SeqCst), 1);
+        assert_eq!(clip_dispatches.load(Ordering::SeqCst), 0);
+
+        // 3. Query with ';' scopes to Clipboard mode: only clip_prov dispatched
+        let sink3 = SearchSink::for_test(3);
+        coordinator.search(";note", 3, &sink3);
+        assert_eq!(app_dispatches.load(Ordering::SeqCst), 1);
+        assert_eq!(calc_dispatches.load(Ordering::SeqCst), 1);
+        assert_eq!(clip_dispatches.load(Ordering::SeqCst), 1);
+
+        // 4. Default query: only app_prov dispatched (declared Default)
+        let sink4 = SearchSink::for_test(4);
+        coordinator.search("firefox", 4, &sink4);
+        assert_eq!(app_dispatches.load(Ordering::SeqCst), 2);
+        assert_eq!(calc_dispatches.load(Ordering::SeqCst), 1);
+        assert_eq!(clip_dispatches.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_prefix_icon_uses_declared_provider_descriptors() {
+        struct MockIconProvider;
+        impl SearchProvider for MockIconProvider {
+            fn id(&self) -> ProviderId {
+                ProviderId::from_static("mock-icon")
+            }
+            fn declared_modes(&self) -> &'static [SearchMode] {
+                &[SearchMode::Actions]
+            }
+            fn prefix_icon(&self, mode: SearchMode) -> Option<IconName> {
+                if mode == SearchMode::Actions {
+                    Some(IconName::Settings)
+                } else {
+                    None
+                }
+            }
+            fn search(&self, _request: SearchRequest, _sink: SearchSink) {}
+            fn activate(&self, _activation: SearchActivation) -> Result<ActionResult, SearchError> {
+                Ok(ActionResult::Handled {
+                    close_overview: true,
+                })
+            }
+        }
+
+        let coordinator = SearchCoordinator::new(vec![Arc::new(MockIconProvider)]);
+        assert_eq!(coordinator.prefix_icon("/action"), IconName::Settings);
+        assert_eq!(coordinator.prefix_icon("normal query"), IconName::Search);
+    }
+
+    #[test]
+    fn test_all_sigils_scope_to_expected_providers() {
+        use crate::actions::{ActionCategory, ActionDescriptor, ActionId, ActionInputRequirement};
+        use crate::shell::overview_search::{
+            ActionSearchProvider, CalculatorSearchProvider, ClipboardSearchProvider,
+            QuicklinksSearchProvider,
+        };
+        use shilpo_services::ClipboardItem;
+        use tokio::sync::watch;
+
+        let actions = vec![ActionDescriptor {
+            id: ActionId::ToggleOverview,
+            name: "toggle-overview".to_string(),
+            label: "Toggle Overview".to_string(),
+            category: ActionCategory::Overlay,
+            input: ActionInputRequirement::NoInput,
+            enabled: true,
+        }];
+        let (_tx, rx) = watch::channel(vec![ClipboardItem {
+            id: 1,
+            text: "copied snippet".to_string(),
+            timestamp: "100".to_string(),
+        }]);
+        let keybindings = vec![("Super+T".to_string(), "Terminal".to_string())];
+
+        let action_prov = Arc::new(ActionSearchProvider::new(actions));
+        let clip_prov = Arc::new(ClipboardSearchProvider::new(Some(rx)));
+        let calc_prov = Arc::new(CalculatorSearchProvider::new());
+        let quick_prov = Arc::new(QuicklinksSearchProvider::new(keybindings));
+
+        let coordinator =
+            SearchCoordinator::new(vec![action_prov, clip_prov, calc_prov, quick_prov]);
+
+        // 1. '/' scopes to actions
+        let sink = SearchSink::for_test(1);
+        coordinator.search("/toggle", 1, &sink);
+        let res = sink.snapshot();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].category, ResultCategory::Action);
+
+        // 2. ';' scopes to clipboard
+        let sink = SearchSink::for_test(2);
+        coordinator.search(";copied", 2, &sink);
+        let res = sink.snapshot();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].category, ResultCategory::Clipboard);
+
+        // 3. '=' scopes to calculator
+        let sink = SearchSink::for_test(3);
+        coordinator.search("=5 * 5", 3, &sink);
+        let res = sink.snapshot();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].title, "25");
+        assert_eq!(res[0].category, ResultCategory::Calculator);
+
+        // 4. '?' scopes to web search
+        let sink = SearchSink::for_test(4);
+        coordinator.search("?rust documentation", 4, &sink);
+        let res = sink.snapshot();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].category, ResultCategory::WebSearch);
+
+        // 5. '<' scopes to keybindings
+        let sink = SearchSink::for_test(5);
+        coordinator.search("<Super", 5, &sink);
+        let res = sink.snapshot();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].category, ResultCategory::Keybinding);
+    }
+
+    #[test]
+    fn test_implicit_and_explicit_calculator_scoping() {
+        use crate::shell::overview_search::CalculatorSearchProvider;
+
+        let calc_prov = Arc::new(CalculatorSearchProvider::new());
+        let coordinator = SearchCoordinator::new(vec![calc_prov]);
+
+        // Bare implicit arithmetic
+        let sink1 = SearchSink::for_test(1);
+        coordinator.search("2 + 2", 1, &sink1);
+        let res1 = sink1.snapshot();
+        assert_eq!(res1.len(), 1);
+        assert_eq!(res1[0].title, "4");
+
+        // Complex implicit expression with parenthesis
+        let sink2 = SearchSink::for_test(2);
+        coordinator.search("10 * (5 - 3)", 2, &sink2);
+        let res2 = sink2.snapshot();
+        assert_eq!(res2.len(), 1);
+        assert_eq!(res2[0].title, "20");
+
+        // Non-arithmetic query "hello 2" parses as Default and is NOT dispatched to Calculator
+        let sink3 = SearchSink::for_test(3);
+        coordinator.search("hello 2", 3, &sink3);
+        let res3 = sink3.snapshot();
+        assert_eq!(res3.len(), 0);
+    }
+
+    #[test]
+    fn test_unscoped_query_returns_ordered_mix_from_multiple_providers() {
+        use crate::actions::{ActionCategory, ActionDescriptor, ActionId, ActionInputRequirement};
+        use crate::shell::overview_search::{
+            ActionSearchProvider, AppSearchProvider, QuicklinksSearchProvider,
+        };
+        use shilpo_services::{AppScanner, Application};
+        use std::path::PathBuf;
+
+        let scanner = AppScanner::from_applications(vec![Application {
+            name: "Terminal Emulator".to_string(),
+            description: Some("System terminal".to_string()),
+            exec: "terminal".to_string(),
+            icon: None,
+            icon_path: None,
+            desktop_file: PathBuf::from("/usr/share/applications/term.desktop"),
+            categories: vec!["System".to_string()],
+            working_dir: None,
+            terminal: false,
+            try_exec: None,
+        }]);
+
+        let actions = vec![ActionDescriptor {
+            id: ActionId::ToggleOverview,
+            name: "terminal-toggle".to_string(),
+            label: "Terminal Toggle Action".to_string(),
+            category: ActionCategory::Overlay,
+            input: ActionInputRequirement::NoInput,
+            enabled: true,
+        }];
+
+        let app_prov = Arc::new(AppSearchProvider::new(scanner));
+        let action_prov = Arc::new(ActionSearchProvider::new(actions));
+        let quick_prov = Arc::new(QuicklinksSearchProvider::new(Vec::new()));
+
+        let coordinator = SearchCoordinator::new(vec![app_prov, action_prov, quick_prov]);
+
+        let sink = SearchSink::for_test(1);
+        coordinator.search("terminal", 1, &sink);
+        let results = sink.snapshot();
+
+        // Must contain results from AppSearchProvider, ActionSearchProvider, and QuicklinksSearchProvider
+        assert!(
+            results
+                .iter()
+                .any(|c| c.category == ResultCategory::Application)
+        );
+        assert!(results.iter().any(|c| c.category == ResultCategory::Action));
+        assert!(
+            results
+                .iter()
+                .any(|c| c.category == ResultCategory::Command)
+        );
+        assert!(
+            results
+                .iter()
+                .any(|c| c.category == ResultCategory::WebSearch)
+        );
+
+        // Application (prior 200) outranks Command (prior 50) and WebSearch (prior 20)
+        let app_idx = results
+            .iter()
+            .position(|c| c.category == ResultCategory::Application)
+            .unwrap();
+        let cmd_idx = results
+            .iter()
+            .position(|c| c.category == ResultCategory::Command)
+            .unwrap();
+        let web_idx = results
+            .iter()
+            .position(|c| c.category == ResultCategory::WebSearch)
+            .unwrap();
+
+        assert!(app_idx < cmd_idx);
+        assert!(cmd_idx < web_idx);
+    }
+
+    #[test]
+    fn test_every_action_result_variant_produced_by_domain_providers_via_coordinator() {
+        use crate::actions::{ActionCategory, ActionDescriptor, ActionId, ActionInputRequirement};
+        use crate::shell::overview_search::{
+            ActionSearchProvider, AppSearchProvider, CalculatorSearchProvider,
+            ClipboardSearchProvider, QuicklinksSearchProvider, WindowSearchProvider,
+        };
+        use shilpo_services::{
+            AppScanner, Application, ClipboardItem, CompositorConnection, CompositorSnapshot,
+            DomainVersion, TestCompositorAdapter, WindowInfo,
+        };
+        use std::path::PathBuf;
+        use tokio::sync::watch;
+
+        let snapshot = CompositorSnapshot {
+            version: DomainVersion::new(1, 1),
+            connection: CompositorConnection::Ready,
+            windows: vec![WindowInfo {
+                id: 42,
+                title: Some("Terminal".to_string()),
+                app_id: Some("org.gnome.Terminal".to_string()),
+                workspace_id: Some(1),
+                is_focused: false,
+                is_floating: false,
+                is_urgent: false,
+                layout_x: None,
+                layout_y: None,
+                column: None,
+                row: None,
+            }],
+            ..Default::default()
+        };
+
+        let scanner = AppScanner::from_applications(vec![Application {
+            name: "Calculator App".to_string(),
+            description: None,
+            exec: "gnome-calculator".to_string(),
+            icon: None,
+            icon_path: None,
+            desktop_file: PathBuf::from("/usr/share/applications/calc.desktop"),
+            categories: Vec::new(),
+            working_dir: None,
+            terminal: false,
+            try_exec: None,
+        }]);
+
+        let actions = vec![ActionDescriptor {
+            id: ActionId::Quit,
+            name: "quit".to_string(),
+            label: "Quit Shilpo".to_string(),
+            category: ActionCategory::System,
+            input: ActionInputRequirement::NoInput,
+            enabled: true,
+        }];
+
+        let (_tx, rx) = watch::channel(vec![ClipboardItem {
+            id: 99,
+            text: "saved text".to_string(),
+            timestamp: "1000".to_string(),
+        }]);
+
+        let keybindings = vec![("Super+L".to_string(), "Lock Screen".to_string())];
+
+        let app_prov = Arc::new(AppSearchProvider::new(scanner));
+        let win_prov = Arc::new(WindowSearchProvider::new(Some(Arc::new(
+            TestCompositorAdapter::new(snapshot),
+        ))));
+        let act_prov = Arc::new(ActionSearchProvider::new(actions));
+        let clip_prov = Arc::new(ClipboardSearchProvider::new(Some(rx)));
+        let calc_prov = Arc::new(CalculatorSearchProvider::new());
+        let quick_prov = Arc::new(QuicklinksSearchProvider::new(keybindings));
+
+        let coordinator = SearchCoordinator::new(vec![
+            app_prov.clone(),
+            win_prov.clone(),
+            act_prov.clone(),
+            clip_prov.clone(),
+            calc_prov.clone(),
+            quick_prov.clone(),
+        ]);
+
+        // 1. LaunchApp
+        let sink = SearchSink::for_test(1);
+        coordinator.search(">Calc", 1, &sink);
+        let cand = &sink.snapshot()[0];
+        let res = coordinator
+            .activate(
+                &cand.provider_id,
+                &cand.canonical_id,
+                cand.activation.clone(),
+            )
+            .unwrap();
+        assert!(matches!(res, ActionResult::LaunchApp(_)));
+
+        // 2. Handled (Window)
+        let sink = SearchSink::for_test(2);
+        coordinator.search("Terminal", 2, &sink);
+        let win_cand = sink
+            .snapshot()
+            .into_iter()
+            .find(|c| c.category == ResultCategory::Window)
+            .unwrap();
+        let res = coordinator
+            .activate(
+                &win_cand.provider_id,
+                &win_cand.canonical_id,
+                win_cand.activation.clone(),
+            )
+            .unwrap();
+        assert!(matches!(
+            res,
+            ActionResult::Handled {
+                close_overview: true
+            }
+        ));
+
+        // 3. InvokeAction
+        let sink = SearchSink::for_test(3);
+        coordinator.search("/quit", 3, &sink);
+        let act_cand = &sink.snapshot()[0];
+        let res = coordinator
+            .activate(
+                &act_cand.provider_id,
+                &act_cand.canonical_id,
+                act_cand.activation.clone(),
+            )
+            .unwrap();
+        assert!(matches!(res, ActionResult::InvokeAction(_)));
+
+        // 4. CopyClipboard
+        let sink = SearchSink::for_test(4);
+        coordinator.search(";saved", 4, &sink);
+        let clip_cand = &sink.snapshot()[0];
+        let res = coordinator
+            .activate(
+                &clip_cand.provider_id,
+                &clip_cand.canonical_id,
+                clip_cand.activation.clone(),
+            )
+            .unwrap();
+        assert!(matches!(res, ActionResult::CopyClipboard(_)));
+
+        // 5. CopyCalculation
+        let sink = SearchSink::for_test(5);
+        coordinator.search("=100 + 200", 5, &sink);
+        let calc_cand = &sink.snapshot()[0];
+        let res = coordinator
+            .activate(
+                &calc_cand.provider_id,
+                &calc_cand.canonical_id,
+                calc_cand.activation.clone(),
+            )
+            .unwrap();
+        assert_eq!(res, ActionResult::CopyCalculation("300".to_string()));
+
+        // 6. OpenPath
+        let sink = SearchSink::for_test(6);
+        coordinator.search("~/", 6, &sink);
+        let path_cand = sink
+            .snapshot()
+            .into_iter()
+            .find(|c| c.category == ResultCategory::FilePath)
+            .unwrap();
+        let res = coordinator
+            .activate(
+                &path_cand.provider_id,
+                &path_cand.canonical_id,
+                path_cand.activation.clone(),
+            )
+            .unwrap();
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(res, ActionResult::OpenPath(PathBuf::from(home)));
+
+        // 7. OpenUri
+        let sink = SearchSink::for_test(7);
+        coordinator.search("https://example.com/test", 7, &sink);
+        let uri_cand = sink
+            .snapshot()
+            .into_iter()
+            .find(|c| c.category == ResultCategory::Uri)
+            .unwrap();
+        let res = coordinator
+            .activate(
+                &uri_cand.provider_id,
+                &uri_cand.canonical_id,
+                uri_cand.activation.clone(),
+            )
+            .unwrap();
+        assert_eq!(
+            res,
+            ActionResult::OpenUri("https://example.com/test".to_string())
+        );
+
+        // 8. ExecuteCommand
+        let sink = SearchSink::for_test(8);
+        coordinator.search("$echo hi", 8, &sink);
+        if let Some(cmd_cand) = sink
+            .snapshot()
+            .into_iter()
+            .find(|c| c.category == ResultCategory::Command)
+        {
+            let res = coordinator
+                .activate(
+                    &cmd_cand.provider_id,
+                    &cmd_cand.canonical_id,
+                    cmd_cand.activation.clone(),
+                )
+                .unwrap();
+            assert_eq!(res, ActionResult::ExecuteCommand("echo hi".to_string()));
+        }
+
+        // 9. OpenWeb
+        let sink = SearchSink::for_test(9);
+        coordinator.search("?rust lang", 9, &sink);
+        let web_cand = sink
+            .snapshot()
+            .into_iter()
+            .find(|c| c.category == ResultCategory::WebSearch)
+            .unwrap();
+        let res = coordinator
+            .activate(
+                &web_cand.provider_id,
+                &web_cand.canonical_id,
+                web_cand.activation.clone(),
+            )
+            .unwrap();
+        assert_eq!(
+            res,
+            ActionResult::OpenWeb("https://www.google.com/search?q=rust+lang".to_string())
+        );
+
+        // 10. CopyKeybinding
+        let sink = SearchSink::for_test(10);
+        coordinator.search("<Super", 10, &sink);
+        let key_cand = sink
+            .snapshot()
+            .into_iter()
+            .find(|c| c.category == ResultCategory::Keybinding)
+            .unwrap();
+        let res = coordinator
+            .activate(
+                &key_cand.provider_id,
+                &key_cand.canonical_id,
+                key_cand.activation.clone(),
+            )
+            .unwrap();
+        assert_eq!(res, ActionResult::CopyKeybinding("Super+L".to_string()));
     }
 }

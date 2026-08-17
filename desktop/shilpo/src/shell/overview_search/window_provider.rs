@@ -30,11 +30,11 @@ impl SearchProvider for WindowSearchProvider {
         ProviderId::from_static("window-search")
     }
 
-    fn search(&self, request: SearchRequest, sink: SearchSink) {
-        if !matches!(request.mode, SearchMode::Default) {
-            return;
-        }
+    fn declared_modes(&self) -> &'static [SearchMode] {
+        &[SearchMode::Default]
+    }
 
+    fn search(&self, request: SearchRequest, sink: SearchSink) {
         let Some(compositor) = &self.compositor else {
             return;
         };

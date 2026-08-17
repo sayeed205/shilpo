@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use shilpo_ui::IconName;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SearchMode {
     Default,
     Apps,
@@ -8,6 +10,18 @@ pub enum SearchMode {
     Command,
     WebSearch,
     Keybindings,
+}
+
+impl SearchMode {
+    /// Returns the fallback default icon for this search mode.
+    pub fn default_icon(&self) -> IconName {
+        match self {
+            Self::Apps | Self::Command => IconName::Terminal,
+            Self::Actions => IconName::Settings,
+            Self::Clipboard | Self::Calculator | Self::Keybindings => IconName::Star,
+            Self::WebSearch | Self::Default => IconName::Search,
+        }
+    }
 }
 
 pub fn parse_query(raw: &str) -> (SearchMode, &str) {

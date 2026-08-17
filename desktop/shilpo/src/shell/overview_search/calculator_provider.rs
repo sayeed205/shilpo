@@ -1,0 +1,142 @@
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+use shilpo_ui::IconName;
+
+use super::{
+    calculator,
+    parser::SearchMode,
+    sink::SearchSink,
+    types::{
+        ActionResult, CompletionState, LatencyClass, ProviderId, ResultCategory, SearchActivation,
+        SearchCandidate, SearchError, SearchProvider, SearchRequest, SearchResultIcon,
+    },
+};
+
+/// Provider that calculates arithmetic expressions and provides copyable results.
+#[derive(Clone, Default)]
+pub struct CalculatorSearchProvider {
+    cached_results: Arc<Mutex<HashMap<String, String>>>,
+}
+
+impl CalculatorSearchProvider {
+    /// Creates a new calculator search provider.
+    pub fn new() -> Self {
+        Self {
+            cached_results: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+impl SearchProvider for CalculatorSearchProvider {
+    fn id(&self) -> ProviderId {
+        ProviderId::from_static("calculator-search")
+    }
+
+    fn declared_modes(&self) -> &'static [SearchMode] {
+        &[SearchMode::Calculator]
+    }
+
+    fn prefix_icon(&self, mode: SearchMode) -> Option<IconName> {
+        match mode {
+            SearchMode::Calculator => Some(IconName::Star),
+            _ => None,
+        }
+    }
+
+    fn search(&self, request: SearchRequest, sink: SearchSink) {
+        let query_generation = request.generation;
+        let provider_id = self.id();
+        let mut cached = self.cached_results.lock().unwrap();
+
+        if let Some(val) = calculator::evaluate_expression(&request.query) {
+            let canonical_id = format!("calc:{}", val);
+            let act_key = format!("calc:{query_generation}:{canonical_id}");
+            cached.insert(act_key.clone(), val.clone());
+
+            let candidate = SearchCandidate {
+                provider_id: provider_id.clone(),
+                canonical_id,
+                generation: query_generation,
+                title: val,
+                subtitle: Some(format!("= {}", request.query)),
+                aliases: Vec::new(),
+                keywords: Vec::new(),
+                category: ResultCategory::Calculator,
+                latency: LatencyClass::Instant,
+                completion: CompletionState::Complete,
+                icon: SearchResultIcon::Named(IconName::Star),
+                activation_verb: "Copy result".to_string(),
+                match_positions: Vec::new(),
+                activation: SearchActivation::new(act_key),
+            };
+
+            sink.push(candidate);
+        }
+    }
+
+    fn activate(&self, activation: SearchActivation) -> Result<ActionResult, SearchError> {
+        let val = self
+            .cached_results
+            .lock()
+            .unwrap()
+            .get(&activation.payload)
+            .cloned()
+            .ok_or_else(|| SearchError::NotFound(activation.payload.clone()))?;
+
+        Ok(ActionResult::CopyCalculation(val))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shell::overview_search::sink::SinkConfig;
+
+    #[test]
+    fn test_calculator_declared_modes_and_prefix_icon() {
+        let provider = CalculatorSearchProvider::new();
+        assert_eq!(provider.declared_modes(), &[SearchMode::Calculator]);
+        assert_eq!(
+            provider.prefix_icon(SearchMode::Calculator),
+            Some(IconName::Star)
+        );
+        assert_eq!(provider.prefix_icon(SearchMode::Default), None);
+    }
+
+    #[test]
+    fn test_calculator_evaluates_arithmetic_expressions() {
+        let provider = CalculatorSearchProvider::new();
+        let sink = SearchSink::new(1, SinkConfig::default());
+        provider.search(
+            SearchRequest::new("=2+2", SearchMode::Calculator, "2+2", 1),
+            sink.clone(),
+        );
+
+        let candidates = sink.snapshot();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].title, "4");
+        assert_eq!(candidates[0].category, ResultCategory::Calculator);
+    }
+
+    #[test]
+    fn test_calculator_activation() {
+        let provider = CalculatorSearchProvider::new();
+        let sink = SearchSink::new(1, SinkConfig::default());
+        provider.search(
+            SearchRequest::new("10 * (5 - 3)", SearchMode::Calculator, "10 * (5 - 3)", 1),
+            sink.clone(),
+        );
+
+        let candidate = &sink.snapshot()[0];
+        assert_eq!(candidate.title, "20");
+
+        let result = provider.activate(candidate.activation.clone()).unwrap();
+        match result {
+            ActionResult::CopyCalculation(val) => assert_eq!(val, "20"),
+            other => panic!("expected CopyCalculation, got {other:?}"),
+        }
+    }
+}
