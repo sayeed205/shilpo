@@ -3,13 +3,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::domain::{
-    FAILURE_WINDOW_MS, INITIAL_BACKOFF_MS, MAX_BACKOFF_MS, QUARANTINE_FAILURES, STABLE_RESET_MS,
-};
 use anyhow::Result;
 pub use shilpo_domain::{
     CancellationReason, DomainLifecycle, DomainPortTelemetry, DomainVersion, MailboxPolicy,
     StaleUpdateError, SupervisorState,
+};
+use shilpo_domain::{
+    FAILURE_WINDOW_MS, INITIAL_BACKOFF_MS, MAX_BACKOFF_MS, QUARANTINE_FAILURES, STABLE_RESET_MS,
 };
 use tokio::sync::{broadcast, watch};
 use zbus::{Connection, interface, object_server::SignalEmitter};

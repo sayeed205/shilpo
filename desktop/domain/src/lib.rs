@@ -45,6 +45,13 @@ impl std::fmt::Display for DomainVersion {
 }
 
 /// Lifecycle connection state of a domain service or adapter.
+///
+/// This collapses two prior definitions that disagreed on `Copy`: the
+/// compositor's `CompositorConnection` lacked it, the device crate's
+/// `DomainLifecycle` had it. `Copy` is kept, matching the fieldless
+/// device-side definition; both variants and payloads are unit-only, so
+/// this widens no consumer's obligations, and `Clone` remains available
+/// wherever `Copy` was previously relied on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DomainLifecycle {
