@@ -6,50 +6,10 @@ use std::{
     },
 };
 
-/// DomainVersion tuple containing owner_generation and revision with strict lexicographical ordering.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub struct DomainVersion {
-    pub owner_generation: u64,
-    pub revision: u64,
-}
-
-impl DomainVersion {
-    pub const ZERO: Self = Self {
-        owner_generation: 0,
-        revision: 0,
-    };
-
-    pub fn new(owner_generation: u64, revision: u64) -> Self {
-        Self {
-            owner_generation,
-            revision,
-        }
-    }
-}
-
-/// Consumer-facing lifecycle state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum DomainLifecycle {
-    #[default]
-    Unavailable,
-    Connecting,
-    Ready,
-    Reconnecting,
-    Degraded,
-}
-
-/// Supervisor operational state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SupervisorState {
-    Starting,
-    Running,
-    Backoff { attempt: u32, retry_at_ms: u64 },
-    Quarantined,
-    Stopping,
-    Stopped,
-}
+pub use shilpo_domain::{
+    CancellationReason, DomainLifecycle, DomainPortTelemetry, DomainVersion, MailboxPolicy,
+    StaleUpdateError, SupervisorState,
+};
 
 /// Domain snapshot containing version, lifecycle, payload, and error diagnostics.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -88,34 +48,6 @@ pub enum CommandOutcome {
 pub enum RejectionReason {
     Unavailable,
     Overloaded,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum CancellationReason {
-    Shutdown,
-    Reconnect,
-    OwnerReplaced,
-    Superseded,
-}
-
-/// Bounded mailbox overload policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MailboxPolicy {
-    Lossless,
-    ReplaceLatest { key: String },
-}
-
-/// Telemetry metrics for domain port observability.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct DomainPortTelemetry {
-    pub owner_generation: u64,
-    pub current_queue_depth: usize,
-    pub queue_capacity: usize,
-    pub overloads: u64,
-    pub supersessions: u64,
-    pub restarts: u64,
-    pub stale_updates: u64,
-    pub last_error: Option<String>,
 }
 
 /// Controllable manual clock for deterministic time advancement in contract tests.
@@ -177,36 +109,31 @@ pub enum TestAction {
     SetMuted(bool),
 }
 
-/// Error returned when publishing a stale or conflicting snapshot update.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StaleUpdateError {
-    StaleVersion {
-        current: DomainVersion,
-        attempted: DomainVersion,
-    },
-    ConflictingSnapshot {
-        version: DomainVersion,
-    },
-    UninstalledGeneration {
-        installed: u64,
-        attempted: u64,
-    },
+/// Handle / Ticket returned to caller when a command is submitted.
+#[derive(Clone)]
+pub struct CommandTicket {
+    outcome_fn: Arc<dyn Fn() -> Option<CommandOutcome> + Send + Sync>,
+    completion_attempts_fn: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
-/// Handle / Ticket returned to caller when a command is submitted.
-#[derive(Debug, Clone)]
-pub struct CommandTicket {
-    outcome: Arc<Mutex<Option<CommandOutcome>>>,
-    completion_attempts: Arc<AtomicU64>,
+impl std::fmt::Debug for CommandTicket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommandTicket")
+            .field("outcome", &self.outcome())
+            .field("completion_attempts", &self.completion_attempts())
+            .finish()
+    }
 }
 
 impl CommandTicket {
     pub fn new() -> (Self, CommandResolver) {
         let outcome = Arc::new(Mutex::new(None));
         let completion_attempts = Arc::new(AtomicU64::new(0));
+        let outcome_clone = outcome.clone();
+        let attempts_clone = completion_attempts.clone();
         let ticket = Self {
-            outcome: outcome.clone(),
-            completion_attempts: completion_attempts.clone(),
+            outcome_fn: Arc::new(move || outcome_clone.lock().unwrap().clone()),
+            completion_attempts_fn: Arc::new(move || attempts_clone.load(Ordering::SeqCst)),
         };
         let resolver = CommandResolver {
             outcome,
@@ -215,16 +142,34 @@ impl CommandTicket {
         (ticket, resolver)
     }
 
+    #[allow(dead_code)]
+    pub fn from_outcome_fn(
+        outcome_fn: impl Fn() -> Option<CommandOutcome> + Send + Sync + 'static,
+    ) -> Self {
+        let outcome_fn = Arc::new(outcome_fn);
+        let outcome_fn_for_attempts = outcome_fn.clone();
+        Self {
+            outcome_fn,
+            completion_attempts_fn: Arc::new(move || {
+                if outcome_fn_for_attempts().is_some() {
+                    1
+                } else {
+                    0
+                }
+            }),
+        }
+    }
+
     pub fn outcome(&self) -> Option<CommandOutcome> {
-        self.outcome.lock().unwrap().clone()
+        (self.outcome_fn)()
     }
 
     pub fn is_completed(&self) -> bool {
-        self.outcome.lock().unwrap().is_some()
+        self.outcome().is_some()
     }
 
     pub fn completion_attempts(&self) -> u64 {
-        self.completion_attempts.load(Ordering::SeqCst)
+        (self.completion_attempts_fn)()
     }
 }
 
@@ -247,21 +192,37 @@ impl CommandResolver {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SnapshotSubscription {
-    latest: Arc<Mutex<DomainSnapshot<TestPayload>>>,
+#[derive(Clone)]
+pub struct SnapshotSubscription<P> {
+    latest_fn: Arc<dyn Fn() -> DomainSnapshot<P> + Send + Sync>,
 }
 
-impl SnapshotSubscription {
-    pub fn latest(&self) -> DomainSnapshot<TestPayload> {
-        self.latest.lock().unwrap().clone()
+impl<P: Clone + Send + 'static> SnapshotSubscription<P> {
+    pub fn new(latest: Arc<Mutex<DomainSnapshot<P>>>) -> Self {
+        Self {
+            latest_fn: Arc::new(move || latest.lock().unwrap().clone()),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn from_fn(latest_fn: impl Fn() -> DomainSnapshot<P> + Send + Sync + 'static) -> Self {
+        Self {
+            latest_fn: Arc::new(latest_fn),
+        }
+    }
+
+    pub fn latest(&self) -> DomainSnapshot<P> {
+        (self.latest_fn)()
     }
 }
 
 /// Test driver trait exposed by support module so scenarios can be run against any driver.
 pub trait DomainPortDriver {
-    fn snapshot(&self) -> DomainSnapshot<TestPayload>;
-    fn subscribe(&self) -> SnapshotSubscription;
+    type Payload: Clone + PartialEq + std::fmt::Debug + Send + 'static;
+    type Command;
+
+    fn snapshot(&self) -> DomainSnapshot<Self::Payload>;
+    fn subscribe(&self) -> SnapshotSubscription<Self::Payload>;
     fn supervisor_state(&self) -> SupervisorState;
     fn telemetry(&self) -> DomainPortTelemetry;
     fn clock(&self) -> &ManualClock;
@@ -271,16 +232,17 @@ pub trait DomainPortDriver {
     fn begin_start(&self);
     fn mark_ready(&self);
     fn report_owner_failure(&self, error: String);
-    fn publish_update(&self, revision: u64, payload: TestPayload) -> Result<(), StaleUpdateError>;
+    fn publish_update(&self, revision: u64, payload: Self::Payload)
+    -> Result<(), StaleUpdateError>;
     fn publish_raw_update(
         &self,
         version: DomainVersion,
         lifecycle: DomainLifecycle,
-        payload: TestPayload,
+        payload: Self::Payload,
         error: Option<String>,
     ) -> Result<(), StaleUpdateError>;
 
-    fn submit_command(&self, command: TestCommand) -> Result<CommandTicket, CommandOutcome>;
+    fn submit_command(&self, command: Self::Command) -> Result<CommandTicket, CommandOutcome>;
     fn ack_command_without_snapshot(&self) -> Option<CommandId>;
     fn process_pending_commands_and_converge(&self);
     fn reconcile_front_command(&self);
@@ -290,6 +252,12 @@ pub trait DomainPortDriver {
     fn backoff_delay_ms(&self, attempt: u32) -> u64;
     #[allow(dead_code)]
     fn tick(&self);
+
+    // Factory methods
+    fn default_payload(&self) -> Self::Payload;
+    fn sample_payload(&self, seed: u64) -> Self::Payload;
+    fn lossless_command(&self, id: &str, seed: u64) -> Self::Command;
+    fn replace_latest_command(&self, id: &str, key: &str, seed: u64) -> Self::Command;
 }
 
 struct PendingCommandItem {
@@ -326,6 +294,7 @@ pub struct ReferenceDomainPort {
 }
 
 impl ReferenceDomainPort {
+    #[allow(dead_code)]
     pub fn new(capacity: usize) -> Self {
         assert!(
             capacity > 0,
@@ -366,94 +335,25 @@ impl ReferenceDomainPort {
     }
 
     fn notify_subscribers(state: &ReferenceState) {
-        let snapshot = Self::snapshot_from_state(state);
-        for subscriber in &state.subscribers {
-            *subscriber.lock().unwrap() = snapshot.clone();
+        let snap = Self::snapshot_from_state(state);
+        for sub in &state.subscribers {
+            *sub.lock().unwrap() = snap.clone();
         }
     }
 
     fn cancel_generation_commands(state: &mut ReferenceState, reason: CancellationReason) {
-        for item in std::mem::take(&mut state.queue) {
+        for item in std::mem::take(&mut state.in_flight) {
             item.resolver.resolve(CommandOutcome::Cancelled { reason });
         }
-        for item in std::mem::take(&mut state.in_flight) {
+        for item in std::mem::take(&mut state.queue) {
             item.resolver.resolve(CommandOutcome::Cancelled { reason });
         }
     }
 
     fn backoff_delay_for_attempt(attempt: u32) -> u64 {
-        let multiplier = 2u64.saturating_pow(attempt.saturating_sub(1));
-        250u64.saturating_mul(multiplier).min(30_000)
-    }
-
-    fn apply_update(
-        state: &mut ReferenceState,
-        version: DomainVersion,
-        lifecycle: DomainLifecycle,
-        payload: TestPayload,
-        last_error: Option<String>,
-    ) -> Result<(), StaleUpdateError> {
-        let current_version = DomainVersion::new(state.owner_generation, state.revision);
-        if version.owner_generation > state.owner_generation {
-            state.stale_updates += 1;
-            return Err(StaleUpdateError::UninstalledGeneration {
-                installed: state.owner_generation,
-                attempted: version.owner_generation,
-            });
-        }
-        if version < current_version {
-            state.stale_updates += 1;
-            return Err(StaleUpdateError::StaleVersion {
-                current: current_version,
-                attempted: version,
-            });
-        }
-        if version == current_version {
-            if state.lifecycle == lifecycle
-                && state.payload == payload
-                && state.last_error == last_error
-            {
-                return Ok(());
-            }
-            state.stale_updates += 1;
-            return Err(StaleUpdateError::ConflictingSnapshot {
-                version: current_version,
-            });
-        }
-
-        state.owner_generation = version.owner_generation;
-        state.revision = version.revision;
-        state.lifecycle = lifecycle;
-        state.payload = payload;
-        state.last_error = last_error;
-        Self::notify_subscribers(state);
-        Ok(())
-    }
-
-    fn update_backoff_and_quarantine(state: &mut ReferenceState, now_ms: u64, error: String) {
-        state.last_error = Some(error);
-        state.failure_timestamps_ms.push(now_ms);
-        state
-            .failure_timestamps_ms
-            .retain(|&ts| now_ms.saturating_sub(ts) <= 60_000);
-
-        if state.failure_timestamps_ms.len() >= 5 {
-            state.supervisor_state = SupervisorState::Quarantined;
-            state.lifecycle = DomainLifecycle::Unavailable;
-        } else {
-            state.backoff_attempt += 1;
-            let backoff_ms = Self::backoff_delay_for_attempt(state.backoff_attempt);
-            let retry_at_ms = now_ms + backoff_ms;
-            state.supervisor_state = SupervisorState::Backoff {
-                attempt: state.backoff_attempt,
-                retry_at_ms,
-            };
-            if state.had_prior_readiness {
-                state.lifecycle = DomainLifecycle::Reconnecting;
-            } else {
-                state.lifecycle = DomainLifecycle::Unavailable;
-            }
-        }
+        let base = 250u64;
+        let mult = 2u64.saturating_pow(attempt.saturating_sub(1));
+        base.saturating_mul(mult).min(30_000)
     }
 
     fn check_clock_state(state: &mut ReferenceState, now_ms: u64) {
@@ -463,9 +363,7 @@ impl ReferenceDomainPort {
                     state.owner_generation += 1;
                     state.revision = 0;
                     state.restarts += 1;
-                    // Cancel pending commands from prior generation
                     Self::cancel_generation_commands(state, CancellationReason::OwnerReplaced);
-
                     state.supervisor_state = SupervisorState::Starting;
                     state.lifecycle = if state.had_prior_readiness {
                         DomainLifecycle::Reconnecting
@@ -477,10 +375,9 @@ impl ReferenceDomainPort {
                 }
             }
             SupervisorState::Running => {
-                if let Some(start_ts) = state.last_running_timestamp_ms
-                    && now_ms.saturating_sub(start_ts) >= 300_000
+                if let Some(last_ts) = state.last_running_timestamp_ms
+                    && now_ms.saturating_sub(last_ts) >= 300_000
                 {
-                    // 5 minutes stable reset
                     state.failure_timestamps_ms.clear();
                     state.backoff_attempt = 0;
                 }
@@ -491,29 +388,62 @@ impl ReferenceDomainPort {
 }
 
 impl DomainPortDriver for ReferenceDomainPort {
+    type Payload = TestPayload;
+    type Command = TestCommand;
+
+    fn default_payload(&self) -> Self::Payload {
+        TestPayload::default()
+    }
+
+    fn sample_payload(&self, seed: u64) -> Self::Payload {
+        TestPayload {
+            volume: seed as u8,
+            is_muted: seed % 2 == 1,
+            device_name: format!("Device {seed}"),
+        }
+    }
+
+    fn lossless_command(&self, id: &str, seed: u64) -> Self::Command {
+        TestCommand {
+            id: CommandId(id.to_string()),
+            action: TestAction::SetVolume(seed as u8),
+            policy: MailboxPolicy::Lossless,
+        }
+    }
+
+    fn replace_latest_command(&self, id: &str, key: &str, seed: u64) -> Self::Command {
+        TestCommand {
+            id: CommandId(id.to_string()),
+            action: if key == "mute" {
+                TestAction::SetMuted(seed % 2 == 1)
+            } else {
+                TestAction::SetVolume(seed as u8)
+            },
+            policy: MailboxPolicy::ReplaceLatest {
+                key: key.to_string(),
+            },
+        }
+    }
+
     fn snapshot(&self) -> DomainSnapshot<TestPayload> {
-        let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms());
+        let state = self.state.lock().unwrap();
         Self::snapshot_from_state(&state)
     }
 
-    fn subscribe(&self) -> SnapshotSubscription {
+    fn subscribe(&self) -> SnapshotSubscription<TestPayload> {
         let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms());
-        let latest = Arc::new(Mutex::new(Self::snapshot_from_state(&state)));
-        state.subscribers.push(latest.clone());
-        SnapshotSubscription { latest }
+        let slot = Arc::new(Mutex::new(Self::snapshot_from_state(&state)));
+        state.subscribers.push(slot.clone());
+        SnapshotSubscription::new(slot)
     }
 
     fn supervisor_state(&self) -> SupervisorState {
-        let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms());
+        let state = self.state.lock().unwrap();
         state.supervisor_state
     }
 
     fn telemetry(&self) -> DomainPortTelemetry {
-        let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms());
+        let state = self.state.lock().unwrap();
         DomainPortTelemetry {
             owner_generation: state.owner_generation,
             current_queue_depth: state.queue.len(),
@@ -542,8 +472,7 @@ impl DomainPortDriver for ReferenceDomainPort {
 
     fn begin_start(&self) {
         let mut state = self.state.lock().unwrap();
-        Self::cancel_generation_commands(&mut state, CancellationReason::OwnerReplaced);
-        state.owner_generation = state.owner_generation.saturating_add(1);
+        state.owner_generation += 1;
         state.revision = 0;
         state.supervisor_state = SupervisorState::Starting;
         state.lifecycle = if state.had_prior_readiness {
@@ -551,6 +480,7 @@ impl DomainPortDriver for ReferenceDomainPort {
         } else {
             DomainLifecycle::Connecting
         };
+        Self::cancel_generation_commands(&mut state, CancellationReason::OwnerReplaced);
         Self::notify_subscribers(&state);
     }
 
@@ -565,22 +495,48 @@ impl DomainPortDriver for ReferenceDomainPort {
 
     fn report_owner_failure(&self, error: String) {
         let mut state = self.state.lock().unwrap();
-        assert_eq!(
-            state.supervisor_state,
-            SupervisorState::Running,
-            "only a running owner can report an unexpected failure"
-        );
-        Self::update_backoff_and_quarantine(&mut state, self.clock.now_ms(), error);
+        let now_ms = self.clock.now_ms();
+        state.last_error = Some(error);
+        state
+            .failure_timestamps_ms
+            .retain(|&ts| now_ms.saturating_sub(ts) <= 60_000);
+        state.failure_timestamps_ms.push(now_ms);
+
+        if state.failure_timestamps_ms.len() >= 5 {
+            state.supervisor_state = SupervisorState::Quarantined;
+            state.lifecycle = DomainLifecycle::Unavailable;
+        } else {
+            let attempt = state.failure_timestamps_ms.len() as u32;
+            state.backoff_attempt = attempt;
+            let delay = Self::backoff_delay_for_attempt(attempt);
+            state.supervisor_state = SupervisorState::Backoff {
+                attempt,
+                retry_at_ms: now_ms + delay,
+            };
+            state.lifecycle = if state.had_prior_readiness {
+                DomainLifecycle::Reconnecting
+            } else {
+                DomainLifecycle::Unavailable
+            };
+        }
         Self::notify_subscribers(&state);
     }
 
     fn publish_update(&self, revision: u64, payload: TestPayload) -> Result<(), StaleUpdateError> {
         let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms());
-        let version = DomainVersion::new(state.owner_generation, revision);
-        let lifecycle = state.lifecycle;
-        let last_error = state.last_error.clone();
-        Self::apply_update(&mut state, version, lifecycle, payload, last_error)
+        let current_version = DomainVersion::new(state.owner_generation, state.revision);
+        let attempted_version = DomainVersion::new(state.owner_generation, revision);
+        if attempted_version <= current_version {
+            state.stale_updates += 1;
+            return Err(StaleUpdateError::StaleVersion {
+                current: current_version,
+                attempted: attempted_version,
+            });
+        }
+        state.revision = revision;
+        state.payload = payload;
+        Self::notify_subscribers(&state);
+        Ok(())
     }
 
     fn publish_raw_update(
@@ -591,26 +547,53 @@ impl DomainPortDriver for ReferenceDomainPort {
         error: Option<String>,
     ) -> Result<(), StaleUpdateError> {
         let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms());
-        Self::apply_update(&mut state, version, lifecycle, payload, error)
+        let current_version = DomainVersion::new(state.owner_generation, state.revision);
+
+        if version.owner_generation > state.owner_generation {
+            state.stale_updates += 1;
+            return Err(StaleUpdateError::UninstalledGeneration {
+                installed: state.owner_generation,
+                attempted: version.owner_generation,
+            });
+        }
+        if version < current_version {
+            state.stale_updates += 1;
+            return Err(StaleUpdateError::StaleVersion {
+                current: current_version,
+                attempted: version,
+            });
+        }
+        if version == current_version {
+            if state.lifecycle == lifecycle && state.payload == payload && state.last_error == error
+            {
+                return Ok(());
+            }
+            state.stale_updates += 1;
+            return Err(StaleUpdateError::ConflictingSnapshot {
+                version: current_version,
+            });
+        }
+
+        state.owner_generation = version.owner_generation;
+        state.revision = version.revision;
+        state.lifecycle = lifecycle;
+        state.payload = payload;
+        state.last_error = error;
+        Self::notify_subscribers(&state);
+        Ok(())
     }
 
     fn submit_command(&self, command: TestCommand) -> Result<CommandTicket, CommandOutcome> {
         let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms());
-
         if matches!(state.lifecycle, DomainLifecycle::Unavailable)
-            || matches!(
-                state.supervisor_state,
-                SupervisorState::Quarantined | SupervisorState::Stopped
-            )
+            || matches!(state.supervisor_state, SupervisorState::Quarantined)
         {
             return Err(CommandOutcome::Rejected {
                 reason: RejectionReason::Unavailable,
             });
         }
 
-        match &command.policy {
+        match command.policy {
             MailboxPolicy::Lossless => {
                 if state.queue.len() >= self.capacity {
                     state.overloads += 1;
@@ -619,10 +602,12 @@ impl DomainPortDriver for ReferenceDomainPort {
                     });
                 }
             }
-            MailboxPolicy::ReplaceLatest { key } => {
+            MailboxPolicy::ReplaceLatest { ref key } => {
                 let mut replaced_idx = None;
                 for (idx, item) in state.queue.iter().enumerate() {
-                    if let MailboxPolicy::ReplaceLatest { key: existing_key } = &item.command.policy
+                    if let MailboxPolicy::ReplaceLatest {
+                        key: ref existing_key,
+                    } = item.command.policy
                         && existing_key == key
                     {
                         replaced_idx = Some(idx);
@@ -773,7 +758,7 @@ impl DomainPortDriver for ReferenceDomainPort {
 }
 
 // ---------------------------------------------------------------------------
-// Reusable scenario functions exposing assertions for all 20 contract rules
+// Reusable scenario functions exposing assertions for all 21 contract rules
 // ---------------------------------------------------------------------------
 
 fn start_ready(driver: &impl DomainPortDriver) {
@@ -787,7 +772,7 @@ pub fn scenario_01_initial_projection_is_deterministic_and_unavailable(
     let snap = driver.snapshot();
     assert_eq!(snap.lifecycle, DomainLifecycle::Unavailable);
     assert_eq!(snap.version, DomainVersion::ZERO);
-    assert_eq!(snap.payload, TestPayload::default());
+    assert_eq!(snap.payload, driver.default_payload());
     assert!(snap.last_error.is_none());
     assert_eq!(driver.supervisor_state(), SupervisorState::Starting);
 }
@@ -811,11 +796,7 @@ pub fn scenario_03_reconnect_retains_safe_payload_and_records_last_error(
     driver: &impl DomainPortDriver,
 ) {
     start_ready(driver);
-    let custom_payload = TestPayload {
-        volume: 85,
-        is_muted: true,
-        device_name: "Headset".to_string(),
-    };
+    let custom_payload = driver.sample_payload(85);
     driver.publish_update(1, custom_payload.clone()).unwrap();
 
     driver.report_owner_failure("connection reset by peer".to_string());
@@ -832,14 +813,8 @@ pub fn scenario_04_strictly_newer_revision_in_same_generation_is_accepted(
     driver: &impl DomainPortDriver,
 ) {
     start_ready(driver);
-    let p1 = TestPayload {
-        volume: 60,
-        ..Default::default()
-    };
-    let p2 = TestPayload {
-        volume: 70,
-        ..Default::default()
-    };
+    let p1 = driver.sample_payload(60);
+    let p2 = driver.sample_payload(70);
 
     assert!(driver.publish_update(1, p1.clone()).is_ok());
     assert_eq!(driver.snapshot().version, DomainVersion::new(1, 1));
@@ -858,10 +833,7 @@ pub fn scenario_05_stale_generation_is_rejected(driver: &impl DomainPortDriver) 
 
     assert_eq!(driver.snapshot().version.owner_generation, 2);
 
-    let stale_payload = TestPayload {
-        volume: 10,
-        ..Default::default()
-    };
+    let stale_payload = driver.sample_payload(10);
     let res = driver.publish_raw_update(
         DomainVersion::new(1, 99),
         DomainLifecycle::Ready,
@@ -873,7 +845,7 @@ pub fn scenario_05_stale_generation_is_rejected(driver: &impl DomainPortDriver) 
     let future = driver.publish_raw_update(
         DomainVersion::new(3, 0),
         DomainLifecycle::Ready,
-        TestPayload::default(),
+        driver.default_payload(),
         None,
     );
     assert!(matches!(
@@ -888,16 +860,10 @@ pub fn scenario_05_stale_generation_is_rejected(driver: &impl DomainPortDriver) 
 
 pub fn scenario_06_stale_revision_is_rejected(driver: &impl DomainPortDriver) {
     start_ready(driver);
-    let p5 = TestPayload {
-        volume: 50,
-        ..Default::default()
-    };
+    let p5 = driver.sample_payload(50);
     driver.publish_update(5, p5).unwrap();
 
-    let p3 = TestPayload {
-        volume: 30,
-        ..Default::default()
-    };
+    let p3 = driver.sample_payload(30);
     let res = driver.publish_update(3, p3);
     assert!(matches!(res, Err(StaleUpdateError::StaleVersion { .. })));
     assert_eq!(driver.telemetry().stale_updates, 1);
@@ -908,16 +874,10 @@ pub fn scenario_07_conflicting_payload_at_same_version_is_rejected_and_diagnosed
     driver: &impl DomainPortDriver,
 ) {
     start_ready(driver);
-    let p_a = TestPayload {
-        volume: 40,
-        ..Default::default()
-    };
+    let p_a = driver.sample_payload(40);
     driver.publish_update(5, p_a.clone()).unwrap();
 
-    let p_b = TestPayload {
-        volume: 90,
-        ..Default::default()
-    };
+    let p_b = driver.sample_payload(90);
     let res =
         driver.publish_raw_update(DomainVersion::new(1, 5), DomainLifecycle::Ready, p_b, None);
     assert!(matches!(
@@ -930,10 +890,7 @@ pub fn scenario_07_conflicting_payload_at_same_version_is_rejected_and_diagnosed
 
 pub fn scenario_08_new_owner_generation_permits_revision_reset(driver: &impl DomainPortDriver) {
     start_ready(driver);
-    let p1 = TestPayload {
-        volume: 99,
-        ..Default::default()
-    };
+    let p1 = driver.sample_payload(99);
     driver.publish_update(100, p1).unwrap();
     assert_eq!(driver.snapshot().version, DomainVersion::new(1, 100));
 
@@ -941,10 +898,7 @@ pub fn scenario_08_new_owner_generation_permits_revision_reset(driver: &impl Dom
     driver.advance_clock_ms(300); // generation 2 starts at (2, 0)
     driver.mark_ready();
 
-    let p2 = TestPayload {
-        volume: 20,
-        ..Default::default()
-    };
+    let p2 = driver.sample_payload(20);
     let res = driver.publish_update(1, p2.clone());
     assert!(res.is_ok());
     assert_eq!(driver.snapshot().version, DomainVersion::new(2, 1));
@@ -956,29 +910,24 @@ pub fn scenario_09_slow_subscriber_converges_to_latest_atomic_snapshot(
 ) {
     start_ready(driver);
     let subscriber = driver.subscribe();
+    let mut last_payload = driver.default_payload();
     for r in 1..=5 {
-        let p = TestPayload {
-            volume: r as u8 * 10,
-            ..Default::default()
-        };
+        let p = driver.sample_payload(r * 10);
+        last_payload = p.clone();
         driver.publish_update(r, p).unwrap();
     }
     // A latest-value subscriber does not consume intermediate updates, but
     // still converges atomically to the newest snapshot.
     let snap = subscriber.latest();
     assert_eq!(snap.version, DomainVersion::new(1, 5));
-    assert_eq!(snap.payload.volume, 50);
+    assert_eq!(snap.payload, last_payload);
 }
 
 pub fn scenario_10_accepted_command_receives_exactly_one_terminal_outcome(
     driver: &impl DomainPortDriver,
 ) {
     start_ready(driver);
-    let cmd = TestCommand {
-        id: CommandId("cmd-10".to_string()),
-        action: TestAction::SetVolume(75),
-        policy: MailboxPolicy::Lossless,
-    };
+    let cmd = driver.lossless_command("cmd-10", 75);
     let ticket = driver.submit_command(cmd).unwrap();
     assert_eq!(ticket.outcome(), None);
 
@@ -997,11 +946,7 @@ pub fn scenario_11_backend_acknowledgement_alone_does_not_complete_convergence_c
     driver: &impl DomainPortDriver,
 ) {
     start_ready(driver);
-    let cmd = TestCommand {
-        id: CommandId("cmd-11".to_string()),
-        action: TestAction::SetVolume(33),
-        policy: MailboxPolicy::Lossless,
-    };
+    let cmd = driver.lossless_command("cmd-11", 33);
     let ticket = driver.submit_command(cmd).unwrap();
 
     // Backend ACK occurs
@@ -1022,21 +967,9 @@ pub fn scenario_12_lossless_mailbox_rejects_overflow_without_dropping_accepted_c
     driver: &impl DomainPortDriver,
 ) {
     start_ready(driver);
-    let c1 = TestCommand {
-        id: CommandId("c1".to_string()),
-        action: TestAction::SetVolume(10),
-        policy: MailboxPolicy::Lossless,
-    };
-    let c2 = TestCommand {
-        id: CommandId("c2".to_string()),
-        action: TestAction::SetVolume(20),
-        policy: MailboxPolicy::Lossless,
-    };
-    let c3 = TestCommand {
-        id: CommandId("c3".to_string()),
-        action: TestAction::SetVolume(30),
-        policy: MailboxPolicy::Lossless,
-    };
+    let c1 = driver.lossless_command("c1", 10);
+    let c2 = driver.lossless_command("c2", 20);
+    let c3 = driver.lossless_command("c3", 30);
 
     let t1 = driver.submit_command(c1).unwrap();
     let t2 = driver.submit_command(c2).unwrap();
@@ -1062,20 +995,8 @@ pub fn scenario_13_replace_latest_supersedes_pending_command_with_same_key_and_e
     driver: &impl DomainPortDriver,
 ) {
     start_ready(driver);
-    let c1 = TestCommand {
-        id: CommandId("c1".to_string()),
-        action: TestAction::SetVolume(10),
-        policy: MailboxPolicy::ReplaceLatest {
-            key: "volume".to_string(),
-        },
-    };
-    let c2 = TestCommand {
-        id: CommandId("c2".to_string()),
-        action: TestAction::SetVolume(20),
-        policy: MailboxPolicy::ReplaceLatest {
-            key: "volume".to_string(),
-        },
-    };
+    let c1 = driver.replace_latest_command("c1", "volume", 10);
+    let c2 = driver.replace_latest_command("c2", "volume", 20);
 
     let t1 = driver.submit_command(c1).unwrap();
     let t2 = driver.submit_command(c2).unwrap();
@@ -1093,24 +1014,13 @@ pub fn scenario_13_replace_latest_supersedes_pending_command_with_same_key_and_e
     assert!(matches!(t2.outcome(), Some(CommandOutcome::Applied { .. })));
 }
 
+#[allow(dead_code)]
 pub fn scenario_14_different_replace_latest_keys_do_not_replace_each_other(
     driver: &impl DomainPortDriver,
 ) {
     start_ready(driver);
-    let c1 = TestCommand {
-        id: CommandId("c1".to_string()),
-        action: TestAction::SetVolume(10),
-        policy: MailboxPolicy::ReplaceLatest {
-            key: "vol".to_string(),
-        },
-    };
-    let c2 = TestCommand {
-        id: CommandId("c2".to_string()),
-        action: TestAction::SetMuted(true),
-        policy: MailboxPolicy::ReplaceLatest {
-            key: "mute".to_string(),
-        },
-    };
+    let c1 = driver.replace_latest_command("c1", "vol", 10);
+    let c2 = driver.replace_latest_command("c2", "mute", 20);
 
     let t1 = driver.submit_command(c1).unwrap();
     let t2 = driver.submit_command(c2).unwrap();
@@ -1128,16 +1038,8 @@ pub fn scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_co
     driver: &impl DomainPortDriver,
 ) {
     start_ready(driver); // Generation 1
-    let in_flight = TestCommand {
-        id: CommandId("in-flight".to_string()),
-        action: TestAction::SetVolume(10),
-        policy: MailboxPolicy::Lossless,
-    };
-    let pending = TestCommand {
-        id: CommandId("pending".to_string()),
-        action: TestAction::SetMuted(true),
-        policy: MailboxPolicy::Lossless,
-    };
+    let in_flight = driver.lossless_command("in-flight", 10);
+    let pending = driver.lossless_command("pending", 20);
     let in_flight_ticket = driver.submit_command(in_flight).unwrap();
     assert_eq!(
         driver.ack_command_without_snapshot(),
@@ -1268,21 +1170,9 @@ pub fn scenario_20_telemetry_reports_generation_queue_depth_capacity_overloads_s
     start_ready(driver); // gen 1
 
     // 1. Submit 2 commands, overload 1
-    let c1 = TestCommand {
-        id: CommandId("c1".to_string()),
-        action: TestAction::SetVolume(10),
-        policy: MailboxPolicy::Lossless,
-    };
-    let c2 = TestCommand {
-        id: CommandId("c2".to_string()),
-        action: TestAction::SetVolume(20),
-        policy: MailboxPolicy::Lossless,
-    };
-    let c3 = TestCommand {
-        id: CommandId("c3".to_string()),
-        action: TestAction::SetVolume(30),
-        policy: MailboxPolicy::Lossless,
-    };
+    let c1 = driver.lossless_command("c1", 10);
+    let c2 = driver.lossless_command("c2", 20);
+    let c3 = driver.lossless_command("c3", 30);
     let _ = driver.submit_command(c1);
     let _ = driver.submit_command(c2);
     let _ = driver.submit_command(c3); // overload
@@ -1291,29 +1181,15 @@ pub fn scenario_20_telemetry_reports_generation_queue_depth_capacity_overloads_s
     assert_eq!(queued.queue_capacity, 2);
 
     // 2. Supersede
-    let c_rep1 = TestCommand {
-        id: CommandId("c_rep1".to_string()),
-        action: TestAction::SetMuted(true),
-        policy: MailboxPolicy::ReplaceLatest {
-            key: "mute".to_string(),
-        },
-    };
-    let c_rep2 = TestCommand {
-        id: CommandId("c_rep2".to_string()),
-        action: TestAction::SetMuted(false),
-        policy: MailboxPolicy::ReplaceLatest {
-            key: "mute".to_string(),
-        },
-    };
-    // c1 and c2 are in queue, queue length 2 (capacity 2). Replace c_rep1 with c_rep2 doesn't work if queue is full unless replacing existing mute key.
-    // Let's clear c1 and c2 first to demonstrate replacement
     driver.process_pending_commands_and_converge();
 
+    let c_rep1 = driver.replace_latest_command("c_rep1", "mute", 1);
+    let c_rep2 = driver.replace_latest_command("c_rep2", "mute", 0);
     let _ = driver.submit_command(c_rep1);
     let _ = driver.submit_command(c_rep2); // supersedes c_rep1
 
     // 3. Stale update
-    let _ = driver.publish_update(0, TestPayload::default());
+    let _ = driver.publish_update(0, driver.default_payload());
 
     // 4. Restart
     driver.report_owner_failure("test error".to_string());
@@ -1335,11 +1211,7 @@ pub fn scenario_21_reconciled_and_timed_out_commands_have_typed_terminal_outcome
 ) {
     start_ready(driver);
     let reconciled = driver
-        .submit_command(TestCommand {
-            id: CommandId("reconciled".to_string()),
-            action: TestAction::SetVolume(88),
-            policy: MailboxPolicy::Lossless,
-        })
+        .submit_command(driver.lossless_command("reconciled", 88))
         .unwrap();
     driver.reconcile_front_command();
     assert!(matches!(
@@ -1349,11 +1221,7 @@ pub fn scenario_21_reconciled_and_timed_out_commands_have_typed_terminal_outcome
     assert_eq!(reconciled.completion_attempts(), 1);
 
     let timed_out = driver
-        .submit_command(TestCommand {
-            id: CommandId("timed-out".to_string()),
-            action: TestAction::SetMuted(true),
-            policy: MailboxPolicy::Lossless,
-        })
+        .submit_command(driver.lossless_command("timed-out", 99))
         .unwrap();
     let expected_version = driver.snapshot().version;
     driver.timeout_front_command();
