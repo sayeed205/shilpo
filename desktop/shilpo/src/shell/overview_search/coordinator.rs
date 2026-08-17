@@ -763,7 +763,7 @@ mod tests {
         use std::path::PathBuf;
 
         use shilpo_services::{
-            AppScanner, Application, ClipboardItem, CompositorConnection, CompositorSnapshot,
+            AppScanner, Application, ClipboardItem, CompositorSnapshot, DomainLifecycle,
             DomainVersion, TestCompositorAdapter, WindowInfo,
         };
         use tokio::sync::watch;
@@ -776,7 +776,7 @@ mod tests {
 
         let snapshot = CompositorSnapshot {
             version: DomainVersion::new(1, 1),
-            connection: CompositorConnection::Ready,
+            connection: DomainLifecycle::Ready,
             windows: vec![WindowInfo {
                 id: 42,
                 title: Some("Terminal".to_string()),

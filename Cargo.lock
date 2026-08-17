@@ -8035,11 +8035,21 @@ dependencies = [
  "futures-lite",
  "serde",
  "serde_json",
+ "shilpo-domain",
  "shilpo-services",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
  "zbus",
+ "zvariant",
+]
+
+[[package]]
+name = "shilpo-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "zvariant",
 ]
 
@@ -8155,6 +8165,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "shilpo-device",
+ "shilpo-domain",
  "shilpo-observability",
  "smol",
  "tempfile",

@@ -4,14 +4,15 @@ use std::{
 };
 
 use anyhow::Result;
-pub use shilpo_device::{DomainLifecycle, DomainPortTelemetry};
-use tokio::sync::{broadcast, watch};
-use zbus::{Connection, interface, object_server::SignalEmitter};
-
-pub use crate::compositor::{CancellationReason, DomainVersion, StaleUpdateError, SupervisorState};
-use crate::domain::{
+pub use shilpo_domain::{
+    CancellationReason, DomainLifecycle, DomainPortTelemetry, DomainVersion, MailboxPolicy,
+    StaleUpdateError, SupervisorState,
+};
+use shilpo_domain::{
     FAILURE_WINDOW_MS, INITIAL_BACKOFF_MS, MAX_BACKOFF_MS, QUARANTINE_FAILURES, STABLE_RESET_MS,
 };
+use tokio::sync::{broadcast, watch};
+use zbus::{Connection, interface, object_server::SignalEmitter};
 
 const NOTIFICATION_OBJECT_PATH: &str = "/org/freedesktop/Notifications";
 
@@ -120,13 +121,6 @@ impl CommandId {
     pub fn generate() -> Self {
         Self(uuid::Uuid::new_v4().to_string())
     }
-}
-
-/// Bounded mailbox overload policy.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum MailboxPolicy {
-    Lossless,
-    ReplaceLatest { key: String },
 }
 
 /// Typed notification domain commands.

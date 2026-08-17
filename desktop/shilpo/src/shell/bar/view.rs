@@ -429,7 +429,7 @@ impl BarView {
                             ),
                             self.display_id,
                             snapshot.workspaces.clone(),
-                            snapshot.connection.clone(),
+                            snapshot.connection,
                             pill_orientation,
                         )
                         .into_any_element(),

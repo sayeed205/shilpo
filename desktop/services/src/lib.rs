@@ -7,7 +7,8 @@ pub mod capture;
 pub mod clipboard;
 pub mod compositor;
 pub mod device_daemon;
-pub mod domain;
+pub use shilpo_domain as domain;
+pub use shilpo_domain::*;
 pub mod error;
 pub use shilpo_device as device;
 pub use shilpo_device as device_protocol;
@@ -37,8 +38,8 @@ pub use clipboard::{ClipboardPersistenceError, ClipboardService};
 pub use compositor::{
     BrokerOptions, CancellationReason, CommandCancellation, CommandExecutorFn, CommandOutcome,
     CommandTicket, CompositorAdapter, CompositorCapabilities, CompositorCommand,
-    CompositorCommandBroker, CompositorCommandError, CompositorConnection, CompositorOutput,
-    CompositorSnapshot, CompositorTarget, DomainVersion, ExecutorAck, MailboxPolicy,
+    CompositorCommandBroker, CompositorCommandError, CompositorOutput, CompositorSnapshot,
+    CompositorTarget, DomainLifecycle, DomainVersion, ExecutorAck, MailboxPolicy,
     NiriCompositorService, RejectionReason, StaleUpdateError, SupervisorState,
     TestCompositorAdapter, WindowInfo, WorkspaceInfo,
 };
@@ -46,7 +47,6 @@ pub use device_daemon::{
     DeviceAdapter, DeviceDaemonService, DeviceDbusService, InMemoryDeviceAdapter,
     SystemDeviceAdapter,
 };
-pub use domain::*;
 pub use error::ServiceError;
 pub use location::{LocationInfo, LocationService};
 pub use media::{MediaCommand, MediaInfo, MediaService, PlaybackState};

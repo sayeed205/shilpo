@@ -3,15 +3,14 @@ use std::time::Duration;
 
 use shilpo_services::{
     BrokerOptions, CancellationReason, CommandExecutorFn, CommandOutcome, CompositorAdapter,
-    CompositorCommand, CompositorCommandBroker, CompositorConnection, CompositorSnapshot,
-    DomainVersion, ExecutorAck, MailboxPolicy, StaleUpdateError, TestCompositorAdapter, WindowInfo,
-    WorkspaceInfo,
+    CompositorCommand, CompositorCommandBroker, CompositorSnapshot, DomainLifecycle, DomainVersion,
+    ExecutorAck, MailboxPolicy, StaleUpdateError, TestCompositorAdapter, WindowInfo, WorkspaceInfo,
 };
 
 fn ready_snapshot(generation: u64, rev: u64) -> CompositorSnapshot {
     CompositorSnapshot {
         version: DomainVersion::new(generation, rev),
-        connection: CompositorConnection::Ready,
+        connection: DomainLifecycle::Ready,
         workspaces: vec![WorkspaceInfo {
             id: 1,
             name: None,

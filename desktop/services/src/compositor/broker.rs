@@ -13,8 +13,8 @@ use std::{
 use tokio::sync::oneshot;
 
 use super::{
-    CompositorCommand, CompositorConnection, CompositorSnapshot, DomainVersion, MailboxPolicy,
-    RejectionReason, StaleUpdateError,
+    CancellationReason, CompositorCommand, CompositorSnapshot, DomainLifecycle, DomainVersion,
+    MailboxPolicy, RejectionReason, StaleUpdateError,
 };
 
 /// Terminal outcome returned when a compositor command finishes.
@@ -80,31 +80,6 @@ impl fmt::Display for CompositorTarget {
 pub enum ExecutorAck {
     Success,
     WorkspaceCreated { workspace_id: u64 },
-}
-
-/// Reasons why a compositor command was cancelled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CancellationReason {
-    Shutdown,
-    Reconnect,
-    OwnerReplaced,
-    Superseded,
-    User,
-    Timeout,
-}
-
-impl fmt::Display for CancellationReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::User => write!(f, "cancelled by user or dropped ticket"),
-            Self::Reconnect => write!(f, "compositor reconnected or changed state"),
-            Self::Shutdown => write!(f, "broker shutdown"),
-            Self::OwnerReplaced => write!(f, "owner generation replaced"),
-            Self::Superseded => write!(f, "superseded by newer command"),
-            Self::Timeout => write!(f, "command deadline elapsed"),
-        }
-    }
 }
 
 /// Configuration options for `CompositorCommandBroker`.
@@ -842,7 +817,7 @@ impl CompositorCommandBroker {
         let is_initial_snapshot = state.snapshot.version == DomainVersion::ZERO
             && matches!(
                 state.snapshot.connection,
-                CompositorConnection::Unavailable | CompositorConnection::Connecting
+                DomainLifecycle::Unavailable | DomainLifecycle::Connecting
             );
 
         if snapshot.version.owner_generation > installed_gen {
@@ -1342,7 +1317,7 @@ mod tests {
         broker.set_installed_generation(1);
         let snapshot = CompositorSnapshot {
             version: DomainVersion::new(1, 1),
-            connection: CompositorConnection::Ready,
+            connection: DomainLifecycle::Ready,
             workspaces: vec![super::super::WorkspaceInfo {
                 id: 1,
                 name: None,
@@ -1394,7 +1369,7 @@ mod tests {
         broker.set_installed_generation(1);
         let snapshot = CompositorSnapshot {
             version: DomainVersion::new(1, 1),
-            connection: CompositorConnection::Ready,
+            connection: DomainLifecycle::Ready,
             workspaces: vec![
                 super::super::WorkspaceInfo {
                     id: 1,
@@ -1428,7 +1403,7 @@ mod tests {
         broker
             .observe_snapshot(Arc::new(CompositorSnapshot {
                 version: DomainVersion::new(1, 2),
-                connection: CompositorConnection::Reconnecting,
+                connection: DomainLifecycle::Reconnecting,
                 ..Default::default()
             }))
             .unwrap();
@@ -1452,7 +1427,7 @@ mod tests {
         broker.set_installed_generation(1);
         let snapshot = CompositorSnapshot {
             version: DomainVersion::new(1, 1),
-            connection: CompositorConnection::Ready,
+            connection: DomainLifecycle::Ready,
             workspaces: vec![super::super::WorkspaceInfo {
                 id: 1,
                 name: None,

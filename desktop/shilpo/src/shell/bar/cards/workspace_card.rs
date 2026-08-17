@@ -7,7 +7,7 @@ use std::{
 use gpui::{
     AnyElement, App, ImageSource, IntoElement, ParentElement, Pixels, Size, Styled, Window, div, px,
 };
-use shilpo_services::{Application, CompositorConnection, WorkspaceInfo};
+use shilpo_services::{Application, DomainLifecycle, WorkspaceInfo};
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt};
 
 use super::{
@@ -98,7 +98,7 @@ impl CardProvider for WorkspacePreviewProvider {
 
     fn source_available(&self, source: &CardSourceId, cx: &App) -> bool {
         let snapshot = ShellSurfaces::compositor_snapshot(cx);
-        if !matches!(snapshot.connection, CompositorConnection::Ready) {
+        if !matches!(snapshot.connection, DomainLifecycle::Ready) {
             return true;
         }
 
@@ -131,7 +131,7 @@ impl CardProvider for WorkspacePreviewProvider {
         };
 
         let snapshot = ShellSurfaces::compositor_snapshot(cx);
-        let connection = snapshot.connection.clone();
+        let connection = snapshot.connection;
 
         let wallpaper_snapshot = if cx.has_global::<ShellRuntime>() {
             ShellRuntime::wallpaper_preview_snapshot(cx)
@@ -153,8 +153,8 @@ impl CardProvider for WorkspacePreviewProvider {
                     .corner_radii(24.0, 24.0);
 
                 let status_overlay = match connection {
-                    CompositorConnection::Reconnecting => Some("Reconnecting".to_string()),
-                    CompositorConnection::Unavailable | CompositorConnection::Degraded => {
+                    DomainLifecycle::Reconnecting => Some("Reconnecting".to_string()),
+                    DomainLifecycle::Unavailable | DomainLifecycle::Degraded => {
                         Some("Compositor Unavailable".to_string())
                     }
                     _ => None,
@@ -189,19 +189,19 @@ impl CardProvider for WorkspacePreviewProvider {
                         .into_any_element()
                 }
             }
-            (None, CompositorConnection::Ready) => {
+            (None, DomainLifecycle::Ready) => {
                 // The coordinator reconciles authoritative source removal before rendering.
                 div().into_any_element()
             }
             (None, connection) => {
                 // Compositor disconnected / stopped and no workspace cached.
                 let status_text = match connection {
-                    CompositorConnection::Connecting => "Connecting to compositor...",
-                    CompositorConnection::Reconnecting => "Reconnecting to compositor...",
-                    CompositorConnection::Unavailable | CompositorConnection::Degraded => {
+                    DomainLifecycle::Connecting => "Connecting to compositor...",
+                    DomainLifecycle::Reconnecting => "Reconnecting to compositor...",
+                    DomainLifecycle::Unavailable | DomainLifecycle::Degraded => {
                         "Compositor unavailable"
                     }
-                    CompositorConnection::Ready => "Workspace unavailable",
+                    DomainLifecycle::Ready => "Workspace unavailable",
                 };
 
                 div()

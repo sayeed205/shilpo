@@ -14,6 +14,7 @@ members = [
     "desktop/ext-runtime",
     "desktop/theme-daemon",
     "desktop/observability",
+    "desktop/domain",
     # Other
     "apps/storybook",
 ]
@@ -30,6 +31,7 @@ shilpo-theme = { path = "core/theme" }
 shilpo-macros = { path = "core/macros" }
 shilpo-ext-api = { path = "core/ext-api" }
 shilpo-ext-sdk = { path = "sdk/rust" }
+shilpo-domain = { path = "desktop/domain" }
 shilpo-device = { path = "desktop/device" }
 shilpo-services = { path = "desktop/services" }
 shilpo-ext-runtime = { path = "desktop/ext-runtime" }
