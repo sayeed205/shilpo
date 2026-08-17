@@ -863,19 +863,6 @@ impl ShellRuntime {
             .extension_host_mut()
             .send_lifecycle_for(surface, mounted, width, height);
     }
-
-    pub(super) fn drain_extensions(cx: &mut App) {
-        ExtensionHost::drain(cx);
-        let event_to_send = cx
-            .global_mut::<ShellRuntime>()
-            .wallpaper_coordinator_mut()
-            .on_wallpaper_tick(std::time::Instant::now());
-        if let Some((extension_id, event)) = event_to_send {
-            cx.global::<ShellRuntime>()
-                .extension_host()
-                .send_event_to_extension(&extension_id, event);
-        }
-    }
 }
 
 #[cfg(test)]

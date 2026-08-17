@@ -1,15 +1,19 @@
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{path::PathBuf, sync::Arc};
 
 use gpui::App;
 use shilpo_services::{ClipboardItem, Notification, NotificationPort, NotificationService};
 
-use super::{SessionContext, ShellRuntime, shell_surfaces::ShellSurfaces};
+use super::{SessionContext, ShellRuntime};
 use crate::bar::service_worker::{
-    self, CommandSender, DeviceCommand, UpdateReceiver, WorkerCommand, WorkerUpdate,
+    self, CommandSender, ConfigReceiver, DeviceCommand, WorkerCommand,
 };
+
+pub struct ServiceHubStreams {
+    pub device_rx: tokio::sync::broadcast::Receiver<shilpo_services::DeviceClientUpdate>,
+    pub notif_rx: tokio::sync::broadcast::Receiver<Notification>,
+    pub config_rx: ConfigReceiver,
+    pub device_client: shilpo_services::DeviceClient,
+}
 
 /// Owns shell-facing integrations (compositor, notifications, clipboard, app
 /// scanning) and the client bridge that reports device state from the daemon.
@@ -21,11 +25,11 @@ pub struct ServiceHub {
     notification: Arc<dyn NotificationPort>,
     clipboard: shilpo_services::ClipboardService,
     app_scanner: shilpo_services::AppScanner,
+    device_client: shilpo_services::DeviceClient,
     service_commands: CommandSender,
     device_snapshot: crate::bar::service_worker::DeviceSnapshot,
-    availability: crate::bar::service_worker::ServiceAvailability,
-    notif_rx: Arc<Mutex<tokio::sync::broadcast::Receiver<Notification>>>,
-    updates_rx: Arc<Mutex<UpdateReceiver>>,
+    domain_states:
+        std::collections::HashMap<shilpo_services::DeviceDomain, shilpo_services::DomainState>,
     _service_task: Option<gpui::Task<()>>,
     _app_watcher: Option<notify::RecommendedWatcher>,
     started_at: std::time::Instant,
@@ -34,8 +38,11 @@ pub struct ServiceHub {
 
 impl ServiceHub {
     /// Starts the service hub from a restored session, applying persisted DND state.
-    pub fn start(executor: gpui::BackgroundExecutor, session: &SessionContext) -> Self {
-        let hub = Self::new(
+    pub fn start(
+        executor: gpui::BackgroundExecutor,
+        session: &SessionContext,
+    ) -> (Self, ServiceHubStreams) {
+        let (hub, streams) = Self::new(
             executor,
             session.config_path.clone(),
             session.heed_store.clone(),
@@ -43,14 +50,14 @@ impl ServiceHub {
         if session.session_state.dnd_active {
             hub.notification.set_dnd_enabled(true);
         }
-        hub
+        (hub, streams)
     }
 
     fn new(
         executor: gpui::BackgroundExecutor,
         config_path: PathBuf,
         session_store: Option<Arc<shilpo_services::HeedSessionStore>>,
-    ) -> Self {
+    ) -> (Self, ServiceHubStreams) {
         let compositor: Arc<dyn shilpo_services::CompositorAdapter> =
             shilpo_services::NiriCompositorService::new();
         let device_client = shilpo_services::DeviceClient::new();
@@ -70,48 +77,56 @@ impl ServiceHub {
             };
 
         let notif_rx = notification.subscribe_events();
+        let device_rx = device_client.subscribe_updates();
 
-        let (updates_tx, updates_rx, service_commands, commands_rx) = service_worker::channels();
+        let (config_tx, config_rx, service_commands, commands_rx) = service_worker::channels();
         let service_task = service_worker::spawn(
             executor,
-            updates_tx,
+            config_tx,
             commands_rx,
-            config_path.clone(),
-            device_client,
+            config_path,
+            device_client.clone(),
         );
-        Self {
+
+        let streams = ServiceHubStreams {
+            device_rx,
+            notif_rx,
+            config_rx,
+            device_client: device_client.clone(),
+        };
+
+        let hub = Self {
             compositor,
             notification,
             clipboard,
             app_scanner,
+            device_client,
             service_commands,
             device_snapshot: crate::bar::service_worker::DeviceSnapshot::default(),
-            availability: crate::bar::service_worker::ServiceAvailability::default(),
-            notif_rx: Arc::new(Mutex::new(notif_rx)),
-            updates_rx: Arc::new(Mutex::new(updates_rx)),
+            domain_states: std::collections::HashMap::new(),
             _service_task: Some(service_task),
             _app_watcher: app_watcher,
             started_at: std::time::Instant::now(),
             heed_store_available,
-        }
+        };
+
+        (hub, streams)
     }
 
     #[cfg(test)]
     pub(crate) fn new_offline_for_test() -> Self {
-        let (updates_tx, updates_rx, service_commands, _commands_rx) = service_worker::channels();
-        drop(updates_tx);
+        let (_config_tx, _config_rx, service_commands, _commands_rx) = service_worker::channels();
         let adapter = Arc::new(shilpo_services::NotificationDomainState::new_ready(32));
-        let notif_rx = adapter.subscribe_events();
+        let device_client = shilpo_services::DeviceClient::new();
         Self {
             compositor: Arc::new(shilpo_services::TestCompositorAdapter::new_default()),
             notification: adapter,
             clipboard: shilpo_services::ClipboardService::with_store(None),
             app_scanner: shilpo_services::AppScanner::new_empty(),
+            device_client,
             service_commands,
             device_snapshot: crate::bar::service_worker::DeviceSnapshot::default(),
-            availability: crate::bar::service_worker::ServiceAvailability::default(),
-            notif_rx: Arc::new(Mutex::new(notif_rx)),
-            updates_rx: Arc::new(Mutex::new(updates_rx)),
+            domain_states: std::collections::HashMap::new(),
             _service_task: None,
             _app_watcher: None,
             started_at: std::time::Instant::now(),
@@ -135,13 +150,44 @@ impl ServiceHub {
         self.device_snapshot.clone()
     }
 
-    pub(crate) fn service_availability(&self) -> crate::bar::service_worker::ServiceAvailability {
-        self.availability.clone()
+    pub fn apply_domain_state(&mut self, state: &shilpo_services::DomainState) -> bool {
+        let domain = state.domain;
+        if let Some(existing) = self.domain_states.get(&domain)
+            && state.version <= existing.version
+        {
+            return false;
+        }
+        self.domain_states.insert(domain, state.clone());
+        self.device_snapshot.apply_domain_state(state);
+        true
+    }
+
+    pub fn domain_state(
+        &self,
+        domain: shilpo_services::DeviceDomain,
+    ) -> shilpo_services::DomainState {
+        self.domain_states
+            .get(&domain)
+            .cloned()
+            .unwrap_or_else(|| self.device_client.get_domain_state(domain))
+    }
+
+    pub fn domain_lifecycle(
+        &self,
+        domain: shilpo_services::DeviceDomain,
+    ) -> shilpo_services::DomainLifecycle {
+        self.domain_state(domain).lifecycle
     }
 
     pub(crate) fn health(&self) -> shilpo_services::ServiceHealth {
         let comp_snap = self.compositor.current();
         let notification = self.notification.snapshot();
+        let battery = self.domain_state(shilpo_services::DeviceDomain::Battery);
+        let audio = self.domain_state(shilpo_services::DeviceDomain::Audio);
+        let network = self.domain_state(shilpo_services::DeviceDomain::Network);
+        let media = self.domain_state(shilpo_services::DeviceDomain::Media);
+        let brightness = self.domain_state(shilpo_services::DeviceDomain::Brightness);
+
         shilpo_services::ServiceHealth {
             compositor_connected: matches!(
                 comp_snap.connection,
@@ -160,34 +206,24 @@ impl ServiceHub {
             },
             compositor_last_error: comp_snap.last_error.clone(),
             compositor_telemetry: Some(self.compositor.command_broker().telemetry()),
-            battery_service_available: self.availability.battery_available,
-            battery_state: self.availability.battery_state,
-            battery_last_error: self.availability.battery_last_error.clone(),
-            audio_service_available: self.availability.audio_available,
-            audio_state: self.availability.audio_state,
-            audio_last_error: self.availability.audio_last_error.clone(),
-            network_service_available: self.availability.network_available,
-            network_state: self.availability.network_state,
-            network_last_error: self.availability.network_last_error.clone(),
-            notification_service_available: matches!(
-                notification.lifecycle,
-                shilpo_services::DomainLifecycle::Ready
-            ),
-            notification_state: match notification.lifecycle {
-                shilpo_services::DomainLifecycle::Ready => shilpo_services::ServiceLifecycle::Ready,
-                shilpo_services::DomainLifecycle::Connecting
-                | shilpo_services::DomainLifecycle::Reconnecting => {
-                    shilpo_services::ServiceLifecycle::Connecting { attempt: 0 }
-                }
-                _ => shilpo_services::ServiceLifecycle::Unavailable,
-            },
+            battery_service_available: battery.lifecycle.is_ready(),
+            battery_state: to_service_lifecycle(battery.lifecycle),
+            battery_last_error: battery.error,
+            audio_service_available: audio.lifecycle.is_ready(),
+            audio_state: to_service_lifecycle(audio.lifecycle),
+            audio_last_error: audio.error,
+            network_service_available: network.lifecycle.is_ready(),
+            network_state: to_service_lifecycle(network.lifecycle),
+            network_last_error: network.error,
+            notification_service_available: notification.lifecycle.is_ready(),
+            notification_state: to_service_lifecycle(notification.lifecycle),
             notification_last_error: notification.last_error,
-            media_service_available: self.availability.media_available,
-            media_state: self.availability.media_state,
-            media_last_error: self.availability.media_last_error.clone(),
-            brightness_service_available: self.availability.brightness_available,
-            brightness_state: self.availability.brightness_state,
-            brightness_last_error: self.availability.brightness_last_error.clone(),
+            media_service_available: media.lifecycle.is_ready(),
+            media_state: to_service_lifecycle(media.lifecycle),
+            media_last_error: media.error,
+            brightness_service_available: brightness.lifecycle.is_ready(),
+            brightness_state: to_service_lifecycle(brightness.lifecycle),
+            brightness_last_error: brightness.error,
             heed_store_available: self.heed_store_available,
             uptime_seconds: self.started_at.elapsed().as_secs(),
             extension_host: None,
@@ -262,198 +298,20 @@ impl ServiceHub {
             WorkerCommand::Device(command),
         );
     }
+}
 
-    fn drain_notifications(&mut self) -> Vec<Notification> {
-        let mut list = Vec::new();
-        if let Ok(mut rx) = self.notif_rx.lock() {
-            while let Ok(notif) = rx.try_recv() {
-                list.push(notif);
-            }
+fn to_service_lifecycle(
+    lifecycle: shilpo_services::DomainLifecycle,
+) -> shilpo_services::ServiceLifecycle {
+    match lifecycle {
+        shilpo_services::DomainLifecycle::Ready => shilpo_services::ServiceLifecycle::Ready,
+        shilpo_services::DomainLifecycle::Connecting
+        | shilpo_services::DomainLifecycle::Reconnecting => {
+            shilpo_services::ServiceLifecycle::Connecting { attempt: 0 }
         }
-        list
-    }
-
-    fn drain_updates(&mut self) -> Vec<WorkerUpdate> {
-        let mut list = Vec::new();
-        if let Ok(rx) = self.updates_rx.lock() {
-            while let Ok(upd) = rx.try_recv() {
-                list.push(upd);
-            }
-        }
-        list
-    }
-
-    fn apply_update(&mut self, update: &WorkerUpdate) {
-        self.device_snapshot.apply(update);
-        match update {
-            crate::bar::service_worker::WorkerUpdate::ServiceStateChange {
-                service,
-                state,
-                last_error,
-            } => {
-                let available = state.is_ready();
-                match *service {
-                    "battery" => {
-                        self.availability.battery_available = available;
-                        self.availability.battery_state = *state;
-                        self.availability.battery_last_error = last_error.clone();
-                    }
-                    "audio" => {
-                        self.availability.audio_available = available;
-                        self.availability.audio_state = *state;
-                        self.availability.audio_last_error = last_error.clone();
-                    }
-                    "network" => {
-                        self.availability.network_available = available;
-                        self.availability.network_state = *state;
-                        self.availability.network_last_error = last_error.clone();
-                    }
-                    "media" => {
-                        self.availability.media_available = available;
-                        self.availability.media_state = *state;
-                        self.availability.media_last_error = last_error.clone();
-                    }
-                    "brightness" => {
-                        self.availability.brightness_available = available;
-                        self.availability.brightness_state = *state;
-                        self.availability.brightness_last_error = last_error.clone();
-                    }
-                    _ => tracing::warn!(service, "unknown service state update"),
-                }
-            }
-            crate::bar::service_worker::WorkerUpdate::CommandRejected { reason, .. } => {
-                tracing::warn!(%reason, "device command rejected")
-            }
-            crate::bar::service_worker::WorkerUpdate::CommandOutcome(outcome) => {
-                tracing::debug!(?outcome, "device command reached terminal outcome");
-            }
-            _ => {}
-        }
-    }
-
-    /// Drains the notification inbox and the service-worker update stream,
-    /// applying device state and forwarding updates to the shell surfaces.
-    pub(crate) fn drain(cx: &mut App) {
-        if !cx.has_global::<ShellRuntime>() {
-            return;
-        }
-
-        ShellRuntime::publish_status(cx);
-
-        let notifs = cx
-            .global_mut::<ShellRuntime>()
-            .service_hub_mut()
-            .map(ServiceHub::drain_notifications)
-            .unwrap_or_default();
-        for notif in notifs {
-            ShellSurfaces::request(
-                cx,
-                super::shell_surfaces::SurfaceRequest::ShowNotification(notif),
-            );
-        }
-
-        let updates = cx
-            .global_mut::<ShellRuntime>()
-            .service_hub_mut()
-            .map(ServiceHub::drain_updates)
-            .unwrap_or_default();
-
-        if !updates.is_empty() {
-            for upd in &updates {
-                if let Some(hub) = cx.global_mut::<ShellRuntime>().service_hub_mut() {
-                    hub.apply_update(upd);
-                }
-                match upd {
-                    crate::bar::service_worker::WorkerUpdate::Config(
-                        crate::bar::service_worker::ConfigUpdate::Loaded { config, changeset },
-                    ) => {
-                        ShellRuntime::emit_config_signal(cx, true, changeset.clone(), 0);
-                        ShellRuntime::set_active_config(cx, config);
-                        if changeset.outputs || changeset.desktop {
-                            ShellSurfaces::request(cx, super::SurfaceRequest::SyncDisplays);
-                        }
-                        if changeset.extensions {
-                            ShellSurfaces::reconcile_bar_extension_instances(cx);
-                        }
-                    }
-                    crate::bar::service_worker::WorkerUpdate::Config(
-                        crate::bar::service_worker::ConfigUpdate::Failed { changeset, .. },
-                    ) => ShellRuntime::emit_config_signal(cx, false, changeset.clone(), 1),
-                    crate::bar::service_worker::WorkerUpdate::Battery(info) => {
-                        if info.available
-                            && !info.is_present
-                            && ShellRuntime::service_availability(cx).battery_state
-                                == shilpo_services::ServiceLifecycle::Ready
-                        {
-                            crate::bar::cards::adapter::CardCoordinator::dispatch(
-                                cx,
-                                crate::bar::cards::model::CardRequest::AnchorRemoved {
-                                    source: crate::bar::cards::model::CardSourceId::singleton(
-                                        "battery",
-                                    ),
-                                },
-                            );
-                        }
-                        crate::bar::cards::adapter::CardCoordinator::refresh_owner(
-                            cx,
-                            &crate::bar::cards::model::CardOwnerId::new("battery"),
-                        );
-                        ShellRuntime::dispatch_extension_event(
-                            cx,
-                            shilpo_ext_api::ExtensionEvent::PowerChanged {
-                                percentage: info.is_present.then_some(info.percentage as f32),
-                                charging: info.is_charging(),
-                            },
-                        );
-                    }
-                    crate::bar::service_worker::WorkerUpdate::ServiceStateChange {
-                        service: "battery",
-                        ..
-                    } => {
-                        crate::bar::cards::adapter::CardCoordinator::refresh_owner(
-                            cx,
-                            &crate::bar::cards::model::CardOwnerId::new("battery"),
-                        );
-                    }
-                    crate::bar::service_worker::WorkerUpdate::Network(info) => {
-                        ShellRuntime::dispatch_extension_event(
-                            cx,
-                            shilpo_ext_api::ExtensionEvent::NetworkChanged {
-                                connected: info.available && info.is_connected,
-                            },
-                        );
-                    }
-                    crate::bar::service_worker::WorkerUpdate::Media(info) => {
-                        ShellRuntime::dispatch_extension_event(
-                            cx,
-                            shilpo_ext_api::ExtensionEvent::MediaChanged {
-                                title: (!info.title.is_empty()).then_some(info.title.clone()),
-                                artist: (!info.artist.is_empty()).then_some(info.artist.clone()),
-                                playing: info.playback_state
-                                    == shilpo_services::PlaybackState::Playing,
-                            },
-                        );
-                    }
-                    _ => {}
-                }
-            }
-
-            let handles = cx.global::<ShellRuntime>().shell_surfaces().bar_handles();
-            for handle in handles {
-                let updates_clone = updates.clone();
-                if let Err(error) = handle.update(cx, |bar_view, _window, cx| {
-                    for upd in &updates_clone {
-                        bar_view.apply_worker_update(upd, cx);
-                    }
-                }) {
-                    tracing::debug!(
-                        ?error,
-                        window_id = ?handle.window_id(),
-                        surface = "bar",
-                        "stale window handle on service drain"
-                    );
-                }
-            }
+        shilpo_services::DomainLifecycle::Degraded
+        | shilpo_services::DomainLifecycle::Unavailable => {
+            shilpo_services::ServiceLifecycle::Unavailable
         }
     }
 }
@@ -482,11 +340,39 @@ impl ShellRuntime {
             .unwrap_or_default()
     }
 
-    pub fn service_availability(cx: &App) -> crate::bar::service_worker::ServiceAvailability {
+    pub fn domain_state(
+        cx: &App,
+        domain: shilpo_services::DeviceDomain,
+    ) -> shilpo_services::DomainState {
         cx.global::<Self>()
             .service_hub()
-            .map(|hub| hub.service_availability())
-            .unwrap_or_default()
+            .map(|hub| hub.domain_state(domain))
+            .unwrap_or_else(|| shilpo_services::DomainState {
+                domain,
+                version: shilpo_services::DomainVersion::ZERO,
+                lifecycle: shilpo_services::DomainLifecycle::Unavailable,
+                payload: shilpo_services::DomainPayload::empty(domain),
+                error: None,
+            })
+    }
+
+    pub fn domain_lifecycle(
+        cx: &App,
+        domain: shilpo_services::DeviceDomain,
+    ) -> shilpo_services::DomainLifecycle {
+        Self::domain_state(cx, domain).lifecycle
+    }
+
+    pub fn battery_lifecycle(cx: &App) -> shilpo_services::DomainLifecycle {
+        Self::domain_lifecycle(cx, shilpo_services::DeviceDomain::Battery)
+    }
+
+    pub fn service_health(cx: &App) -> Option<shilpo_services::ServiceHealth> {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>().service_hub().map(|hub| hub.health())
+        } else {
+            None
+        }
     }
 
     pub fn dispatch_device_command(cx: &App, command: DeviceCommand) {
@@ -604,12 +490,11 @@ mod tests {
 
     #[tokio::test]
     async fn service_hub_initialization_and_single_ownership() {
-        let (updates_tx, _updates_rx, service_commands, _commands_rx) = service_worker::channels();
+        let (_updates_tx, _updates_rx, service_commands, _commands_rx) = service_worker::channels();
         assert!(
             service_worker::try_send_command(&service_commands, WorkerCommand::ReloadConfig)
                 .is_ok()
         );
-        drop(updates_tx);
     }
 
     #[test]
@@ -680,7 +565,7 @@ mod tests {
 
     #[test]
     fn emit_test_notification_routes_to_notification_domain() {
-        let mut harness = ServiceHubTestHarness::new_offline();
+        let harness = ServiceHubTestHarness::new_offline();
         let notif = Notification {
             id: 0,
             app_name: "Shilpo Debug".to_string(),
@@ -701,12 +586,5 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].summary, "Test Title");
         assert_eq!(history[0].body, "Test Body");
-
-        let drained = harness.hub.drain_notifications();
-        assert_eq!(drained.len(), 1);
-        assert_eq!(drained[0].summary, "Test Title");
-        assert_eq!(drained[0].body, "Test Body");
     }
-
-    impl ServiceHub {}
 }
