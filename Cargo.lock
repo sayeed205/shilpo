@@ -8044,6 +8044,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "shilpo-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "zvariant",
+]
+
+[[package]]
 name = "shilpo-ext-api"
 version = "0.1.0"
 dependencies = [
