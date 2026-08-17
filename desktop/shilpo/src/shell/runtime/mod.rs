@@ -1210,15 +1210,108 @@ mod tests {
             });
         }
 
-        // Draining should recover from Lagged by resyncing from device_client
+        // Draining should recover from Lagged by resyncing from device_client.
+        //
+        // All 25 sends land before the task is ever polled, so the broadcast
+        // channel's overflow behavior is deterministic: with capacity 16, the
+        // oldest 9 (versions 1..=9) are dropped and versions 10..=25 remain
+        // buffered. The task observes exactly one `Lagged(9)`, then drains the
+        // 16 surviving messages in order, ending on version (1, 25).
         cx.run_until_parked();
 
         cx.update(|app| {
             let state = ShellRuntime::domain_state(app, DeviceDomain::Battery);
-            assert!(matches!(
-                state.lifecycle,
-                DomainLifecycle::Ready | DomainLifecycle::Unavailable
-            ));
+            assert_eq!(
+                state.version,
+                DomainVersion::new(1, 25),
+                "post-lag drain must end on the newest surviving message, not a stale or resync-clobbered version"
+            );
+            assert_eq!(
+                state.payload,
+                DomainPayload::Battery(BatteryPayload {
+                    available: true,
+                    is_present: true,
+                    percentage: 25,
+                    ..Default::default()
+                })
+            );
+            assert_eq!(state.lifecycle, DomainLifecycle::Ready);
+        });
+    }
+
+    #[gpui::test]
+    fn test_shutdown_cancels_event_loop_and_stops_publishing(cx: &mut gpui::TestAppContext) {
+        let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_event_test(app)
+        });
+
+        let update = DeviceClientUpdate {
+            domain: DeviceDomain::Battery,
+            state: DomainState {
+                domain: DeviceDomain::Battery,
+                version: DomainVersion::new(1, 1),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Battery(BatteryPayload {
+                    available: true,
+                    is_present: true,
+                    percentage: 50,
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+        let _ = device_tx.send(update);
+        cx.run_until_parked();
+        cx.update(|app| {
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Battery).payload,
+                DomainPayload::Battery(BatteryPayload {
+                    available: true,
+                    is_present: true,
+                    percentage: 50,
+                    ..Default::default()
+                })
+            );
+        });
+
+        // Simulate the cancellation `ShellRuntime::shutdown` performs: dropping the
+        // task handle cancels the spawned event loop.
+        cx.update(|app| {
+            app.global_mut::<ShellRuntime>()._drain_task = gpui::Task::ready(());
+            app.global_mut::<ShellRuntime>()._wallpaper_timer_task = gpui::Task::ready(());
+        });
+        cx.run_until_parked();
+
+        let post_shutdown_update = DeviceClientUpdate {
+            domain: DeviceDomain::Battery,
+            state: DomainState {
+                domain: DeviceDomain::Battery,
+                version: DomainVersion::new(1, 2),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Battery(BatteryPayload {
+                    available: true,
+                    is_present: true,
+                    percentage: 99,
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+        let _ = device_tx.send(post_shutdown_update);
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Battery).payload,
+                DomainPayload::Battery(BatteryPayload {
+                    available: true,
+                    is_present: true,
+                    percentage: 50,
+                    ..Default::default()
+                }),
+                "no update should be applied after the event loop task is cancelled"
+            );
         });
     }
 }
