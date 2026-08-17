@@ -5,6 +5,8 @@ use std::{
 
 use shilpo_services::{AppScanner, Application};
 
+use shilpo_ui::IconName;
+
 use super::{
     parser::SearchMode,
     sink::SearchSink,
@@ -36,11 +38,18 @@ impl SearchProvider for AppSearchProvider {
         ProviderId::from_static("app-search")
     }
 
-    fn search(&self, request: SearchRequest, sink: SearchSink) {
-        if !matches!(request.mode, SearchMode::Default | SearchMode::Apps) {
-            return;
-        }
+    fn declared_modes(&self) -> &'static [SearchMode] {
+        &[SearchMode::Default, SearchMode::Apps]
+    }
 
+    fn prefix_icon(&self, mode: SearchMode) -> Option<IconName> {
+        match mode {
+            SearchMode::Apps => Some(IconName::Terminal),
+            _ => None,
+        }
+    }
+
+    fn search(&self, request: SearchRequest, sink: SearchSink) {
         let query_generation = request.generation;
         let provider_id = self.id();
         let mut cached = self.cached_apps.lock().unwrap();

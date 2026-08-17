@@ -20,8 +20,9 @@ use shilpo_ui::{
 use crate::{
     app_icons::{app_icon, build_app_icon_index, resolve_app_icon_path},
     overview_search::{
-        ActionResult, AppSearchProvider, HeedSearchLearningStore, OverviewSearch, SearchCandidate,
-        SearchCoordinator, SearchMode, SearchResultIcon, SearchSink, WindowSearchProvider,
+        ActionResult, ActionSearchProvider, AppSearchProvider, CalculatorSearchProvider,
+        ClipboardSearchProvider, HeedSearchLearningStore, QuicklinksSearchProvider,
+        SearchCandidate, SearchCoordinator, SearchResultIcon, SearchSink, WindowSearchProvider,
     },
     runtime::{ShellRuntime, ShellSurfaces},
     workspace_miniature::{
@@ -743,16 +744,25 @@ impl WorkspaceOverview {
         let heed_store = ShellRuntime::session_heed_store(cx);
         let learning_store = Arc::new(HeedSearchLearningStore::new(heed_store));
         let actions = ShellRuntime::action_descriptors(cx);
-        let clipboard_history = ShellRuntime::clipboard_history(cx);
+        let clipboard_sub = ShellRuntime::clipboard_subscription(cx);
         let keybindings = ShellRuntime::keybinding_descriptors(cx);
 
         let app_provider = Arc::new(AppSearchProvider::new(scanner));
         let window_provider = Arc::new(WindowSearchProvider::new(compositor));
-        let legacy_provider =
-            Arc::new(OverviewSearch::new(actions, clipboard_history, keybindings));
+        let action_provider = Arc::new(ActionSearchProvider::new(actions));
+        let clipboard_provider = Arc::new(ClipboardSearchProvider::new(clipboard_sub));
+        let calc_provider = Arc::new(CalculatorSearchProvider::new());
+        let quicklinks_provider = Arc::new(QuicklinksSearchProvider::new(keybindings));
         let search_coordinator = Arc::new(
-            SearchCoordinator::new(vec![window_provider, app_provider, legacy_provider])
-                .with_learning_store(learning_store),
+            SearchCoordinator::new(vec![
+                window_provider,
+                app_provider,
+                action_provider,
+                clipboard_provider,
+                calc_provider,
+                quicklinks_provider,
+            ])
+            .with_learning_store(learning_store),
         );
 
         window.on_window_should_close(cx, move |_, cx| {
@@ -1134,14 +1144,11 @@ impl Render for WorkspaceOverview {
             .unwrap_or_default();
         let is_query_empty = query_text.trim().is_empty();
 
-        let prefix_icon = match crate::overview_search::parser::parse_query(&query_text).0 {
-            SearchMode::Apps | SearchMode::Command => IconName::Terminal,
-            SearchMode::Actions => IconName::Settings,
-            SearchMode::Clipboard | SearchMode::Calculator | SearchMode::Keybindings => {
-                IconName::Star
-            }
-            SearchMode::WebSearch | SearchMode::Default => IconName::Search,
-        };
+        let prefix_icon = self
+            .search
+            .as_ref()
+            .map(|coord| coord.prefix_icon(&query_text))
+            .unwrap_or(IconName::Search);
 
         let search_bar = if let Some(input_state) = &self.input_state {
             div()

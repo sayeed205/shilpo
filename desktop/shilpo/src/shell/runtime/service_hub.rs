@@ -240,6 +240,12 @@ impl ServiceHub {
         self.clipboard.history()
     }
 
+    pub(crate) fn clipboard_subscription(
+        &self,
+    ) -> tokio::sync::watch::Receiver<Vec<ClipboardItem>> {
+        self.clipboard.subscribe()
+    }
+
     pub(crate) fn send_device_command(&self, command: DeviceCommand) {
         let _ = service_worker::try_send_command(
             &self.service_commands,
@@ -506,6 +512,18 @@ impl ShellRuntime {
             hub.clipboard_history()
         } else {
             Vec::new()
+        }
+    }
+
+    pub fn clipboard_subscription(
+        cx: &App,
+    ) -> Option<tokio::sync::watch::Receiver<Vec<ClipboardItem>>> {
+        if cx.has_global::<Self>()
+            && let Some(hub) = cx.global::<Self>().service_hub()
+        {
+            Some(hub.clipboard_subscription())
+        } else {
+            None
         }
     }
 
