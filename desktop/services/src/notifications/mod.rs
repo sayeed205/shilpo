@@ -1,9 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 
 use anyhow::Result;
@@ -12,8 +9,16 @@ use tokio::sync::{broadcast, watch};
 use zbus::{Connection, interface, object_server::SignalEmitter};
 
 pub use crate::compositor::{CancellationReason, DomainVersion, StaleUpdateError, SupervisorState};
+use crate::domain::{
+    FAILURE_WINDOW_MS, INITIAL_BACKOFF_MS, MAX_BACKOFF_MS, QUARANTINE_FAILURES, STABLE_RESET_MS,
+};
 
 const NOTIFICATION_OBJECT_PATH: &str = "/org/freedesktop/Notifications";
+
+/// Poll interval while quarantined and waiting for an external `reset_quarantine` call.
+/// Deliberately slower than the connection-liveness poll: there is nothing to react to
+/// until an operator or `org.shilpo.Debug` clears the quarantine.
+const QUARANTINE_IDLE_POLL_MS: u64 = 2_000;
 
 /// Reasons reported by the freedesktop `NotificationClosed` signal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -283,29 +288,34 @@ pub trait NotificationPort: Send + Sync {
     }
 }
 
-/// Controllable manual clock for deterministic time advancement in tests.
-#[derive(Debug, Clone, Default)]
-pub struct NotificationClock {
-    now_ms: Arc<AtomicU64>,
+/// Monotonic time source for supervision timing.
+pub trait TimeSource: Send + Sync {
+    fn now_ms(&self) -> u64;
 }
 
-impl NotificationClock {
+/// Monotonic time source implementation based on `std::time::Instant`.
+#[derive(Debug, Clone)]
+pub struct MonotonicTimeSource {
+    start: std::time::Instant,
+}
+
+impl MonotonicTimeSource {
     pub fn new() -> Self {
         Self {
-            now_ms: Arc::new(AtomicU64::new(0)),
+            start: std::time::Instant::now(),
         }
     }
+}
 
-    pub fn now_ms(&self) -> u64 {
-        self.now_ms.load(Ordering::SeqCst)
+impl Default for MonotonicTimeSource {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    pub fn advance_ms(&self, ms: u64) {
-        self.now_ms.fetch_add(ms, Ordering::SeqCst);
-    }
-
-    pub fn advance_secs(&self, secs: u64) {
-        self.advance_ms(secs * 1000);
+impl TimeSource for MonotonicTimeSource {
+    fn now_ms(&self) -> u64 {
+        self.start.elapsed().as_millis() as u64
     }
 }
 
@@ -342,7 +352,6 @@ struct NotificationState {
 /// It is deliberately kept behind the concrete notification service; callers use
 /// `NotificationPort` and cannot select this state machine as a runtime owner.
 pub struct NotificationDomainState {
-    clock: NotificationClock,
     capacity: usize,
     state: Mutex<NotificationState>,
     watch_tx: watch::Sender<NotificationSnapshot>,
@@ -356,7 +365,6 @@ impl NotificationDomainState {
         let (watch_tx, _) = watch::channel(initial_snapshot.clone());
         let (event_tx, _) = broadcast::channel(64);
         Self {
-            clock: NotificationClock::new(),
             capacity,
             state: Mutex::new(NotificationState {
                 supervisor_state: SupervisorState::Starting,
@@ -387,22 +395,8 @@ impl NotificationDomainState {
     pub fn new_ready(capacity: usize) -> Self {
         let adapter = Self::new(capacity);
         adapter.begin_start();
-        adapter.mark_ready();
+        adapter.mark_ready(0);
         adapter
-    }
-
-    pub fn clock(&self) -> &NotificationClock {
-        &self.clock
-    }
-
-    pub fn advance_clock_ms(&self, ms: u64) {
-        self.clock.advance_ms(ms);
-        let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
-    }
-
-    pub fn advance_clock_secs(&self, secs: u64) {
-        self.advance_clock_ms(secs * 1000);
     }
 
     fn snapshot_from_state(state: &NotificationState) -> NotificationSnapshot {
@@ -432,7 +426,9 @@ impl NotificationDomainState {
 
     fn backoff_delay_for_attempt(attempt: u32) -> u64 {
         let multiplier = 2u64.saturating_pow(attempt.saturating_sub(1));
-        250u64.saturating_mul(multiplier).min(30_000)
+        INITIAL_BACKOFF_MS
+            .saturating_mul(multiplier)
+            .min(MAX_BACKOFF_MS)
     }
 
     fn check_clock_state(
@@ -459,7 +455,7 @@ impl NotificationDomainState {
             }
             SupervisorState::Running => {
                 if let Some(start_ts) = state.last_running_timestamp_ms
-                    && now_ms.saturating_sub(start_ts) >= 300_000
+                    && now_ms.saturating_sub(start_ts) >= STABLE_RESET_MS
                 {
                     state.failure_timestamps_ms.clear();
                     state.backoff_attempt = 0;
@@ -467,6 +463,11 @@ impl NotificationDomainState {
             }
             _ => {}
         }
+    }
+
+    pub fn tick(&self, now_ms: u64) {
+        let mut state = self.state.lock().unwrap();
+        Self::check_clock_state(&mut state, now_ms, &self.watch_tx);
     }
 
     pub fn begin_start(&self) {
@@ -483,33 +484,34 @@ impl NotificationDomainState {
         Self::notify_subscribers(&state, &self.watch_tx);
     }
 
-    pub fn mark_ready(&self) {
+    pub fn mark_ready(&self, now_ms: u64) {
         let mut state = self.state.lock().unwrap();
         state.supervisor_state = SupervisorState::Running;
         state.lifecycle = DomainLifecycle::Ready;
         state.had_prior_readiness = true;
-        state.last_running_timestamp_ms = Some(self.clock.now_ms());
+        state.last_running_timestamp_ms = Some(now_ms);
         Self::notify_subscribers(&state, &self.watch_tx);
     }
 
-    pub fn report_owner_failure(&self, error: String) {
+    pub fn report_owner_failure(&self, error: String, now_ms: u64) {
         let mut state = self.state.lock().unwrap();
-        let now_ms = self.clock.now_ms();
         state.last_error = Some(error);
-        state.failure_timestamps_ms.push(now_ms);
         state
             .failure_timestamps_ms
-            .retain(|&ts| now_ms.saturating_sub(ts) <= 60_000);
+            .retain(|&ts| now_ms.saturating_sub(ts) <= FAILURE_WINDOW_MS);
+        state.failure_timestamps_ms.push(now_ms);
+        state.last_running_timestamp_ms = None;
 
-        if state.failure_timestamps_ms.len() >= 5 {
+        if state.failure_timestamps_ms.len() >= QUARANTINE_FAILURES {
             state.supervisor_state = SupervisorState::Quarantined;
             state.lifecycle = DomainLifecycle::Unavailable;
         } else {
-            state.backoff_attempt += 1;
-            let delay = Self::backoff_delay_for_attempt(state.backoff_attempt);
+            let attempt = state.failure_timestamps_ms.len() as u32;
+            state.backoff_attempt = attempt;
+            let delay = Self::backoff_delay_for_attempt(attempt);
             state.supervisor_state = SupervisorState::Backoff {
-                attempt: state.backoff_attempt,
-                retry_at_ms: now_ms + delay,
+                attempt,
+                retry_at_ms: now_ms.saturating_add(delay),
             };
             state.lifecycle = if state.had_prior_readiness {
                 DomainLifecycle::Reconnecting
@@ -528,7 +530,6 @@ impl NotificationDomainState {
         dnd_enabled: bool,
     ) -> Result<(), StaleUpdateError> {
         let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
         let version = DomainVersion::new(state.owner_generation, revision);
         let lifecycle = state.lifecycle;
         let last_error = state.last_error.clone();
@@ -554,7 +555,6 @@ impl NotificationDomainState {
         last_error: Option<String>,
     ) -> Result<(), StaleUpdateError> {
         let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
         Self::apply_update(
             &mut state,
             version,
@@ -700,15 +700,13 @@ impl NotificationDomainState {
 
     pub fn process_pending_commands_and_converge(&self) {
         let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
         Self::process_queue_locked(&mut state, &self.watch_tx, &self.event_tx);
     }
 }
 
 impl NotificationPort for NotificationDomainState {
     fn snapshot(&self) -> NotificationSnapshot {
-        let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
+        let state = self.state.lock().unwrap();
         NotificationSnapshot {
             lifecycle: state.lifecycle,
             version: DomainVersion::new(state.owner_generation, state.revision),
@@ -732,7 +730,6 @@ impl NotificationPort for NotificationDomainState {
         command: NotificationCommand,
     ) -> Result<CommandTicket, CommandOutcome> {
         let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
 
         if matches!(state.lifecycle, DomainLifecycle::Unavailable)
             || matches!(
@@ -798,14 +795,12 @@ impl NotificationPort for NotificationDomainState {
     }
 
     fn supervisor_state(&self) -> SupervisorState {
-        let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
+        let state = self.state.lock().unwrap();
         state.supervisor_state
     }
 
     fn telemetry(&self) -> DomainPortTelemetry {
-        let mut state = self.state.lock().unwrap();
-        Self::check_clock_state(&mut state, self.clock.now_ms(), &self.watch_tx);
+        let state = self.state.lock().unwrap();
         DomainPortTelemetry {
             owner_generation: state.owner_generation,
             current_queue_depth: state.queue.len(),
@@ -823,6 +818,7 @@ impl NotificationPort for NotificationDomainState {
         if matches!(state.supervisor_state, SupervisorState::Quarantined) {
             state.failure_timestamps_ms.clear();
             state.backoff_attempt = 0;
+            state.last_running_timestamp_ms = None;
             state.supervisor_state = SupervisorState::Starting;
             state.lifecycle = if state.had_prior_readiness {
                 DomainLifecycle::Reconnecting
@@ -882,6 +878,7 @@ pub struct NotificationService {
     adapter: Arc<NotificationDomainState>,
     connection: Arc<Mutex<Option<Connection>>>,
     signal_sink: Arc<Mutex<Option<Arc<dyn NotificationSignalSink>>>>,
+    time_source: Arc<dyn TimeSource>,
 }
 
 impl NotificationService {
@@ -916,6 +913,7 @@ impl NotificationService {
             adapter,
             connection: Arc::new(Mutex::new(None)),
             signal_sink: Arc::new(Mutex::new(None)),
+            time_source: Arc::new(MonotonicTimeSource::new()),
         }
     }
 
@@ -926,10 +924,19 @@ impl NotificationService {
             adapter,
             connection: Arc::new(Mutex::new(None)),
             signal_sink: Arc::new(Mutex::new(None)),
+            time_source: Arc::new(MonotonicTimeSource::new()),
         }
     }
 
     pub async fn new_with_connection(connection: Connection) -> Result<Self> {
+        Self::new_with_connection_and_time_source(connection, Arc::new(MonotonicTimeSource::new()))
+            .await
+    }
+
+    pub async fn new_with_connection_and_time_source(
+        connection: Connection,
+        time_source: Arc<dyn TimeSource>,
+    ) -> Result<Self> {
         let adapter = Arc::new(NotificationDomainState::new(32));
         adapter.begin_start();
 
@@ -949,19 +956,21 @@ impl NotificationService {
 
         let signal_emitter =
             SignalEmitter::new(&connection, NOTIFICATION_OBJECT_PATH)?.into_owned();
-        adapter.mark_ready();
+        let now_ms = time_source.now_ms();
+        adapter.mark_ready(now_ms);
         let service = Self {
             adapter,
             connection: Arc::new(Mutex::new(Some(connection.clone()))),
             signal_sink: Arc::new(Mutex::new(Some(Arc::new(DbusNotificationSignalSink {
                 emitter: signal_emitter,
             })))),
+            time_source: time_source.clone(),
         };
-        service.spawn_supervisor(connection);
+        service.spawn_supervisor(connection, time_source);
         Ok(service)
     }
 
-    fn spawn_supervisor(&self, initial_connection: Connection) {
+    fn spawn_supervisor(&self, initial_connection: Connection, time_source: Arc<dyn TimeSource>) {
         let adapter = self.adapter.clone();
         let connection_slot = self.connection.clone();
         let signal_slot = self.signal_sink.clone();
@@ -970,63 +979,126 @@ impl NotificationService {
             .executor()
             .spawn(
                 async move {
-                    let mut connection = initial_connection;
+                    let mut connection = Some(initial_connection);
                     loop {
-                        while !connection.is_closed() {
-                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        let now_ms = time_source.now_ms();
+                        adapter.tick(now_ms);
+
+                        let state = adapter.supervisor_state();
+                        match state {
+                            SupervisorState::Running => {
+                                let is_closed = connection.as_ref().is_none_or(|c| c.is_closed());
+                                if is_closed {
+                                    *connection_slot.lock().unwrap() = None;
+                                    *signal_slot.lock().unwrap() = None;
+                                    connection = None;
+                                    let now_ms = time_source.now_ms();
+                                    adapter.report_owner_failure(
+                                        "notification DBus connection closed".into(),
+                                        now_ms,
+                                    );
+                                } else {
+                                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                                }
+                            }
+                            SupervisorState::Quarantined => {
+                                *connection_slot.lock().unwrap() = None;
+                                *signal_slot.lock().unwrap() = None;
+                                connection = None;
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    QUARANTINE_IDLE_POLL_MS,
+                                ))
+                                .await;
+                            }
+                            SupervisorState::Backoff { retry_at_ms, .. } => {
+                                *connection_slot.lock().unwrap() = None;
+                                *signal_slot.lock().unwrap() = None;
+                                connection = None;
+                                let now_ms = time_source.now_ms();
+                                if now_ms < retry_at_ms {
+                                    tokio::time::sleep(std::time::Duration::from_millis(
+                                        retry_at_ms - now_ms,
+                                    ))
+                                    .await;
+                                } else {
+                                    adapter.tick(now_ms);
+                                }
+                            }
+                            SupervisorState::Starting => {
+                                *connection_slot.lock().unwrap() = None;
+                                *signal_slot.lock().unwrap() = None;
+                                connection = None;
+
+                                let next = match Connection::session().await {
+                                    Ok(conn) => conn,
+                                    Err(_) => {
+                                        let now_ms = time_source.now_ms();
+                                        adapter.report_owner_failure(
+                                            "notification DBus reconnect failed".into(),
+                                            now_ms,
+                                        );
+                                        continue;
+                                    }
+                                };
+
+                                let server = NotificationServer {
+                                    adapter: adapter.clone(),
+                                    next_id: Arc::new(Mutex::new(0)),
+                                };
+                                if next
+                                    .object_server()
+                                    .at(NOTIFICATION_OBJECT_PATH, server)
+                                    .await
+                                    .is_err()
+                                    || next
+                                        .request_name("org.freedesktop.Notifications")
+                                        .await
+                                        .is_err()
+                                {
+                                    let now_ms = time_source.now_ms();
+                                    adapter.report_owner_failure(
+                                        "notification DBus owner registration failed".into(),
+                                        now_ms,
+                                    );
+                                    continue;
+                                }
+
+                                let emitter =
+                                    match SignalEmitter::new(&next, NOTIFICATION_OBJECT_PATH)
+                                        .map(SignalEmitter::into_owned)
+                                    {
+                                        Ok(e) => e,
+                                        Err(_) => {
+                                            let now_ms = time_source.now_ms();
+                                            adapter.report_owner_failure(
+                                                "notification DBus signal setup failed".into(),
+                                                now_ms,
+                                            );
+                                            continue;
+                                        }
+                                    };
+
+                                adapter.begin_start();
+                                let now_ms = time_source.now_ms();
+                                adapter.mark_ready(now_ms);
+                                *connection_slot.lock().unwrap() = Some(next.clone());
+                                *signal_slot.lock().unwrap() =
+                                    Some(Arc::new(DbusNotificationSignalSink { emitter }));
+                                connection = Some(next);
+                            }
+                            SupervisorState::Stopping | SupervisorState::Stopped => {
+                                break;
+                            }
                         }
-                        adapter.report_owner_failure("notification DBus connection closed".into());
-                        if matches!(adapter.supervisor_state(), SupervisorState::Quarantined) {
-                            *connection_slot.lock().unwrap() = None;
-                            *signal_slot.lock().unwrap() = None;
-                            break;
-                        }
-                        *connection_slot.lock().unwrap() = None;
-                        *signal_slot.lock().unwrap() = None;
-                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                        let Ok(next) = Connection::session().await else {
-                            adapter
-                                .report_owner_failure("notification DBus reconnect failed".into());
-                            continue;
-                        };
-                        let server = NotificationServer {
-                            adapter: adapter.clone(),
-                            next_id: Arc::new(Mutex::new(0)),
-                        };
-                        if next
-                            .object_server()
-                            .at(NOTIFICATION_OBJECT_PATH, server)
-                            .await
-                            .is_err()
-                            || next
-                                .request_name("org.freedesktop.Notifications")
-                                .await
-                                .is_err()
-                        {
-                            adapter.report_owner_failure(
-                                "notification DBus owner registration failed".into(),
-                            );
-                            continue;
-                        }
-                        let Ok(emitter) = SignalEmitter::new(&next, NOTIFICATION_OBJECT_PATH)
-                            .map(SignalEmitter::into_owned)
-                        else {
-                            adapter.report_owner_failure(
-                                "notification DBus signal setup failed".into(),
-                            );
-                            continue;
-                        };
-                        adapter.begin_start();
-                        adapter.mark_ready();
-                        *connection_slot.lock().unwrap() = Some(next.clone());
-                        *signal_slot.lock().unwrap() =
-                            Some(Arc::new(DbusNotificationSignalSink { emitter }));
-                        connection = next;
                     }
                 },
                 "notification-owner-supervisor",
             )
             .detach();
+    }
+
+    pub fn time_source(&self) -> &Arc<dyn TimeSource> {
+        &self.time_source
     }
 
     pub fn is_dbus_connected(&self) -> bool {
@@ -1335,7 +1407,7 @@ mod tests {
     fn test_notification_urgency_and_action_parsing() {
         let adapter = Arc::new(NotificationDomainState::new(32));
         adapter.begin_start();
-        adapter.mark_ready();
+        adapter.mark_ready(0);
 
         let server = NotificationServer {
             adapter: adapter.clone(),
@@ -1386,5 +1458,32 @@ mod tests {
 
         assert_eq!(service.notifications().len(), 1);
         assert_eq!(service.notifications()[0].summary, "Initial Summary");
+    }
+
+    #[test]
+    fn test_backoff_delay_calculation() {
+        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(1), 250);
+        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(2), 500);
+        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(3), 1000);
+        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(4), 2000);
+        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(5), 4000);
+        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(6), 8000);
+        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(7), 16000);
+        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(8), 30000);
+        assert_eq!(
+            NotificationDomainState::backoff_delay_for_attempt(20),
+            30000
+        );
+    }
+
+    #[test]
+    fn test_monotonic_time_source_constructors() {
+        let time_source = MonotonicTimeSource::new();
+        let _ = time_source.now_ms();
+        let service = NotificationService::new_offline();
+        assert_eq!(
+            service.time_source().now_ms(),
+            service.time_source().now_ms()
+        );
     }
 }

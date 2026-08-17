@@ -35,6 +35,7 @@ pub enum ShellCommand {
     NextWallpaper,
     ForgetSearchResult(String),
     ClearSearchLearning,
+    ResetNotificationQuarantine,
 }
 
 /// Active dev session record.

@@ -187,6 +187,13 @@ impl ShellRuntime {
                         tracing::warn!(%error, "failed to clear search learning");
                     }
                 }
+                ShellCommand::ResetNotificationQuarantine => {
+                    if let Some(hub) = cx.global::<Self>().service_hub() {
+                        hub.reset_notification_quarantine();
+                    } else {
+                        tracing::warn!("service hub unavailable for notification quarantine reset");
+                    }
+                }
             }
         }
         Self::publish_status(cx);

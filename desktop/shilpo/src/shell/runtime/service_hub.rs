@@ -231,6 +231,10 @@ impl ServiceHub {
         self.notification.clear_history();
     }
 
+    pub(crate) fn reset_notification_quarantine(&self) {
+        self.notification.reset_quarantine();
+    }
+
     pub(crate) fn copy_text(&self, text: &str) -> anyhow::Result<()> {
         self.clipboard.copy_text(text)
     }
