@@ -10,6 +10,7 @@ pub struct ConfigChangeSet {
     pub outputs: bool,
     pub startup: bool,
     pub capture: bool,
+    pub clipboard: bool,
     pub clock_format: bool,
     pub temperature_unit: bool,
     pub locale: bool,
@@ -24,6 +25,7 @@ impl ConfigChangeSet {
             && !self.outputs
             && !self.startup
             && !self.capture
+            && !self.clipboard
             && !self.clock_format
             && !self.temperature_unit
             && !self.locale
@@ -38,6 +40,7 @@ impl ConfigChangeSet {
             outputs: true,
             startup: true,
             capture: true,
+            clipboard: true,
             clock_format: true,
             temperature_unit: true,
             locale: true,
@@ -53,6 +56,7 @@ impl ConfigChangeSet {
             outputs: old.outputs != new.outputs,
             startup: old.startup != new.startup,
             capture: old.capture != new.capture,
+            clipboard: old.clipboard != new.clipboard,
             clock_format: old.clock_format != new.clock_format,
             temperature_unit: old.temperature_unit != new.temperature_unit,
             locale: old.locale != new.locale,

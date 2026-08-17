@@ -230,6 +230,9 @@ impl ShellRuntime {
     pub(crate) fn set_active_config(cx: &mut App, config: &crate::config::ShellConfig) {
         if cx.has_global::<Self>() {
             cx.global_mut::<Self>().active_config = config.clone();
+            if let Some(ref hub) = cx.global::<Self>().service_hub {
+                let _ = hub.set_clipboard_history_limit(config.clipboard.history_limit);
+            }
             Self::sync_wallpaper_provider(cx);
             let settings_event = {
                 let runtime = cx.global::<Self>();

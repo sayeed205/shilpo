@@ -22,8 +22,7 @@
 //!   or when the open path fails), callers receive `None` and persist
 //!   exclusively in memory. The clipboard service treats `None` as offline
 //!   rather than as an error.
-use heed::byteorder::NativeEndian;
-use heed::types::{SerdeJson, Str, U64};
+use heed::types::{SerdeJson, Str};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -92,11 +91,92 @@ pub struct OutputBarState {
     pub active_workspace_id: Option<u64>,
 }
 
+pub const CLIPBOARD_ITEM_VERSION: u8 = 1;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum ClipboardContent {
+    Text(String),
+    FileReference(Vec<PathBuf>),
+    Image,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClipboardItem {
-    pub id: u64,
-    pub text: String,
-    pub timestamp: String,
+    pub version: u8,
+    pub id: String,
+    pub content: ClipboardContent,
+    pub last_copied_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl ClipboardItem {
+    pub const CURRENT_VERSION: u8 = CLIPBOARD_ITEM_VERSION;
+
+    pub fn compute_content_hash(content: &ClipboardContent) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        match content {
+            ClipboardContent::Text(text) => {
+                hasher.update(b"text:");
+                hasher.update(text.as_bytes());
+            }
+            ClipboardContent::FileReference(paths) => {
+                hasher.update(b"file_ref:");
+                for path in paths {
+                    hasher.update(path.to_string_lossy().as_bytes());
+                    hasher.update(b"\0");
+                }
+            }
+            ClipboardContent::Image => {
+                hasher.update(b"image:");
+            }
+        }
+        format!("sha256:{}", hex::encode(hasher.finalize()))
+    }
+
+    pub fn new_text(text: String, last_copied_at: chrono::DateTime<chrono::Utc>) -> Self {
+        let content = ClipboardContent::Text(text);
+        let id = Self::compute_content_hash(&content);
+        Self {
+            version: Self::CURRENT_VERSION,
+            id,
+            content,
+            last_copied_at,
+        }
+    }
+
+    pub fn new_file_reference(
+        paths: Vec<PathBuf>,
+        last_copied_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
+        let content = ClipboardContent::FileReference(paths);
+        let id = Self::compute_content_hash(&content);
+        Self {
+            version: Self::CURRENT_VERSION,
+            id,
+            content,
+            last_copied_at,
+        }
+    }
+
+    pub fn text(&self) -> Option<&str> {
+        match &self.content {
+            ClipboardContent::Text(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    pub fn display_text(&self) -> String {
+        match &self.content {
+            ClipboardContent::Text(text) => text.clone(),
+            ClipboardContent::FileReference(paths) => paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            ClipboardContent::Image => "[Image]".to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -131,7 +211,7 @@ impl SearchLearningRecord {
 pub struct HeedSessionStore {
     env: heed::Env,
     output_bars_db: heed::Database<Str, SerdeJson<OutputBarState>>,
-    clipboard_history_db: heed::Database<U64<NativeEndian>, SerdeJson<ClipboardItem>>,
+    clipboard_history_db: heed::Database<Str, SerdeJson<ClipboardItem>>,
     audio_pref_db: heed::Database<Str, SerdeJson<AudioPreference>>,
     search_learning_db: heed::Database<Str, SerdeJson<SearchLearningRecord>>,
     _lock_file: Option<fs::File>,
@@ -376,7 +456,6 @@ impl HeedSessionStore {
                 source: e,
             })?;
 
-        let mut entries: Vec<u64> = Vec::new();
         let iter =
             self.clipboard_history_db
                 .iter(&wtxn)
@@ -385,19 +464,22 @@ impl HeedSessionStore {
                     source: e,
                 })?;
 
+        let mut entries = Vec::new();
         for res in iter {
-            let (key, _) = res.map_err(|e| SessionStoreError::Backend {
+            let (key, it) = res.map_err(|e| SessionStoreError::Backend {
                 operation: "decode_clipboard_item",
                 source: e,
             })?;
-            entries.push(key);
+            if it.version == ClipboardItem::CURRENT_VERSION {
+                entries.push((key.to_string(), it.last_copied_at));
+            }
         }
 
-        entries.sort_unstable();
+        entries.sort_by_key(|(_, ts)| *ts);
 
         if entries.len() > max_entries {
             let to_remove = entries.len() - max_entries;
-            for key in &entries[..to_remove] {
+            for (key, _) in &entries[..to_remove] {
                 self.clipboard_history_db
                     .delete(&mut wtxn, key)
                     .map_err(|e| SessionStoreError::Backend {
@@ -409,6 +491,58 @@ impl HeedSessionStore {
 
         wtxn.commit().map_err(|e| SessionStoreError::Backend {
             operation: "commit_record_clipboard",
+            source: e,
+        })
+    }
+
+    pub fn prune_clipboard_history(&self, max_entries: usize) -> Result<(), SessionStoreError> {
+        if max_entries == 0 {
+            return Err(SessionStoreError::InvalidLimit);
+        }
+
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| SessionStoreError::Backend {
+                operation: "write_txn",
+                source: e,
+            })?;
+
+        let iter =
+            self.clipboard_history_db
+                .iter(&wtxn)
+                .map_err(|e| SessionStoreError::Backend {
+                    operation: "iter_clipboard_history",
+                    source: e,
+                })?;
+
+        let mut entries = Vec::new();
+        for res in iter {
+            let (key, it) = res.map_err(|e| SessionStoreError::Backend {
+                operation: "decode_clipboard_item",
+                source: e,
+            })?;
+            if it.version == ClipboardItem::CURRENT_VERSION {
+                entries.push((key.to_string(), it.last_copied_at));
+            }
+        }
+
+        entries.sort_by_key(|(_, ts)| *ts);
+
+        if entries.len() > max_entries {
+            let to_remove = entries.len() - max_entries;
+            for (key, _) in &entries[..to_remove] {
+                self.clipboard_history_db
+                    .delete(&mut wtxn, key)
+                    .map_err(|e| SessionStoreError::Backend {
+                        operation: "delete_clipboard_item",
+                        source: e,
+                    })?;
+            }
+        }
+
+        wtxn.commit().map_err(|e| SessionStoreError::Backend {
+            operation: "commit_prune_clipboard",
             source: e,
         })
     }
@@ -443,10 +577,12 @@ impl HeedSessionStore {
                 operation: "decode_clipboard_item",
                 source: e,
             })?;
-            items.push(item);
+            if item.version == ClipboardItem::CURRENT_VERSION {
+                items.push(item);
+            }
         }
 
-        items.sort_by_key(|i| i.id);
+        items.sort_by_key(|i| i.last_copied_at);
         items.reverse();
         items.truncate(max_entries);
         Ok(items)
@@ -791,14 +927,12 @@ mod tests {
     #[test]
     fn clipboard_atomic_retention_and_pruning() {
         let dir = temp_test_dir();
+        let base_time = chrono::Utc::now();
         {
             let store = HeedSessionStore::open(&dir).unwrap();
             for i in 1..=105 {
-                let item = ClipboardItem {
-                    id: i,
-                    text: format!("item_{i}"),
-                    timestamp: format!("ts_{i}"),
-                };
+                let time = base_time + chrono::Duration::seconds(i);
+                let item = ClipboardItem::new_text(format!("item_{i}"), time);
                 store.record_clipboard_item(&item, 100).unwrap();
             }
         }
@@ -808,21 +942,166 @@ mod tests {
         let history = store.clipboard_history(100).unwrap();
         assert_eq!(history.len(), 100);
 
-        // Newest item should be ID 105, oldest returned should be ID 6
-        assert_eq!(history.first().unwrap().id, 105);
-        assert_eq!(history.last().unwrap().id, 6);
+        // Newest item should be item_105, oldest returned should be item_6
+        assert_eq!(history.first().unwrap().text().unwrap(), "item_105");
+        assert_eq!(history.last().unwrap().text().unwrap(), "item_6");
 
-        // Directly query DB to ensure IDs 1..=5 were deleted
+        // Directly query DB to ensure items 1..=5 were deleted
         let rtxn = store.env.read_txn().unwrap();
-        for id in 1..=5 {
+        for i in 1..=5 {
+            let item = ClipboardItem::new_text(format!("item_{i}"), base_time);
             assert!(
                 store
                     .clipboard_history_db
-                    .get(&rtxn, &id)
+                    .get(&rtxn, &item.id)
                     .unwrap()
                     .is_none()
             );
         }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_clipboard_dedup_and_promote_on_repeat() {
+        let dir = temp_test_dir();
+        let store = HeedSessionStore::open(&dir).unwrap();
+        let t1 = chrono::Utc::now();
+        let t2 = t1 + chrono::Duration::seconds(10);
+        let t3 = t1 + chrono::Duration::seconds(20);
+
+        let item_a1 = ClipboardItem::new_text("content A".into(), t1);
+        let item_b = ClipboardItem::new_text("content B".into(), t2);
+        let item_a2 = ClipboardItem::new_text("content A".into(), t3);
+
+        store.record_clipboard_item(&item_a1, 100).unwrap();
+        store.record_clipboard_item(&item_b, 100).unwrap();
+        store.record_clipboard_item(&item_a2, 100).unwrap();
+
+        let history = store.clipboard_history(100).unwrap();
+        assert_eq!(
+            history.len(),
+            2,
+            "copying A, B, then A must yield 2 entries, not 3"
+        );
+        assert_eq!(history[0].text().unwrap(), "content A");
+        assert_eq!(history[0].last_copied_at, t3);
+        assert_eq!(history[1].text().unwrap(), "content B");
+        assert_eq!(
+            history[0].id, item_a1.id,
+            "canonical id must be stable across repeats"
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_clipboard_two_distinct_contents_same_timestamp_produce_distinct_entries() {
+        let dir = temp_test_dir();
+        let store = HeedSessionStore::open(&dir).unwrap();
+        let identical_time = chrono::Utc::now();
+
+        let item_a = ClipboardItem::new_text("payload alpha".into(), identical_time);
+        let item_b = ClipboardItem::new_text("payload beta".into(), identical_time);
+
+        assert_ne!(item_a.id, item_b.id);
+
+        store.record_clipboard_item(&item_a, 100).unwrap();
+        store.record_clipboard_item(&item_b, 100).unwrap();
+
+        let history = store.clipboard_history(100).unwrap();
+        assert_eq!(
+            history.len(),
+            2,
+            "two distinct contents in same millisecond must produce two entries"
+        );
+        let texts: Vec<&str> = history.iter().map(|i| i.text().unwrap()).collect();
+        assert!(texts.contains(&"payload alpha"));
+        assert!(texts.contains(&"payload beta"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_clipboard_different_days_ordering_after_reopen() {
+        let dir = temp_test_dir();
+        let day1 = chrono::Utc::now() - chrono::Duration::days(2);
+        let day2 = chrono::Utc::now() - chrono::Duration::days(1);
+        let day3 = chrono::Utc::now();
+
+        {
+            let store = HeedSessionStore::open(&dir).unwrap();
+            let item1 = ClipboardItem::new_text("day 1 note".into(), day1);
+            let item2 = ClipboardItem::new_text("day 2 note".into(), day2);
+            let item3 = ClipboardItem::new_text("day 3 note".into(), day3);
+
+            store.record_clipboard_item(&item1, 100).unwrap();
+            store.record_clipboard_item(&item2, 100).unwrap();
+            store.record_clipboard_item(&item3, 100).unwrap();
+        }
+
+        // Reopen store
+        let store = HeedSessionStore::open(&dir).unwrap();
+        let history = store.clipboard_history(100).unwrap();
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0].text().unwrap(), "day 3 note");
+        assert_eq!(history[1].text().unwrap(), "day 2 note");
+        assert_eq!(history[2].text().unwrap(), "day 1 note");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_clipboard_unknown_version_skipped_safely() {
+        let dir = temp_test_dir();
+        let store = HeedSessionStore::open(&dir).unwrap();
+
+        let mut wtxn = store.env.write_txn().unwrap();
+        let bad_item = ClipboardItem {
+            version: 99,
+            id: "sha256:future_ver".to_string(),
+            content: ClipboardContent::Text("future content".to_string()),
+            last_copied_at: chrono::Utc::now(),
+        };
+        store
+            .clipboard_history_db
+            .put(&mut wtxn, &bad_item.id, &bad_item)
+            .unwrap();
+        wtxn.commit().unwrap();
+
+        let history = store.clipboard_history(100).unwrap();
+        assert_eq!(
+            history.len(),
+            0,
+            "unknown record version must be filtered safely"
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_clipboard_runtime_shrink_prunes_bounds() {
+        let dir = temp_test_dir();
+        let store = HeedSessionStore::open(&dir).unwrap();
+        let base_time = chrono::Utc::now();
+
+        for i in 1..=20 {
+            let item = ClipboardItem::new_text(
+                format!("item_{i}"),
+                base_time + chrono::Duration::seconds(i),
+            );
+            store.record_clipboard_item(&item, 20).unwrap();
+        }
+
+        assert_eq!(store.clipboard_history(20).unwrap().len(), 20);
+
+        // Lower limit at runtime to 5
+        store.prune_clipboard_history(5).unwrap();
+
+        let history = store.clipboard_history(20).unwrap();
+        assert_eq!(history.len(), 5);
+        assert_eq!(history[0].text().unwrap(), "item_20");
+        assert_eq!(history[4].text().unwrap(), "item_16");
 
         let _ = fs::remove_dir_all(dir);
     }

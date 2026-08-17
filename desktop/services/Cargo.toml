@@ -47,6 +47,9 @@ freedesktop-icons.workspace = true
 libpulse-binding.workspace = true
 ddc.workspace = true
 ddc-i2c.workspace = true
+sha2.workspace = true
+hex.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

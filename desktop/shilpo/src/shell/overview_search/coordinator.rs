@@ -599,11 +599,10 @@ mod tests {
             input: ActionInputRequirement::NoInput,
             enabled: true,
         }];
-        let (_tx, rx) = watch::channel(vec![ClipboardItem {
-            id: 1,
-            text: "copied snippet".to_string(),
-            timestamp: "100".to_string(),
-        }]);
+        let (_tx, rx) = watch::channel(vec![ClipboardItem::new_text(
+            "copied snippet".to_string(),
+            chrono::Utc::now(),
+        )]);
         let keybindings = vec![("Super+T".to_string(), "Terminal".to_string())];
 
         let action_prov = Arc::new(ActionSearchProvider::new(actions));
@@ -811,11 +810,10 @@ mod tests {
             enabled: true,
         }];
 
-        let (_tx, rx) = watch::channel(vec![ClipboardItem {
-            id: 99,
-            text: "saved text".to_string(),
-            timestamp: "1000".to_string(),
-        }]);
+        let (_tx, rx) = watch::channel(vec![ClipboardItem::new_text(
+            "saved text".to_string(),
+            chrono::Utc::now(),
+        )]);
 
         let keybindings = vec![("Super+L".to_string(), "Lock Screen".to_string())];
 

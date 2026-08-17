@@ -25,6 +25,7 @@ pub fn classify_diagnostic(diagnostic: &ConfigDiagnostic) -> RecoveryScope {
         || path == "bar.margin.horizontal"
         || path == "bar.margin.vertical"
         || path == "capture.default_selection"
+        || path == "clipboard.history_limit"
     {
         return RecoveryScope::RejectValue;
     }
@@ -47,6 +48,9 @@ pub fn classify_diagnostic(diagnostic: &ConfigDiagnostic) -> RecoveryScope {
         return RecoveryScope::RetainPreviousComponent;
     }
     if path.starts_with("capture.") {
+        return RecoveryScope::RetainPreviousComponent;
+    }
+    if path.starts_with("clipboard.") {
         return RecoveryScope::RetainPreviousComponent;
     }
     RecoveryScope::RejectCandidate
@@ -105,6 +109,9 @@ pub fn apply_scoped_recovery(
                         candidate.capture.default_selection =
                             fallback_config.capture.default_selection.clone();
                     }
+                    "clipboard.history_limit" => {
+                        candidate.clipboard.history_limit = fallback_config.clipboard.history_limit;
+                    }
                     _ => {}
                 }
                 restore_provenance_path(provenance, fallback_provenance, path);
@@ -132,6 +139,9 @@ pub fn apply_scoped_recovery(
                     }
                     "capture" => {
                         candidate.capture = fallback_config.capture.clone();
+                    }
+                    "clipboard" => {
+                        candidate.clipboard = fallback_config.clipboard.clone();
                     }
                     _ => {}
                 }

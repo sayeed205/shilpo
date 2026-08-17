@@ -71,6 +71,12 @@
         "default_selection": "rectangle"
       }
     },
+    "clipboard": {
+      "$ref": "#/$defs/ClipboardConfig",
+      "default": {
+        "history_limit": 100
+      }
+    },
     "keybindings": {
       "type": "array",
       "items": {
@@ -519,6 +525,18 @@
         "default_selection": {
           "type": "string",
           "default": "rectangle"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ClipboardConfig": {
+      "type": "object",
+      "properties": {
+        "history_limit": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 100
         }
       },
       "additionalProperties": false

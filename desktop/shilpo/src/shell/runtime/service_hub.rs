@@ -246,6 +246,13 @@ impl ServiceHub {
         self.clipboard.subscribe()
     }
 
+    pub(crate) fn set_clipboard_history_limit(
+        &self,
+        limit: usize,
+    ) -> Result<(), shilpo_services::ClipboardPersistenceError> {
+        self.clipboard.set_history_limit(limit)
+    }
+
     pub(crate) fn send_device_command(&self, command: DeviceCommand) {
         let _ = service_worker::try_send_command(
             &self.service_commands,

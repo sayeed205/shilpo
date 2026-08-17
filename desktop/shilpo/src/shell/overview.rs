@@ -587,7 +587,7 @@ impl WorkspaceOverview {
                     }
                 }
                 Ok(ActionResult::CopyClipboard(item)) => {
-                    ShellRuntime::copy_clipboard_text(cx, &item.text);
+                    ShellRuntime::copy_clipboard_text(cx, &item.display_text());
                     self.begin_close(OverviewCloseReason::Selection, cx);
                 }
                 Ok(ActionResult::CopyCalculation(val)) => {
