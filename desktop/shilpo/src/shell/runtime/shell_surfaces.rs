@@ -1977,9 +1977,7 @@ fn readiness_for(
 ) -> shilpo_services::ReadinessState {
     match connection {
         shilpo_services::DomainLifecycle::Unavailable
-        | shilpo_services::DomainLifecycle::Connecting => {
-            shilpo_services::ReadinessState::Starting
-        }
+        | shilpo_services::DomainLifecycle::Connecting => shilpo_services::ReadinessState::Starting,
         shilpo_services::DomainLifecycle::Ready => {
             if matches!(bar_state, BarState::Visible | BarState::Hidden) {
                 shilpo_services::ReadinessState::Ready
@@ -1988,9 +1986,7 @@ fn readiness_for(
             }
         }
         shilpo_services::DomainLifecycle::Reconnecting
-        | shilpo_services::DomainLifecycle::Degraded => {
-            shilpo_services::ReadinessState::Degraded
-        }
+        | shilpo_services::DomainLifecycle::Degraded => shilpo_services::ReadinessState::Degraded,
     }
 }
 

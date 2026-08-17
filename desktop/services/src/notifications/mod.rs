@@ -3,6 +3,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::domain::{
+    FAILURE_WINDOW_MS, INITIAL_BACKOFF_MS, MAX_BACKOFF_MS, QUARANTINE_FAILURES, STABLE_RESET_MS,
+};
 use anyhow::Result;
 pub use shilpo_domain::{
     CancellationReason, DomainLifecycle, DomainPortTelemetry, DomainVersion, MailboxPolicy,
@@ -10,9 +13,6 @@ pub use shilpo_domain::{
 };
 use tokio::sync::{broadcast, watch};
 use zbus::{Connection, interface, object_server::SignalEmitter};
-use crate::domain::{
-    FAILURE_WINDOW_MS, INITIAL_BACKOFF_MS, MAX_BACKOFF_MS, QUARANTINE_FAILURES, STABLE_RESET_MS,
-};
 
 const NOTIFICATION_OBJECT_PATH: &str = "/org/freedesktop/Notifications";
 

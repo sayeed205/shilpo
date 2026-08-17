@@ -24,9 +24,7 @@ fn workspace_status_label(connection: &DomainLifecycle) -> Option<&'static str> 
     match connection {
         DomainLifecycle::Connecting => Some("Connecting..."),
         DomainLifecycle::Reconnecting => Some("Reconnecting"),
-        DomainLifecycle::Unavailable | DomainLifecycle::Degraded => {
-            Some("Compositor Unavailable")
-        }
+        DomainLifecycle::Unavailable | DomainLifecycle::Degraded => Some("Compositor Unavailable"),
         DomainLifecycle::Ready => None,
     }
 }
@@ -498,15 +496,9 @@ mod tests {
     #[test]
     fn workspace_actions_only_enable_when_ready() {
         assert!(workspace_actions_enabled(&DomainLifecycle::Ready));
-        assert!(!workspace_actions_enabled(
-            &DomainLifecycle::Connecting
-        ));
-        assert!(!workspace_actions_enabled(
-            &DomainLifecycle::Reconnecting
-        ));
-        assert!(!workspace_actions_enabled(
-            &DomainLifecycle::Unavailable
-        ));
+        assert!(!workspace_actions_enabled(&DomainLifecycle::Connecting));
+        assert!(!workspace_actions_enabled(&DomainLifecycle::Reconnecting));
+        assert!(!workspace_actions_enabled(&DomainLifecycle::Unavailable));
     }
 
     #[test]

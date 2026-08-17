@@ -280,4 +280,57 @@ mod tests {
         let parsed: DomainPortTelemetry = serde_json::from_str(&json).unwrap();
         assert_eq!(telem, parsed);
     }
+
+    #[test]
+    fn test_domain_lifecycle_helpers() {
+        assert_eq!(DomainLifecycle::default(), DomainLifecycle::Unavailable);
+        assert!(!DomainLifecycle::Unavailable.is_ready());
+        assert!(!DomainLifecycle::Connecting.is_ready());
+        assert!(DomainLifecycle::Ready.is_ready());
+        assert!(!DomainLifecycle::Reconnecting.is_ready());
+        assert!(!DomainLifecycle::Degraded.is_ready());
+
+        assert_eq!(DomainLifecycle::Unavailable.state_name(), "unavailable");
+        assert_eq!(DomainLifecycle::Connecting.state_name(), "connecting");
+        assert_eq!(DomainLifecycle::Ready.state_name(), "ready");
+        assert_eq!(DomainLifecycle::Reconnecting.state_name(), "reconnecting");
+        assert_eq!(DomainLifecycle::Degraded.state_name(), "degraded");
+    }
+
+    #[test]
+    fn test_cancellation_reason_display() {
+        assert_eq!(
+            format!("{}", CancellationReason::User),
+            "cancelled by user or dropped ticket"
+        );
+        assert_eq!(
+            format!("{}", CancellationReason::Reconnect),
+            "compositor reconnected or changed state"
+        );
+        assert_eq!(
+            format!("{}", CancellationReason::Shutdown),
+            "broker shutdown"
+        );
+        assert_eq!(
+            format!("{}", CancellationReason::OwnerReplaced),
+            "owner generation replaced"
+        );
+        assert_eq!(
+            format!("{}", CancellationReason::Superseded),
+            "superseded by newer command"
+        );
+        assert_eq!(
+            format!("{}", CancellationReason::Timeout),
+            "command deadline elapsed"
+        );
+    }
+
+    #[test]
+    fn test_supervision_constants() {
+        assert_eq!(INITIAL_BACKOFF_MS, 250);
+        assert_eq!(MAX_BACKOFF_MS, 30_000);
+        assert_eq!(FAILURE_WINDOW_MS, 60_000);
+        assert_eq!(STABLE_RESET_MS, 300_000);
+        assert_eq!(QUARANTINE_FAILURES, 5);
+    }
 }

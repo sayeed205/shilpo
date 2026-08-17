@@ -7,7 +7,8 @@ pub mod capture;
 pub mod clipboard;
 pub mod compositor;
 pub mod device_daemon;
-pub mod domain;
+pub use shilpo_domain as domain;
+pub use shilpo_domain::*;
 pub mod error;
 pub use shilpo_device as device;
 pub use shilpo_device as device_protocol;
@@ -46,7 +47,6 @@ pub use device_daemon::{
     DeviceAdapter, DeviceDaemonService, DeviceDbusService, InMemoryDeviceAdapter,
     SystemDeviceAdapter,
 };
-pub use domain::*;
 pub use error::ServiceError;
 pub use location::{LocationInfo, LocationService};
 pub use media::{MediaCommand, MediaInfo, MediaService, PlaybackState};
