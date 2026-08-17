@@ -1168,4 +1168,19 @@ mod tests {
             DomainPayload::Battery(known_payload)
         );
     }
+
+    #[test]
+    fn reconnect_backoff_progression_and_30s_cap() {
+        assert_eq!(reconnect_backoff(0), Duration::from_millis(250));
+        assert_eq!(reconnect_backoff(1), Duration::from_millis(250));
+        assert_eq!(reconnect_backoff(2), Duration::from_millis(500));
+        assert_eq!(reconnect_backoff(3), Duration::from_millis(1000));
+        assert_eq!(reconnect_backoff(4), Duration::from_millis(2000));
+        assert_eq!(reconnect_backoff(5), Duration::from_millis(4000));
+        assert_eq!(reconnect_backoff(6), Duration::from_millis(8000));
+        assert_eq!(reconnect_backoff(7), Duration::from_millis(16000));
+        assert_eq!(reconnect_backoff(8), Duration::from_millis(30000));
+        assert_eq!(reconnect_backoff(9), Duration::from_millis(30000));
+        assert_eq!(reconnect_backoff(32), Duration::from_millis(30000));
+    }
 }
