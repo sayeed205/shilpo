@@ -1010,8 +1010,6 @@ impl ShellConfig {
 pub struct ShellSessionState {
     pub version: u32,
     #[serde(default)]
-    pub recent_apps: Vec<String>,
-    #[serde(default)]
     pub pinned_apps: Vec<String>,
     #[serde(default)]
     pub launch_counts: HashMap<String, u32>,
@@ -1029,7 +1027,6 @@ impl Default for ShellSessionState {
     fn default() -> Self {
         Self {
             version: 1,
-            recent_apps: Vec::new(),
             pinned_apps: Vec::new(),
             launch_counts: HashMap::new(),
             dnd_active: false,
@@ -1089,7 +1086,7 @@ impl ShellSessionState {
     }
 
     pub fn sanitize_sensitive_state(&mut self) {
-        self.recent_apps
+        self.pinned_apps
             .retain(|app| !app.contains("secret") && !app.contains("token"));
     }
 
@@ -1118,14 +1115,9 @@ impl ShellSessionState {
         Ok(())
     }
 
-    pub fn record_recent_app(&mut self, app_id: impl Into<String>) {
+    pub fn record_app_launch(&mut self, app_id: impl Into<String>) {
         let app_id = app_id.into();
-        *self.launch_counts.entry(app_id.clone()).or_insert(0) += 1;
-        self.recent_apps.retain(|id| id != &app_id);
-        self.recent_apps.insert(0, app_id);
-        if self.recent_apps.len() > 30 {
-            self.recent_apps.truncate(30);
-        }
+        *self.launch_counts.entry(app_id).or_insert(0) += 1;
     }
 
     pub fn app_launch_count(&self, app_id: &str) -> u32 {
@@ -1133,7 +1125,6 @@ impl ShellSessionState {
     }
 
     pub fn purge_usage_history(&mut self) {
-        self.recent_apps.clear();
         self.launch_counts.clear();
     }
 }

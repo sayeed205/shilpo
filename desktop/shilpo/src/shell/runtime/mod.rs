@@ -219,6 +219,14 @@ impl ShellRuntime {
         }
     }
 
+    pub fn session_heed_store(cx: &App) -> Option<Arc<shilpo_services::HeedSessionStore>> {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>().heed_store.clone()
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn set_active_config(cx: &mut App, config: &crate::config::ShellConfig) {
         if cx.has_global::<Self>() {
             cx.global_mut::<Self>().active_config = config.clone();

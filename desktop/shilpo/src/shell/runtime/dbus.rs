@@ -33,24 +33,6 @@ impl ShellRuntime {
         Ok(())
     }
 
-    pub fn record_recent_app(cx: &mut App, app_id: &str) {
-        if cx.has_global::<Self>() {
-            let runtime = cx.global_mut::<Self>();
-            runtime.session_state_mut().record_recent_app(app_id);
-            let path = runtime.session_path().clone();
-            let session = runtime.session_state().clone();
-            let _ = session.save_atomic(&path);
-        }
-    }
-
-    pub fn recent_apps(cx: &App) -> Vec<String> {
-        if cx.has_global::<Self>() {
-            cx.global::<Self>().session_state().recent_apps.clone()
-        } else {
-            Vec::new()
-        }
-    }
-
     pub fn save_output_bar(
         cx: &mut App,
         output_name: &str,
@@ -186,6 +168,22 @@ impl ShellRuntime {
                         hub.push_notification(notif);
                     } else {
                         tracing::warn!("service hub unavailable for test notification");
+                    }
+                }
+                ShellCommand::ForgetSearchResult(canonical_id) => {
+                    if cx.has_global::<Self>()
+                        && let Some(store) = cx.global::<Self>().heed_store()
+                        && let Err(error) = store.forget_search_result(&canonical_id)
+                    {
+                        tracing::warn!(%error, canonical_id = %canonical_id, "failed to forget search result");
+                    }
+                }
+                ShellCommand::ClearSearchLearning => {
+                    if cx.has_global::<Self>()
+                        && let Some(store) = cx.global::<Self>().heed_store()
+                        && let Err(error) = store.clear_search_learning()
+                    {
+                        tracing::warn!(%error, "failed to clear search learning");
                     }
                 }
             }

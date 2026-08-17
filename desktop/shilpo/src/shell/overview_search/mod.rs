@@ -1,6 +1,7 @@
 pub mod app_provider;
 pub mod calculator;
 pub mod coordinator;
+pub mod learning;
 pub mod legacy_adapter;
 pub mod matcher;
 pub mod parser;
@@ -12,6 +13,11 @@ pub mod window_provider;
 
 pub use app_provider::AppSearchProvider;
 pub use coordinator::SearchCoordinator;
+pub use learning::{
+    DEFAULT_HALF_LIFE_SECS, HeedSearchLearningStore, LearningClock, MAX_INFLUENCE_BOOST,
+    MAX_LEARNING_ENTRIES, NoopSearchLearningStore, SearchLearningStore, SystemLearningClock,
+    TestLearningClock,
+};
 pub use legacy_adapter::{LegacyOverviewSearchProvider, OverviewSearch};
 pub use matcher::{MatchResult, fuzzy_match, fuzzy_score};
 pub use parser::SearchMode;

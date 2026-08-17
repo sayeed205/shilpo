@@ -36,6 +36,8 @@ pub trait Shell {
         payload_json: Option<String>,
     ) -> zbus::Result<()>;
     async fn next_wallpaper(&self) -> zbus::Result<()>;
+    async fn forget_search_result(&self, canonical_id: String) -> zbus::Result<()>;
+    async fn clear_search_learning(&self) -> zbus::Result<()>;
     async fn start_dev_session(
         &self,
         extension_id: String,

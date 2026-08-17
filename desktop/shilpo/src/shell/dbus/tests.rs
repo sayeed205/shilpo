@@ -141,6 +141,11 @@ async fn test_introspection_exact_contract() {
             ),
             ("NextWallpaper", &[]),
             (
+                "ForgetSearchResult",
+                &[(Some("canonical_id"), "s", Some("in"))],
+            ),
+            ("ClearSearchLearning", &[]),
+            (
                 "StartDevSession",
                 &[
                     (Some("extension_id"), "s", Some("in")),
@@ -233,6 +238,33 @@ async fn test_mailbox_command_delivery_and_fifo() {
     assert_eq!(cmd1, ShellCommand::ReloadConfig);
     assert_eq!(cmd2, ShellCommand::ShowBar);
     assert_eq!(cmd3, ShellCommand::SetBrightness(42));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_forget_and_clear_search_learning_dispatch() {
+    let mut harness = TestDbusHarness::new().await;
+
+    bounded!(
+        "ForgetSearchResult response",
+        harness
+            .shell_proxy
+            .forget_search_result("app:firefox".into())
+    )
+    .unwrap();
+    bounded!(
+        "ClearSearchLearning response",
+        harness.shell_proxy.clear_search_learning()
+    )
+    .unwrap();
+
+    let cmd1 = bounded!("first command", harness.mailbox_rx.recv()).unwrap();
+    let cmd2 = bounded!("second command", harness.mailbox_rx.recv()).unwrap();
+
+    assert_eq!(
+        cmd1,
+        ShellCommand::ForgetSearchResult("app:firefox".to_string())
+    );
+    assert_eq!(cmd2, ShellCommand::ClearSearchLearning);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

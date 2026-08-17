@@ -105,11 +105,35 @@ pub struct AudioPreference {
     pub default_port: Option<String>,
 }
 
+pub const SEARCH_LEARNING_RECORD_VERSION: u8 = 1;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SearchLearningRecord {
+    pub version: u8,
+    pub activation_count: u32,
+    pub last_activated_at_secs: u64,
+    pub decayed_score: f64,
+}
+
+impl SearchLearningRecord {
+    pub const CURRENT_VERSION: u8 = SEARCH_LEARNING_RECORD_VERSION;
+
+    pub fn new_initial(activated_at_secs: u64) -> Self {
+        Self {
+            version: Self::CURRENT_VERSION,
+            activation_count: 1,
+            last_activated_at_secs: activated_at_secs,
+            decayed_score: 1.0,
+        }
+    }
+}
+
 pub struct HeedSessionStore {
     env: heed::Env,
     output_bars_db: heed::Database<Str, SerdeJson<OutputBarState>>,
     clipboard_history_db: heed::Database<U64<NativeEndian>, SerdeJson<ClipboardItem>>,
     audio_pref_db: heed::Database<Str, SerdeJson<AudioPreference>>,
+    search_learning_db: heed::Database<Str, SerdeJson<SearchLearningRecord>>,
     _lock_file: Option<fs::File>,
 }
 
@@ -247,6 +271,13 @@ impl HeedSessionStore {
                 source: e,
             })?;
 
+        let search_learning_db = env
+            .create_database(&mut wtxn, Some("search_learning"))
+            .map_err(|e| SessionStoreError::Backend {
+                operation: "create_database search_learning",
+                source: e,
+            })?;
+
         wtxn.commit().map_err(|e| SessionStoreError::Backend {
             operation: "commit_databases",
             source: e,
@@ -257,6 +288,7 @@ impl HeedSessionStore {
             output_bars_db,
             clipboard_history_db,
             audio_pref_db,
+            search_learning_db,
             _lock_file: Some(lock_file),
         })
     }
@@ -532,6 +564,208 @@ impl HeedSessionStore {
 
         Ok(pref)
     }
+
+    pub fn get_search_learning_record(
+        &self,
+        canonical_id: &str,
+    ) -> Result<Option<SearchLearningRecord>, SessionStoreError> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| SessionStoreError::Backend {
+                operation: "read_txn",
+                source: e,
+            })?;
+
+        let record = self
+            .search_learning_db
+            .get(&rtxn, canonical_id)
+            .map_err(|e| SessionStoreError::Backend {
+                operation: "get_search_learning_record",
+                source: e,
+            })?;
+
+        if let Some(rec) = record {
+            if rec.version == SearchLearningRecord::CURRENT_VERSION {
+                Ok(Some(rec))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn list_search_learning_records(
+        &self,
+    ) -> Result<Vec<(String, SearchLearningRecord)>, SessionStoreError> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| SessionStoreError::Backend {
+                operation: "read_txn",
+                source: e,
+            })?;
+
+        let iter = self
+            .search_learning_db
+            .iter(&rtxn)
+            .map_err(|e| SessionStoreError::Backend {
+                operation: "iter_search_learning",
+                source: e,
+            })?;
+
+        let mut results = Vec::new();
+        for res in iter {
+            let (key, rec) = res.map_err(|e| SessionStoreError::Backend {
+                operation: "decode_search_learning_record",
+                source: e,
+            })?;
+            if rec.version == SearchLearningRecord::CURRENT_VERSION {
+                results.push((key.to_string(), rec));
+            }
+        }
+
+        Ok(results)
+    }
+
+    pub fn record_search_activation(
+        &self,
+        canonical_id: &str,
+        activated_at_secs: u64,
+        max_entries: usize,
+        half_life_secs: u64,
+    ) -> Result<(), SessionStoreError> {
+        if max_entries == 0 {
+            return Err(SessionStoreError::InvalidLimit);
+        }
+
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| SessionStoreError::Backend {
+                operation: "write_txn",
+                source: e,
+            })?;
+
+        let existing = self
+            .search_learning_db
+            .get(&wtxn, canonical_id)
+            .map_err(|e| SessionStoreError::Backend {
+                operation: "get_search_learning_record",
+                source: e,
+            })?;
+
+        if let Some(mut record) = existing
+            && record.version == SearchLearningRecord::CURRENT_VERSION
+        {
+            let elapsed = activated_at_secs.saturating_sub(record.last_activated_at_secs);
+            let decay_factor = (-(elapsed as f64)
+                * (std::f64::consts::LN_2 / (half_life_secs.max(1) as f64)))
+                .exp();
+            let new_decayed_score = record.decayed_score * decay_factor + 1.0;
+
+            record.decayed_score = new_decayed_score;
+            record.activation_count = record.activation_count.saturating_add(1);
+            record.last_activated_at_secs = activated_at_secs;
+
+            self.search_learning_db
+                .put(&mut wtxn, canonical_id, &record)
+                .map_err(|e| SessionStoreError::Backend {
+                    operation: "put_search_learning_record",
+                    source: e,
+                })?;
+        } else {
+            let mut entries: Vec<(String, u64)> = Vec::new();
+            let iter =
+                self.search_learning_db
+                    .iter(&wtxn)
+                    .map_err(|e| SessionStoreError::Backend {
+                        operation: "iter_search_learning_for_eviction",
+                        source: e,
+                    })?;
+
+            for res in iter {
+                let (key, rec) = res.map_err(|e| SessionStoreError::Backend {
+                    operation: "decode_search_learning_for_eviction",
+                    source: e,
+                })?;
+                entries.push((key.to_string(), rec.last_activated_at_secs));
+            }
+
+            if entries.len() >= max_entries {
+                entries.sort_by_key(|(_, last_act)| *last_act);
+                if let Some((oldest_key, _)) = entries.first() {
+                    self.search_learning_db
+                        .delete(&mut wtxn, oldest_key)
+                        .map_err(|e| SessionStoreError::Backend {
+                            operation: "delete_lru_search_learning_record",
+                            source: e,
+                        })?;
+                }
+            }
+
+            let new_record = SearchLearningRecord::new_initial(activated_at_secs);
+            self.search_learning_db
+                .put(&mut wtxn, canonical_id, &new_record)
+                .map_err(|e| SessionStoreError::Backend {
+                    operation: "put_initial_search_learning_record",
+                    source: e,
+                })?;
+        }
+
+        wtxn.commit().map_err(|e| SessionStoreError::Backend {
+            operation: "commit_search_activation",
+            source: e,
+        })
+    }
+
+    pub fn forget_search_result(&self, canonical_id: &str) -> Result<bool, SessionStoreError> {
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| SessionStoreError::Backend {
+                operation: "write_txn",
+                source: e,
+            })?;
+
+        let deleted = self
+            .search_learning_db
+            .delete(&mut wtxn, canonical_id)
+            .map_err(|e| SessionStoreError::Backend {
+                operation: "delete_search_learning_record",
+                source: e,
+            })?;
+
+        wtxn.commit().map_err(|e| SessionStoreError::Backend {
+            operation: "commit_forget_search_result",
+            source: e,
+        })?;
+
+        Ok(deleted)
+    }
+
+    pub fn clear_search_learning(&self) -> Result<(), SessionStoreError> {
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| SessionStoreError::Backend {
+                operation: "write_txn",
+                source: e,
+            })?;
+
+        self.search_learning_db
+            .clear(&mut wtxn)
+            .map_err(|e| SessionStoreError::Backend {
+                operation: "clear_search_learning",
+                source: e,
+            })?;
+
+        wtxn.commit().map_err(|e| SessionStoreError::Backend {
+            operation: "commit_clear_search_learning",
+            source: e,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -684,6 +918,184 @@ mod tests {
         }
 
         drop(store);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_search_learning_activation_decay_and_reopen() {
+        let dir = temp_test_dir();
+        let store = HeedSessionStore::open(&dir).unwrap();
+
+        let half_life = 14 * 24 * 3600; // 14 days
+        let t0 = 1_000_000;
+
+        // Record activation at t0
+        store
+            .record_search_activation("app:firefox", t0, 512, half_life)
+            .unwrap();
+
+        let rec = store
+            .get_search_learning_record("app:firefox")
+            .unwrap()
+            .unwrap();
+        assert_eq!(rec.version, 1);
+        assert_eq!(rec.activation_count, 1);
+        assert_eq!(rec.last_activated_at_secs, t0);
+        assert!((rec.decayed_score - 1.0).abs() < 1e-6);
+
+        // Record second activation after 14 days (half-life)
+        let t1 = t0 + half_life;
+        store
+            .record_search_activation("app:firefox", t1, 512, half_life)
+            .unwrap();
+
+        let rec2 = store
+            .get_search_learning_record("app:firefox")
+            .unwrap()
+            .unwrap();
+        assert_eq!(rec2.activation_count, 2);
+        assert_eq!(rec2.last_activated_at_secs, t1);
+        // Previous 1.0 decayed to 0.5 + 1.0 = 1.5
+        assert!((rec2.decayed_score - 1.5).abs() < 1e-4);
+
+        // Reopen store and verify persistence
+        drop(store);
+        let store_reopened = HeedSessionStore::open(&dir).unwrap();
+        let rec3 = store_reopened
+            .get_search_learning_record("app:firefox")
+            .unwrap()
+            .unwrap();
+        assert_eq!(rec3, rec2);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_search_learning_eviction_at_max_entries() {
+        let dir = temp_test_dir();
+        let store = HeedSessionStore::open(&dir).unwrap();
+
+        let half_life = 14 * 24 * 3600;
+        let max_entries = 3;
+
+        // Insert 3 entries at timestamps 10, 20, 30
+        store
+            .record_search_activation("item:1", 10, max_entries, half_life)
+            .unwrap();
+        store
+            .record_search_activation("item:2", 20, max_entries, half_life)
+            .unwrap();
+        store
+            .record_search_activation("item:3", 30, max_entries, half_life)
+            .unwrap();
+
+        let list = store.list_search_learning_records().unwrap();
+        assert_eq!(list.len(), 3);
+
+        // Insert 4th entry at timestamp 40 -> should evict item:1 (timestamp 10)
+        store
+            .record_search_activation("item:4", 40, max_entries, half_life)
+            .unwrap();
+
+        let list2 = store.list_search_learning_records().unwrap();
+        assert_eq!(list2.len(), 3);
+        assert!(
+            store
+                .get_search_learning_record("item:1")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .get_search_learning_record("item:2")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .get_search_learning_record("item:3")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .get_search_learning_record("item:4")
+                .unwrap()
+                .is_some()
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_search_learning_forget_and_clear() {
+        let dir = temp_test_dir();
+        let store = HeedSessionStore::open(&dir).unwrap();
+
+        store
+            .record_search_activation("item:a", 100, 512, 1000)
+            .unwrap();
+        store
+            .record_search_activation("item:b", 200, 512, 1000)
+            .unwrap();
+
+        assert_eq!(store.list_search_learning_records().unwrap().len(), 2);
+
+        // Forget item:a
+        let deleted = store.forget_search_result("item:a").unwrap();
+        assert!(deleted);
+        assert!(
+            store
+                .get_search_learning_record("item:a")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .get_search_learning_record("item:b")
+                .unwrap()
+                .is_some()
+        );
+
+        // Forget non-existent item
+        let deleted_again = store.forget_search_result("item:non_existent").unwrap();
+        assert!(!deleted_again);
+
+        // Clear all
+        store.clear_search_learning().unwrap();
+        assert_eq!(store.list_search_learning_records().unwrap().len(), 0);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_search_learning_rejects_unknown_version() {
+        let dir = temp_test_dir();
+        let store = HeedSessionStore::open(&dir).unwrap();
+
+        // Write a record with unknown version 99 directly
+        let mut wtxn = store.env.write_txn().unwrap();
+        let bad_rec = SearchLearningRecord {
+            version: 99,
+            activation_count: 5,
+            last_activated_at_secs: 100,
+            decayed_score: 5.0,
+        };
+        store
+            .search_learning_db
+            .put(&mut wtxn, "item:bad", &bad_rec)
+            .unwrap();
+        wtxn.commit().unwrap();
+
+        // get_search_learning_record safely filters it out (returns None)
+        assert!(
+            store
+                .get_search_learning_record("item:bad")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(store.list_search_learning_records().unwrap().len(), 0);
+
         let _ = fs::remove_dir_all(dir);
     }
 }

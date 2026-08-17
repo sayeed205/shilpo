@@ -31,6 +31,8 @@ pub enum ShellCommand {
         payload_json: Option<String>,
     },
     NextWallpaper,
+    ForgetSearchResult(String),
+    ClearSearchLearning,
 }
 
 /// Active dev session record.
@@ -319,6 +321,30 @@ impl ShellDbusService {
         );
         let _enter = _span.enter();
         self.send_command(ShellCommand::ToggleOverview)
+    }
+
+    async fn forget_search_result(&self, canonical_id: String) -> zbus::fdo::Result<()> {
+        let _span = tracing::info_span!(
+            target: "shilpo_profile",
+            "dbus_call",
+            destination = "org.shilpo.Shell",
+            operation = "forget_search_result",
+            outcome = tracing::field::Empty
+        );
+        let _enter = _span.enter();
+        self.send_command(ShellCommand::ForgetSearchResult(canonical_id))
+    }
+
+    async fn clear_search_learning(&self) -> zbus::fdo::Result<()> {
+        let _span = tracing::info_span!(
+            target: "shilpo_profile",
+            "dbus_call",
+            destination = "org.shilpo.Shell",
+            operation = "clear_search_learning",
+            outcome = tracing::field::Empty
+        );
+        let _enter = _span.enter();
+        self.send_command(ShellCommand::ClearSearchLearning)
     }
 
     async fn focus_workspace(&self, workspace_id: u64) -> zbus::fdo::Result<CommandResult> {
