@@ -8035,6 +8035,7 @@ dependencies = [
  "futures-lite",
  "serde",
  "serde_json",
+ "shilpo-domain",
  "shilpo-services",
  "thiserror 2.0.20",
  "tokio",

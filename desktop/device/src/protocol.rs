@@ -1,28 +1,7 @@
 use serde::{Deserialize, Serialize};
+pub use shilpo_domain::{DomainLifecycle, DomainPortTelemetry, DomainVersion};
 
-pub const PROTOCOL_VERSION: u32 = 2;
-
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, zvariant::Type,
-)]
-pub struct DomainVersion {
-    pub owner_generation: u64,
-    pub revision: u64,
-}
-
-impl DomainVersion {
-    pub const ZERO: Self = Self {
-        owner_generation: 0,
-        revision: 0,
-    };
-
-    pub fn new(owner_generation: u64, revision: u64) -> Self {
-        Self {
-            owner_generation,
-            revision,
-        }
-    }
-}
+pub const PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -52,17 +31,6 @@ impl DeviceDomain {
     ];
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum DomainLifecycle {
-    #[default]
-    Unavailable,
-    Connecting,
-    Ready,
-    Reconnecting,
-    Degraded,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DomainState {
     pub domain: DeviceDomain,
@@ -70,18 +38,6 @@ pub struct DomainState {
     pub lifecycle: DomainLifecycle,
     pub payload: DomainPayload,
     pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DomainPortTelemetry {
-    pub owner_generation: u64,
-    pub current_queue_depth: usize,
-    pub queue_capacity: usize,
-    pub overloads: u64,
-    pub supersessions: u64,
-    pub restarts: u64,
-    pub stale_updates: u64,
-    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

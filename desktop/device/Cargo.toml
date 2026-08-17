@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+shilpo-domain.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 zbus.workspace = true
