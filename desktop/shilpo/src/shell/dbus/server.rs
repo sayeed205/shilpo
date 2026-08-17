@@ -36,6 +36,7 @@ pub enum ShellCommand {
     ForgetSearchResult(String),
     ClearSearchLearning,
     ResetNotificationQuarantine,
+    ResetDeviceQuarantine,
 }
 
 /// Active dev session record.

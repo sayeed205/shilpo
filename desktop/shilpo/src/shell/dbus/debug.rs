@@ -173,4 +173,34 @@ impl DebugDbusService {
         );
         result
     }
+
+    async fn reset_device_quarantine(&self) -> zbus::fdo::Result<()> {
+        let _span = tracing::info_span!(
+            target: "shilpo_profile",
+            "dbus_call",
+            destination = "org.shilpo.Debug",
+            operation = "reset_device_quarantine",
+            outcome = tracing::field::Empty
+        );
+        let _enter = _span.enter();
+
+        let result = match self
+            .mailbox_tx
+            .try_send(ShellCommand::ResetDeviceQuarantine)
+        {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => Err(zbus::fdo::Error::LimitsExceeded(
+                "command mailbox is full".into(),
+            )),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err(zbus::fdo::Error::Failed("shell daemon is stopping".into()))
+            }
+        };
+
+        tracing::Span::current().record(
+            "outcome",
+            if result.is_ok() { "accepted" } else { "failed" },
+        );
+        result
+    }
 }

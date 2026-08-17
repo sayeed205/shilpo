@@ -180,6 +180,13 @@ impl ShellRuntime {
                     tracing::warn!("service hub unavailable for notification quarantine reset");
                 }
             }
+            ShellCommand::ResetDeviceQuarantine => {
+                if let Some(hub) = cx.global::<Self>().service_hub() {
+                    hub.reset_device_quarantine();
+                } else {
+                    tracing::warn!("service hub unavailable for device quarantine reset");
+                }
+            }
         }
         Self::publish_status(cx);
     }

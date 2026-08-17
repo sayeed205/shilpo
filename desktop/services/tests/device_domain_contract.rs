@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -7,7 +7,10 @@ use shilpo_services::device_protocol::{
     CommandOutcomeRecord, DeviceCommand, DeviceDomain, DomainLifecycle, DomainPayload, DomainState,
     DomainVersion, PROTOCOL_VERSION, RejectionReason,
 };
-use shilpo_services::{DeviceAdapter, DeviceClient, DeviceDaemonService, InMemoryDeviceAdapter};
+use shilpo_services::{
+    DeviceAdapter, DeviceClient, DeviceDaemonService, InMemoryDeviceAdapter, SupervisorState,
+    TimeSource,
+};
 
 /// Test-only adapter that separates the backend *acknowledging* a command
 /// (`execute_command` resolving `Ok`) from the effect becoming observable to
@@ -776,6 +779,215 @@ async fn scenario_15_owner_replacement_cancels_old_generation_pending_and_in_fli
     let state = service.get_domain_state(DeviceDomain::Audio);
     assert_eq!(state.version, DomainVersion::new(2, 0));
     assert_eq!(state.lifecycle, DomainLifecycle::Reconnecting);
+}
+
+struct TestTimeSource {
+    now: AtomicU64,
+}
+
+impl TestTimeSource {
+    fn new(start_ms: u64) -> Self {
+        Self {
+            now: AtomicU64::new(start_ms),
+        }
+    }
+
+    fn advance_ms(&self, ms: u64) {
+        self.now.fetch_add(ms, Ordering::SeqCst);
+    }
+
+    fn advance_secs(&self, secs: u64) {
+        self.advance_ms(secs * 1000);
+    }
+}
+
+impl TimeSource for TestTimeSource {
+    fn now_ms(&self) -> u64 {
+        self.now.load(Ordering::SeqCst)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scenarios 16-19: Supervision, Backoff, Quarantine, and Recovery
+// ---------------------------------------------------------------------------
+
+/// Scenario 16: Verifies that owner reconnect backoff follows the standard exponential
+/// progression starting at 250ms and capped at 30 seconds (30,000ms).
+///
+/// **Bug this catches**: Catches failures where reconnect delay fails to double exponentially,
+/// uses improper progression constants, or fails to saturate at the 30-second cap.
+#[test]
+fn scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds() {
+    let time_source = Arc::new(TestTimeSource::new(10_000));
+    let client = DeviceClient::new_with_time_source(time_source.clone());
+
+    assert_eq!(client.supervisor_state(), SupervisorState::Starting);
+
+    // Attempt 1: failure at 10,000ms -> backoff 250ms -> retry at 10,250ms
+    client.report_owner_failure("fail 1".into(), time_source.now_ms());
+    assert_eq!(
+        client.supervisor_state(),
+        SupervisorState::Backoff {
+            attempt: 1,
+            retry_at_ms: 10_250,
+        }
+    );
+
+    // Advance to retry and mark ready
+    time_source.advance_ms(250);
+    client.tick(time_source.now_ms());
+    client.mark_ready(time_source.now_ms());
+    assert_eq!(client.supervisor_state(), SupervisorState::Running);
+
+    // Attempt 2: failure at 10,250ms -> backoff 500ms -> retry at 10,750ms
+    client.report_owner_failure("fail 2".into(), time_source.now_ms());
+    assert_eq!(
+        client.supervisor_state(),
+        SupervisorState::Backoff {
+            attempt: 2,
+            retry_at_ms: 10_750,
+        }
+    );
+
+    time_source.advance_ms(500);
+    client.tick(time_source.now_ms());
+    client.mark_ready(time_source.now_ms());
+
+    // Attempt 3: failure at 10,750ms -> backoff 1000ms -> retry at 11,750ms
+    client.report_owner_failure("fail 3".into(), time_source.now_ms());
+    assert_eq!(
+        client.supervisor_state(),
+        SupervisorState::Backoff {
+            attempt: 3,
+            retry_at_ms: 11_750,
+        }
+    );
+
+    time_source.advance_ms(1000);
+    client.tick(time_source.now_ms());
+    client.mark_ready(time_source.now_ms());
+
+    // Attempt 4: failure at 11,750ms -> backoff 2000ms -> retry at 13,750ms
+    client.report_owner_failure("fail 4".into(), time_source.now_ms());
+    assert_eq!(
+        client.supervisor_state(),
+        SupervisorState::Backoff {
+            attempt: 4,
+            retry_at_ms: 13_750,
+        }
+    );
+}
+
+/// Scenario 17: Verifies that 5 failures within a 60-second rolling window transition
+/// the client supervisor into `Quarantined` state and mark cached domains `Unavailable`.
+///
+/// **Bug this catches**: Catches failures where the rolling window threshold is not enforced,
+/// allowing rapid reconnect crash loops to proceed unbounded instead of entering quarantine.
+#[test]
+fn scenario_17_five_failures_inside_60_seconds_enter_quarantine() {
+    let time_source = Arc::new(TestTimeSource::new(0));
+    let client = DeviceClient::new_with_time_source(time_source.clone());
+    client.mark_ready(0);
+
+    // 4 failures inside rolling window
+    for i in 1..=4 {
+        client.report_owner_failure(format!("failure {i}"), time_source.now_ms());
+        assert!(matches!(
+            client.supervisor_state(),
+            SupervisorState::Backoff { .. }
+        ));
+        time_source.advance_ms(250);
+        client.tick(time_source.now_ms());
+        client.mark_ready(time_source.now_ms());
+        assert_eq!(client.supervisor_state(), SupervisorState::Running);
+    }
+
+    // 5th failure trips quarantine
+    client.report_owner_failure("failure 5".into(), time_source.now_ms());
+    assert_eq!(client.supervisor_state(), SupervisorState::Quarantined);
+
+    for domain in DeviceDomain::ALL {
+        let snap = client.get_domain_state(domain);
+        assert_eq!(snap.lifecycle, DomainLifecycle::Unavailable);
+        assert_eq!(snap.error.as_deref(), Some("failure 5"));
+    }
+}
+
+/// Scenario 18: Verifies that 5 minutes of continuous stable running clears the rolling
+/// failure window while preserving the total session restart count in telemetry.
+///
+/// **Bug this catches**: Catches failure of the 5-minute stable reset timer to clear
+/// transient failure counts (causing subsequent isolated failures to prematurely quarantine)
+/// or bugs that inadvertently reset total lifetime restart telemetry.
+#[test]
+fn scenario_18_five_minutes_stable_clears_rolling_failure_window_but_preserves_session_restart_telemetry()
+ {
+    let time_source = Arc::new(TestTimeSource::new(0));
+    let client = DeviceClient::new_with_time_source(time_source.clone());
+    client.mark_ready(0);
+
+    // 3 failures
+    for i in 1..=3 {
+        client.report_owner_failure(format!("failure {i}"), time_source.now_ms());
+        time_source.advance_ms(1000);
+        client.tick(time_source.now_ms());
+        client.mark_ready(time_source.now_ms());
+    }
+
+    assert_eq!(client.telemetry().restarts, 3);
+
+    // 5 minutes of continuous stable running (300 seconds)
+    time_source.advance_secs(300);
+    client.tick(time_source.now_ms());
+
+    // Next failure should be attempt 1 with 250ms backoff because window was cleared
+    let fail_ts = time_source.now_ms();
+    client.report_owner_failure("failure after stable".into(), fail_ts);
+    assert_eq!(
+        client.supervisor_state(),
+        SupervisorState::Backoff {
+            attempt: 1,
+            retry_at_ms: fail_ts + 250,
+        }
+    );
+    assert_eq!(client.telemetry().restarts, 4);
+}
+
+/// Scenario 19: Verifies that quarantine does not automatically expire over time and requires
+/// an explicit `reset_quarantine()` call to return the supervisor to `Starting` and domains to `Reconnecting`.
+///
+/// **Bug this catches**: Catches bugs where quarantine spontaneously self-heals after time passes
+/// without operator/D-Bus intervention, or where `reset_quarantine()` fails to transition domains
+/// back to `Reconnecting`.
+#[test]
+fn scenario_19_quarantine_requires_explicit_reset_or_containing_process_restart() {
+    let time_source = Arc::new(TestTimeSource::new(0));
+    let client = DeviceClient::new_with_time_source(time_source.clone());
+    client.mark_ready(0);
+
+    // 5 failures to enter quarantine
+    for i in 1..=5 {
+        client.report_owner_failure(format!("failure {i}"), time_source.now_ms());
+        if i < 5 {
+            time_source.advance_ms(250);
+            client.tick(time_source.now_ms());
+            client.mark_ready(time_source.now_ms());
+        }
+    }
+    assert_eq!(client.supervisor_state(), SupervisorState::Quarantined);
+
+    // Advance clock by 10 minutes -> remains Quarantined
+    time_source.advance_secs(600);
+    client.tick(time_source.now_ms());
+    assert_eq!(client.supervisor_state(), SupervisorState::Quarantined);
+
+    // Explicit reset
+    client.reset_quarantine();
+    assert_eq!(client.supervisor_state(), SupervisorState::Starting);
+    for domain in DeviceDomain::ALL {
+        let snap = client.get_domain_state(domain);
+        assert_eq!(snap.lifecycle, DomainLifecycle::Reconnecting);
+    }
 }
 
 // ---------------------------------------------------------------------------

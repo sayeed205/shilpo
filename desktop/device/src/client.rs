@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -10,6 +10,12 @@ use crate::protocol::{
     CommandOutcome, DeviceCommand, DeviceDomain, DomainLifecycle, DomainPayload, DomainState,
     DomainVersion, PROTOCOL_VERSION,
 };
+use shilpo_domain::{
+    FAILURE_WINDOW_MS, INITIAL_BACKOFF_MS, MAX_BACKOFF_MS, MonotonicTimeSource,
+    QUARANTINE_FAILURES, STABLE_RESET_MS, SupervisorState, TimeSource,
+};
+
+const QUARANTINE_IDLE_POLL_MS: u64 = 2_000;
 
 #[derive(Clone, Debug)]
 pub struct DeviceClientUpdate {
@@ -32,6 +38,11 @@ pub struct DeviceClient {
     stale_updates: Arc<AtomicU64>,
     overloads: Arc<AtomicU64>,
     supersessions: Arc<AtomicU64>,
+    supervisor_state: Arc<Mutex<SupervisorState>>,
+    failure_timestamps_ms: Arc<Mutex<Vec<u64>>>,
+    backoff_attempt: Arc<AtomicU32>,
+    last_running_timestamp_ms: Arc<Mutex<Option<u64>>>,
+    time_source: Arc<dyn TimeSource>,
 }
 
 #[derive(Default)]
@@ -108,6 +119,10 @@ impl DeviceClient {
     }
 
     pub fn new() -> Self {
+        Self::new_with_time_source(Arc::new(MonotonicTimeSource::new()))
+    }
+
+    pub fn new_with_time_source(time_source: Arc<dyn TimeSource>) -> Self {
         let (update_tx, _) = broadcast::channel(128);
         let (outcome_tx, _) = broadcast::channel(128);
         let domains = Arc::new(RwLock::new(unavailable_domains()));
@@ -122,6 +137,10 @@ impl DeviceClient {
         let stale_updates = Arc::new(AtomicU64::new(0));
         let overloads = Arc::new(AtomicU64::new(0));
         let supersessions = Arc::new(AtomicU64::new(0));
+        let supervisor_state = Arc::new(Mutex::new(SupervisorState::Starting));
+        let failure_timestamps_ms = Arc::new(Mutex::new(Vec::new()));
+        let backoff_attempt = Arc::new(AtomicU32::new(0));
+        let last_running_timestamp_ms = Arc::new(Mutex::new(None));
 
         let client = Self {
             domains,
@@ -137,6 +156,11 @@ impl DeviceClient {
             stale_updates,
             overloads,
             supersessions,
+            supervisor_state,
+            failure_timestamps_ms,
+            backoff_attempt,
+            last_running_timestamp_ms,
+            time_source,
         };
         let debounce_client = client.clone();
         let supersessions_counter = client.supersessions.clone();
@@ -391,34 +415,59 @@ impl DeviceClient {
         // Publish only after every listener and the initial projection are
         // ready. A failed setup therefore cannot leak listeners into a retry.
         *self.connection.lock().unwrap() = Some(connection.clone());
+        let ready_now_ms = self.time_source.now_ms();
+        self.mark_ready(ready_now_ms);
         let closed_client = self.clone();
         tokio::spawn(async move {
             connection.closed().await;
             *closed_client.connection.lock().unwrap() = None;
-            closed_client.mark_connection_lost("device daemon connection closed");
+            let now_ms = closed_client.time_source.now_ms();
+            closed_client
+                .report_owner_failure("device daemon connection closed".to_string(), now_ms);
         });
         Ok(())
     }
 
     /// Keeps the client connected for the lifetime of its consumer. Failed
-    /// attempts leave the cached projection explicitly reconnecting instead of
-    /// silently retaining stale ready data.
+    /// attempts drive the persistent supervisor state machine.
     pub async fn maintain_connection(&self) {
-        let mut attempt = 0u32;
         loop {
-            if self.is_connected() {
-                tokio::time::sleep(Duration::from_millis(250)).await;
-                continue;
-            }
-            self.mark_connection_lost("device daemon unavailable");
-            match self.connect().await {
-                Ok(()) => attempt = 0,
-                Err(error) => {
-                    attempt = attempt.saturating_add(1);
-                    let delay = reconnect_backoff(attempt);
-                    self.mark_connection_lost(&error);
-                    tokio::time::sleep(delay.min(Duration::from_secs(30))).await;
+            let now_ms = self.time_source.now_ms();
+            self.tick(now_ms);
+
+            match self.supervisor_state() {
+                SupervisorState::Running => {
+                    if self.is_connected() {
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    } else {
+                        self.report_owner_failure(
+                            "device daemon connection closed".to_string(),
+                            now_ms,
+                        );
+                    }
                 }
+                SupervisorState::Backoff { retry_at_ms, .. } => {
+                    let now_ms = self.time_source.now_ms();
+                    if now_ms < retry_at_ms {
+                        tokio::time::sleep(Duration::from_millis(retry_at_ms - now_ms)).await;
+                    } else {
+                        self.tick(now_ms);
+                    }
+                }
+                SupervisorState::Quarantined => {
+                    tokio::time::sleep(Duration::from_millis(QUARANTINE_IDLE_POLL_MS)).await;
+                }
+                SupervisorState::Starting => match self.connect().await {
+                    Ok(()) => {
+                        let ready_now_ms = self.time_source.now_ms();
+                        self.mark_ready(ready_now_ms);
+                    }
+                    Err(error) => {
+                        let fail_now_ms = self.time_source.now_ms();
+                        self.report_owner_failure(error, fail_now_ms);
+                    }
+                },
+                SupervisorState::Stopping | SupervisorState::Stopped => break,
             }
         }
     }
@@ -481,20 +530,6 @@ impl DeviceClient {
         domains.insert(domain, state.clone());
         drop(domains);
         let _ = self.update_tx.send(DeviceClientUpdate { domain, state });
-    }
-
-    fn mark_connection_lost(&self, error: &str) {
-        self.restarts.fetch_add(1, Ordering::SeqCst);
-        *self.last_error.lock().unwrap() = Some(error.to_owned());
-        let mut domains = self.domains.write().unwrap();
-        for state in domains.values_mut() {
-            state.lifecycle = DomainLifecycle::Reconnecting;
-            state.error = Some(error.to_string());
-            let _ = self.update_tx.send(DeviceClientUpdate {
-                domain: state.domain,
-                state: state.clone(),
-            });
-        }
     }
 
     pub fn notify_command_outcome(&self, outcome: CommandOutcome) {
@@ -609,6 +644,95 @@ impl DeviceClient {
         Ok(outcome)
     }
 
+    pub fn supervisor_state(&self) -> SupervisorState {
+        *self.supervisor_state.lock().unwrap()
+    }
+
+    pub fn time_source(&self) -> &Arc<dyn TimeSource> {
+        &self.time_source
+    }
+
+    pub fn mark_ready(&self, now_ms: u64) {
+        *self.supervisor_state.lock().unwrap() = SupervisorState::Running;
+        *self.last_running_timestamp_ms.lock().unwrap() = Some(now_ms);
+        *self.last_error.lock().unwrap() = None;
+    }
+
+    pub fn report_owner_failure(&self, error: String, now_ms: u64) {
+        self.restarts.fetch_add(1, Ordering::SeqCst);
+        *self.last_error.lock().unwrap() = Some(error.clone());
+        *self.last_running_timestamp_ms.lock().unwrap() = None;
+
+        let mut failures = self.failure_timestamps_ms.lock().unwrap();
+        failures.retain(|&ts| now_ms.saturating_sub(ts) <= FAILURE_WINDOW_MS);
+        failures.push(now_ms);
+        let failure_count = failures.len();
+        let (new_state, target_lifecycle) = if failure_count >= QUARANTINE_FAILURES {
+            (SupervisorState::Quarantined, DomainLifecycle::Unavailable)
+        } else {
+            let attempt = failure_count as u32;
+            self.backoff_attempt.store(attempt, Ordering::SeqCst);
+            let delay = reconnect_backoff(attempt).as_millis() as u64;
+            (
+                SupervisorState::Backoff {
+                    attempt,
+                    retry_at_ms: now_ms.saturating_add(delay),
+                },
+                DomainLifecycle::Reconnecting,
+            )
+        };
+        drop(failures);
+
+        *self.supervisor_state.lock().unwrap() = new_state;
+        let mut domains = self.domains.write().unwrap();
+        for state in domains.values_mut() {
+            state.lifecycle = target_lifecycle;
+            state.error = Some(error.clone());
+            let _ = self.update_tx.send(DeviceClientUpdate {
+                domain: state.domain,
+                state: state.clone(),
+            });
+        }
+    }
+
+    pub fn tick(&self, now_ms: u64) {
+        let mut supervisor = self.supervisor_state.lock().unwrap();
+        match *supervisor {
+            SupervisorState::Backoff { retry_at_ms, .. } => {
+                if now_ms >= retry_at_ms {
+                    *supervisor = SupervisorState::Starting;
+                }
+            }
+            SupervisorState::Running => {
+                if let Some(start_ts) = *self.last_running_timestamp_ms.lock().unwrap()
+                    && now_ms.saturating_sub(start_ts) >= STABLE_RESET_MS
+                {
+                    self.failure_timestamps_ms.lock().unwrap().clear();
+                    self.backoff_attempt.store(0, Ordering::SeqCst);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn reset_quarantine(&self) {
+        let mut supervisor = self.supervisor_state.lock().unwrap();
+        if matches!(*supervisor, SupervisorState::Quarantined) {
+            self.failure_timestamps_ms.lock().unwrap().clear();
+            self.backoff_attempt.store(0, Ordering::SeqCst);
+            *self.last_running_timestamp_ms.lock().unwrap() = None;
+            *supervisor = SupervisorState::Starting;
+            let mut domains = self.domains.write().unwrap();
+            for state in domains.values_mut() {
+                state.lifecycle = DomainLifecycle::Reconnecting;
+                let _ = self.update_tx.send(DeviceClientUpdate {
+                    domain: state.domain,
+                    state: state.clone(),
+                });
+            }
+        }
+    }
+
     pub fn send_command_debounced(
         &self,
         command: DeviceCommand,
@@ -632,9 +756,9 @@ impl DeviceClient {
 
 fn reconnect_backoff(attempt: u32) -> Duration {
     Duration::from_millis(
-        250u64.saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1).min(7))),
+        INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1).min(7))),
     )
-    .min(Duration::from_secs(30))
+    .min(Duration::from_millis(MAX_BACKOFF_MS))
 }
 
 fn state_from_wire(
