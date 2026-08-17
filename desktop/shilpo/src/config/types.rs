@@ -35,6 +35,8 @@ pub struct ShellConfig {
     #[serde(default)]
     pub capture: CaptureConfig,
     #[serde(default)]
+    pub clipboard: ClipboardConfig,
+    #[serde(default)]
     pub keybindings: Vec<KeybindingConfig>,
 }
 
@@ -130,6 +132,27 @@ fn default_screenshot_dir() -> PathBuf {
 
 fn default_selection() -> String {
     "rectangle".to_string()
+}
+
+pub const DEFAULT_CLIPBOARD_HISTORY_LIMIT: usize = 100;
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ClipboardConfig {
+    #[serde(default = "default_clipboard_history_limit")]
+    pub history_limit: usize,
+}
+
+impl Default for ClipboardConfig {
+    fn default() -> Self {
+        Self {
+            history_limit: default_clipboard_history_limit(),
+        }
+    }
+}
+
+pub fn default_clipboard_history_limit() -> usize {
+    DEFAULT_CLIPBOARD_HISTORY_LIMIT
 }
 
 /// Resolve Shilpo XDG configuration directory (`$XDG_CONFIG_HOME/shilpo` or `$HOME/.config/shilpo`).
@@ -595,6 +618,7 @@ impl Default for ShellConfig {
             locale: None,
             startup: StartupConfig::default(),
             capture: CaptureConfig::default(),
+            clipboard: ClipboardConfig::default(),
             keybindings: Vec::new(),
         }
     }
@@ -904,6 +928,13 @@ impl ShellConfig {
                     "must be 'rectangle' or 'ellipse'",
                 ));
             }
+        }
+
+        if self.clipboard.history_limit == 0 {
+            d.push(ConfigDiagnostic::new(
+                "clipboard.history_limit",
+                "must be greater than zero",
+            ));
         }
 
         let mut seen_keybinding_actions = std::collections::HashSet::new();

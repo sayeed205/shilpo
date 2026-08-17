@@ -822,6 +822,37 @@ margin = { horizontal = 600, vertical = 6 }
     }
 
     #[test]
+    fn test_clipboard_config_validation_and_recovery() {
+        let mut config = ShellConfig::default();
+        assert_eq!(config.clipboard.history_limit, 100);
+        assert!(config.validate().is_ok());
+
+        // Zero limit is rejected by validation
+        config.clipboard.history_limit = 0;
+        let diagnostics = match config.validate().unwrap_err() {
+            ConfigError::Validation { diagnostics } => diagnostics,
+            other => panic!("expected validation error, got {other:?}"),
+        };
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].path, "clipboard.history_limit");
+
+        // Scoped recovery restores fallback value
+        let fallback = ShellConfig::default();
+        let mut prov = ConfigProvenance::new();
+        let fallback_prov = ConfigProvenance::new();
+        let scope = apply_scoped_recovery(
+            &mut config,
+            &mut prov,
+            &fallback,
+            &fallback_prov,
+            &diagnostics,
+        );
+        assert_eq!(scope, RecoveryScope::RejectValue);
+        assert_eq!(config.clipboard.history_limit, 100);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn test_session_restore_fallback_policy() {
         let temp_file =
             std::env::temp_dir().join(format!("shilpo-session-{}.json", std::process::id()));

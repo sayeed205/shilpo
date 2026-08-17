@@ -66,12 +66,55 @@ impl SearchProvider for ClipboardSearchProvider {
             let act_key = format!("clipboard:{query_generation}:{canonical_id}");
             cached.insert(act_key.clone(), item.clone());
 
+            let (title, subtitle) = match &item.content {
+                shilpo_services::ClipboardContent::Text(text) => (
+                    text.clone(),
+                    Some(format!(
+                        "Copied at {}",
+                        item.last_copied_at
+                            .with_timezone(&chrono::Local)
+                            .format("%H:%M:%S")
+                    )),
+                ),
+                shilpo_services::ClipboardContent::FileReference(paths) => {
+                    let title = if paths.len() == 1 {
+                        paths[0]
+                            .file_name()
+                            .map(|f| f.to_string_lossy().to_string())
+                            .unwrap_or_else(|| paths[0].display().to_string())
+                    } else {
+                        format!("{} files", paths.len())
+                    };
+                    let subtitle = if paths.len() == 1 {
+                        Some(paths[0].display().to_string())
+                    } else {
+                        Some(
+                            paths
+                                .iter()
+                                .map(|p| p.display().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )
+                    };
+                    (title, subtitle)
+                }
+                shilpo_services::ClipboardContent::Image => (
+                    "[Image]".to_string(),
+                    Some(format!(
+                        "Copied at {}",
+                        item.last_copied_at
+                            .with_timezone(&chrono::Local)
+                            .format("%H:%M:%S")
+                    )),
+                ),
+            };
+
             let candidate = SearchCandidate {
                 provider_id: provider_id.clone(),
                 canonical_id,
                 generation: query_generation,
-                title: item.text.clone(),
-                subtitle: Some(format!("Copied at {}", item.timestamp)),
+                title,
+                subtitle,
                 aliases: Vec::new(),
                 keywords: Vec::new(),
                 category: ResultCategory::Clipboard,
@@ -105,12 +148,11 @@ mod tests {
     use super::*;
     use crate::shell::overview_search::sink::SinkConfig;
 
-    fn sample_item(id: u64, text: &str) -> ClipboardItem {
-        ClipboardItem {
-            id,
-            text: text.to_string(),
-            timestamp: (1700000000 + id).to_string(),
-        }
+    fn sample_item(text: &str, secs: i64) -> ClipboardItem {
+        ClipboardItem::new_text(
+            text.to_string(),
+            chrono::Utc::now() + chrono::Duration::seconds(secs),
+        )
     }
 
     #[test]
@@ -126,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_clipboard_candidates_reflect_live_history_changes_between_searches() {
-        let (tx, rx) = watch::channel(vec![sample_item(1, "first copied text")]);
+        let (tx, rx) = watch::channel(vec![sample_item("first copied text", 1)]);
         let provider = ClipboardSearchProvider::new(Some(rx));
 
         // First search sees initial clipboard item
@@ -141,8 +183,8 @@ mod tests {
 
         // Update clipboard channel with new items while provider instance is held
         tx.send(vec![
-            sample_item(1, "first copied text"),
-            sample_item(2, "second copied text"),
+            sample_item("first copied text", 1),
+            sample_item("second copied text", 2),
         ])
         .unwrap();
 
@@ -159,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_clipboard_activation() {
-        let (_tx, rx) = watch::channel(vec![sample_item(42, "hello clipboard")]);
+        let (_tx, rx) = watch::channel(vec![sample_item("hello clipboard", 42)]);
         let provider = ClipboardSearchProvider::new(Some(rx));
 
         let sink = SearchSink::new(1, SinkConfig::default());
@@ -172,10 +214,40 @@ mod tests {
         let result = provider.activate(candidate.activation.clone()).unwrap();
         match result {
             ActionResult::CopyClipboard(item) => {
-                assert_eq!(item.id, 42);
-                assert_eq!(item.text, "hello clipboard");
+                assert_eq!(item.text().unwrap(), "hello clipboard");
             }
             other => panic!("expected CopyClipboard, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_clipboard_identical_content_yields_identical_canonical_id() {
+        let now = chrono::Utc::now();
+        let item1 = ClipboardItem::new_text("identical text".into(), now);
+        let item2 =
+            ClipboardItem::new_text("identical text".into(), now + chrono::Duration::seconds(5));
+
+        assert_eq!(item1.id, item2.id);
+
+        let (_tx1, rx1) = watch::channel(vec![item1]);
+        let provider1 = ClipboardSearchProvider::new(Some(rx1));
+        let sink1 = SearchSink::new(1, SinkConfig::default());
+        provider1.search(
+            SearchRequest::new(";identical", SearchMode::Clipboard, "identical", 1),
+            sink1.clone(),
+        );
+
+        let (_tx2, rx2) = watch::channel(vec![item2]);
+        let provider2 = ClipboardSearchProvider::new(Some(rx2));
+        let sink2 = SearchSink::new(2, SinkConfig::default());
+        provider2.search(
+            SearchRequest::new(";identical", SearchMode::Clipboard, "identical", 2),
+            sink2.clone(),
+        );
+
+        assert_eq!(
+            sink1.snapshot()[0].canonical_id,
+            sink2.snapshot()[0].canonical_id
+        );
     }
 }
