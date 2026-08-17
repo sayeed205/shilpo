@@ -250,6 +250,28 @@ impl DomainPortDriver for NotificationDomainPortDriver {
         }
     }
 
+    // DISCLOSURE (scenario_21): `reconcile_front_command` and
+    // `timeout_front_command` resolve the front ticket directly on this
+    // driver's own resolver rather than driving `NotificationDomainState`'s
+    // real reconcile/timeout logic. This is a genuine interface gap, not a
+    // convenience shortcut:
+    //
+    // - `lossless_command()` maps to `NotificationCommand::Push`, whose real
+    //   handler (`src/notifications/mod.rs::process_queue_locked`)
+    //   unconditionally returns `changed = true` with no deduplication. There
+    //   is no notification command this driver produces that can naturally
+    //   reach `ReconciledApplied` through production logic.
+    // - Real `ReconciledApplied` timeout completion
+    //   (`CommandTicket::wait_timeout`) races a wall-clock `Instant::now()`
+    //   deadline, which this suite's determinism constraints forbid using.
+    //
+    // scenario_21 therefore exercises the `CommandTicket`/`CommandResolver`
+    // bookkeeping contract on notification (single-resolution guarantee,
+    // typed outcome propagation) but not `NotificationDomainState`'s actual
+    // trigger conditions for these two outcomes. Real `ReconciledApplied`
+    // coverage exists via idempotent double-submission in the notification
+    // crate's own tests; real `TimedOut` coverage is not exercised by this
+    // contract suite for notification.
     fn reconcile_front_command(&self) {
         let adapter = self.current_adapter();
         let mut pending = self.pending.lock().unwrap();

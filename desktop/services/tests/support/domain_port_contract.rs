@@ -586,7 +586,10 @@ impl DomainPortDriver for ReferenceDomainPort {
     fn submit_command(&self, command: TestCommand) -> Result<CommandTicket, CommandOutcome> {
         let mut state = self.state.lock().unwrap();
         if matches!(state.lifecycle, DomainLifecycle::Unavailable)
-            || matches!(state.supervisor_state, SupervisorState::Quarantined)
+            || matches!(
+                state.supervisor_state,
+                SupervisorState::Quarantined | SupervisorState::Stopped
+            )
         {
             return Err(CommandOutcome::Rejected {
                 reason: RejectionReason::Unavailable,
