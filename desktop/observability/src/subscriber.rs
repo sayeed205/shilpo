@@ -1,4 +1,3 @@
-use crate::{ProcessRole, is_profile_enabled, paths};
 use std::{
     fs, io,
     path::PathBuf,
@@ -7,9 +6,12 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
+
 use tracing_subscriber::{
     EnvFilter, Registry, layer::SubscriberExt, reload::Handle, util::SubscriberInitExt,
 };
+
+use crate::{ProcessRole, is_profile_enabled, paths};
 
 static SUBSCRIBER_INITIALIZED: AtomicBool = AtomicBool::new(false);
 

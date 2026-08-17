@@ -4,22 +4,22 @@ use std::{
     sync::Arc,
 };
 
-use crate::{
-    ActiveTheme, ElementExt, Icon, IconName, h_flex,
-    history::{History, HistoryItem},
-    scroll::{Scrollbar, ScrollbarShow},
-    v_flex,
-};
-
-use super::{
-    DockArea, Panel, PanelEvent, PanelInfo, PanelState, PanelView, StackPanel, TabPanel, TileMeta,
-};
 use gpui::{
     AnyElement, App, AppContext, Bounds, Context, DismissEvent, Div, DragMoveEvent, Empty,
     EntityId, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, MouseButton,
     MouseDownEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, ScrollHandle, Size,
     StatefulInteractiveElement, Styled, WeakEntity, Window, actions, div, prelude::FluentBuilder,
     px, size,
+};
+
+use super::{
+    DockArea, Panel, PanelEvent, PanelInfo, PanelState, PanelView, StackPanel, TabPanel, TileMeta,
+};
+use crate::{
+    ActiveTheme, ElementExt, Icon, IconName, h_flex,
+    history::{History, HistoryItem},
+    scroll::{Scrollbar, ScrollbarShow},
+    v_flex,
 };
 
 actions!(tiles, [Undo, Redo]);
@@ -1324,8 +1324,9 @@ impl Render for Tiles {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use gpui::{Bounds, Pixels, Point, Size, px};
+
+    use super::*;
 
     fn b(x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels> {
         Bounds {

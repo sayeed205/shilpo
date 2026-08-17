@@ -147,10 +147,11 @@ impl PowerProfileService {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     #[cfg(target_os = "linux")]
     use crate::power_profile::adapter::mock::TestPowerProfileAdapter;
-    use std::time::Duration;
 
     #[tokio::test]
     async fn test_power_profile_offline() {

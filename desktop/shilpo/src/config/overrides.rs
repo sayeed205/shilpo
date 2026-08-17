@@ -3,18 +3,20 @@
 //! Provides transactional comment-preserving edits (`Set` and `Remove` batches)
 //! for `overrides.toml` using [`toml_edit::DocumentMut`].
 
-use crate::config::{
-    resolver::ConfigResolver,
-    types::{ConfigDiagnostic, ConfigError},
-    unknown_keys::UnknownConfigKey,
-};
 use std::{
     fmt, fs, io,
     io::Write,
     path::{Path, PathBuf},
     sync::Arc,
 };
+
 use toml_edit::{DocumentMut, Item, Table, Value};
+
+use crate::config::{
+    resolver::ConfigResolver,
+    types::{ConfigDiagnostic, ConfigError},
+    unknown_keys::UnknownConfigKey,
+};
 
 /// A single edit inside a transactional override batch.
 #[derive(Debug, Clone)]
@@ -699,8 +701,9 @@ fn remove_leaf(doc: &mut DocumentMut, path: &[String]) -> Result<(), OverrideErr
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn test_formatting_and_comments_preserved_on_leaf_replacement() {

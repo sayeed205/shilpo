@@ -5,7 +5,6 @@ use gpui::{
     Subscription, Window, WindowBounds, WindowKind, WindowOptions, actions, div,
     prelude::FluentBuilder as _, px, rems, size,
 };
-
 use serde::{Deserialize, Serialize};
 use shilpo_ui::{
     ActiveTheme, IconName, Root, TitleBar, WindowControlsMode, WindowExt,
@@ -26,10 +25,11 @@ mod gallery;
 mod stories;
 mod themes;
 mod title_bar;
-pub use crate::title_bar::AppTitleBar;
 pub use assets::Assets;
 pub use gallery::Gallery;
 pub use stories::*;
+
+pub use crate::title_bar::AppTitleBar;
 
 rust_i18n::i18n!("locales", fallback = "en");
 

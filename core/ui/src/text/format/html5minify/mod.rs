@@ -761,8 +761,9 @@ fn optional_end_tag(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::str;
+
+    use super::*;
 
     #[test]
     fn test_write_collapse_whitespace() {

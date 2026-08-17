@@ -1,5 +1,3 @@
-use crate::theme::ActiveTheme;
-use crate::{Disableable, Icon, IconName, Sizable, Size, StyledExt, h_flex};
 use std::rc::Rc;
 
 use gpui::{
@@ -7,6 +5,9 @@ use gpui::{
     Styled, Window, div, prelude::FluentBuilder as _,
 };
 use gpui::{ClickEvent, Hsla, StatefulInteractiveElement};
+
+use crate::theme::ActiveTheme;
+use crate::{Disableable, Icon, IconName, Sizable, Size, StyledExt, h_flex};
 
 /// A simple star Rating element.
 #[derive(IntoElement)]

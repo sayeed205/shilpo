@@ -1,10 +1,11 @@
-use crate::{ActiveTheme, Disableable, StyledExt, h_flex};
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, MouseButton,
     ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
     StyleRefinement, Styled, Window, prelude::FluentBuilder as _,
 };
 use smallvec::SmallVec;
+
+use crate::{ActiveTheme, Disableable, StyledExt, h_flex};
 
 #[derive(IntoElement)]
 pub(crate) struct MenuItemElement {

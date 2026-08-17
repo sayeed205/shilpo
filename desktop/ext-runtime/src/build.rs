@@ -1,11 +1,13 @@
-use crate::cli::{ExtensionCliResult, is_regular_file};
-use serde::{Deserialize, Serialize};
-use shilpo_ext_api::ExtensionManifest;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use serde::{Deserialize, Serialize};
+use shilpo_ext_api::ExtensionManifest;
+
+use crate::cli::{ExtensionCliResult, is_regular_file};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -1208,14 +1210,16 @@ pub fn build_extension_with_timeout(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    use tempfile::tempdir;
+
     use super::*;
     use crate::scaffold::{
         PackageManager, ScaffoldOptions, StarterContribution, StarterLanguage, ViewSyntax,
         scaffold_extension,
     };
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-    use tempfile::tempdir;
 
     struct MockProcessRunner {
         commands: Mutex<Vec<ProcessCommand>>,

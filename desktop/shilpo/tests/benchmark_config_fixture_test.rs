@@ -1,5 +1,6 @@
-use shilpo::config::{ConfigResolver, ShellConfig};
 use std::fs;
+
+use shilpo::config::{ConfigResolver, ShellConfig};
 use tempfile::TempDir;
 
 const TOML_FIXTURE: &str = include_str!("../fixtures/config/valid_full.toml");

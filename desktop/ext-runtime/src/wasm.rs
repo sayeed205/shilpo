@@ -1,13 +1,3 @@
-use crate::adapter::{
-    ExtensionRuntime, GrantChecker, RuntimeBudget, RuntimeError, RuntimeFailureKind,
-};
-use crate::state::{
-    MAX_PENDING_STATE_EVENTS, StateStore, StateStoreError, StateValue as StoredValue,
-};
-use shilpo_ext_api::{
-    Capability, ExtensionEvent as ApiEvent, ExtensionId, HostOperation, ViewTree as ApiViewTree,
-    wildcard_matches,
-};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
@@ -18,9 +8,21 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+
+use shilpo_ext_api::{
+    Capability, ExtensionEvent as ApiEvent, ExtensionId, HostOperation, ViewTree as ApiViewTree,
+    wildcard_matches,
+};
 use wasmtime::component::{Component, Linker, ResourceTable, types::ComponentItem};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+
+use crate::adapter::{
+    ExtensionRuntime, GrantChecker, RuntimeBudget, RuntimeError, RuntimeFailureKind,
+};
+use crate::state::{
+    MAX_PENDING_STATE_EVENTS, StateStore, StateStoreError, StateValue as StoredValue,
+};
 
 wasmtime::component::bindgen!({
     path: "../../core/ext-api/wit",
@@ -491,8 +493,9 @@ impl WasmState {
 fn map_secret_broker_error(
     err: crate::secrets::SecretBrokerError,
 ) -> shilpo::extension::types::Error {
-    use crate::secrets::SecretBrokerError;
     use shilpo::extension::types as wit_types;
+
+    use crate::secrets::SecretBrokerError;
 
     match err {
         SecretBrokerError::BackendUnavailable(msg) => wit_types::Error {
@@ -1718,10 +1721,12 @@ fn data_value_from_stored(value: &StoredValue) -> self::shilpo::extension::types
 
 #[cfg(test)]
 mod state_seam_tests {
+    use std::time::Duration;
+
+    use shilpo_ext_api::ExtensionId;
+
     use super::*;
     use crate::secrets::FakeSecretBroker;
-    use shilpo_ext_api::ExtensionId;
-    use std::time::Duration;
 
     fn state() -> WasmState {
         let extension_id = ExtensionId::new("io.github.test.state-seam").unwrap();
@@ -2010,10 +2015,12 @@ mod state_seam_tests {
 
 #[cfg(test)]
 mod secret_host_tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use shilpo_ext_api::{Capability, ExtensionId, SecretPurpose};
+
     use super::*;
     use crate::secrets::FakeSecretBroker;
-    use shilpo_ext_api::{Capability, ExtensionId, SecretPurpose};
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn state(granted: bool, checker: Option<GrantChecker>) -> WasmState {
         let extension_id = ExtensionId::new("io.github.test.secret-host").unwrap();
@@ -2432,12 +2439,13 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
 
 #[cfg(test)]
 mod bar_menu_component_fixture_tests {
-    use super::*;
-    use crate::secrets::FakeSecretBroker;
     use shilpo_ext_api::{
         Alignment, BarMenuCloseReason, ContainerDirection, Justification, Overflow,
         SemanticColorToken, ViewNode,
     };
+
+    use super::*;
+    use crate::secrets::FakeSecretBroker;
 
     const FIXTURE: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -2620,8 +2628,9 @@ fn convert_view_tree_from_wit(
         idx: usize,
         nodes: &[self::shilpo::extension::view::ViewNode],
     ) -> Result<shilpo_ext_api::ViewNode, RuntimeError> {
-        use self::shilpo::extension::view as wit_view;
         use shilpo_ext_api as api;
+
+        use self::shilpo::extension::view as wit_view;
         if idx >= nodes.len() {
             return Err(RuntimeError::with_kind(
                 RuntimeFailureKind::InvalidOutput,
@@ -2742,8 +2751,9 @@ fn convert_view_tree_from_wit(
     }
 
     fn decode_style(s: &self::shilpo::extension::view::ViewStyle) -> shilpo_ext_api::ViewStyle {
-        use self::shilpo::extension::view as wit_view;
         use shilpo_ext_api as api;
+
+        use self::shilpo::extension::view as wit_view;
         shilpo_ext_api::ViewStyle {
             padding: s.padding,
             margin: s.margin,
@@ -2771,8 +2781,9 @@ fn convert_view_tree_from_wit(
     fn decode_color(
         token: self::shilpo::extension::view::SemanticColorToken,
     ) -> shilpo_ext_api::SemanticColorToken {
-        use self::shilpo::extension::view as wit_view;
         use shilpo_ext_api as api;
+
+        use self::shilpo::extension::view as wit_view;
         match token {
             wit_view::SemanticColorToken::Primary => api::SemanticColorToken::Primary,
             wit_view::SemanticColorToken::OnPrimary => api::SemanticColorToken::OnPrimary,

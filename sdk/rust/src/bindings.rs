@@ -13,9 +13,8 @@ pub mod generated {
 }
 
 pub use generated::export;
-pub use generated::*;
-
 pub use generated::shilpo::extension::{
     actions, clipboard, events, filesystem, http, location, notifications, secrets, state, theme,
     types, view, wallpaper,
 };
+pub use generated::*;

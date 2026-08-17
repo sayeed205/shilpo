@@ -2,7 +2,6 @@ use gpui::{
     App, AppContext, Axis, Context, Element, Entity, FocusHandle, Focusable, Global, IntoElement,
     ParentElement as _, Render, SharedString, Styled, Window, prelude::FluentBuilder, px,
 };
-
 use shilpo_ui::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, Theme, ThemeMode,
     button::{Button, ButtonVariants as _},

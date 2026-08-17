@@ -1,7 +1,9 @@
-use crate::effects::AuthorizedHostOperation;
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+
 use serde::{Deserialize, Serialize};
 use shilpo_ext_api::{CanonicalId, ExtensionId, ViewTree};
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+
+use crate::effects::AuthorizedHostOperation;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ContributionSurface {

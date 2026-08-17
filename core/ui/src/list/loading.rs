@@ -1,6 +1,7 @@
+use gpui::{IntoElement, ParentElement as _, RenderOnce, Styled};
+
 use super::ListItem;
 use crate::{skeleton::Skeleton, v_flex};
-use gpui::{IntoElement, ParentElement as _, RenderOnce, Styled};
 
 #[derive(IntoElement)]
 pub struct Loading;

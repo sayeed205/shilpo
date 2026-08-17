@@ -1,6 +1,5 @@
 use std::ops::Range;
 
-use crate::{ActiveTheme, AxisExt, ElementExt, Sizable, StyledExt, h_flex};
 use gpui::{
     AccessibleAction, Along, App, AppContext as _, Axis, Background, Bounds, Context, Corners,
     DefiniteLength, DragMoveEvent, Empty, Entity, EntityId, EventEmitter, InteractiveElement,
@@ -8,6 +7,8 @@ use gpui::{
     Point, Render, RenderOnce, Role, StatefulInteractiveElement as _, StyleRefinement, Styled,
     Window, div, prelude::FluentBuilder as _, px, relative,
 };
+
+use crate::{ActiveTheme, AxisExt, ElementExt, Sizable, StyledExt, h_flex};
 
 #[derive(Clone)]
 struct DragThumb((EntityId, bool));

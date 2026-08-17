@@ -355,13 +355,14 @@ impl Element for TextView {
 
 #[cfg(test)]
 mod tests {
-    use super::{TextView, TextViewPlugin};
-    use crate::text::TextViewState;
     use gpui::{
         AppContext as _, Context, Entity, IntoElement, Modifiers, MouseButton, MouseDownEvent,
         MouseUpEvent, ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext,
         Window, div, point, px,
     };
+
+    use super::{TextView, TextViewPlugin};
+    use crate::text::TextViewState;
 
     struct TextViewTestRoot {
         text_view: Entity<TextViewState>,

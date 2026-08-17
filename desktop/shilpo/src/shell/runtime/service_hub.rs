@@ -6,11 +6,10 @@ use std::{
 use gpui::App;
 use shilpo_services::{ClipboardItem, Notification, NotificationPort, NotificationService};
 
+use super::{SessionContext, ShellRuntime, shell_surfaces::ShellSurfaces};
 use crate::bar::service_worker::{
     self, CommandSender, DeviceCommand, UpdateReceiver, WorkerCommand, WorkerUpdate,
 };
-
-use super::{SessionContext, ShellRuntime, shell_surfaces::ShellSurfaces};
 
 /// Owns shell-facing integrations (compositor, notifications, clipboard, app
 /// scanning) and the client bridge that reports device state from the daemon.

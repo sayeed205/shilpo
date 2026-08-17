@@ -195,10 +195,12 @@ fn decode_semantic_tokens(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use lsp_types::{SemanticToken, SemanticTokenType, SemanticTokensLegend};
+
     use super::*;
     use crate::highlighter::HighlightTheme;
-    use lsp_types::{SemanticToken, SemanticTokenType, SemanticTokensLegend};
-    use std::sync::Arc;
 
     fn legend() -> SemanticTokensLegend {
         SemanticTokensLegend {

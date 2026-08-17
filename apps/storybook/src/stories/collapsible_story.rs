@@ -3,7 +3,6 @@ use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     Styled, Window, prelude::FluentBuilder as _,
 };
-
 use shilpo_ui::group_box::{GroupBox, GroupBoxVariants as _};
 use shilpo_ui::label::Label;
 use shilpo_ui::tag::Tag;

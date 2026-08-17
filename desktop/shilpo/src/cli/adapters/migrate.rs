@@ -1,7 +1,9 @@
+use std::path::Path;
+
+use serde_json::Value;
+
 use crate::cli::output::EXIT_FAILURE;
 use crate::config::{MigrationMode, MigrationOutcome, MigrationService};
-use serde_json::Value;
-use std::path::Path;
 
 /// Result of a `shilpo config migrate` run, rendered for both the human and
 /// JSON CLI contracts.

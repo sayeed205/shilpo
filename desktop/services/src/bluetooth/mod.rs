@@ -1,7 +1,8 @@
-use anyhow::Result;
-use futures_lite::StreamExt;
 use std::collections::HashMap;
 use std::process::Command;
+
+use anyhow::Result;
+use futures_lite::StreamExt;
 use tokio::sync::{mpsc, watch};
 use zbus::Connection;
 

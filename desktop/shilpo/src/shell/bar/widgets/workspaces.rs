@@ -1,11 +1,3 @@
-use crate::actions::ActionInvocation;
-use crate::bar::cards::{
-    adapter::CardCoordinator,
-    model::{CardChannel, CardDismissReason, CardRequest, CardSourceState},
-    workspace_card::{workspace_owner_id, workspace_source},
-};
-use crate::bar::widgets::pill_strip::PillOrientation;
-use crate::runtime::{ShellRuntime, ShellSurfaces};
 use gpui::{
     App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, RenderOnce, Role,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
@@ -14,6 +6,15 @@ use shilpo_services::{CompositorConnection, WorkspaceInfo};
 use shilpo_ui::{
     ActiveTheme, ElementExt as _, Icon, IconName, StyledExt, h_flex, tooltip::Tooltip, v_flex,
 };
+
+use crate::actions::ActionInvocation;
+use crate::bar::cards::{
+    adapter::CardCoordinator,
+    model::{CardChannel, CardDismissReason, CardRequest, CardSourceState},
+    workspace_card::{workspace_owner_id, workspace_source},
+};
+use crate::bar::widgets::pill_strip::PillOrientation;
+use crate::runtime::{ShellRuntime, ShellSurfaces};
 
 fn workspace_actions_enabled(connection: &CompositorConnection) -> bool {
     matches!(connection, CompositorConnection::Ready)
@@ -461,11 +462,12 @@ impl RenderOnce for WorkspacesWidget {
 
 #[cfg(test)]
 mod tests {
+    use gpui::Pixels;
+
     use super::*;
     use crate::bar::widgets::pill_strip::{
         PILL_INDICATOR_SIZE, calculate_stretching_geometry, indicator_target,
     };
-    use gpui::Pixels;
 
     fn as_f32(value: Pixels) -> f32 {
         value.into()

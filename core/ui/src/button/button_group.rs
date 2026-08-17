@@ -1,3 +1,5 @@
+use std::{cell::Cell, rc::Rc};
+
 use gpui::InteractiveElement;
 use gpui::ParentElement;
 use gpui::{App, Axis, ElementId, IntoElement, Window};
@@ -5,7 +7,6 @@ use gpui::{
     RenderOnce, StatefulInteractiveElement as _, StyleRefinement, Styled, div,
     prelude::FluentBuilder as _,
 };
-use std::{cell::Cell, rc::Rc};
 
 use crate::{
     Disableable, Sizable, Size, StyledExt,
@@ -248,12 +249,13 @@ impl RenderOnce for ButtonGroup {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::button::button_geometry;
     use gpui::{
         AppContext, Axis, Context, Entity, IntoElement, Render, TestAppContext, VisualTestContext,
         Window, div, px,
     };
+
+    use super::*;
+    use crate::button::button_geometry;
 
     #[gpui::test]
     fn test_button_group_builder(_cx: &mut gpui::TestAppContext) {

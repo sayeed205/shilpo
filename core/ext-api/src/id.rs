@@ -1,7 +1,8 @@
-use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize, de};
 use std::fmt;
 use std::str::FromStr;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 /// Scoped error type for identifier parsing and validation.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -265,8 +266,9 @@ mod tests {
     }
 
     mod proptests {
-        use super::*;
         use proptest::prelude::*;
+
+        use super::*;
 
         fn is_valid_extension_id_oracle(s: &str) -> bool {
             let parts: Vec<&str> = s.split('.').collect();

@@ -1,6 +1,7 @@
+use std::fs;
+
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use shilpo::config::{ConfigResolver, ShellConfig};
-use std::fs;
 use tempfile::TempDir;
 
 const TOML_FIXTURE: &str = include_str!("../fixtures/config/valid_full.toml");

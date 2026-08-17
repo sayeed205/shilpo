@@ -221,6 +221,8 @@ fn score_candidate(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::shell::overview_search::{
         learning::{
@@ -229,7 +231,6 @@ mod tests {
         },
         types::{CompletionState, LatencyClass, ProviderId, SearchActivation, SearchResultIcon},
     };
-    use std::sync::Arc;
 
     fn make_test_candidate(
         provider: &'static str,

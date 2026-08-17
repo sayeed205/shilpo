@@ -4,7 +4,6 @@ use gpui::{
     Action, App, AppContext, ClickEvent, Context, Entity, Focusable, IntoElement, ParentElement,
     Render, SharedString, Styled, Window, div, prelude::FluentBuilder, px, relative,
 };
-
 use serde::Deserialize;
 use shilpo_ui::{
     ActiveTheme, Icon, IconName, Selectable as _, Side, Sizable,

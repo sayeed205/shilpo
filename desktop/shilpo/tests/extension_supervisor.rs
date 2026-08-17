@@ -1,3 +1,12 @@
+use std::{
+    io,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering},
+    },
+    time::{Duration, Instant},
+};
+
 use shilpo::shell::extensions::supervisor::{
     ChildSpawner, ChildStream, Clock, ExtensionSupervisor, READY_RESET_DURATION, RETRY_DELAYS,
     SupervisorState,
@@ -7,14 +16,6 @@ use shilpo::shell::extensions::{
 };
 use shilpo_ext_runtime::{
     HostGeneration, HostMessage, PROTOCOL_VERSION, ProcessCodecError, WorkerMessage, WorkerPayload,
-};
-use std::{
-    io,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU32, Ordering},
-    },
-    time::{Duration, Instant},
 };
 
 struct TestClock {

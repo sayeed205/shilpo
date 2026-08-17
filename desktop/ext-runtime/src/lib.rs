@@ -12,28 +12,14 @@ pub mod state;
 pub mod wasm;
 pub mod worker;
 
-pub use lint::{
-    CheckedExtensionData, InspectionPolicy, LintDiagnostic, LintOptions, LintReport, LintSeverity,
-    MAX_FILE_BYTES, MAX_PACKAGE_BYTES, WASM_LARGE_THRESHOLD_BYTES, inspect_extension,
-    inspect_extension_checked, inspect_extension_full, inspect_extension_with_timeout,
-    validate_png_bytes, validate_svg_bytes,
+pub use adapter::{
+    DispatchResult, ExtensionHost, ExtensionRuntime, GuestExtension, HostError, InMemoryRuntime,
+    RuntimeBudget, RuntimeError, RuntimeFailureKind,
 };
-
 pub use build::{
     ExtensionLanguage, ExtensionProjectConfig, OsProcessRunner, ProcessCommand, ProcessOutput,
     ProcessRunner, ResolvedBuildConfig, build_extension, find_canonical_wit_dir, find_local_jco,
     resolve_project_config,
-};
-pub use scaffold::{
-    PackageManager, ScaffoldError, ScaffoldOptions, ScaffoldResult, StarterContribution,
-    StarterLanguage, ViewSyntax, derive_extension_id, derive_package_name, scaffold_extension,
-    synchronize_capabilities_and_subscriptions, validate_target_path,
-};
-pub use secrets::{FakeSecretBroker, Oo7SecretBroker, SecretBroker, SecretBrokerError};
-
-pub use adapter::{
-    DispatchResult, ExtensionHost, ExtensionRuntime, GuestExtension, HostError, InMemoryRuntime,
-    RuntimeBudget, RuntimeError, RuntimeFailureKind,
 };
 pub use catalog::{
     CURRENT_SHILPO_VERSION, CatalogError, CatalogExtension, CatalogPaths, ExtensionCatalog,
@@ -56,6 +42,18 @@ pub use effects::{
     AuthorizedHostOperation, AuthorizedHostOperationKind, AuthorizedHttpRequest,
     CanonicalHttpTarget, capability_allows_http_target, capability_allows_operation,
 };
+pub use lint::{
+    CheckedExtensionData, InspectionPolicy, LintDiagnostic, LintOptions, LintReport, LintSeverity,
+    MAX_FILE_BYTES, MAX_PACKAGE_BYTES, WASM_LARGE_THRESHOLD_BYTES, inspect_extension,
+    inspect_extension_checked, inspect_extension_full, inspect_extension_with_timeout,
+    validate_png_bytes, validate_svg_bytes,
+};
+pub use scaffold::{
+    PackageManager, ScaffoldError, ScaffoldOptions, ScaffoldResult, StarterContribution,
+    StarterLanguage, ViewSyntax, derive_extension_id, derive_package_name, scaffold_extension,
+    synchronize_capabilities_and_subscriptions, validate_target_path,
+};
+pub use secrets::{FakeSecretBroker, Oo7SecretBroker, SecretBroker, SecretBrokerError};
 pub use state::{
     FakeStateStore, HeedStateStore, StateMutation, StatePolicy, StateSnapshot, StateStore,
     StateStoreError, StateValue,
@@ -73,19 +71,21 @@ pub use worker::{
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
     use flate2::read::GzDecoder;
     use shilpo_ext_api::{
         CanonicalId, Capability, ContainerDirection, ContainerNode, EventKind, ExtensionEvent,
         ExtensionId, ExtensionManifest, HostOperation, ManifestError, TextNode, ViewLimits,
         ViewNode, ViewTree,
     };
-    use std::collections::BTreeSet;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tar::Archive;
+
+    use super::*;
 
     const MANIFEST: &str = r#"
         id = "io.github.alice.world-clock"

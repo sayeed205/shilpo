@@ -1,5 +1,4 @@
-use crate::bar::cards::adapter::CardCoordinator;
-use crate::bar::cards::model::CardRequest;
+use std::sync::Mutex;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -12,13 +11,16 @@ use gpui::{
     WindowBounds, WindowHandle, WindowKind, WindowOptions, point, px, size,
 };
 use shilpo_ext_api::{CanonicalId, ExtensionId};
+use shilpo_services::capture::{CaptureIntent, capture_frame, frame_to_rgba};
 use shilpo_services::{
     BarState, CompositorAdapter, CompositorCommandBroker, CompositorOutput, CompositorSnapshot,
 };
 use shilpo_theme_daemon::DaemonState;
-use std::sync::Mutex;
 use uuid::Uuid;
 
+use super::{ShellRuntime, WallpaperPreviewResource};
+use crate::bar::cards::adapter::CardCoordinator;
+use crate::bar::cards::model::CardRequest;
 use crate::{
     actions::ActionInvocation,
     bar::{BarSpec, BarView, OutputDescriptor, ReconciliationOp, geometry::BarGeometry},
@@ -26,9 +28,6 @@ use crate::{
     extensions::{ContributionInstance, ContributionSurface},
     overview::{OverviewCloseReason, WorkspaceOverview},
 };
-use shilpo_services::capture::{CaptureIntent, capture_frame, frame_to_rgba};
-
-use super::{ShellRuntime, WallpaperPreviewResource};
 
 #[derive(Clone, Copy)]
 pub(crate) struct OverviewLifecycleCallback {
@@ -1997,8 +1996,9 @@ fn readiness_for(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{cell::Cell, rc::Rc};
+
+    use super::*;
 
     struct LifecycleTestView;
 

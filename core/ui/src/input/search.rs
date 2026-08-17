@@ -1,13 +1,13 @@
-use aho_corasick::AhoCorasick;
-use rust_i18n::t;
 use std::{ops::Range, rc::Rc};
 
+use aho_corasick::AhoCorasick;
 use gpui::{
     App, AppContext as _, Context, Empty, Entity, FocusHandle, Focusable, Half,
     InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, Styled, Subscription,
     Window, actions, div, prelude::FluentBuilder as _,
 };
 use ropey::Rope;
+use rust_i18n::t;
 
 use crate::{
     ActiveTheme, Disableable, ElementExt, IconName, Selectable, Sizable,

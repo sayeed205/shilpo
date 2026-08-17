@@ -1,5 +1,16 @@
-use instant::Duration;
 use std::ops::Range;
+
+use gpui::{
+    App, AvailableSpace, ClickEvent, Context, DefiniteLength, EdgesRefinement, EventEmitter,
+    ListSizingBehavior, RenderOnce, Role, ScrollStrategy, SharedString, StatefulInteractiveElement,
+    StyleRefinement, Subscription, px, size,
+};
+use gpui::{
+    AppContext, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
+    Length, MouseButton, ParentElement, Render, Styled, Task, Window, div, prelude::FluentBuilder,
+};
+use instant::Duration;
+use rust_i18n::t;
 
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
 use crate::input::InputState;
@@ -12,16 +23,6 @@ use crate::{
 };
 use crate::{Icon, IndexPath, Selectable, Sizable, StyledExt};
 use crate::{VirtualListScrollHandle, list::ListDelegate, v_virtual_list};
-use gpui::{
-    App, AvailableSpace, ClickEvent, Context, DefiniteLength, EdgesRefinement, EventEmitter,
-    ListSizingBehavior, RenderOnce, Role, ScrollStrategy, SharedString, StatefulInteractiveElement,
-    StyleRefinement, Subscription, px, size,
-};
-use gpui::{
-    AppContext, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
-    Length, MouseButton, ParentElement, Render, Styled, Task, Window, div, prelude::FluentBuilder,
-};
-use rust_i18n::t;
 
 pub(crate) fn init(cx: &mut App) {
     let context: Option<&str> = Some("List");

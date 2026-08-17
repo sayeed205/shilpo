@@ -659,12 +659,11 @@ fn consume_paragraph(children: &mut Vec<BlockNode>, paragraph: &mut Paragraph) {
 mod tests {
     use gpui::{px, relative};
 
+    use super::trim_text;
     use crate::text::{
         document::ParsedDocument,
         node::{BlockNode, ImageNode, InlineNode, NodeContext, Paragraph},
     };
-
-    use super::trim_text;
 
     #[test]
     fn test_cleanup_html() {

@@ -1,13 +1,14 @@
-use crate::{ActiveTheme, Sizable, Size, StyledExt};
+use std::f32::consts::TAU;
+
 use gpui::{
     Animation, AnimationExt as _, App, ElementId, Hsla, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, RenderOnce, StyleRefinement, Styled, Window, canvas, div,
     prelude::FluentBuilder as _, px,
 };
 use instant::Duration;
-use std::f32::consts::TAU;
 
 use crate::motion::ExpressiveSpring;
+use crate::{ActiveTheme, Sizable, Size, StyledExt};
 
 /// A Material Design 3 Expressive morphing star loading indicator.
 #[derive(IntoElement)]

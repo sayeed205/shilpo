@@ -1,12 +1,5 @@
 use std::rc::Rc;
 
-use crate::{
-    ActiveTheme, Disableable, FocusableExt as _, Icon, IconName, Selectable, Sizable, Size,
-    StyleSized, StyledExt,
-    button::ButtonIcon,
-    h_flex,
-    tooltip::{ManagedTooltipExt as _, Tooltip},
-};
 use gpui::{
     AbsoluteLength, AnyElement, App, Background, ClickEvent, Corners, CursorStyle, DefiniteLength,
     Div, Edges, ElementId, Hsla, InteractiveElement, Interactivity, IntoElement, Length,
@@ -20,6 +13,13 @@ use super::{
     button_geometry::ButtonSlotGeometry,
     button_geometry::{self, CornerShape, CornerToken},
     button_shape_tokens, button_shared_tokens, button_tokens, shared,
+};
+use crate::{
+    ActiveTheme, Disableable, FocusableExt as _, Icon, IconName, Selectable, Sizable, Size,
+    StyleSized, StyledExt,
+    button::ButtonIcon,
+    h_flex,
+    tooltip::{ManagedTooltipExt as _, Tooltip},
 };
 
 #[derive(Default, Clone, Copy)]

@@ -4,7 +4,6 @@
 
 use crate::bindings::shilpo::extension::state::{StateMutation, StateSnapshot, WatchRegistration};
 use crate::bindings::shilpo::extension::types::{DataValue, Error};
-
 /// Typed state helper for key-value storage and reactive watches.
 ///
 /// # Examples
@@ -93,10 +92,11 @@ mod imp {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod imp {
-    use super::*;
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::sync::Mutex;
+
+    use super::*;
 
     static FAKE_STORE: Mutex<Option<HashMap<String, (DataValue, u64)>>> = Mutex::new(None);
     static REVISION: Mutex<u64> = Mutex::new(1);

@@ -1,6 +1,6 @@
-use gpui::Half;
 use std::ops::Range;
 
+use gpui::Half;
 use gpui::{
     App, Font, LineFragment, Pixels, Point, ShapedLine, Size, TextAlign, Window, point, px, size,
 };
@@ -686,10 +686,11 @@ impl LineLayout {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::rc::Rc;
 
     use gpui::{Boundary, FontFeatures, FontStyle, FontWeight, px};
+
+    use super::*;
 
     #[test]
     fn test_update() {

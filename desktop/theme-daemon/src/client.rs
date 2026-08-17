@@ -1,14 +1,16 @@
-use crate::daemon::{ChangeKind, DaemonState, ThemeUpdate};
-use crate::dbus::ThemeDbusProxy;
-use crate::persistence::read_state_snapshot;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
 use anyhow::{Context, Result, anyhow};
 use futures_lite::stream::StreamExt;
 use shilpo_ui::theme::{ColorSource, ThemeMode};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 use zbus::Connection;
+
+use crate::daemon::{ChangeKind, DaemonState, ThemeUpdate};
+use crate::dbus::ThemeDbusProxy;
+use crate::persistence::read_state_snapshot;
 
 #[derive(Clone)]
 pub struct ThemeClient {

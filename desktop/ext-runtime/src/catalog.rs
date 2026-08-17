@@ -1,4 +1,10 @@
-use crate::cli::ExtensionCli;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use flate2::read::GzDecoder;
@@ -9,13 +15,9 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shilpo_ext_api::{Capability, ExtensionId, ExtensionManifest, SUPPORTED_API_VERSION};
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tar::Archive;
+
+use crate::cli::ExtensionCli;
 
 const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_INDEX_BYTES: usize = 8 * 1024 * 1024;
@@ -1907,11 +1909,13 @@ fn unique_suffix() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fs;
+
     use flate2::Compression;
     use flate2::write::GzEncoder;
-    use std::fs;
     use tar::{Builder, Header};
+
+    use super::*;
 
     fn test_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("shilpo-catalog-{name}-{}", unique_suffix()));

@@ -1,8 +1,7 @@
 use gpui::{Hsla, Pixels, px};
 
-use crate::ActiveTheme;
-
 use super::{IconButtonShape, IconButtonSize, IconButtonVariant, IconButtonWidth};
+use crate::ActiveTheme;
 
 pub(crate) fn resolve_width(size: IconButtonSize, width: IconButtonWidth) -> Pixels {
     let container = dimensions(size).container;

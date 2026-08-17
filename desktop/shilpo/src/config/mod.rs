@@ -36,9 +36,11 @@ pub use watcher::{
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::str::FromStr;
+
     use tempfile::TempDir;
+
+    use super::*;
 
     fn valid() -> ShellConfig {
         ShellConfig::default()

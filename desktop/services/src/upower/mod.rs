@@ -1,6 +1,7 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use futures_lite::StreamExt;
-use std::time::Duration;
 use tokio::sync::watch;
 use zbus::{Connection, proxy};
 
@@ -8,7 +9,6 @@ pub use crate::device_protocol::{
     BatteryChargeState, BatteryCoarseLevel, BatteryDevicePayload, BatteryPayload as BatteryInfo,
     BatteryTechnology, BatteryWarningLevel, OptionalBool, OptionalF64, OptionalU64,
 };
-
 use crate::runtime::{StateContext, StateRuntime};
 
 const UPOWER_SERVICE: &str = "org.freedesktop.UPower";

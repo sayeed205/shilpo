@@ -17,10 +17,13 @@ pub mod runtime;
 pub mod widgets;
 pub mod workspace_miniature;
 
+use std::sync::{Arc, Mutex};
+
 pub use actions::{
     ActionCategory, ActionDescriptor, ActionId, ActionRegistry, KeybindingManager, Shortcut,
 };
 pub use bar::BarView;
+use dbus::{DebugDbusService, ShellCommand, ShellDbusService, ShellStatus, ShellTelemetry};
 pub use error::ShellError;
 pub use extensions::{
     ContributionDescriptor, ContributionInstance, ContributionSurface, ExtensionCoordinator,
@@ -31,9 +34,6 @@ pub use notification::NotificationToastView;
 pub use osd::{OsdKind, OsdView};
 pub use overview::WorkspaceOverview;
 pub use runtime::ShellRuntime;
-
-use dbus::{DebugDbusService, ShellCommand, ShellDbusService, ShellStatus, ShellTelemetry};
-use std::sync::{Arc, Mutex};
 
 pub fn run_daemon() {
     let obs_guard = init_tracing();

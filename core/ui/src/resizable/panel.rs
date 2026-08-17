@@ -10,11 +10,10 @@ use gpui::{
     prelude::FluentBuilder,
 };
 
+use super::{ResizableState, resizable_panel, resize_handle};
 use crate::{
     AxisExt, ElementExt, h_flex, resizable::PANEL_MIN_SIZE, styled::StyledExt as _, v_flex,
 };
-
-use super::{ResizableState, resizable_panel, resize_handle};
 
 pub enum ResizablePanelEvent {
     Resized,

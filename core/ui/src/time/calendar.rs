@@ -9,13 +9,12 @@ use gpui::{
 };
 use rust_i18n::t;
 
+use super::utils::days_in_month;
 use crate::{
     ActiveTheme, Disableable as _, IconName, Selectable, Sizable, Size, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
-
-use super::utils::days_in_month;
 
 /// Events emitted by the calendar.
 pub enum CalendarEvent {

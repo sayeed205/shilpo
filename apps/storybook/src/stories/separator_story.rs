@@ -1,9 +1,10 @@
-use crate::section;
 use gpui::{
     App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled,
     Window, px,
 };
 use shilpo_ui::{ActiveTheme, h_flex, label::Label, separator::Separator, v_flex};
+
+use crate::section;
 
 const DESCRIPTION: &str = "GPUI Component is a Rust GUI components for building fantastic cross-platform desktop application by using GPUI.";
 

@@ -1,10 +1,3 @@
-use serde::{Deserialize, Serialize};
-use shilpo_ext_runtime::{
-    ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, FrameReader,
-    HostGeneration, HostMessage, PROTOCOL_VERSION, ProcessCodecError, ReplaceableEvent,
-    ScriptExtensionStatus, WasmExtensionStatus, WorkerMessage, WorkerPayload,
-    recv_worker_message_nonblocking, send_host_message,
-};
 use std::{
     collections::{HashMap, HashSet},
     io,
@@ -17,6 +10,14 @@ use std::{
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
+};
+
+use serde::{Deserialize, Serialize};
+use shilpo_ext_runtime::{
+    ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate, FrameReader,
+    HostGeneration, HostMessage, PROTOCOL_VERSION, ProcessCodecError, ReplaceableEvent,
+    ScriptExtensionStatus, WasmExtensionStatus, WorkerMessage, WorkerPayload,
+    recv_worker_message_nonblocking, send_host_message,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

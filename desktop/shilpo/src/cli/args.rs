@@ -1,5 +1,6 @@
-use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -524,8 +525,9 @@ impl From<ViewSyntaxValue> for shilpo_ext_runtime::ViewSyntax {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clap::Parser;
+
+    use super::*;
 
     #[test]
     fn test_package_manager_value_deno_conversion() {

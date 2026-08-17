@@ -583,13 +583,14 @@ mod tests {
 
     #[test]
     fn test_all_sigils_scope_to_expected_providers() {
+        use shilpo_services::ClipboardItem;
+        use tokio::sync::watch;
+
         use crate::actions::{ActionCategory, ActionDescriptor, ActionId, ActionInputRequirement};
         use crate::shell::overview_search::{
             ActionSearchProvider, CalculatorSearchProvider, ClipboardSearchProvider,
             QuicklinksSearchProvider,
         };
-        use shilpo_services::ClipboardItem;
-        use tokio::sync::watch;
 
         let actions = vec![ActionDescriptor {
             id: ActionId::ToggleOverview,
@@ -680,12 +681,14 @@ mod tests {
 
     #[test]
     fn test_unscoped_query_returns_ordered_mix_from_multiple_providers() {
+        use std::path::PathBuf;
+
+        use shilpo_services::{AppScanner, Application};
+
         use crate::actions::{ActionCategory, ActionDescriptor, ActionId, ActionInputRequirement};
         use crate::shell::overview_search::{
             ActionSearchProvider, AppSearchProvider, QuicklinksSearchProvider,
         };
-        use shilpo_services::{AppScanner, Application};
-        use std::path::PathBuf;
 
         let scanner = AppScanner::from_applications(vec![Application {
             name: "Terminal Emulator".to_string(),
@@ -757,17 +760,19 @@ mod tests {
 
     #[test]
     fn test_every_action_result_variant_produced_by_domain_providers_via_coordinator() {
+        use std::path::PathBuf;
+
+        use shilpo_services::{
+            AppScanner, Application, ClipboardItem, CompositorConnection, CompositorSnapshot,
+            DomainVersion, TestCompositorAdapter, WindowInfo,
+        };
+        use tokio::sync::watch;
+
         use crate::actions::{ActionCategory, ActionDescriptor, ActionId, ActionInputRequirement};
         use crate::shell::overview_search::{
             ActionSearchProvider, AppSearchProvider, CalculatorSearchProvider,
             ClipboardSearchProvider, QuicklinksSearchProvider, WindowSearchProvider,
         };
-        use shilpo_services::{
-            AppScanner, Application, ClipboardItem, CompositorConnection, CompositorSnapshot,
-            DomainVersion, TestCompositorAdapter, WindowInfo,
-        };
-        use std::path::PathBuf;
-        use tokio::sync::watch;
 
         let snapshot = CompositorSnapshot {
             version: DomainVersion::new(1, 1),

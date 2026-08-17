@@ -1,9 +1,3 @@
-use crate::highlighter::{HighlightTheme, LanguageRegistry};
-
-use anyhow::{Context, Result, anyhow};
-use gpui::{HighlightStyle, SharedString};
-
-use ropey::{ChunkCursor, Rope};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{
@@ -11,9 +5,15 @@ use std::{
     ops::{ControlFlow, Range},
     usize,
 };
+
+use anyhow::{Context, Result, anyhow};
+use gpui::{HighlightStyle, SharedString};
+use ropey::{ChunkCursor, Rope};
 use tree_sitter::{
     InputEdit, ParseOptions, Parser, Point, Query, QueryCursor, StreamingIterator, Tree,
 };
+
+use crate::highlighter::{HighlightTheme, LanguageRegistry};
 
 /// When a node spans more than this many bytes beyond the requested query
 /// range, we recurse into its children instead of querying it directly.

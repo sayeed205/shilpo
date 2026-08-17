@@ -1,6 +1,7 @@
-use crate::events::WallpaperTarget;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::events::WallpaperTarget;
 
 #[derive(
     Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord,

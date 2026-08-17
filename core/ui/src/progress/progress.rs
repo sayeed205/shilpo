@@ -1,4 +1,3 @@
-use crate::{ActiveTheme, Sizable, Size, StyledExt};
 use gpui::{
     Animation, AnimationExt as _, App, Background, Corners, ElementId, Hsla,
     InteractiveElement as _, IntoElement, ParentElement, Pixels, RenderOnce, Role,
@@ -8,6 +7,7 @@ use gpui::{
 use instant::Duration;
 
 use super::ProgressState;
+use crate::{ActiveTheme, Sizable, Size, StyledExt};
 
 /// A linear horizontal progress bar element.
 #[derive(IntoElement)]

@@ -1,4 +1,3 @@
-use anyhow::Result;
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
@@ -6,11 +5,13 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+
+use anyhow::Result;
+pub use shilpo_device::{DomainLifecycle, DomainPortTelemetry};
 use tokio::sync::{broadcast, watch};
 use zbus::{Connection, interface, object_server::SignalEmitter};
 
 pub use crate::compositor::{CancellationReason, DomainVersion, StaleUpdateError, SupervisorState};
-pub use shilpo_device::{DomainLifecycle, DomainPortTelemetry};
 
 const NOTIFICATION_OBJECT_PATH: &str = "/org/freedesktop/Notifications";
 

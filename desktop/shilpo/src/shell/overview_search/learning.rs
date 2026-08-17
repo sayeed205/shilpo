@@ -18,12 +18,13 @@
 //! - **Explicit Reset**: Per-item and global resets take effect immediately in both persistent
 //!   and in-memory stores.
 
-use shilpo_services::{HeedSessionStore, SearchLearningRecord};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use shilpo_services::{HeedSessionStore, SearchLearningRecord};
 
 /// Maximum score boost that learning can contribute to a candidate (+40).
 pub const MAX_INFLUENCE_BOOST: i64 = 40;

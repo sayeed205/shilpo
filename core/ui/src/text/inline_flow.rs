@@ -11,12 +11,11 @@ use gpui::{
     WhiteSpace, Window, img, point, prelude::FluentBuilder as _, px, relative, size,
 };
 
-use crate::{WindowExt as _, tooltip::Tooltip};
-
 use super::{
     inline::{Inline, InlineState},
     node::LinkMark,
 };
+use crate::{WindowExt as _, tooltip::Tooltip};
 
 const IMAGE_LEN: usize = 1;
 

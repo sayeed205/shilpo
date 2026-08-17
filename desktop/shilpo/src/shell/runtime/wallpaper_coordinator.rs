@@ -1,13 +1,15 @@
-use crate::config::ExtensionsConfig;
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
+
 use shilpo_ext_api::{
     CanonicalId, ExtensionEvent, ExtensionId, WallpaperMode, WallpaperRequest,
     WallpaperRequestReason, WallpaperSource, WallpaperTarget, WallpaperTargetKind, WorkspaceTarget,
 };
 use shilpo_ext_runtime::{ContributionDescriptor, ContributionSurface, ExtensionGeneration};
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+
+use crate::config::ExtensionsConfig;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PendingWallpaperRequest {
@@ -374,8 +376,9 @@ impl WallpaperCoordinator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use shilpo_ext_api::ContributionId;
+
+    use super::*;
 
     #[test]
     fn coordinator_tracks_active_provider_and_discards_stale_replies() {

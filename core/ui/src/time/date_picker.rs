@@ -9,6 +9,7 @@ use gpui::{
 };
 use rust_i18n::t;
 
+use super::calendar::{Calendar, CalendarEvent, CalendarState, Date, Matcher};
 use crate::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyleSized as _, StyledExt as _,
     actions::{Cancel, Confirm},
@@ -17,8 +18,6 @@ use crate::{
     input::{Delete, clear_button, input_style},
     v_flex,
 };
-
-use super::calendar::{Calendar, CalendarEvent, CalendarState, Date, Matcher};
 
 const CONTEXT: &'static str = "DatePicker";
 pub(crate) fn init(cx: &mut App) {

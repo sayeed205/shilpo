@@ -1,9 +1,11 @@
+use std::fs;
+
+use clap::Parser;
+use tempfile::TempDir;
+
 use crate::adapters::ConfigMigrateAdapter;
 use crate::args::{Cli, Commands, ConfigCommands, ModeValue, ShellCommands, VisibilityAction};
 use crate::output::{CliOutput, EXIT_FAILURE, EXIT_INVALID_ARGS, JsonEnvelope, JsonError};
-use clap::Parser;
-use std::fs;
-use tempfile::TempDir;
 
 #[test]
 fn test_cli_parser_shell_subcommands() {
@@ -759,8 +761,9 @@ fn test_cli_config_effective_toml_is_deterministic_for_dynamic_maps() {
 
 #[test]
 fn test_cli_parser_ext_build() {
-    use crate::args::ExtCommands;
     use std::path::PathBuf;
+
+    use crate::args::ExtCommands;
 
     let cli = Cli::try_parse_from(["shilpo", "ext", "build"]).unwrap();
     assert!(matches!(
@@ -952,8 +955,9 @@ fn test_cli_parser_ext_new_view_syntax() {
 
 #[test]
 fn test_cli_ext_new_adapter_view_syntax_scaffolding() {
-    use crate::adapters::ExtAdapter;
     use shilpo_ext_runtime::{StarterContribution, StarterLanguage, ViewSyntax};
+
+    use crate::adapters::ExtAdapter;
 
     let dir = TempDir::new().unwrap();
     let target_jsx = dir.path().join("widget-jsx");

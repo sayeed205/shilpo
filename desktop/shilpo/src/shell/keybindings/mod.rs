@@ -1,8 +1,9 @@
 //! Global shortcut backend abstraction and Niri KDL generated include renderer.
 
-use crate::shell::actions::ResolvedShortcut;
 use std::path::PathBuf;
 use std::{fs, sync::Arc};
+
+use crate::shell::actions::ResolvedShortcut;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectionStatus {

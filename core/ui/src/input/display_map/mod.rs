@@ -17,13 +17,13 @@ mod text_wrapper;
 mod wrap_map;
 
 // Re-export public API
-pub use self::display_map::DisplayMap;
-pub(crate) use self::text_wrapper::LineLayout;
-
 // Re-export FoldRange and extract_fold_ranges
 #[cfg(not(feature = "tree-sitter"))]
 pub use folding::Tree;
 pub use folding::{FoldRange, extract_fold_ranges};
+
+pub use self::display_map::DisplayMap;
+pub(crate) use self::text_wrapper::LineLayout;
 
 /// Position in the buffer (logical text).
 ///

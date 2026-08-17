@@ -1,3 +1,5 @@
+use std::{ops::Range, rc::Rc};
+
 use gpui::Corners;
 use gpui::Half;
 use gpui::{
@@ -12,16 +14,14 @@ use gpui::{
 };
 use ropey::Rope;
 use smallvec::SmallVec;
-use std::{ops::Range, rc::Rc};
 
+use super::{InputState, LastLayout, WhitespaceIndicators, mode::InputMode};
 use crate::{
     ActiveTheme as _, Colorize, IconName, Root, Selectable, Sizable as _,
     button::{Button, ButtonVariants as _},
     input::{RopeExt as _, blink_cursor::CURSOR_WIDTH, display_map::LineLayout},
     scroll::Scrollbar,
 };
-
-use super::{InputState, LastLayout, WhitespaceIndicators, mode::InputMode};
 
 const BOTTOM_MARGIN_ROWS: usize = 3;
 pub(super) const RIGHT_MARGIN: Pixels = px(10.);

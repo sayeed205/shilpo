@@ -4,6 +4,7 @@ use gpui::{App, Bounds, Hsla, PathBuilder, Pixels, SharedString, Window, fill, p
 use num_traits::{Num, ToPrimitive};
 use shilpo_macros::IntoPlot;
 
+use super::build_band_labels;
 use crate::{
     ActiveTheme,
     plot::{
@@ -11,8 +12,6 @@ use crate::{
         scale::{Scale, ScaleBand, ScaleLinear, Sealed},
     },
 };
-
-use super::build_band_labels;
 
 #[derive(IntoPlot)]
 pub struct CandlestickChart<T, X, Y>

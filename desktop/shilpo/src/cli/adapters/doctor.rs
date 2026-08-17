@@ -1,5 +1,6 @@
-use serde::Serialize;
 use std::path::{Path, PathBuf};
+
+use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -857,10 +858,12 @@ fn expand_home_path(path: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use tempfile::TempDir;
+
     use super::expand_home_path;
     use crate::cli::adapters::doctor::{DiagnosticStatus, DoctorChecker};
-    use std::path::PathBuf;
-    use tempfile::TempDir;
 
     #[test]
     fn wallpaper_path_expands_home_prefix() {

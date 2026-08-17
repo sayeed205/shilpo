@@ -1,13 +1,15 @@
-use crate::effects::{AuthorizedHostOperation, capability_allows_operation};
-use crate::{CircuitBreaker, DiagnosticCode, ExtensionDiagnostic};
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
+
 use shilpo_ext_api::{
     CanonicalId, Capability, ContributionId, ExtensionEvent, ExtensionId, ExtensionManifest,
     HostOperation, IdError, ManifestError, TextNode, ViewLimits, ViewNode, ViewTree,
     ViewValidationError,
 };
-use std::collections::HashMap;
-use std::fmt;
-use std::sync::Arc;
+
+use crate::effects::{AuthorizedHostOperation, capability_allows_operation};
+use crate::{CircuitBreaker, DiagnosticCode, ExtensionDiagnostic};
 
 pub type GrantChecker = Arc<dyn Fn(&ExtensionId, &str) -> bool + Send + Sync>;
 use std::time::Duration;
@@ -739,9 +741,10 @@ fn authorize_operation(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
     use crate::circuit_breaker::{CircuitStateKind, FakeMonotonicClock};
-    use std::time::Instant;
 
     struct ConfigurableFailureRuntime {
         failure_kind: Option<RuntimeFailureKind>,

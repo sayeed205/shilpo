@@ -1,12 +1,13 @@
-use gpui::{App, Entity, Menu, MenuItem, SharedString};
-use shilpo_ui::{ActiveTheme as _, GlobalState, Theme, ThemeMode, menu::AppMenuBar};
 use std::cell::Cell;
+
+use gpui::{App, Entity, Menu, MenuItem, SharedString};
+use shilpo_ui::WindowControlsMode;
+use shilpo_ui::{ActiveTheme as _, GlobalState, Theme, ThemeMode, menu::AppMenuBar};
 
 use crate::{
     About, AppState, Open, Quit, SelectLocale, SelectWindowControls, ToggleSearch,
     themes::SwitchThemeMode,
 };
-use shilpo_ui::WindowControlsMode;
 
 pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> {
     let app_menu_bar = AppMenuBar::new(cx);

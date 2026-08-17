@@ -1,7 +1,10 @@
-use shilpo_ext_api::{CanonicalId, ExtensionEvent, ExtensionId, HostOperation, ViewTree};
-use shilpo_ext_runtime::{AuthorizedHostOperation, AuthorizedHostOperationKind};
 use std::{collections::HashMap, fs, path::PathBuf, sync::Arc};
 
+use gpui::App;
+use shilpo_ext_api::{CanonicalId, ExtensionEvent, ExtensionId, HostOperation, ViewTree};
+use shilpo_ext_runtime::{AuthorizedHostOperation, AuthorizedHostOperationKind};
+
+use super::{ShellRuntime, shell_surfaces::ShellSurfaces};
 use crate::{
     actions::{ActionId, ActionInvocation},
     extensions::{
@@ -9,9 +12,6 @@ use crate::{
         ExtensionGeneration,
     },
 };
-use gpui::App;
-
-use super::{ShellRuntime, shell_surfaces::ShellSurfaces};
 
 fn circuit_notice_notification(
     notice: shilpo_ext_runtime::CircuitNotice,

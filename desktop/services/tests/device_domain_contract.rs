@@ -1,10 +1,11 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use shilpo_services::device_protocol::{
     AudioAction, CancellationReason, CommandId, CommandOutcome, CommandOutcomeRecord,
     DeviceCommand, DeviceDomain, DomainLifecycle, DomainVersion, PROTOCOL_VERSION, RejectionReason,
 };
 use shilpo_services::{DeviceDaemonService, InMemoryDeviceAdapter};
-use std::sync::Arc;
-use std::time::Duration;
 
 #[test]
 fn domain_version_orders_generation_before_revision() {

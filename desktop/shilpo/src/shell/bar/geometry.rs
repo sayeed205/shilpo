@@ -1,6 +1,7 @@
-use crate::config::{BarConfig, BarPosition, BarStyle};
 use gpui::layer_shell::Anchor;
 use gpui::{Bounds, DisplayId, Pixels, point, px, size};
+
+use crate::config::{BarConfig, BarPosition, BarStyle};
 
 pub(crate) const HUG_CORNER_RADIUS: f32 = 32.0;
 

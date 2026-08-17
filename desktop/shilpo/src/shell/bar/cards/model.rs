@@ -1102,8 +1102,9 @@ impl CardState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use gpui::{Bounds, DisplayId, Pixels, Point, Size, px};
+
+    use super::*;
 
     fn source(id: &str) -> CardSourceId {
         CardSourceId::singleton(id)

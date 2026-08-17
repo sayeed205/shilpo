@@ -1,8 +1,10 @@
+use std::sync::{Arc, Mutex};
+
+use anyhow::Result;
+
 use crate::session_store::{
     ClipboardItem, DEFAULT_CLIPBOARD_HISTORY_LIMIT, HeedSessionStore, SessionStoreError,
 };
-use anyhow::Result;
-use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
 pub enum ClipboardPersistenceError {
@@ -63,8 +65,9 @@ impl ClipboardStore for HeedClipboardStore {
     }
 }
 
-use crate::runtime::{StateContext, StateRuntime};
 use tokio::sync::watch;
+
+use crate::runtime::{StateContext, StateRuntime};
 
 /// Desktop Clipboard Service supporting persistent history via LMDB and Wayland ext-data-control.
 #[derive(Clone)]

@@ -8,16 +8,9 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use tempfile::TempDir;
-
 use semver::Version;
 use shilpo_ext_api::{CapabilityKind, ContributionId, ExtensionId, ViewLimits};
-
-use crate::CatalogPaths;
-use crate::worker::protocol::{
-    ContributionDescriptor, ExtensionGeneration, ExtensionSnapshot, ScriptExtensionStatus,
-};
-use crate::worker::protocol::{ContributionSurface, ExtensionRuntimeKind};
+use tempfile::TempDir;
 
 use super::manager::{ScriptClock, ScriptRuntime};
 use super::manifest::{
@@ -28,6 +21,11 @@ use super::record::{MAX_RECORD_BYTES, decode_and_validate_record};
 use super::runner::{
     ProcessOutput, ProcessRunner, RealProcessRunner, ScriptProcessError, StreamProcess,
 };
+use crate::CatalogPaths;
+use crate::worker::protocol::{
+    ContributionDescriptor, ExtensionGeneration, ExtensionSnapshot, ScriptExtensionStatus,
+};
+use crate::worker::protocol::{ContributionSurface, ExtensionRuntimeKind};
 
 // -----------------------------------------------------------------------------
 // 1. Manifest Parsing & Validation Tests

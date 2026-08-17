@@ -12,14 +12,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use crate::config::BarPosition;
 use gpui::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};
 use gpui::{
     App, AppContext, Bounds, DisplayId, IntoElement, Pixels, Task, WindowBackgroundAppearance,
     WindowBounds, WindowHandle, WindowKind, WindowOptions, px,
 };
-
-use crate::runtime::{ShellRuntime, ShellSurfaces};
 
 use super::{
     band::CardBandView,
@@ -33,6 +30,8 @@ use super::{
     },
     provider::CardProvider,
 };
+use crate::config::BarPosition;
+use crate::runtime::{ShellRuntime, ShellSurfaces};
 
 // ────────────────────────────────────────────────────────────────
 // CardCoordinator
@@ -1153,9 +1152,10 @@ impl CardCoordinator {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{Size, TestAppContext, size};
+
     use super::*;
     use crate::runtime::shell_surfaces::SurfaceLifecycle;
-    use gpui::{Size, TestAppContext, size};
 
     #[test]
     fn bar_menu_close_reason_mapping_is_exhaustive() {
@@ -1558,8 +1558,9 @@ mod tests {
 
     #[gpui::test]
     fn headless_shell_delivers_every_extension_menu_close_reason(cx: &mut TestAppContext) {
-        use crate::extensions::ExtensionCommand;
         use shilpo_ext_api::{CanonicalId, ContributionId, ExtensionEvent, ExtensionId};
+
+        use crate::extensions::ExtensionCommand;
 
         let cases = [
             (

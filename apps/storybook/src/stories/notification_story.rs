@@ -2,7 +2,6 @@ use gpui::{
     Anchor, App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
     IntoElement, ParentElement, Render, Styled, Window,
 };
-
 use shilpo_ui::{
     ActiveTheme, Theme, WindowExt as _,
     button::{Button, ButtonVariants as _},

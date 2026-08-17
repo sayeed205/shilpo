@@ -2,7 +2,6 @@ use std::ops::Range;
 
 use ropey::{LineType, Rope, RopeSlice};
 use sum_tree::Bias;
-
 #[cfg(feature = "tree-sitter")]
 pub use tree_sitter::{InputEdit, Point};
 
@@ -458,10 +457,10 @@ impl RopeExt for Rope {
 
 #[cfg(test)]
 mod tests {
-    use super::Point;
     use ropey::Rope;
     use sum_tree::Bias;
 
+    use super::Point;
     use crate::{RopeExt, input::Position};
 
     #[test]

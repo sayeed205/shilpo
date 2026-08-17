@@ -1,5 +1,6 @@
-use crate::config::types::ShellConfig;
 use serde::{Deserialize, Serialize};
+
+use crate::config::types::ShellConfig;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigChangeSet {

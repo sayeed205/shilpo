@@ -1,10 +1,11 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
 use crate::device_protocol::{
     AudioAction, BrightnessAction, CaffeineAction, DeviceCommand, DeviceDomain, DomainLifecycle,
     DomainPayload, DomainState, NightLightAction,
 };
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 pub trait DeviceAdapter: Send + Sync {
     fn name(&self) -> &'static str;

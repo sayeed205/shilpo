@@ -188,11 +188,12 @@ impl Element for ScrollableMask {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use gpui::{
         Context, IntoElement, Render, ScrollDelta, ScrollWheelEvent, TestAppContext,
         VisualTestContext, Window, div, point, px,
     };
+
+    use super::*;
 
     struct HorizontalScrollAreaTest {
         scroll_handle: ScrollHandle,

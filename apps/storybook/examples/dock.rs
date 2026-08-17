@@ -1,5 +1,8 @@
+use std::{sync::Arc, time::Duration};
+
 use anyhow::{Context as _, Result};
 use gpui::*;
+use serde::Deserialize;
 use shilpo_ui::{
     IconName, Root, Sizable,
     button::{Button, ButtonVariants as _},
@@ -7,9 +10,6 @@ use shilpo_ui::{
     menu::DropdownMenu,
     status_bar::StatusBar,
 };
-
-use serde::Deserialize;
-use std::{sync::Arc, time::Duration};
 use storybook::Assets;
 use storybook::{
     AccordionStory, AppState, AppTitleBar, ButtonStory, CalendarStory, DataTableStory, DialogStory,

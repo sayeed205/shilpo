@@ -1,9 +1,11 @@
-use crate::daemon::DaemonState;
-use anyhow::{Context, Result};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
+use crate::daemon::DaemonState;
 
 pub fn state_file_path() -> PathBuf {
     std::env::var_os("XDG_STATE_HOME")
@@ -83,8 +85,9 @@ pub fn read_state_snapshot() -> Option<DaemonState> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
 
     #[test]
     fn test_atomic_persistence_and_permissions() {

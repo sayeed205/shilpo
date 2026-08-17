@@ -2,6 +2,11 @@
 //!
 //! Based on the `Input` example from the `gpui` crate.
 //! https://github.com/zed-industries/zed/blob/main/crates/gpui/examples/input.rs
+use std::borrow::Cow;
+use std::cell::Cell;
+use std::ops::Range;
+use std::rc::Rc;
+
 use anyhow::Result;
 use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Edges, Entity, EntityInputHandler,
@@ -14,10 +19,6 @@ use gpui::{
 use gpui::{Half, TextAlign};
 use ropey::{Rope, RopeSlice};
 use serde::Deserialize;
-use std::borrow::Cow;
-use std::cell::Cell;
-use std::ops::Range;
-use std::rc::Rc;
 use sum_tree::Bias;
 use unicode_segmentation::*;
 
@@ -3162,9 +3163,10 @@ impl Render for InputState {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{TestAppContext, VisualTestContext};
+
     use super::*;
     use crate::theme::Theme;
-    use gpui::{TestAppContext, VisualTestContext};
 
     struct InputView {
         input: Entity<InputState>,

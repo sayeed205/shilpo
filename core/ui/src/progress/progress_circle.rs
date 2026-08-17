@@ -1,4 +1,5 @@
-use crate::{ActiveTheme, Sizable, Size, StyledExt};
+use std::f32::consts::TAU;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, ElementId, Hsla, InteractiveElement as _,
@@ -7,10 +8,10 @@ use gpui::{
 };
 use gpui::{Bounds, Corners, div, fill};
 use instant::Duration;
-use std::f32::consts::TAU;
 
 use super::ProgressState;
 use crate::plot::shape::{Arc, ArcData};
+use crate::{ActiveTheme, Sizable, Size, StyledExt};
 
 #[derive(Clone)]
 struct WaveMorphState {

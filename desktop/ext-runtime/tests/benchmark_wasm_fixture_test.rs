@@ -1,8 +1,9 @@
+use std::sync::Arc;
+
 use shilpo_ext_api::ExtensionId;
 use shilpo_ext_runtime::{
     ExtensionRuntime, FakeSecretBroker, RuntimeBudget, WasmModule, WasmRuntime,
 };
-use std::sync::Arc;
 
 const SDK_FIXTURE: &[u8] = include_bytes!(env!("SHILPO_SDK_FIXTURE_WASM"));
 

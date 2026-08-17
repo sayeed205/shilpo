@@ -1,9 +1,10 @@
+use std::io::Cursor;
+
 use shilpo_ext_runtime::{
     ExtensionCommand, HostGeneration, HostMessage, MAX_FRAME_SIZE, MAX_QUEUE_BOUND,
     PROTOCOL_VERSION, ProcessCodecError, read_frame, recv_host_message, send_host_message,
     write_frame,
 };
-use std::io::Cursor;
 
 #[test]
 fn frame_round_trip_and_partial_read_handling() {

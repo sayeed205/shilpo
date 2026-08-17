@@ -1,12 +1,14 @@
-use super::protocol::{ExtensionCommand, ExtensionGeneration, ExtensionUpdate};
-use crate::{CatalogPaths, WasmRuntime};
-use serde::{Deserialize, Serialize};
 use std::{
     io::{self, Read, Write},
     sync::mpsc,
     thread,
     time::Duration,
 };
+
+use serde::{Deserialize, Serialize};
+
+use super::protocol::{ExtensionCommand, ExtensionGeneration, ExtensionUpdate};
+use crate::{CatalogPaths, WasmRuntime};
 
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024; // 8MB

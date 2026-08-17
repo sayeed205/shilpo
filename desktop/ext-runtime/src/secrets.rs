@@ -1,8 +1,9 @@
-use shilpo_ext_api::{ExtensionId, SecretPurpose, SecretRef};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::RwLock;
 use std::time::Instant;
+
+use shilpo_ext_api::{ExtensionId, SecretPurpose, SecretRef};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SecretBrokerError {

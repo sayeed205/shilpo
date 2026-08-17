@@ -1900,11 +1900,13 @@ fn escape_js_template_contents(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::build::ProcessOutput;
     use std::collections::HashMap;
     use std::sync::Mutex;
+
     use tempfile::tempdir;
+
+    use super::*;
+    use crate::build::ProcessOutput;
 
     struct MockProcessRunner {
         commands: Mutex<Vec<ProcessCommand>>,

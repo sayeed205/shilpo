@@ -1,6 +1,3 @@
-use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use shilpo_ext_api::{CanonicalId, ExtensionId, IdError};
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -9,6 +6,10 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use shilpo_ext_api::{CanonicalId, ExtensionId, IdError};
 
 use super::migration::LATEST_CONFIG_VERSION;
 

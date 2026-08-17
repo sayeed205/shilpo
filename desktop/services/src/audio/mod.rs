@@ -1,10 +1,11 @@
+use std::sync::mpsc;
+
 use anyhow::Result;
 use libpulse_binding as pulse;
 use pulse::context::subscribe::InterestMaskSet;
 use pulse::context::{Context, FlagSet as ContextFlagSet, State as ContextState};
 use pulse::mainloop::threaded::Mainloop;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc;
 use tokio::sync::watch;
 
 /// Metadata describing an individual application audio playback stream (Sink Input).

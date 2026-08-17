@@ -1,6 +1,7 @@
-use gpui::{App, Global, ReadGlobal, SharedString};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
+
+use gpui::{App, Global, ReadGlobal, SharedString};
 
 #[derive(Default)]
 struct FontFamilyCacheState {

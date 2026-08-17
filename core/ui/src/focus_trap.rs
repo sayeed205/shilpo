@@ -1,9 +1,10 @@
+use std::collections::HashMap;
+
 use gpui::{
     AnyElement, App, Bounds, Element, ElementId, FocusHandle, Global, GlobalElementId,
     InteractiveElement, Interactivity, IntoElement, LayoutId, ParentElement, Pixels,
     StatefulInteractiveElement, StyleRefinement, Styled, WeakFocusHandle, Window,
 };
-use std::collections::HashMap;
 
 /// Initialize the focus trap manager as a global
 pub(crate) fn init(cx: &mut App) {

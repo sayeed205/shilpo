@@ -4,7 +4,6 @@ use std::{
 };
 
 use shilpo_services::{AppScanner, Application};
-
 use shilpo_ui::IconName;
 
 use super::{

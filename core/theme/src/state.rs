@@ -1,9 +1,9 @@
-use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashMap;
 use std::fmt;
 
 use mcu_material_color::Hct;
+use schemars::JsonSchema;
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 /// Deterministic placeholder timestamp used by `ThemeState::default()` so the pure
 /// default carries no hidden clock I/O (ADR-0002). System-boundary callers (e.g.
@@ -923,8 +923,9 @@ mod tests {
     }
 
     mod proptests {
-        use super::*;
         use proptest::prelude::*;
+
+        use super::*;
 
         fn arb_scheme_variant() -> impl Strategy<Value = SchemeVariant> {
             prop_oneof![

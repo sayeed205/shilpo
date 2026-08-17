@@ -2,11 +2,11 @@ mod loading_indicator;
 mod progress;
 mod progress_circle;
 
+use std::cell::Cell;
+
 pub use loading_indicator::LoadingIndicator;
 pub use progress::Progress;
 pub use progress_circle::ProgressCircle;
-
-use std::cell::Cell;
 
 /// Shared state for progress components.
 ///

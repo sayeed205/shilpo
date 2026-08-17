@@ -275,8 +275,9 @@ impl RenderOnce for BatteryIndicator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use shilpo_services::BatteryChargeState;
+
+    use super::*;
 
     #[test]
     fn absent_battery_has_no_visual_state() {

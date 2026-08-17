@@ -386,8 +386,9 @@ impl<E: Element + 'static> Element for RippleElement<E> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use gpui::{AppContext, TestAppContext, point};
+
+    use super::*;
 
     #[test]
     fn test_is_point_in_rounded_bounds() {

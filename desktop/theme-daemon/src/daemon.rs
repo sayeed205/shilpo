@@ -1,7 +1,9 @@
-use crate::adapters::{DesktopAdapter, select_desktop_adapter};
-use crate::dbus::{ActorMessage, EffectStatus, ThemeDbusService};
-use crate::executors::{AdapterExecutor, PersistenceExecutor, ProjectionStatus};
-use crate::portal::PortalObserver;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use anyhow::Result;
 use image::DynamicImage;
 use image::imageops::FilterType;
@@ -11,16 +13,15 @@ use shilpo_ui::theme::{
     ColorSource, SchemeVariant, ThemeCommand, ThemeMode, ThemeState, generate_m3_palettes,
     materialize_seed_with_variant, reduce, resolve_variant,
 };
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 use zbus::Connection;
 use zbus::names::BusName;
 
+use crate::adapters::{DesktopAdapter, select_desktop_adapter};
+use crate::dbus::{ActorMessage, EffectStatus, ThemeDbusService};
+use crate::executors::{AdapterExecutor, PersistenceExecutor, ProjectionStatus};
+use crate::portal::PortalObserver;
 use crate::wallpaper_cache::WallpaperAnalysisCache;
 
 #[cfg(test)]
@@ -1098,8 +1099,9 @@ fn auto_detect_variant(img: &DynamicImage) -> SchemeVariant {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::Path;
+
+    use super::*;
 
     const TEST_NOW: &str = "2026-08-07T09:00:00Z";
     const CUSTOM_SEED: u32 = 0xffaabbcc;
@@ -2063,9 +2065,10 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn wallpaper_cache_cold_vs_hit_benchmark() {
-        use image::{Rgba, RgbaImage};
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::time::Instant;
+
+        use image::{Rgba, RgbaImage};
 
         let temp_dir = tempfile::tempdir().unwrap();
         let img_path = temp_dir.path().join("bench_wallpaper.png");

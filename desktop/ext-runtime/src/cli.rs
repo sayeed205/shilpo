@@ -1,16 +1,18 @@
-use crate::adapter::{ExtensionRuntime, RuntimeBudget};
-use crate::catalog::{ExtensionCatalog, RegistrySource, generate_signing_key};
-use crate::wasm::{WasmModule, WasmRuntime};
-use flate2::Compression;
-use flate2::write::GzEncoder;
-use serde::{Deserialize, Serialize};
-use shilpo_ext_api::{ExtensionEvent, ExtensionId, ExtensionManifest, ViewLimits};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use serde::{Deserialize, Serialize};
+use shilpo_ext_api::{ExtensionEvent, ExtensionId, ExtensionManifest, ViewLimits};
 use tar::Builder;
+
+use crate::adapter::{ExtensionRuntime, RuntimeBudget};
+use crate::catalog::{ExtensionCatalog, RegistrySource, generate_signing_key};
+use crate::wasm::{WasmModule, WasmRuntime};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExtensionCliResult {

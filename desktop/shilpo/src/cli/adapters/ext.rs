@@ -1923,11 +1923,12 @@ fn should_ignore_path(path: &Path, root: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{
         ExtOpResult, record_refresh_warning, script_catalog_operation_error,
         script_item_from_status,
     };
-    use std::path::PathBuf;
 
     #[test]
     fn daemon_refresh_failure_keeps_local_mutation_successful() {

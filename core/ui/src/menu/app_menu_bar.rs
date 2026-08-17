@@ -1,3 +1,10 @@
+use gpui::{
+    App, AppContext as _, ClickEvent, Context, DismissEvent, Entity, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, KeyBinding, MouseButton, OwnedMenu, ParentElement,
+    Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, anchored,
+    deferred, div, prelude::FluentBuilder, px,
+};
+
 use crate::{
     ActiveTheme, Selectable,
     actions::{Cancel, SelectLeft, SelectRight},
@@ -5,12 +12,6 @@ use crate::{
     global_state::GlobalState,
     h_flex,
     menu::PopupMenu,
-};
-use gpui::{
-    App, AppContext as _, ClickEvent, Context, DismissEvent, Entity, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyBinding, MouseButton, OwnedMenu, ParentElement,
-    Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, anchored,
-    deferred, div, prelude::FluentBuilder, px,
 };
 
 const CONTEXT: &str = "AppMenuBar";
@@ -315,9 +316,9 @@ impl Render for AppMenu {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use gpui::TestAppContext;
+
+    use super::*;
 
     struct TestRoot {
         menu_bar: Entity<AppMenuBar>,

@@ -1,6 +1,7 @@
+use std::path::Path;
+
 use shilpo_theme_daemon::{DaemonState, ThemeClient};
 use shilpo_ui::theme::{ColorSource, ThemeMode};
-use std::path::Path;
 
 pub struct ThemeAdapter;
 

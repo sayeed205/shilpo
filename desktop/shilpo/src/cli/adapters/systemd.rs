@@ -1,10 +1,11 @@
 //! Systemd adapter for managing `shilpo-shell.service` user unit and polling D-Bus status.
 
+use std::process::Command;
+use std::time::{Duration, Instant};
+
 use super::ipc::IpcAdapter;
 use crate::cli::output::{EXIT_FAILURE, EXIT_UNAVAILABLE};
 use crate::shell::dbus::ShellStatus;
-use std::process::Command;
-use std::time::{Duration, Instant};
 
 pub const SERVICE_NAME: &str = "shilpo-shell.service";
 

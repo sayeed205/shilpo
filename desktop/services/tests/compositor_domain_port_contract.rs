@@ -1,11 +1,12 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use shilpo_services::{
     BrokerOptions, CancellationReason, CommandExecutorFn, CommandOutcome, CompositorAdapter,
     CompositorCommand, CompositorCommandBroker, CompositorConnection, CompositorSnapshot,
     DomainVersion, ExecutorAck, MailboxPolicy, StaleUpdateError, TestCompositorAdapter, WindowInfo,
     WorkspaceInfo,
 };
-use std::sync::Arc;
-use std::time::Duration;
 
 fn ready_snapshot(generation: u64, rev: u64) -> CompositorSnapshot {
     CompositorSnapshot {

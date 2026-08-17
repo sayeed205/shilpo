@@ -1,3 +1,5 @@
+use std::{io::Read, path::PathBuf, time::Duration};
+
 use gpui::{
     AnimationExt as _, App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, ObjectFit,
     ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
@@ -5,7 +7,6 @@ use gpui::{
 };
 use shilpo_ui::progress::ProgressCircle;
 use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
-use std::{io::Read, path::PathBuf, time::Duration};
 
 const MAX_ARTWORK_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CACHED_ARTWORKS: usize = 32;

@@ -1,8 +1,9 @@
-use anyhow::{Context, Result, anyhow};
-use rustix::fs::{MemfdFlags, memfd_create};
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::AsFd;
+
+use anyhow::{Context, Result, anyhow};
+use rustix::fs::{MemfdFlags, memfd_create};
 use tracing::{debug, error, info, warn};
 use wayland_client::{
     Connection, Dispatch, EventQueue, QueueHandle,

@@ -2,7 +2,6 @@ use gpui::{
     App, AppContext, Context, Entity, Focusable, IntoElement, Keystroke, ParentElement, Render,
     Styled, Window,
 };
-
 use shilpo_ui::{h_flex, kbd::Kbd, v_flex};
 
 use crate::section;

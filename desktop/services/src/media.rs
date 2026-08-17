@@ -1,10 +1,10 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 #[cfg(target_os = "linux")]
 use futures_lite::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tokio::sync::watch;
-
 #[cfg(target_os = "linux")]
 use zbus::proxy;
 

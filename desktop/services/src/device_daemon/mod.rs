@@ -2,18 +2,20 @@ pub mod dbus;
 pub mod in_memory_adapter;
 pub mod system_adapter;
 
-use crate::device_protocol::{
-    CancellationReason, CommandId, CommandOutcome, DeviceCommand, DeviceDomain, DomainLifecycle,
-    DomainPortTelemetry, DomainState, DomainVersion, RejectionReason, check_protocol_version,
-};
-pub use dbus::DeviceDbusService;
-pub use in_memory_adapter::{DeviceAdapter, InMemoryDeviceAdapter};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+pub use dbus::DeviceDbusService;
+pub use in_memory_adapter::{DeviceAdapter, InMemoryDeviceAdapter};
 pub use system_adapter::SystemDeviceAdapter;
 use tokio::sync::{Notify, broadcast, oneshot};
+
+use crate::device_protocol::{
+    CancellationReason, CommandId, CommandOutcome, DeviceCommand, DeviceDomain, DomainLifecycle,
+    DomainPortTelemetry, DomainState, DomainVersion, RejectionReason, check_protocol_version,
+};
 
 const DOMAIN_QUEUE_CAPACITY: usize = 16;
 
@@ -645,9 +647,10 @@ fn vpn_active(payload: &crate::device_protocol::NetworkPayload, name: &str) -> b
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use crate::device_protocol::{AudioAction, BrightnessAction, DomainPayload, PROTOCOL_VERSION};
-    use std::sync::Mutex;
 
     #[derive(Clone)]
     struct DeferredAdapter {

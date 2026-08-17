@@ -1,5 +1,12 @@
 use std::ops::Range;
 
+use gpui::{
+    App, AppContext as _, Axis, ElementId, Entity, IntoElement, ParentElement as _, Pixels,
+    RenderOnce, StyleRefinement, Styled, Window, container_query, div, prelude::FluentBuilder as _,
+    px, relative,
+};
+use rust_i18n::t;
+
 use crate::{
     IconName, Sizable, Size, StyledExt,
     group_box::GroupBoxVariant,
@@ -8,12 +15,6 @@ use crate::{
     setting::{SettingGroup, SettingPage},
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
 };
-use gpui::{
-    App, AppContext as _, Axis, ElementId, Entity, IntoElement, ParentElement as _, Pixels,
-    RenderOnce, StyleRefinement, Styled, Window, container_query, div, prelude::FluentBuilder as _,
-    px, relative,
-};
-use rust_i18n::t;
 
 const STACKED_LAYOUT_MAX_WIDTH: Pixels = px(480.);
 

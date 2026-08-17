@@ -1,5 +1,4 @@
 use gpui::{App, AppContext as _, Context, Entity, IntoElement, Render, Styled, Window};
-
 use shilpo_ui::{ActiveTheme, input::*};
 
 const EXAMPLE_CODE: &str = include_str!("./editor_story.rs");

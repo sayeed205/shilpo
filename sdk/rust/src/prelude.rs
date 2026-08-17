@@ -12,7 +12,6 @@ pub use crate::bindings::shilpo::extension::{
         ViewStyle, ViewTree,
     },
 };
-
 pub use crate::builder::{
     BadgeBuilder, ButtonBuilder, ContainerBuilder, IconBuilder, IconButtonBuilder, ImageBuilder,
     IntoViewNode, ListBuilder, LoadingIndicatorBuilder, ProgressBuilder, SliderBuilder,
@@ -20,7 +19,6 @@ pub use crate::builder::{
     build_view_tree, button, column, container, divider, grid, icon, icon_button, image, list,
     loading_indicator, progress, row, slider, spacer, stack, style, text, text_input, toggle,
 };
-
 pub use crate::data::DataValueExt;
 pub use crate::extension::Extension;
 pub use crate::state::State;

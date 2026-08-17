@@ -24,13 +24,14 @@
 //! The production [`HeedStateStore`] fails closed: if the persistent store cannot be
 //! opened, runtime construction fails rather than silently falling back to memory.
 
-use heed::types::{Bytes, Str};
-use shilpo_ext_api::ExtensionId;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
+
+use heed::types::{Bytes, Str};
+use shilpo_ext_api::ExtensionId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum StatePolicy {
@@ -829,8 +830,9 @@ impl HeedStateStore {
 
 #[cfg(test)]
 mod contract_tests {
-    use super::*;
     use std::sync::Arc;
+
+    use super::*;
 
     pub(crate) fn isolation(store: &dyn StateStore) {
         let alice = ExtensionId::new("io.github.alice.state").unwrap();
@@ -1146,9 +1148,10 @@ mod contract_tests {
 
 #[cfg(test)]
 mod fake_contract_tests {
+    use std::sync::Arc;
+
     use super::contract_tests as contract;
     use super::*;
-    use std::sync::Arc;
 
     fn corrupt_injector(store: &FakeStateStore) -> impl Fn(&ExtensionId) {
         move |extension_id| {
@@ -1221,10 +1224,12 @@ mod fake_contract_tests {
 
 #[cfg(test)]
 mod heed_contract_tests {
+    use std::sync::Arc;
+
+    use tempfile::TempDir;
+
     use super::contract_tests as contract;
     use super::*;
-    use std::sync::Arc;
-    use tempfile::TempDir;
 
     fn open_store() -> (TempDir, HeedStateStore) {
         let dir = TempDir::new().expect("temp dir");

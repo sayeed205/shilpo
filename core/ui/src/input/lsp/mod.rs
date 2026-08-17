@@ -1,7 +1,8 @@
+use std::rc::Rc;
+
 use anyhow::Result;
 use gpui::{App, Context, Hsla, MouseMoveEvent, SharedString, Task, Window};
 use ropey::Rope;
-use std::rc::Rc;
 
 use crate::input::{InputState, RopeExt, popovers::ContextMenu};
 

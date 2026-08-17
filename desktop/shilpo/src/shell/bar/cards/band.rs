@@ -10,7 +10,6 @@
 //! combined fade + scale + inward translation.  When `reduced_motion` is true
 //! content appears / disappears immediately.
 
-use crate::config::BarPosition;
 use gpui::{
     App, Bounds, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement,
     Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
@@ -22,6 +21,7 @@ use super::{
     model::{CardChannel, CardDismissReason, CardRequest, CardSourceId},
     provider::CardContentRenderFn,
 };
+use crate::config::BarPosition;
 
 // ────────────────────────────────────────────────────────────────
 // CardBandView

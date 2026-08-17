@@ -1,10 +1,12 @@
 //! org.shilpo.Shell D-Bus service server implementation.
 
-use super::types::{CommandResult, ShellStatus, ShellTelemetry};
-use shilpo_services::CompositorCommandBroker;
 use std::sync::{Arc, Mutex};
+
+use shilpo_services::CompositorCommandBroker;
 use tokio::sync::mpsc;
 use zbus::object_server::SignalEmitter;
+
+use super::types::{CommandResult, ShellStatus, ShellTelemetry};
 
 /// Internal command payload sent to GPUI thread mailbox.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -846,20 +846,22 @@ impl Element for TextSelectionController {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use gpui::{
+        AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+        Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement as _, Render,
+        Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
+    };
+
     use super::{SelectionScope, SelectionScopeElement};
     use crate::global_state::GlobalState;
     use crate::{
         Placement, Root,
         text::{TextView, TextViewState},
     };
-    use gpui::{
-        AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-        Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement as _, Render,
-        Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
-    };
-    use std::cell::Cell;
-    use std::rc::Rc;
-    use std::time::Duration;
 
     struct ChatTestView {
         focus_handle: FocusHandle,

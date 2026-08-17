@@ -1,14 +1,16 @@
-use crate::config::ShellConfig;
-use gpui::BackgroundExecutor;
-use shilpo_services::DeviceClient;
-pub use shilpo_services::DeviceCommand;
-use shilpo_services::{self};
-use shilpo_services::{AudioInfo, BatteryInfo, BrightnessInfo, MediaInfo, NetworkInfo};
 use std::{
     path::{Path, PathBuf},
     sync::mpsc,
     time::{Duration, Instant},
 };
+
+use gpui::BackgroundExecutor;
+use shilpo_services::DeviceClient;
+pub use shilpo_services::DeviceCommand;
+use shilpo_services::{self};
+use shilpo_services::{AudioInfo, BatteryInfo, BrightnessInfo, MediaInfo, NetworkInfo};
+
+use crate::config::ShellConfig;
 
 pub type UpdateSender = mpsc::SyncSender<WorkerUpdate>;
 pub type UpdateReceiver = mpsc::Receiver<WorkerUpdate>;
@@ -637,8 +639,9 @@ fn network_info(p: shilpo_services::NetworkPayload) -> NetworkInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn device_snapshot_applies_updates_correctly() {

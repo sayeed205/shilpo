@@ -1,5 +1,14 @@
 use std::{ops::Range, rc::Rc, time::Duration};
 
+use gpui::{
+    AppContext, Axis, Background, Bounds, ClickEvent, Context, Div, DragMoveEvent, EventEmitter,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
+    MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled, Task, UniformListScrollHandle, Window, div,
+    prelude::FluentBuilder, px, uniform_list,
+};
+
+use super::*;
 use crate::{
     ActiveTheme, ElementExt, Icon, IconName, StyleSized as _, StyledExt, VirtualListScrollHandle,
     actions::{
@@ -11,15 +20,6 @@ use crate::{
     scroll::{ScrollableMask, Scrollbar},
     v_flex,
 };
-use gpui::{
-    AppContext, Axis, Background, Bounds, ClickEvent, Context, Div, DragMoveEvent, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
-    MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled, Task, UniformListScrollHandle, Window, div,
-    prelude::FluentBuilder, px, uniform_list,
-};
-
-use super::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum SelectionMode {

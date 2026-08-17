@@ -525,8 +525,9 @@ fn render_physical_device_details(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use shilpo_services::{OptionalF64, OptionalU64};
+
+    use super::*;
 
     #[test]
     fn test_format_time_helpers() {

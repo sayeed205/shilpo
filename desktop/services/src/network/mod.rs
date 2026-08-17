@@ -4,14 +4,12 @@ pub mod dbus_client;
 pub mod vpn;
 pub mod wifi;
 
-pub use vpn::VpnConnection;
-pub use wifi::{WifiAccessPoint, WifiSecurity};
-
 use anyhow::Result;
 use futures_lite::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
-
+pub use vpn::VpnConnection;
+pub use wifi::{WifiAccessPoint, WifiSecurity};
 use zbus::{Connection, MessageStream};
 
 /// Physical or virtual network device interface description.

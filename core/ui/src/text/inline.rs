@@ -1,10 +1,10 @@
-use gpui::Corners;
 use std::{
     ops::Range,
     rc::Rc,
     sync::{Arc, Mutex},
 };
 
+use gpui::Corners;
 use gpui::{
     App, BorderStyle, Bounds, CursorStyle, Edges, Element, ElementId, GlobalElementId, Half,
     HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId, MouseButton,
@@ -597,8 +597,9 @@ fn point_in_text_selection(
 
 #[cfg(test)]
 mod tests {
-    use super::point_in_text_selection;
     use gpui::{point, px};
+
+    use super::point_in_text_selection;
 
     #[test]
     fn test_point_in_text_selection() {

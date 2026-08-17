@@ -13,16 +13,15 @@ use std::{
 
 use shilpo_ext_api::{CanonicalId, ExtensionId, ViewTree};
 
-use crate::worker::protocol::{
-    ContributionDescriptor, ContributionSurface, ExtensionRuntimeKind, ScriptExtensionStatus,
-};
-use crate::{CatalogPaths, CircuitBreaker, DiagnosticCode};
-
 use super::{
     manifest::{ScriptManifest, ScriptMode},
     record::decode_and_validate_record,
     runner::{ProcessOutput, ProcessRunner, RealProcessRunner, ScriptProcessError},
 };
+use crate::worker::protocol::{
+    ContributionDescriptor, ContributionSurface, ExtensionRuntimeKind, ScriptExtensionStatus,
+};
+use crate::{CatalogPaths, CircuitBreaker, DiagnosticCode};
 
 const MAX_DIAGNOSTICS_PER_BUNDLE: usize = 64;
 const MAX_SOURCE_DIAGNOSTICS: usize = 128;

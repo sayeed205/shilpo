@@ -7,6 +7,9 @@ use gpui::{
     StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, Window, div, px, relative,
 };
 
+use super::{
+    InputContentType, InputState, content_type::sync_native_content_type, element::EditorScrollbar,
+};
 use crate::button::{Button, ButtonVariants as _};
 use crate::input::clear_button;
 use crate::native_menu::NativeMenu;
@@ -15,10 +18,6 @@ use crate::{ActiveTheme, Colorize, v_flex};
 use crate::{IconName, Size};
 use crate::{Selectable, StyledExt, h_flex};
 use crate::{Sizable, StyleSized};
-
-use super::{
-    InputContentType, InputState, content_type::sync_native_content_type, element::EditorScrollbar,
-};
 
 /// Returns `(background, foreground)` colors for input-like components.
 pub(crate) fn input_style(disabled: bool, cx: &App) -> (Hsla, Hsla) {
@@ -612,8 +611,9 @@ impl RenderOnce for Input {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use gpui::AppContext;
+
+    use super::*;
 
     #[test]
     fn content_types_map_to_accessibility_roles() {

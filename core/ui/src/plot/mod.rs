@@ -5,19 +5,16 @@ pub mod scale;
 pub mod shape;
 pub mod tooltip;
 
-pub use shilpo_macros::IntoPlot;
-
 use std::{fmt::Debug, ops::Add};
 
+pub use axis::{AXIS_GAP, AxisLabelSide, AxisText, PlotAxis};
 use gpui::{
     AnyElement, App, Bounds, ElementId, IntoElement, Path, PathBuilder, Pixels, Point, Window,
     point, px,
 };
-
-pub use axis::{AXIS_GAP, AxisLabelSide, AxisText, PlotAxis};
 pub use grid::Grid;
 pub use label::PlotLabel;
-
+pub use shilpo_macros::IntoPlot;
 use tooltip::TooltipState;
 
 pub trait Plot: IntoElement {

@@ -1,3 +1,18 @@
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs,
+    hash::{Hash, Hasher},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, UNIX_EPOCH},
+};
+
+use semver::Version;
+use shilpo_ext_api::{
+    CanonicalId, Capability, ExtensionEvent, ExtensionId, ExtensionManifest, HostOperation,
+    ViewTree,
+};
+
 use super::process::HostGeneration;
 use super::protocol::{
     ContributionDescriptor, ContributionInstance, ContributionSurface, DevReloadOutcome,
@@ -7,19 +22,6 @@ use super::protocol::{
 use crate::{
     CURRENT_SHILPO_VERSION, CatalogPaths, ExtensionCatalog, ExtensionHost, ExtensionRuntime,
     MonotonicClock, SystemMonotonicClock,
-};
-use semver::Version;
-use shilpo_ext_api::{
-    CanonicalId, Capability, ExtensionEvent, ExtensionId, ExtensionManifest, HostOperation,
-    ViewTree,
-};
-use std::{
-    collections::{BTreeMap, HashMap},
-    fs,
-    hash::{Hash, Hasher},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::{Duration, UNIX_EPOCH},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1550,14 +1552,16 @@ fn compute_fingerprint(root: &Path, manifest: &ExtensionManifest) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        CircuitStateKind, DiagnosticCode, FakeMonotonicClock, GuestExtension, InMemoryRuntime,
-    };
-    use shilpo_ext_api::{BarMenuCloseReason, HostOperation, ImageNode, TextNode, ViewNode};
     use std::{
         sync::{Arc, Mutex},
         time::Instant,
+    };
+
+    use shilpo_ext_api::{BarMenuCloseReason, HostOperation, ImageNode, TextNode, ViewNode};
+
+    use super::*;
+    use crate::{
+        CircuitStateKind, DiagnosticCode, FakeMonotonicClock, GuestExtension, InMemoryRuntime,
     };
 
     struct TestGuest;

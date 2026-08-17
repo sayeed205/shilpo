@@ -1,11 +1,13 @@
+use std::sync::Arc;
+
+use zbus::object_server::SignalEmitter;
+
 use super::DeviceDaemonService;
 use crate::device_protocol::{
     AudioPayload, BatteryPayload, BluetoothPayload, BrightnessPayload, CaffeinePayload,
     DeviceCommand, DeviceDomain, DomainLifecycle, DomainPayload, DomainState, MediaPayload,
     NetworkPayload, NightLightPayload, PROTOCOL_VERSION, PowerProfilePayload,
 };
-use std::sync::Arc;
-use zbus::object_server::SignalEmitter;
 
 fn lifecycle_code(lifecycle: DomainLifecycle) -> u8 {
     match lifecycle {

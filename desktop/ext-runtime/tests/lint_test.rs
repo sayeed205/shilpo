@@ -1,10 +1,10 @@
 use std::fs;
-use tempfile::tempdir;
 
 use shilpo_ext_runtime::{
     InspectionPolicy, LintDiagnostic, LintSeverity, inspect_extension, validate_png_bytes,
     validate_svg_bytes,
 };
+use tempfile::tempdir;
 
 #[test]
 fn test_missing_manifest() {
