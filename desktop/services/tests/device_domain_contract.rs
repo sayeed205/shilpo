@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use shilpo_services::device_protocol::{
@@ -8,9 +9,89 @@ use shilpo_services::device_protocol::{
 };
 use shilpo_services::{DeviceAdapter, DeviceClient, DeviceDaemonService, InMemoryDeviceAdapter};
 
+/// Test-only adapter that separates the backend *acknowledging* a command
+/// (`execute_command` resolving `Ok`) from the effect becoming observable to
+/// the daemon's confirmation poll (`get_domain_state` reporting it). The
+/// production `InMemoryDeviceAdapter` applies state before `execute_command`
+/// resolves, so ack and convergence are indistinguishable through it; this
+/// adapter exists solely to make scenario_11 test what its name claims,
+/// without adding any test-only method to a production type.
+#[derive(Clone)]
+struct DelayedConfirmAdapter {
+    inner: InMemoryDeviceAdapter,
+    confirmed: Arc<AtomicBool>,
+    pending_volume: Arc<Mutex<Option<u8>>>,
+}
+
+impl DelayedConfirmAdapter {
+    fn new() -> Self {
+        Self {
+            inner: InMemoryDeviceAdapter::new(),
+            confirmed: Arc::new(AtomicBool::new(false)),
+            pending_volume: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Models the backend later reporting the command's effect, decoupled
+    /// from the acknowledgement `execute_command` already gave.
+    fn confirm(&self) {
+        self.confirmed.store(true, Ordering::SeqCst);
+    }
+}
+
+impl DeviceAdapter for DelayedConfirmAdapter {
+    fn name(&self) -> &'static str {
+        "delayed-confirm-test-adapter"
+    }
+
+    fn execute_command(
+        &self,
+        command: DeviceCommand,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<DomainState, String>> + Send + 'static>,
+    > {
+        if let DeviceCommand::Audio(AudioAction::SetVolume(v)) = &command {
+            *self.pending_volume.lock().unwrap() = Some(*v);
+        }
+        // Resolves immediately: the backend has acknowledged the command.
+        // Its return value is not what the daemon uses to detect convergence
+        // (that comes from a separate `get_domain_state` poll loop), so an
+        // instantly-resolving future here is a faithful "acknowledged" signal
+        // rather than a shortcut.
+        let placeholder = self.inner.get_domain_state(command.domain());
+        Box::pin(async move { Ok(placeholder) })
+    }
+
+    fn get_domain_state(&self, domain: DeviceDomain) -> DomainState {
+        if domain == DeviceDomain::Audio
+            && self.confirmed.load(Ordering::SeqCst)
+            && let Some(volume) = *self.pending_volume.lock().unwrap()
+        {
+            let mut state = self.inner.get_domain_state(domain);
+            if let DomainPayload::Audio(ref mut audio) = state.payload {
+                audio.volume = volume;
+            }
+            return state;
+        }
+        self.inner.get_domain_state(domain)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Scenarios 01-09: Freshness, Lifecycle, and Projection
 // ---------------------------------------------------------------------------
+//
+// Scenarios 01, 02, 05, 06, and 07 drive `DeviceClient`, not `DeviceDaemonService`.
+// This is deliberate, not a substitution of convenience: freshness/generation
+// fencing over *incoming* state (`update_local_domain_state`) is implemented on
+// the client side (`desktop/device/src/client.rs`), which is the Shell-facing
+// subscriber half of the device domain port. `DeviceDaemonService` is the
+// daemon-side command/mailbox half and does not validate freshness of updates
+// it emits — there is nothing on that side for these scenarios to exercise.
+// `InMemoryDeviceAdapter` also seeds every domain as `Ready`/`(1,1)` for test
+// convenience, so `DeviceDaemonService`'s actual initial projection is never
+// `Unavailable` the way scenario_01 requires; `all_nine_device_domains_project_deterministically`
+// below documents and asserts that seeded daemon-side initial state separately.
 
 #[test]
 fn scenario_01_initial_projection_is_deterministic_and_unavailable() {
@@ -237,8 +318,10 @@ fn scenario_05_stale_generation_is_rejected() {
     let client = DeviceClient::new();
     assert_eq!(client.installed_owner_generation(), 0);
 
-    // Install generation 2 state
-    let state_gen2 = DomainState {
+    // A state whose generation exceeds the currently-installed generation (0,
+    // the default before any daemon owner is installed) is rejected as
+    // not-yet-installed, without corrupting the projection.
+    let uninstalled_gen2 = DomainState {
         domain: DeviceDomain::Audio,
         version: DomainVersion::new(2, 1),
         lifecycle: DomainLifecycle::Ready,
@@ -248,15 +331,31 @@ fn scenario_05_stale_generation_is_rejected() {
         }),
         error: None,
     };
-    // Uninstalled generation 2 is rejected if installed_gen is 0
-    client.update_local_domain_state(state_gen2.clone());
+    client.update_local_domain_state(uninstalled_gen2.clone());
     assert_eq!(client.stale_updates(), 1);
+    assert_eq!(
+        client.get_domain_state(DeviceDomain::Audio).version,
+        DomainVersion::ZERO
+    );
 
-    // Stale generation 1 is also rejected once generation 2 is installed
-    let mut stale_gen1 = state_gen2;
-    stale_gen1.version = DomainVersion::new(1, 99);
-    client.update_local_domain_state(stale_gen1);
+    // A second, still-uninstalled generation is rejected the same way; the
+    // rejection does not depend on which uninstalled generation is offered.
+    let mut also_uninstalled = uninstalled_gen2;
+    also_uninstalled.version = DomainVersion::new(1, 99);
+    client.update_local_domain_state(also_uninstalled);
     assert_eq!(client.stale_updates(), 2);
+    assert_eq!(
+        client.get_domain_state(DeviceDomain::Audio).version,
+        DomainVersion::ZERO
+    );
+
+    // The complementary case this scenario's name evokes — a generation older
+    // than one already *installed* being rejected — requires installing a
+    // generation, which is only reachable through `installed_owner_generation`,
+    // a private field. That case is already covered from inside the crate's
+    // own unit tests, which have that access:
+    // `desktop/device/src/client.rs::freshness_rejects_uninstalled_generation_and_equal_version_conflicts`
+    // and `::stale_domain_signal_cannot_overwrite_newer_projection`.
 }
 
 #[test]
@@ -379,6 +478,11 @@ async fn scenario_08_new_owner_generation_permits_revision_reset() {
 fn scenario_09_slow_subscriber_converges_to_latest_atomic_snapshot() {
     let client = DeviceClient::new();
 
+    // Subscribe before any updates arrive, then never drain the receiver while
+    // updates are published — a "slow" subscriber that has not read a single
+    // message yet.
+    let mut subscriber = client.subscribe_updates();
+
     for r in 1..=5 {
         let state = DomainState {
             domain: DeviceDomain::Audio,
@@ -393,6 +497,8 @@ fn scenario_09_slow_subscriber_converges_to_latest_atomic_snapshot() {
         client.update_local_domain_state(state);
     }
 
+    // The atomic snapshot converges to the latest revision regardless of
+    // whether the broadcast subscriber has consumed anything.
     let snap = client.get_domain_state(DeviceDomain::Audio);
     assert_eq!(snap.version, DomainVersion::new(0, 5));
     if let DomainPayload::Audio(payload) = snap.payload {
@@ -400,6 +506,16 @@ fn scenario_09_slow_subscriber_converges_to_latest_atomic_snapshot() {
     } else {
         panic!("expected Audio payload");
     }
+
+    // The subscriber, reading only now, still converges to the same latest
+    // revision as its last observed message — it was never required to keep
+    // up with every intermediate update.
+    let mut last_seen = None;
+    while let Ok(update) = subscriber.try_recv() {
+        last_seen = Some(update);
+    }
+    let last_seen = last_seen.expect("subscriber must observe at least the final update");
+    assert_eq!(last_seen.state.version, DomainVersion::new(0, 5));
 }
 
 // ---------------------------------------------------------------------------
@@ -432,8 +548,14 @@ async fn scenario_10_accepted_command_receives_exactly_one_terminal_outcome() {
 
 #[tokio::test(start_paused = true)]
 async fn scenario_11_backend_acknowledgement_alone_does_not_complete_a_convergence_command() {
-    let adapter = Arc::new(InMemoryDeviceAdapter::new());
-    adapter.set_forced_delay(Some(Duration::from_millis(500)));
+    // `InMemoryDeviceAdapter` applies state before `execute_command` resolves,
+    // so a plain forced-delay cannot separate "backend acknowledged" from
+    // "convergence observed" -- both happen at once as soon as the delay
+    // elapses. `DelayedConfirmAdapter` decouples them: `execute_command`
+    // resolves immediately (the acknowledgement), but the daemon's
+    // confirmation poll (`get_domain_state`) keeps reporting the old value
+    // until the test calls `confirm()` (the later convergence signal).
+    let adapter = Arc::new(DelayedConfirmAdapter::new());
     let service = DeviceDaemonService::new(adapter.clone());
 
     let (id, mut reply_rx) = service
@@ -443,12 +565,22 @@ async fn scenario_11_backend_acknowledgement_alone_does_not_complete_a_convergen
         )
         .expect("command must be accepted");
 
-    // Advance clock partially (200ms) - command is in-flight, not completed yet
-    tokio::time::advance(Duration::from_millis(200)).await;
-    assert!(reply_rx.try_recv().is_err());
+    // Let `execute_command` resolve (the acknowledgement) and the daemon's
+    // first confirmation poll run. It must observe the pre-confirm state and
+    // keep waiting, so no outcome has arrived yet. `yield_now` hands control
+    // to the spawned command task without advancing the paused clock, so this
+    // does not race the confirmation loop's own 100ms poll interval.
+    tokio::task::yield_now().await;
+    tokio::task::yield_now().await;
+    assert!(
+        reply_rx.try_recv().is_err(),
+        "acknowledgement alone must not complete the command"
+    );
 
-    // Advance clock past execution delay (another 400ms) - now completed
-    tokio::time::advance(Duration::from_millis(400)).await;
+    // The backend now reports the effect; the next confirmation poll tick
+    // observes it and completes the command.
+    adapter.confirm();
+    tokio::time::advance(Duration::from_millis(150)).await;
     let outcome = reply_rx.await.expect("outcome must arrive");
     assert_eq!(
         outcome,
@@ -456,7 +588,7 @@ async fn scenario_11_backend_acknowledgement_alone_does_not_complete_a_convergen
             command_id: id,
             arrival_sequence: 1,
             domain: DeviceDomain::Audio,
-            version: DomainVersion::new(1, 2),
+            version: DomainVersion::new(1, 1),
         }
     );
 }
