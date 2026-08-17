@@ -37,8 +37,8 @@ pub use clipboard::{ClipboardPersistenceError, ClipboardService};
 pub use compositor::{
     BrokerOptions, CancellationReason, CommandCancellation, CommandExecutorFn, CommandOutcome,
     CommandTicket, CompositorAdapter, CompositorCapabilities, CompositorCommand,
-    CompositorCommandBroker, CompositorCommandError, CompositorConnection, CompositorOutput,
-    CompositorSnapshot, CompositorTarget, DomainVersion, ExecutorAck, MailboxPolicy,
+    CompositorCommandBroker, CompositorCommandError, CompositorOutput, CompositorSnapshot,
+    CompositorTarget, DomainLifecycle, DomainVersion, ExecutorAck, MailboxPolicy,
     NiriCompositorService, RejectionReason, StaleUpdateError, SupervisorState,
     TestCompositorAdapter, WindowInfo, WorkspaceInfo,
 };

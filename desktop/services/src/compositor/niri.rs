@@ -21,8 +21,8 @@ use tokio::sync::watch;
 
 use super::{
     BrokerOptions, CompositorAdapter, CompositorCapabilities, CompositorCommand,
-    CompositorCommandBroker, CompositorConnection, CompositorOutput, CompositorSnapshot,
-    DomainVersion, ExecutorAck, RejectionReason, SupervisorState, WindowInfo, WorkspaceInfo,
+    CompositorCommandBroker, CompositorOutput, CompositorSnapshot, DomainLifecycle, DomainVersion,
+    ExecutorAck, RejectionReason, SupervisorState, WindowInfo, WorkspaceInfo,
     broker::{CommandCancellation, StreamCancelHandle, create_stream_cancel_handle},
 };
 use crate::domain::{
@@ -134,7 +134,7 @@ impl NiriCompositorService {
     pub fn new() -> Arc<Self> {
         let initial = CompositorSnapshot {
             version: DomainVersion::ZERO,
-            connection: CompositorConnection::Unavailable,
+            connection: DomainLifecycle::Unavailable,
             capabilities: CompositorCapabilities::default(),
             outputs: Vec::new(),
             workspaces: Vec::new(),
@@ -583,7 +583,7 @@ fn publish_reconnecting(
     let mut current = (*previous).clone();
     *revision = revision.saturating_add(1);
     current.version = DomainVersion::new(owner_generation, *revision);
-    current.connection = CompositorConnection::Reconnecting;
+    current.connection = DomainLifecycle::Reconnecting;
     current.last_error = last_error;
     let snap_arc = Arc::new(current);
     if broker.observe_snapshot(snap_arc.clone()).is_ok() {
@@ -622,7 +622,7 @@ fn run_niri_listener(
                 let mut current = (*previous).clone();
                 revision += 1;
                 current.version = DomainVersion::new(owner_generation, revision);
-                current.connection = CompositorConnection::Unavailable;
+                current.connection = DomainLifecycle::Unavailable;
                 current.last_error = Some("Quarantined after five failures in 60s".into());
                 let snap_arc = Arc::new(current);
                 if broker.observe_snapshot(snap_arc.clone()).is_ok() {
@@ -643,7 +643,7 @@ fn run_niri_listener(
         let mut connecting = (*previous).clone();
         revision = revision.saturating_add(1);
         connecting.version = DomainVersion::new(owner_generation, revision);
-        connecting.connection = CompositorConnection::Connecting;
+        connecting.connection = DomainLifecycle::Connecting;
         connecting.last_error = None;
         let connecting = Arc::new(connecting);
         if broker.observe_snapshot(connecting.clone()).is_ok() {
@@ -818,7 +818,7 @@ fn run_niri_listener(
                             &broker,
                             owner_generation,
                             &mut revision,
-                            CompositorConnection::Ready,
+                            DomainLifecycle::Ready,
                             &current_outputs,
                             &state,
                         );
@@ -862,7 +862,7 @@ fn publish_snapshot_from_state(
     broker: &CompositorCommandBroker,
     owner_generation: u64,
     revision: &mut u64,
-    connection: CompositorConnection,
+    connection: DomainLifecycle,
     outputs: &[CompositorOutput],
     state: &EventStreamState,
 ) {
@@ -1460,7 +1460,7 @@ mod tests {
         broker.set_installed_generation(1);
         let ready_snap = CompositorSnapshot {
             version: DomainVersion::new(1, 1),
-            connection: CompositorConnection::Ready,
+            connection: DomainLifecycle::Ready,
             workspaces: vec![super::WorkspaceInfo {
                 id: 1,
                 name: None,
@@ -1505,7 +1505,7 @@ mod tests {
         broker.set_installed_generation(1);
         let ready_snap = CompositorSnapshot {
             version: DomainVersion::new(1, 1),
-            connection: CompositorConnection::Ready,
+            connection: DomainLifecycle::Ready,
             workspaces: vec![super::WorkspaceInfo {
                 id: 1,
                 name: None,
@@ -1526,7 +1526,7 @@ mod tests {
         broker
             .observe_snapshot(Arc::new(CompositorSnapshot {
                 version: DomainVersion::new(1, 2),
-                connection: CompositorConnection::Reconnecting,
+                connection: DomainLifecycle::Reconnecting,
                 ..Default::default()
             }))
             .unwrap();

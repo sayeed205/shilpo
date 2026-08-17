@@ -118,7 +118,7 @@ impl SearchProvider for WindowSearchProvider {
 #[cfg(test)]
 mod tests {
     use shilpo_services::{
-        CompositorConnection, CompositorSnapshot, DomainVersion, TestCompositorAdapter, WindowInfo,
+        CompositorSnapshot, DomainLifecycle, DomainVersion, TestCompositorAdapter, WindowInfo,
     };
 
     use super::*;
@@ -142,7 +142,7 @@ mod tests {
     fn ready_snapshot(windows: Vec<WindowInfo>) -> CompositorSnapshot {
         CompositorSnapshot {
             version: DomainVersion::new(1, 1),
-            connection: CompositorConnection::Ready,
+            connection: DomainLifecycle::Ready,
             windows,
             ..Default::default()
         }

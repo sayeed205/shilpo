@@ -145,14 +145,14 @@ impl ServiceHub {
         shilpo_services::ServiceHealth {
             compositor_connected: matches!(
                 comp_snap.connection,
-                shilpo_services::CompositorConnection::Ready
+                shilpo_services::DomainLifecycle::Ready
             ),
             compositor_state: format!("{:?}", comp_snap.connection).to_lowercase(),
             compositor_owner_generation: comp_snap.version.owner_generation,
             compositor_revision: comp_snap.version.revision,
             compositor_reconnect_attempt: if matches!(
                 comp_snap.connection,
-                shilpo_services::CompositorConnection::Reconnecting
+                shilpo_services::DomainLifecycle::Reconnecting
             ) {
                 1
             } else {

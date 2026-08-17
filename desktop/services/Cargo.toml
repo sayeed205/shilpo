@@ -9,6 +9,7 @@ default = []
 ocr = ["dep:tesseract", "dep:leptonica-sys"]
 
 [dependencies]
+shilpo-domain.workspace = true
 shilpo-device.workspace = true
 shilpo-observability.workspace = true
 gpui.workspace = true

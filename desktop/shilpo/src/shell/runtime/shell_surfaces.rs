@@ -1972,23 +1972,23 @@ impl ShellSurfaces {
 }
 
 fn readiness_for(
-    connection: &shilpo_services::CompositorConnection,
+    connection: &shilpo_services::DomainLifecycle,
     bar_state: &BarState,
 ) -> shilpo_services::ReadinessState {
     match connection {
-        shilpo_services::CompositorConnection::Unavailable
-        | shilpo_services::CompositorConnection::Connecting => {
+        shilpo_services::DomainLifecycle::Unavailable
+        | shilpo_services::DomainLifecycle::Connecting => {
             shilpo_services::ReadinessState::Starting
         }
-        shilpo_services::CompositorConnection::Ready => {
+        shilpo_services::DomainLifecycle::Ready => {
             if matches!(bar_state, BarState::Visible | BarState::Hidden) {
                 shilpo_services::ReadinessState::Ready
             } else {
                 shilpo_services::ReadinessState::Degraded
             }
         }
-        shilpo_services::CompositorConnection::Reconnecting
-        | shilpo_services::CompositorConnection::Degraded => {
+        shilpo_services::DomainLifecycle::Reconnecting
+        | shilpo_services::DomainLifecycle::Degraded => {
             shilpo_services::ReadinessState::Degraded
         }
     }
@@ -2359,7 +2359,7 @@ mod tests {
         );
 
         let ready_snapshot = CompositorSnapshot {
-            connection: shilpo_services::CompositorConnection::Ready,
+            connection: shilpo_services::DomainLifecycle::Ready,
             ..Default::default()
         };
         harness

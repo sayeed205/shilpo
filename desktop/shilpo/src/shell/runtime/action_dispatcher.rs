@@ -550,7 +550,7 @@ mod tests {
     fn snapshot_enables_only_actions_the_compositor_supports() {
         let mut dispatcher = ActionDispatcher::new();
         let snapshot = CompositorSnapshot {
-            connection: shilpo_services::CompositorConnection::Ready,
+            connection: shilpo_services::DomainLifecycle::Ready,
             capabilities: shilpo_services::CompositorCapabilities {
                 can_focus_workspace: false,
                 ..Default::default()

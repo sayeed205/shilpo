@@ -2,7 +2,7 @@ use gpui::{
     App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, RenderOnce, Role,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
 };
-use shilpo_services::{CompositorConnection, WorkspaceInfo};
+use shilpo_services::{DomainLifecycle, WorkspaceInfo};
 use shilpo_ui::{
     ActiveTheme, ElementExt as _, Icon, IconName, StyledExt, h_flex, tooltip::Tooltip, v_flex,
 };
@@ -16,18 +16,18 @@ use crate::bar::cards::{
 use crate::bar::widgets::pill_strip::PillOrientation;
 use crate::runtime::{ShellRuntime, ShellSurfaces};
 
-fn workspace_actions_enabled(connection: &CompositorConnection) -> bool {
-    matches!(connection, CompositorConnection::Ready)
+fn workspace_actions_enabled(connection: &DomainLifecycle) -> bool {
+    matches!(connection, DomainLifecycle::Ready)
 }
 
-fn workspace_status_label(connection: &CompositorConnection) -> Option<&'static str> {
+fn workspace_status_label(connection: &DomainLifecycle) -> Option<&'static str> {
     match connection {
-        CompositorConnection::Connecting => Some("Connecting..."),
-        CompositorConnection::Reconnecting => Some("Reconnecting"),
-        CompositorConnection::Unavailable | CompositorConnection::Degraded => {
+        DomainLifecycle::Connecting => Some("Connecting..."),
+        DomainLifecycle::Reconnecting => Some("Reconnecting"),
+        DomainLifecycle::Unavailable | DomainLifecycle::Degraded => {
             Some("Compositor Unavailable")
         }
-        CompositorConnection::Ready => None,
+        DomainLifecycle::Ready => None,
     }
 }
 
@@ -86,7 +86,7 @@ pub struct WorkspacesWidget {
     source_instance: gpui::SharedString,
     display_id: Option<gpui::DisplayId>,
     workspaces: Vec<WorkspaceInfo>,
-    connection: CompositorConnection,
+    connection: DomainLifecycle,
     orientation: PillOrientation,
     style: StyleRefinement,
 }
@@ -96,7 +96,7 @@ impl WorkspacesWidget {
         id: impl Into<gpui::SharedString>,
         display_id: Option<gpui::DisplayId>,
         workspaces: Vec<WorkspaceInfo>,
-        connection: CompositorConnection,
+        connection: DomainLifecycle,
         orientation: PillOrientation,
     ) -> Self {
         let source_instance = id.into();
@@ -227,7 +227,7 @@ fn render_workspace_dot(
 impl RenderOnce for WorkspacesWidget {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let is_ready = workspace_actions_enabled(&self.connection);
-        let is_connecting = matches!(self.connection, CompositorConnection::Connecting);
+        let is_connecting = matches!(self.connection, DomainLifecycle::Connecting);
         let is_stopped = workspace_status_label(&self.connection) == Some("Compositor Unavailable");
         // Layer-shell windows do not reliably expose their output through
         // `Window::display`; the owning BarView already has the authoritative ID.
@@ -262,7 +262,7 @@ impl RenderOnce for WorkspacesWidget {
             items.push(badge.into_any_element());
         } else if is_stopped {
             let last_err = match &self.connection {
-                CompositorConnection::Unavailable | CompositorConnection::Degraded => {
+                DomainLifecycle::Unavailable | DomainLifecycle::Degraded => {
                     "Compositor is unavailable".to_string()
                 }
                 _ => String::new(),
@@ -382,7 +382,7 @@ impl RenderOnce for WorkspacesWidget {
                 cx,
             );
 
-        if matches!(self.connection, CompositorConnection::Reconnecting) {
+        if matches!(self.connection, DomainLifecycle::Reconnecting) {
             let error_msg = "Attempting to reconnect to compositor...".to_string();
             let badge = div()
                 .id("ws_reconnect_indicator")
@@ -497,33 +497,33 @@ mod tests {
 
     #[test]
     fn workspace_actions_only_enable_when_ready() {
-        assert!(workspace_actions_enabled(&CompositorConnection::Ready));
+        assert!(workspace_actions_enabled(&DomainLifecycle::Ready));
         assert!(!workspace_actions_enabled(
-            &CompositorConnection::Connecting
+            &DomainLifecycle::Connecting
         ));
         assert!(!workspace_actions_enabled(
-            &CompositorConnection::Reconnecting
+            &DomainLifecycle::Reconnecting
         ));
         assert!(!workspace_actions_enabled(
-            &CompositorConnection::Unavailable
+            &DomainLifecycle::Unavailable
         ));
     }
 
     #[test]
     fn workspace_status_labels_cover_connection_states() {
         assert_eq!(
-            workspace_status_label(&CompositorConnection::Connecting),
+            workspace_status_label(&DomainLifecycle::Connecting),
             Some("Connecting...")
         );
         assert_eq!(
-            workspace_status_label(&CompositorConnection::Reconnecting),
+            workspace_status_label(&DomainLifecycle::Reconnecting),
             Some("Reconnecting")
         );
         assert_eq!(
-            workspace_status_label(&CompositorConnection::Unavailable),
+            workspace_status_label(&DomainLifecycle::Unavailable),
             Some("Compositor Unavailable")
         );
-        assert_eq!(workspace_status_label(&CompositorConnection::Ready), None);
+        assert_eq!(workspace_status_label(&DomainLifecycle::Ready), None);
     }
 
     #[test]

@@ -6,104 +6,16 @@ use std::sync::Arc;
 
 pub use broker::ExecutorAck;
 pub use broker::{
-    BrokerOptions, CancellationReason, CommandCancellation, CommandExecutorFn, CommandOutcome,
-    CommandTicket, CompositorBrokerTelemetry, CompositorCommandBroker, CompositorTarget,
+    BrokerOptions, CommandCancellation, CommandExecutorFn, CommandOutcome, CommandTicket,
+    CompositorBrokerTelemetry, CompositorCommandBroker, CompositorTarget,
 };
 pub use niri::NiriCompositorService;
+pub use shilpo_domain::{
+    CancellationReason, DomainLifecycle, DomainVersion, MailboxPolicy, StaleUpdateError,
+    SupervisorState,
+};
 pub use test_adapter::TestCompositorAdapter;
 use tokio::sync::watch;
-
-/// DomainVersion tuple containing owner_generation and revision with strict lexicographical ordering.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub struct DomainVersion {
-    pub owner_generation: u64,
-    pub revision: u64,
-}
-
-impl DomainVersion {
-    pub const ZERO: Self = Self {
-        owner_generation: 0,
-        revision: 0,
-    };
-
-    pub fn new(owner_generation: u64, revision: u64) -> Self {
-        Self {
-            owner_generation,
-            revision,
-        }
-    }
-}
-
-impl std::fmt::Display for DomainVersion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "g{}.r{}", self.owner_generation, self.revision)
-    }
-}
-
-/// Consumer-facing connection status of the compositor adapter.
-#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CompositorConnection {
-    #[default]
-    Unavailable,
-    Connecting,
-    Ready,
-    Reconnecting,
-    Degraded,
-}
-
-impl CompositorConnection {
-    pub fn is_ready(&self) -> bool {
-        matches!(self, Self::Ready)
-    }
-
-    pub fn state_name(&self) -> &'static str {
-        match self {
-            Self::Unavailable => "unavailable",
-            Self::Connecting => "connecting",
-            Self::Ready => "ready",
-            Self::Reconnecting => "reconnecting",
-            Self::Degraded => "degraded",
-        }
-    }
-}
-
-/// Supervisor operational state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SupervisorState {
-    Starting,
-    Running,
-    Backoff { attempt: u32, retry_at_ms: u64 },
-    Quarantined,
-    Stopping,
-    Stopped,
-}
-
-/// Error returned when publishing a stale or conflicting snapshot update.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum StaleUpdateError {
-    StaleVersion {
-        current: DomainVersion,
-        attempted: DomainVersion,
-    },
-    ConflictingSnapshot {
-        version: DomainVersion,
-    },
-    UninstalledGeneration {
-        installed: u64,
-        attempted: u64,
-    },
-}
-
-/// Bounded command mailbox policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MailboxPolicy {
-    Lossless,
-    ReplaceLatest { key: String },
-}
 
 /// Typed rejection reasons for compositor commands.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -213,7 +125,7 @@ pub struct WindowInfo {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompositorSnapshot {
     pub version: DomainVersion,
-    pub connection: CompositorConnection,
+    pub connection: DomainLifecycle,
     pub capabilities: CompositorCapabilities,
     pub outputs: Vec<CompositorOutput>,
     pub workspaces: Vec<WorkspaceInfo>,
@@ -229,7 +141,7 @@ impl Default for CompositorSnapshot {
     fn default() -> Self {
         Self {
             version: DomainVersion::ZERO,
-            connection: CompositorConnection::Unavailable,
+            connection: DomainLifecycle::Unavailable,
             capabilities: CompositorCapabilities::default(),
             outputs: Vec::new(),
             workspaces: Vec::new(),

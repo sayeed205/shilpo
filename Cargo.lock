@@ -8165,6 +8165,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "shilpo-device",
+ "shilpo-domain",
  "shilpo-observability",
  "smol",
  "tempfile",
