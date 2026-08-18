@@ -58,6 +58,7 @@ struct DeviceClientInner {
     supervisor: Mutex<SupervisorData>,
     time_source: Arc<dyn TimeSource>,
     is_shutdown: AtomicBool,
+    next_command_seq: AtomicU64,
 }
 
 impl DeviceClientInner {
@@ -66,10 +67,11 @@ impl DeviceClientInner {
             return;
         }
 
-        // 1. Transition supervisor to Stopped
+        // 1. Enter the ADR-0006 `Stopping` transitional state while the drain
+        // below is still in flight; only the final step below moves to `Stopped`.
         {
             let mut supervisor = self.supervisor.lock().unwrap();
-            supervisor.state = SupervisorState::Stopped;
+            supervisor.state = SupervisorState::Stopping;
             supervisor.last_running_timestamp_ms = None;
         }
 
@@ -85,18 +87,21 @@ impl DeviceClientInner {
             }
         }
 
-        // 3. Drain all debounced commands and emit Cancelled { Shutdown }
+        // 3. Drain all debounced commands and emit Cancelled { Shutdown }. Each
+        // drained command is given a fresh id/sequence number: the debounce
+        // queue never assigned either while pending, so reusing the
+        // coalescing key here would collide across distinct non-coalescible
+        // commands sharing no key at all.
         let drained = {
             let mut debounced = self.debounced.lock().unwrap();
             debounced.drain(&self.debounce_depth)
         };
         for cmd in drained {
+            let seq = self.next_command_seq.fetch_add(1, Ordering::SeqCst);
+            let key = cmd.coalescing_key().unwrap_or_else(|| "cmd".to_string());
             let _ = self.outcome_tx.send(CommandOutcome::Cancelled {
-                command_id: CommandId(
-                    cmd.coalescing_key()
-                        .unwrap_or_else(|| "non-coalescible".to_string()),
-                ),
-                arrival_sequence: 0,
+                command_id: CommandId(format!("{key}-shutdown-{seq}")),
+                arrival_sequence: seq,
                 domain: cmd.domain(),
                 reason: CancellationReason::Shutdown,
             });
@@ -104,6 +109,9 @@ impl DeviceClientInner {
 
         // 4. Drop D-Bus connection
         *self.connection.lock().unwrap() = None;
+
+        // 5. Fully quiesced: move to the terminal `Stopped` state.
+        self.supervisor.lock().unwrap().state = SupervisorState::Stopped;
     }
 }
 
@@ -238,11 +246,18 @@ impl DeviceClient {
             supervisor,
             time_source,
             is_shutdown: AtomicBool::new(false),
+            next_command_seq: AtomicU64::new(0),
         });
 
         let client = Self {
             inner: inner.clone(),
         };
+        // Debounced submission now inserts directly into a shared mutex
+        // (`send_command_debounced` below) instead of routing through an
+        // mpsc channel, so shutdown can drain everything synchronously under
+        // one lock with no risk of a submission racing in behind the drain.
+        // This worker only needs to poll for due deadlines and exit once
+        // `is_shutdown` is observed.
         let weak_inner = Arc::downgrade(&inner);
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
@@ -570,10 +585,6 @@ impl DeviceClient {
             .get(&domain)
             .cloned()
             .unwrap_or_else(|| unavailable_state(domain))
-    }
-
-    pub fn subscribe(&self) -> broadcast::Receiver<DeviceClientUpdate> {
-        self.inner.update_tx.subscribe()
     }
 
     pub fn subscribe_updates(&self) -> broadcast::Receiver<DeviceClientUpdate> {
@@ -1568,7 +1579,7 @@ mod tests {
     #[tokio::test]
     async fn test_device_terminal_snapshot_published_on_shutdown() {
         let client = DeviceClient::new();
-        let mut update_rx = client.subscribe();
+        let mut update_rx = client.subscribe_updates();
 
         client.update_local_domain_state(DomainState {
             domain: DeviceDomain::Audio,

@@ -670,10 +670,20 @@ impl NotificationDomainState {
     }
 
     pub fn shutdown(&self) {
-        let mut state = self.state.lock().unwrap();
-        if state.supervisor_state == SupervisorState::Stopped {
-            return;
+        {
+            // Enter the ADR-0006 `Stopping` transitional state first, and
+            // check it here too so a second concurrent caller can't also
+            // pass the guard and cancel the queue twice.
+            let mut state = self.state.lock().unwrap();
+            if matches!(
+                state.supervisor_state,
+                SupervisorState::Stopping | SupervisorState::Stopped
+            ) {
+                return;
+            }
+            state.supervisor_state = SupervisorState::Stopping;
         }
+        let mut state = self.state.lock().unwrap();
         Self::cancel_queue(&mut state, CancellationReason::Shutdown);
         state.supervisor_state = SupervisorState::Stopped;
         state.lifecycle = DomainLifecycle::Unavailable;
