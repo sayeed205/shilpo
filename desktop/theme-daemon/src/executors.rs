@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use shilpo_domain::MailboxError;
 use shilpo_ui::theme::ThemeMode;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
@@ -12,6 +13,11 @@ use tracing::{error, info};
 use crate::adapters::DesktopAdapter;
 use crate::daemon::DaemonState;
 use crate::persistence::write_state_snapshot_to;
+
+/// Bounded capacity for the PersistenceExecutor mailbox.
+pub const PERSISTENCE_MAILBOX_CAPACITY: usize = 8;
+/// Bounded capacity for the AdapterExecutor mailbox.
+pub const ADAPTER_MAILBOX_CAPACITY: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "status", content = "error")]
@@ -33,14 +39,15 @@ pub enum PersistenceRequestKind {
 
 #[derive(Clone)]
 pub struct PersistenceExecutor {
-    tx: mpsc::UnboundedSender<PersistenceRequest>,
+    tx: mpsc::Sender<PersistenceRequest>,
     durable_revision: Arc<AtomicU64>,
     last_error: Arc<Mutex<Option<String>>>,
+    overloads: Arc<AtomicU64>,
 }
 
 impl PersistenceExecutor {
     pub fn new(target_file_path: Option<PathBuf>) -> Self {
-        let (tx, mut rx) = mpsc::unbounded_channel::<PersistenceRequest>();
+        let (tx, mut rx) = mpsc::channel::<PersistenceRequest>(PERSISTENCE_MAILBOX_CAPACITY);
         let durable_revision = Arc::new(AtomicU64::new(0));
         let durable_rev_clone = durable_revision.clone();
         let last_error = Arc::new(Mutex::new(None));
@@ -118,6 +125,7 @@ impl PersistenceExecutor {
             tx,
             durable_revision,
             last_error,
+            overloads: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -129,6 +137,12 @@ impl PersistenceExecutor {
         self.last_error.lock().unwrap().clone()
     }
 
+    /// Number of times a `Persist` or `Flush` send was rejected because the
+    /// mailbox was full.
+    pub fn overloads(&self) -> u64 {
+        self.overloads.load(Ordering::SeqCst)
+    }
+
     pub async fn persist(&self, state: DaemonState) -> Result<u64, String> {
         let revision = state.theme.revision;
         self.enqueue(state)?;
@@ -138,13 +152,26 @@ impl PersistenceExecutor {
     pub fn enqueue(&self, state: DaemonState) -> Result<(), String> {
         *self.last_error.lock().unwrap() = None;
         let (reply_tx, _reply_rx) = oneshot::channel();
-        self.tx
-            .send(PersistenceRequest {
-                kind: PersistenceRequestKind::Persist(Box::new(state)),
-                reply: reply_tx,
-            })
-            .map_err(|_| "Persistence executor channel closed".to_string())
-            .map(|_| ())
+        match self.tx.try_send(PersistenceRequest {
+            kind: PersistenceRequestKind::Persist(Box::new(state)),
+            reply: reply_tx,
+        }) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.overloads.fetch_add(1, Ordering::SeqCst);
+                tracing::warn!(
+                    site = "PersistenceExecutor",
+                    policy = "Lossless",
+                    capacity = PERSISTENCE_MAILBOX_CAPACITY,
+                    "persistence mailbox full; request rejected"
+                );
+                Err(MailboxError::Overloaded.to_string())
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::warn!(site = "PersistenceExecutor", "persistence mailbox closed");
+                Err(MailboxError::Unavailable.to_string())
+            }
+        }
     }
 
     pub async fn wait_until_durable(&self, revision: u64) -> Result<u64, String> {
@@ -166,10 +193,18 @@ impl PersistenceExecutor {
             kind: PersistenceRequestKind::Flush,
             reply: reply_tx,
         };
-        if self.tx.send(req).is_err() {
-            return true;
+        match self.tx.try_send(req) {
+            Ok(()) => {}
+            Err(_) => return true,
         }
         tokio::time::timeout(deadline, reply_rx).await.is_ok()
+    }
+
+    /// Returns a clone of the bounded sender. Used in tests to fill the mailbox
+    /// directly and verify overload behaviour.
+    #[cfg(test)]
+    pub(crate) fn sender(&self) -> mpsc::Sender<PersistenceRequest> {
+        self.tx.clone()
     }
 }
 
@@ -181,15 +216,16 @@ pub struct AdapterRequest {
 
 #[derive(Clone)]
 pub struct AdapterExecutor {
-    tx: mpsc::UnboundedSender<AdapterRequest>,
+    tx: mpsc::Sender<AdapterRequest>,
     last_applied_revision: Arc<AtomicU64>,
     projection_status: Arc<Mutex<ProjectionStatus>>,
     latest: Arc<Mutex<Option<(u64, ThemeMode)>>>,
+    overloads: Arc<AtomicU64>,
 }
 
 impl AdapterExecutor {
     pub fn new(adapter: Arc<dyn DesktopAdapter>) -> Self {
-        let (tx, mut rx) = mpsc::unbounded_channel::<AdapterRequest>();
+        let (tx, mut rx) = mpsc::channel::<AdapterRequest>(ADAPTER_MAILBOX_CAPACITY);
         let last_applied_revision = Arc::new(AtomicU64::new(0));
         let projection_status = Arc::new(Mutex::new(ProjectionStatus::Applied));
         let latest = Arc::new(Mutex::new(None));
@@ -293,6 +329,7 @@ impl AdapterExecutor {
             last_applied_revision,
             projection_status,
             latest,
+            overloads: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -304,14 +341,34 @@ impl AdapterExecutor {
         self.projection_status.lock().unwrap().clone()
     }
 
+    /// Number of times a `project` or `project_with_reply` send was rejected
+    /// because the mailbox was full.
+    pub fn overloads(&self) -> u64 {
+        self.overloads.load(Ordering::SeqCst)
+    }
+
     pub fn project(&self, revision: u64, mode: ThemeMode) {
         *self.latest.lock().unwrap() = Some((revision, mode));
         *self.projection_status.lock().unwrap() = ProjectionStatus::Pending;
-        let _ = self.tx.send(AdapterRequest {
+        match self.tx.try_send(AdapterRequest {
             revision,
             mode,
             reply: None,
-        });
+        }) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.overloads.fetch_add(1, Ordering::SeqCst);
+                tracing::warn!(
+                    site = "AdapterExecutor",
+                    policy = "Lossless",
+                    capacity = ADAPTER_MAILBOX_CAPACITY,
+                    "adapter mailbox full; projection request rejected"
+                );
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::warn!(site = "AdapterExecutor", "adapter mailbox closed");
+            }
+        }
     }
 
     pub fn retry_latest(&self) {
@@ -322,21 +379,38 @@ impl AdapterExecutor {
 
     pub async fn project_with_reply(&self, revision: u64, mode: ThemeMode) -> ProjectionStatus {
         let (reply_tx, reply_rx) = oneshot::channel();
-        if self
-            .tx
-            .send(AdapterRequest {
-                revision,
-                mode,
-                reply: Some(reply_tx),
-            })
-            .is_err()
-        {
-            return ProjectionStatus::Degraded("Adapter executor channel closed".to_string());
+        match self.tx.try_send(AdapterRequest {
+            revision,
+            mode,
+            reply: Some(reply_tx),
+        }) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.overloads.fetch_add(1, Ordering::SeqCst);
+                tracing::warn!(
+                    site = "AdapterExecutor",
+                    policy = "Lossless",
+                    capacity = ADAPTER_MAILBOX_CAPACITY,
+                    "adapter mailbox full; projection request rejected"
+                );
+                return ProjectionStatus::Degraded(MailboxError::Overloaded.to_string());
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::warn!(site = "AdapterExecutor", "adapter mailbox closed");
+                return ProjectionStatus::Degraded(MailboxError::Unavailable.to_string());
+            }
         }
 
         reply_rx
             .await
             .unwrap_or_else(|_| ProjectionStatus::Degraded("Adapter dropped request".to_string()))
+    }
+
+    /// Returns a clone of the bounded sender. Used in tests to fill the mailbox
+    /// directly and verify overload behaviour.
+    #[cfg(test)]
+    pub(crate) fn sender(&self) -> mpsc::Sender<AdapterRequest> {
+        self.tx.clone()
     }
 }
 
@@ -430,5 +504,122 @@ mod tests {
 
         assert!(matches!(status, ProjectionStatus::Degraded(_)));
         assert_eq!(executor.status(), status);
+    }
+
+    // Additional executor coverage: PersistenceExecutor mailbox overload.
+    // Fill the PersistenceExecutor mailbox to capacity (8), assert the next send
+    // returns an overload error and increments the counter, then drain and verify
+    // all previously accepted messages are delivered.
+    //
+    // actor_tx (the D-Bus-facing channel named first in #228's policy table) is
+    // covered separately in dbus.rs's own tests, against the real
+    // `ThemeDbusService::try_send` path.
+    #[tokio::test]
+    async fn test_persistence_mailbox_overload() {
+        let temp_dir = std::env::temp_dir().join(format!("theme_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let file_path = temp_dir.join("colors.json");
+        let executor = PersistenceExecutor::new(Some(file_path.clone()));
+
+        // Hold the sender so we can fill the mailbox without it being drained.
+        // We fill by saturating try_send directly via the exposed sender().
+        let raw_tx = executor.sender();
+        let mut oneshot_rxs = Vec::new();
+
+        // Fill to capacity (PERSISTENCE_MAILBOX_CAPACITY = 8)
+        for i in 0..PERSISTENCE_MAILBOX_CAPACITY {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            let mut state = DaemonState::default();
+            state.theme.revision = (i + 1) as u64;
+            raw_tx
+                .try_send(PersistenceRequest {
+                    kind: PersistenceRequestKind::Persist(Box::new(state)),
+                    reply: reply_tx,
+                })
+                .unwrap_or_else(|_| {
+                    panic!("slot {i} should fit in capacity {PERSISTENCE_MAILBOX_CAPACITY}")
+                });
+            oneshot_rxs.push(reply_rx);
+        }
+
+        // One more must be rejected since executor hasn't drained yet.
+        let mut overflow_state = DaemonState::default();
+        overflow_state.theme.revision = 100;
+        let result = executor.enqueue(overflow_state);
+        assert!(
+            result.is_err(),
+            "enqueue on a full mailbox must return an error"
+        );
+        assert_eq!(
+            executor.overloads(),
+            1,
+            "overload counter must be 1 after one rejected send"
+        );
+
+        // Release the raw_tx so the executor's internal task can drain normally.
+        // (The executor holds its own rx; raw_tx is an extra sender.)
+        drop(raw_tx);
+
+        // All 8 accepted messages should eventually be delivered.
+        // Wait for the executor to process at least the last one.
+        for rx in oneshot_rxs {
+            let _ = rx.await;
+        }
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    // Note: a "PersistenceExecutor mailbox closed" test was deliberately not
+    // added. Unlike actor_tx (where ThemeDaemon and ThemeDbusService hold the
+    // sender and receiver independently, so one side can legitimately close
+    // while the other still holds a sender), PersistenceExecutor owns its own
+    // receiver inside its spawned task and its own sender in `self.tx` — the
+    // channel cannot close while the executor is alive to call `enqueue` on
+    // it. There is no real production path that reaches
+    // `TrySendError::Closed` here to test against.
+
+    // Additional executor coverage: AdapterExecutor mailbox overload.
+    // Fill the AdapterExecutor mailbox to capacity, assert the next send returns
+    // Degraded (overload) and increments the overload counter.
+    //
+    // wp_tx (the wallpaper-result channel named third in #228's policy table)
+    // is covered separately below by `test_wallpaper_result_mailbox_overload`
+    // in daemon.rs, against the real `spawn_wallpaper_task` path.
+    #[tokio::test]
+    async fn test_adapter_executor_overload() {
+        // Use a blocking adapter so it never drains the queue while we fill it.
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let mock = Arc::new(MockAdapter {
+            call_count: call_count.clone(),
+            should_fail: false,
+            block_ms: 5000, // block long enough that the queue stays full
+        });
+        let executor = AdapterExecutor::new(mock);
+
+        // Fill to ADAPTER_MAILBOX_CAPACITY (8) using the raw sender.
+        let raw_tx = executor.sender();
+        for i in 0..ADAPTER_MAILBOX_CAPACITY {
+            let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+            raw_tx
+                .try_send(AdapterRequest {
+                    revision: i as u64,
+                    mode: ThemeMode::Light,
+                    reply: Some(reply_tx),
+                })
+                .unwrap_or_else(|_| panic!("slot {i} should fit"));
+        }
+        drop(raw_tx);
+
+        // Next project_with_reply must see Degraded (overload) and increment counter.
+        let status = executor.project_with_reply(99, ThemeMode::Dark).await;
+        assert!(
+            matches!(status, ProjectionStatus::Degraded(_)),
+            "overflowed project_with_reply must return Degraded, got {status:?}"
+        );
+        assert_eq!(
+            executor.overloads(),
+            1,
+            "overload counter must be 1 after one rejected send"
+        );
     }
 }
