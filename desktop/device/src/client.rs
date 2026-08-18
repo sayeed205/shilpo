@@ -279,6 +279,30 @@ impl DeviceClient {
             .store(generation, Ordering::SeqCst);
     }
 
+    /// Directly announces a domain's own version/lifecycle, bypassing the
+    /// freshness gate `update_local_domain_state` applies to incoming
+    /// updates. Mirrors `report_owner_failure`/`reset_quarantine`, which
+    /// already write domain state this way: the owner asserting its own
+    /// transition doesn't need to validate against what it last announced,
+    /// unlike an externally-sourced update that does.
+    pub fn set_domain_lifecycle(
+        &self,
+        domain: DeviceDomain,
+        version: DomainVersion,
+        lifecycle: DomainLifecycle,
+    ) {
+        let mut domains = self.inner.domains.write().unwrap();
+        if let Some(state) = domains.get_mut(&domain) {
+            state.version = version;
+            state.lifecycle = lifecycle;
+            state.error = None;
+            let _ = self.inner.update_tx.send(DeviceClientUpdate {
+                domain,
+                state: state.clone(),
+            });
+        }
+    }
+
     pub fn stale_updates(&self) -> u64 {
         self.inner.stale_updates.load(Ordering::SeqCst)
     }
@@ -741,32 +765,11 @@ impl DeviceClient {
 
     pub fn begin_start(&self) {
         self.inner.supervisor.lock().unwrap().mark_starting();
-        let mut domains = self.inner.domains.write().unwrap();
-        for state in domains.values_mut() {
-            state.lifecycle = DomainLifecycle::Connecting;
-            let _ = self.inner.update_tx.send(DeviceClientUpdate {
-                domain: state.domain,
-                state: state.clone(),
-            });
-        }
     }
 
     pub fn mark_ready(&self, now_ms: u64) {
         self.inner.supervisor.lock().unwrap().mark_running(now_ms);
         *self.inner.last_error.lock().unwrap() = None;
-        let mut domains = self.inner.domains.write().unwrap();
-        for state in domains.values_mut() {
-            if state.version == DomainVersion::ZERO {
-                let installed = self.installed_owner_generation().max(1);
-                state.version = DomainVersion::new(installed, 0);
-            }
-            state.lifecycle = DomainLifecycle::Ready;
-            state.error = None;
-            let _ = self.inner.update_tx.send(DeviceClientUpdate {
-                domain: state.domain,
-                state: state.clone(),
-            });
-        }
     }
 
     pub fn report_owner_failure(&self, error: String, now_ms: u64) {

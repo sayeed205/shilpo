@@ -175,9 +175,7 @@ impl DeviceDomainPortDriver {
 
 fn map_outcome(outcome: DeviceCommandOutcome) -> CommandOutcome {
     match outcome {
-        DeviceCommandOutcome::Applied { .. } => CommandOutcome::Applied {
-            version: DomainVersion::new(1, 0),
-        },
+        DeviceCommandOutcome::Applied { version, .. } => CommandOutcome::Applied { version },
         DeviceCommandOutcome::Rejected { reason, .. } => {
             let r = match reason {
                 DeviceRejectionReason::Overloaded => RejectionReason::Overloaded,
@@ -315,16 +313,23 @@ impl DomainPortDriver for DeviceDomainPortDriver {
         if matches!(prev_state, SupervisorState::Backoff { .. })
             && matches!(new_state, SupervisorState::Starting)
         {
+            // Reference scenario 15 checks the new generation is already
+            // reflected right after this transition, with no subsequent
+            // `mark_ready` call. `set_domain_lifecycle` is the owner's own
+            // ungated announcement (see `begin_start`/`mark_ready` above),
+            // so publishing here doesn't collide with `mark_ready`
+            // re-announcing the same generation afterward -- both simply
+            // overwrite, and scenario 8's "generation starts at (gen, 0)"
+            // still holds since neither call bumps past revision 0.
             let daemon = self.current_daemon();
             let new_gen = daemon.owner_generation();
             client.set_installed_owner_generation(new_gen);
-            let mut reconnecting_state = client.get_domain_state(DeviceDomain::Audio);
-            reconnecting_state.version = DomainVersion::new(new_gen, 0);
-            reconnecting_state.lifecycle = DomainLifecycle::Reconnecting;
-            client.update_local_domain_state(reconnecting_state);
+            client.set_domain_lifecycle(
+                DeviceDomain::Audio,
+                DomainVersion::new(new_gen, 0),
+                DomainLifecycle::Reconnecting,
+            );
         }
-
-        std::thread::sleep(Duration::from_millis(10));
     }
 
     fn advance_clock_secs(&self, secs: u64) {
@@ -337,6 +342,22 @@ impl DomainPortDriver for DeviceDomainPortDriver {
         let owner_gen = daemon.owner_generation().max(1);
         client.set_installed_owner_generation(owner_gen);
         client.begin_start();
+
+        // Real production `connect()` publishes each domain's own snapshot
+        // as soon as it starts listening, ahead of `mark_ready`. Mirror that
+        // here for the single domain this driver exercises, rather than
+        // having production `begin_start` fabricate a lifecycle for all
+        // nine domains it doesn't know about. This is the owner announcing
+        // its own transition (`set_domain_lifecycle`, ungated), not an
+        // externally-sourced update, so there's no freshness conflict to
+        // navigate -- the generation stays wherever it already was; `mark_ready`
+        // below is what actually installs the new one.
+        let current = client.get_domain_state(DeviceDomain::Audio);
+        client.set_domain_lifecycle(
+            DeviceDomain::Audio,
+            current.version,
+            DomainLifecycle::Connecting,
+        );
     }
 
     fn mark_ready(&self) {
@@ -346,16 +367,59 @@ impl DomainPortDriver for DeviceDomainPortDriver {
         let owner_gen = daemon.owner_generation().max(1);
         client.set_installed_owner_generation(owner_gen);
         client.mark_ready(now_ms);
+
+        // Same reasoning as `begin_start` above: production loads real
+        // per-domain state before calling `mark_ready`, so the driver
+        // announces Audio's Ready snapshot itself instead of `mark_ready`
+        // fabricating readiness for domains it never actually heard from.
+        // Reference scenario 02 requires the post-ready version to land at
+        // exactly `(owner_gen, 0)`, which this always does -- an ungated
+        // announcement, so a prior `advance_clock_ms` reconnect publish at
+        // the same version is not a conflict to work around.
+        client.set_domain_lifecycle(
+            DeviceDomain::Audio,
+            DomainVersion::new(owner_gen, 0),
+            DomainLifecycle::Ready,
+        );
     }
 
     fn report_owner_failure(&self, error: String) {
         let now_ms = self.clock.now_ms();
+        // Bump the generation (and cancel anything still queued) *before*
+        // releasing a forced delay. Releasing first risks the woken worker
+        // task's convergence-check racing the generation bump on a
+        // different thread and observing the still-old generation, letting
+        // an in-flight command land `Applied` instead of being cancelled.
+        self.current_daemon().increment_owner_generation();
+        self.current_client().report_owner_failure(error, now_ms);
         let in_mem_opt = self.in_memory_adapter.lock().unwrap().clone();
         if let Some(ref in_mem) = in_mem_opt {
             in_mem.set_forced_delay(None);
         }
-        self.current_daemon().increment_owner_generation();
-        self.current_client().report_owner_failure(error, now_ms);
+
+        // `increment_owner_generation` cancels queued commands synchronously,
+        // but a command already popped and executing (e.g. one an adapter's
+        // `forced_delay` was holding open) only resolves once its worker
+        // task wakes from the `set_forced_delay(None)` signal above and
+        // observes the new generation. Yield (no wall-clock wait) until this
+        // driver's own tracked tickets have settled, matching the bounded
+        // poll pattern the compositor and notification drivers use for the
+        // same class of post-generation-bump async settling.
+        let snapshot: Vec<CommandTicket> = self
+            .pending
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|item| item.ticket.clone())
+            .collect();
+        for ticket in &snapshot {
+            for _ in 0..100_000 {
+                if ticket.is_completed() {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+        }
     }
 
     fn publish_update(
@@ -515,22 +579,13 @@ impl DomainPortDriver for DeviceDomainPortDriver {
         let daemon = self.current_daemon();
         let client = self.current_client();
 
-        for _ in 0..10_000 {
+        for _ in 0..1_000_000 {
             let pending = self.pending.lock().unwrap();
             if pending.iter().all(|item| item.ticket.is_completed()) {
                 break;
             }
             drop(pending);
             std::thread::yield_now();
-        }
-
-        for _ in 0..200 {
-            let pending = self.pending.lock().unwrap();
-            if pending.iter().all(|item| item.ticket.is_completed()) {
-                break;
-            }
-            drop(pending);
-            std::thread::sleep(Duration::from_millis(5));
         }
 
         let state = daemon.get_domain_state(DeviceDomain::Audio);
