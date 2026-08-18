@@ -139,6 +139,26 @@ pub enum MailboxPolicy {
     ReplaceLatest { key: String },
 }
 
+/// Why a send into a bounded adapter mailbox did not enqueue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MailboxError {
+    /// The service is offline; there is no receiver at all.
+    Unavailable,
+    /// The mailbox is at capacity and the policy rejected the send.
+    Overloaded,
+}
+
+impl std::fmt::Display for MailboxError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable => write!(f, "service is offline or mailbox closed"),
+            Self::Overloaded => write!(f, "mailbox is at capacity"),
+        }
+    }
+}
+
+impl std::error::Error for MailboxError {}
+
 /// Telemetry metrics for a domain port's mailbox and supervisor state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DomainPortTelemetry {
@@ -379,5 +399,18 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(2));
         let t2 = ts.now_ms();
         assert!(t2 >= t1);
+    }
+
+    #[test]
+    fn test_mailbox_error() {
+        assert_eq!(
+            format!("{}", MailboxError::Unavailable),
+            "service is offline or mailbox closed"
+        );
+        assert_eq!(
+            format!("{}", MailboxError::Overloaded),
+            "mailbox is at capacity"
+        );
+        assert_ne!(MailboxError::Unavailable, MailboxError::Overloaded);
     }
 }

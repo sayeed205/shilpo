@@ -1,9 +1,13 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+use shilpo_domain::MailboxError;
 use tokio::sync::{mpsc, watch};
+
+/// Capacity for bounded adapter command mailboxes under `MailboxPolicy::Lossless`.
+pub const COMMAND_MAILBOX_CAPACITY: usize = 32;
 
 struct TaskHandle {
     handle: tokio::task::JoinHandle<()>,
@@ -56,7 +60,7 @@ impl<State: Clone + Send + Sync + 'static> StateContext<State> {
 /// Context provided to command-enabled background tasks.
 pub(crate) struct CommandContext<State: Clone + Send + Sync + 'static, Command: Send + 'static> {
     pub state: StateContext<State>,
-    pub command_rx: mpsc::UnboundedReceiver<Command>,
+    pub command_rx: mpsc::Receiver<Command>,
 }
 
 /// Crate-private shared state runtime managing channel broadcasting, clone ownership, and task lifecycle.
@@ -128,7 +132,8 @@ impl<State: Clone + Send + Sync + 'static> StateRuntime<State> {
 /// Crate-private runtime wrapping `StateRuntime` with command channel support.
 pub(crate) struct CommandRuntime<State: Clone + Send + Sync + 'static, Command: Send + 'static> {
     state: StateRuntime<State>,
-    command_tx: Option<mpsc::UnboundedSender<Command>>,
+    command_tx: Option<mpsc::Sender<Command>>,
+    overloads: Arc<AtomicU64>,
 }
 
 impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> Clone
@@ -138,6 +143,7 @@ impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> Clone
         Self {
             state: self.state.clone(),
             command_tx: self.command_tx.clone(),
+            overloads: self.overloads.clone(),
         }
     }
 }
@@ -147,6 +153,7 @@ impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> CommandRunti
         Self {
             state: StateRuntime::new_offline(initial),
             command_tx: None,
+            overloads: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -155,7 +162,10 @@ impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> CommandRunti
         F: FnOnce(CommandContext<State, Command>) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        // Bounded adapter command mailbox: MailboxPolicy::Lossless, capacity 32.
+        // Carries distinct user intents (set wifi, connect VPN, set profile, media transport).
+        // Silently dropping one loses a user action.
+        let (command_tx, command_rx) = mpsc::channel(COMMAND_MAILBOX_CAPACITY);
         let state = StateRuntime::spawn(initial, offline, move |state_ctx| {
             let cmd_ctx = CommandContext {
                 state: state_ctx,
@@ -165,7 +175,12 @@ impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> CommandRunti
         });
 
         let command_tx = (!state.is_offline()).then_some(command_tx);
-        Self { state, command_tx }
+        let overloads = Arc::new(AtomicU64::new(0));
+        Self {
+            state,
+            command_tx,
+            overloads,
+        }
     }
 
     pub fn subscribe(&self) -> watch::Receiver<State> {
@@ -176,12 +191,30 @@ impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> CommandRunti
         self.state.get()
     }
 
-    pub fn send_command(&self, command: Command) -> bool {
+    pub fn send_command(&self, command: Command) -> Result<(), MailboxError> {
         if let Some(tx) = &self.command_tx {
-            tx.send(command).is_ok()
+            match tx.try_send(command) {
+                Ok(()) => Ok(()),
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    self.overloads.fetch_add(1, Ordering::SeqCst);
+                    tracing::warn!(
+                        site = "CommandRuntime",
+                        policy = "Lossless",
+                        capacity = COMMAND_MAILBOX_CAPACITY,
+                        "adapter command mailbox full; command rejected"
+                    );
+                    Err(MailboxError::Overloaded)
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => Err(MailboxError::Unavailable),
+            }
         } else {
-            false
+            Err(MailboxError::Unavailable)
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn overloads(&self) -> u64 {
+        self.overloads.load(Ordering::SeqCst)
     }
 
     #[allow(dead_code)]
@@ -228,13 +261,50 @@ mod tests {
         });
 
         let mut rx = runtime.subscribe();
-        assert!(runtime.send_command(1));
+        assert_eq!(runtime.send_command(1), Ok(()));
         assert!(rx.changed().await.is_ok());
         assert_eq!(runtime.get(), 100);
 
-        assert!(runtime.send_command(2));
+        assert_eq!(runtime.send_command(2), Ok(()));
         assert!(rx.changed().await.is_ok());
         assert_eq!(runtime.get(), 105);
+    }
+
+    #[tokio::test]
+    async fn test_command_runtime_lossless_overload_and_delivery() {
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let (delivered_tx, mut delivered_rx) = mpsc::channel(COMMAND_MAILBOX_CAPACITY);
+
+        let runtime = CommandRuntime::spawn(0, -1, move |mut ctx| async move {
+            let _ = release_rx.await;
+            while let Some(cmd) = ctx.command_rx.recv().await {
+                let _ = delivered_tx.send(cmd).await;
+            }
+        });
+
+        // 1. Send capacity commands: all return Ok(())
+        for i in 0..COMMAND_MAILBOX_CAPACITY {
+            assert_eq!(runtime.send_command(i), Ok(()));
+        }
+        assert_eq!(runtime.overloads(), 0);
+
+        // 2. Capacity+1 command returns Err(MailboxError::Overloaded) and increments overloads
+        assert_eq!(runtime.send_command(999), Err(MailboxError::Overloaded));
+        assert_eq!(runtime.overloads(), 1);
+
+        // 3. Release the loop and verify all capacity accepted commands arrive in order
+        release_tx.send(()).unwrap();
+        for i in 0..COMMAND_MAILBOX_CAPACITY {
+            assert_eq!(delivered_rx.recv().await, Some(i));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_command_runtime_offline_returns_unavailable() {
+        let runtime: CommandRuntime<i32, i32> = CommandRuntime::new_offline(0);
+        let err = runtime.send_command(1).unwrap_err();
+        assert_eq!(err, MailboxError::Unavailable);
+        assert_ne!(err, MailboxError::Overloaded);
     }
 
     #[tokio::test]
@@ -249,13 +319,13 @@ mod tests {
         let runtime2 = runtime1.clone();
         drop(runtime1);
 
-        // Task should still be running because runtime2 exists
-        tokio::task::yield_now().await;
-        assert!(drop_rx.try_recv().is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), drop_rx.recv())
+                .await
+                .is_err()
+        );
 
-        // Dropping last runtime clone should abort task
         drop(runtime2);
-        tokio::task::yield_now().await;
         assert!(drop_rx.recv().await.is_none());
     }
 

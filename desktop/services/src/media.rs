@@ -499,11 +499,9 @@ impl MediaService {
     }
 
     pub fn send_command(&self, command: MediaCommand) -> Result<()> {
-        if self.runtime.send_command(command) {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Failed to send command to MediaService"))
-        }
+        self.runtime
+            .send_command(command)
+            .map_err(|e| anyhow::anyhow!("Failed to send command to MediaService: {e}"))
     }
 }
 
