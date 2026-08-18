@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use shilpo_ui::theme::{ColorSource, SchemeVariant, ThemeMode};
@@ -6,6 +7,9 @@ use zbus::object_server::SignalEmitter;
 
 use crate::daemon::DaemonState;
 use crate::executors::ProjectionStatus;
+
+/// Bounded capacity for the actor mailbox.
+pub const ACTOR_MAILBOX_CAPACITY: usize = 32;
 
 pub enum ActorMessage {
     GetState(tokio::sync::oneshot::Sender<Result<DaemonState, String>>),
@@ -39,8 +43,9 @@ pub enum ActorMessage {
 }
 
 pub struct ThemeDbusService {
-    actor_tx: mpsc::UnboundedSender<ActorMessage>,
+    actor_tx: mpsc::Sender<ActorMessage>,
     effects: Arc<Mutex<EffectStatus>>,
+    actor_overloads: Arc<AtomicU64>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -51,10 +56,38 @@ pub struct EffectStatus {
 
 impl ThemeDbusService {
     pub fn new(
-        actor_tx: mpsc::UnboundedSender<ActorMessage>,
+        actor_tx: mpsc::Sender<ActorMessage>,
         effects: Arc<Mutex<EffectStatus>>,
+        actor_overloads: Arc<AtomicU64>,
     ) -> Self {
-        Self { actor_tx, effects }
+        Self {
+            actor_tx,
+            effects,
+            actor_overloads,
+        }
+    }
+
+    /// Try-send a message to the actor and map `MailboxError` to a D-Bus fault.
+    fn try_send(&self, msg: ActorMessage) -> zbus::fdo::Result<()> {
+        match self.actor_tx.try_send(msg) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.actor_overloads.fetch_add(1, Ordering::SeqCst);
+                tracing::warn!(
+                    site = "ThemeDbusService",
+                    policy = "Lossless",
+                    capacity = ACTOR_MAILBOX_CAPACITY,
+                    "actor mailbox full; D-Bus request rejected"
+                );
+                Err(zbus::fdo::Error::Failed(
+                    "Theme daemon is overloaded; retry".into(),
+                ))
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::warn!(site = "ThemeDbusService", "actor mailbox closed");
+                Err(zbus::fdo::Error::Failed("Actor connection closed".into()))
+            }
+        }
     }
 
     fn state_result_to_json(
@@ -92,7 +125,7 @@ impl ThemeDbusService {
 impl ThemeDbusService {
     async fn get_state(&self) -> zbus::fdo::Result<String> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let _ = self.actor_tx.send(ActorMessage::GetState(tx));
+        self.try_send(ActorMessage::GetState(tx))?;
         self.state_result_to_json(
             rx.await
                 .map_err(|_| zbus::fdo::Error::Failed("Actor request dropped".into()))?,
@@ -101,7 +134,7 @@ impl ThemeDbusService {
 
     async fn get_diagnostics(&self) -> zbus::fdo::Result<String> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let _ = self.actor_tx.send(ActorMessage::GetDiagnostics(tx));
+        self.try_send(ActorMessage::GetDiagnostics(tx))?;
         rx.await
             .map_err(|_| zbus::fdo::Error::Failed("Actor request dropped".into()))
     }
@@ -114,9 +147,7 @@ impl ThemeDbusService {
         let mode = serde_json::from_str(&format!("\"{mode_str}\""))
             .map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))?;
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.actor_tx
-            .send(ActorMessage::SetMode(mode, tx))
-            .map_err(|_| zbus::fdo::Error::Failed("Actor connection closed".into()))?;
+        self.try_send(ActorMessage::SetMode(mode, tx))?;
         self.state_result_to_json(
             rx.await
                 .map_err(|_| zbus::fdo::Error::Failed("Actor request dropped".into()))?,
@@ -125,9 +156,7 @@ impl ThemeDbusService {
 
     async fn toggle_mode(&self) -> zbus::fdo::Result<String> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.actor_tx
-            .send(ActorMessage::ToggleMode(tx))
-            .map_err(|_| zbus::fdo::Error::Failed("Actor connection closed".into()))?;
+        self.try_send(ActorMessage::ToggleMode(tx))?;
         self.state_result_to_json(
             rx.await
                 .map_err(|_| zbus::fdo::Error::Failed("Actor request dropped".into()))?,
@@ -138,9 +167,7 @@ impl ThemeDbusService {
         let source = serde_json::from_str(&format!("\"{source_str}\""))
             .map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))?;
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.actor_tx
-            .send(ActorMessage::SetColorSource(source, tx))
-            .map_err(|_| zbus::fdo::Error::Failed("Actor connection closed".into()))?;
+        self.try_send(ActorMessage::SetColorSource(source, tx))?;
         self.state_result_to_json(
             rx.await
                 .map_err(|_| zbus::fdo::Error::Failed("Actor request dropped".into()))?,
@@ -150,9 +177,7 @@ impl ThemeDbusService {
     async fn set_scheme_variant(&self, variant_str: String) -> zbus::fdo::Result<String> {
         let variant = SchemeVariant::from_str(&variant_str);
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.actor_tx
-            .send(ActorMessage::SetSchemeVariant(variant, tx))
-            .map_err(|_| zbus::fdo::Error::Failed("Actor connection closed".into()))?;
+        self.try_send(ActorMessage::SetSchemeVariant(variant, tx))?;
         self.state_result_to_json(
             rx.await
                 .map_err(|_| zbus::fdo::Error::Failed("Actor request dropped".into()))?,
@@ -161,9 +186,7 @@ impl ThemeDbusService {
 
     async fn set_custom_seed(&self, argb: u32) -> zbus::fdo::Result<String> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.actor_tx
-            .send(ActorMessage::SetCustomSeed(argb, tx))
-            .map_err(|_| zbus::fdo::Error::Failed("Actor connection closed".into()))?;
+        self.try_send(ActorMessage::SetCustomSeed(argb, tx))?;
         self.state_result_to_json(
             rx.await
                 .map_err(|_| zbus::fdo::Error::Failed("Actor request dropped".into()))?,
@@ -172,9 +195,7 @@ impl ThemeDbusService {
 
     async fn set_wallpaper(&self, path: String) -> zbus::fdo::Result<String> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.actor_tx
-            .send(ActorMessage::SetWallpaper(path, tx))
-            .map_err(|_| zbus::fdo::Error::Failed("Actor connection closed".into()))?;
+        self.try_send(ActorMessage::SetWallpaper(path, tx))?;
         self.state_result_to_json(
             rx.await
                 .map_err(|_| zbus::fdo::Error::Failed("Actor request dropped".into()))?,
@@ -183,9 +204,7 @@ impl ThemeDbusService {
 
     async fn set_wallpaper_directory(&self, dir: String) -> zbus::fdo::Result<String> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.actor_tx
-            .send(ActorMessage::SetWallpaperDirectory(dir, tx))
-            .map_err(|_| zbus::fdo::Error::Failed("Actor connection closed".into()))?;
+        self.try_send(ActorMessage::SetWallpaperDirectory(dir, tx))?;
         self.state_result_to_json(
             rx.await
                 .map_err(|_| zbus::fdo::Error::Failed("Actor request dropped".into()))?,
@@ -194,9 +213,7 @@ impl ThemeDbusService {
 
     async fn set_random_wallpaper(&self) -> zbus::fdo::Result<String> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.actor_tx
-            .send(ActorMessage::SetRandomWallpaper(tx))
-            .map_err(|_| zbus::fdo::Error::Failed("Actor connection closed".into()))?;
+        self.try_send(ActorMessage::SetRandomWallpaper(tx))?;
         self.state_result_to_json(
             rx.await
                 .map_err(|_| zbus::fdo::Error::Failed("Actor request dropped".into()))?,
