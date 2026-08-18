@@ -101,6 +101,116 @@ pub enum SupervisorState {
     Stopped,
 }
 
+/// Concrete domain supervisor managing rolling failure window, exponential backoff,
+/// quarantine, stable reset, and lifecycle state transitions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomainSupervisor {
+    state: SupervisorState,
+    failure_timestamps_ms: Vec<u64>,
+    last_running_timestamp_ms: Option<u64>,
+}
+
+impl DomainSupervisor {
+    pub fn new() -> Self {
+        Self {
+            state: SupervisorState::Starting,
+            failure_timestamps_ms: Vec::new(),
+            last_running_timestamp_ms: None,
+        }
+    }
+
+    pub fn state(&self) -> SupervisorState {
+        self.state
+    }
+
+    pub fn is_quarantined(&self) -> bool {
+        matches!(self.state, SupervisorState::Quarantined)
+    }
+
+    pub fn is_running(&self) -> bool {
+        matches!(self.state, SupervisorState::Running)
+    }
+
+    pub fn last_running_timestamp_ms(&self) -> Option<u64> {
+        self.last_running_timestamp_ms
+    }
+
+    pub fn failure_count(&self) -> usize {
+        self.failure_timestamps_ms.len()
+    }
+
+    pub fn mark_running(&mut self, now_ms: u64) {
+        self.state = SupervisorState::Running;
+        self.last_running_timestamp_ms = Some(now_ms);
+    }
+
+    pub fn record_failure(&mut self, now_ms: u64) -> SupervisorState {
+        self.last_running_timestamp_ms = None;
+        self.failure_timestamps_ms
+            .retain(|&ts| now_ms.saturating_sub(ts) <= FAILURE_WINDOW_MS);
+        self.failure_timestamps_ms.push(now_ms);
+        let failure_count = self.failure_timestamps_ms.len();
+
+        let new_state = if failure_count >= QUARANTINE_FAILURES {
+            SupervisorState::Quarantined
+        } else {
+            let attempt = failure_count as u32;
+            let delay = reconnect_backoff_ms(attempt);
+            SupervisorState::Backoff {
+                attempt,
+                retry_at_ms: now_ms.saturating_add(delay),
+            }
+        };
+        self.state = new_state;
+        new_state
+    }
+
+    pub fn tick(&mut self, now_ms: u64) {
+        match self.state {
+            SupervisorState::Backoff { retry_at_ms, .. } => {
+                if now_ms >= retry_at_ms {
+                    self.state = SupervisorState::Starting;
+                }
+            }
+            SupervisorState::Running => {
+                if let Some(start_ts) = self.last_running_timestamp_ms
+                    && now_ms.saturating_sub(start_ts) >= STABLE_RESET_MS
+                {
+                    self.failure_timestamps_ms.clear();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn reset_quarantine(&mut self) -> bool {
+        if matches!(self.state, SupervisorState::Quarantined) {
+            self.failure_timestamps_ms.clear();
+            self.last_running_timestamp_ms = None;
+            self.state = SupervisorState::Starting;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn enter_stopping(&mut self) {
+        self.state = SupervisorState::Stopping;
+        self.last_running_timestamp_ms = None;
+    }
+
+    pub fn enter_stopped(&mut self) {
+        self.state = SupervisorState::Stopped;
+        self.last_running_timestamp_ms = None;
+    }
+}
+
+impl Default for DomainSupervisor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Error returned when publishing a stale or conflicting snapshot update.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StaleUpdateError {
@@ -433,5 +543,161 @@ mod tests {
         assert_eq!(reconnect_backoff_ms(7), 16000);
         assert_eq!(reconnect_backoff_ms(8), 30000);
         assert_eq!(reconnect_backoff_ms(32), 30000);
+    }
+
+    #[test]
+    fn test_supervisor_initial_state_and_mark_running() {
+        let mut sup = DomainSupervisor::new();
+        assert_eq!(sup.state(), SupervisorState::Starting);
+        assert!(!sup.is_running());
+        assert!(!sup.is_quarantined());
+        assert_eq!(sup.last_running_timestamp_ms(), None);
+        assert_eq!(sup.failure_count(), 0);
+
+        sup.mark_running(10_000);
+        assert_eq!(sup.state(), SupervisorState::Running);
+        assert!(sup.is_running());
+        assert_eq!(sup.last_running_timestamp_ms(), Some(10_000));
+    }
+
+    #[test]
+    fn test_supervisor_rolling_window_trims_correctly_at_boundary() {
+        let mut sup = DomainSupervisor::new();
+        // 4 failures inside window
+        sup.record_failure(0);
+        sup.record_failure(10_000);
+        sup.record_failure(20_000);
+        sup.record_failure(30_000);
+        assert_eq!(sup.failure_count(), 4);
+
+        // 5th failure at exactly boundary (60_000 - 0 <= 60_000) -> 5 failures, trips quarantine
+        let state = sup.record_failure(60_000);
+        assert_eq!(state, SupervisorState::Quarantined);
+        assert_eq!(sup.failure_count(), 5);
+
+        // Now test trimming outside boundary
+        let mut sup2 = DomainSupervisor::new();
+        sup2.record_failure(0);
+        assert_eq!(sup2.failure_count(), 1);
+
+        // Failure at 60_001 trims the failure at 0 (60_001 - 0 > 60_000)
+        let state2 = sup2.record_failure(60_001);
+        assert_eq!(
+            state2,
+            SupervisorState::Backoff {
+                attempt: 1,
+                retry_at_ms: 60_001 + 250,
+            }
+        );
+        assert_eq!(sup2.failure_count(), 1);
+    }
+
+    #[test]
+    fn test_supervisor_quarantine_trips_at_exact_5th_failure() {
+        let mut sup = DomainSupervisor::new();
+        for i in 1..=4 {
+            let state = sup.record_failure(i * 1_000);
+            assert_eq!(
+                state,
+                SupervisorState::Backoff {
+                    attempt: i as u32,
+                    retry_at_ms: (i * 1_000) + reconnect_backoff_ms(i as u32),
+                }
+            );
+            assert_eq!(sup.failure_count(), i as usize);
+            assert!(!sup.is_quarantined());
+        }
+
+        let state5 = sup.record_failure(5_000);
+        assert_eq!(state5, SupervisorState::Quarantined);
+        assert!(sup.is_quarantined());
+        assert_eq!(sup.failure_count(), 5);
+    }
+
+    #[test]
+    fn test_supervisor_tick_expires_backoff_and_stable_reset() {
+        let mut sup = DomainSupervisor::new();
+        sup.record_failure(1_000);
+        assert_eq!(
+            sup.state(),
+            SupervisorState::Backoff {
+                attempt: 1,
+                retry_at_ms: 1_250,
+            }
+        );
+
+        // Tick before deadline -> stays in Backoff
+        sup.tick(1_249);
+        assert_eq!(
+            sup.state(),
+            SupervisorState::Backoff {
+                attempt: 1,
+                retry_at_ms: 1_250,
+            }
+        );
+
+        // Tick at/after deadline -> transitions to Starting
+        sup.tick(1_250);
+        assert_eq!(sup.state(), SupervisorState::Starting);
+
+        // Mark running and test stable reset
+        sup.mark_running(2_000);
+        assert_eq!(sup.failure_count(), 1);
+
+        // Tick before stable reset duration (300_000 ms)
+        sup.tick(2_000 + STABLE_RESET_MS - 1);
+        assert_eq!(sup.failure_count(), 1);
+
+        // Tick after stable reset duration
+        sup.tick(2_000 + STABLE_RESET_MS);
+        assert_eq!(sup.failure_count(), 0);
+    }
+
+    #[test]
+    fn test_supervisor_reset_quarantine_guarded() {
+        let mut sup = DomainSupervisor::new();
+        // In Starting: no-op
+        assert!(!sup.reset_quarantine());
+        assert_eq!(sup.state(), SupervisorState::Starting);
+
+        // In Running: no-op
+        sup.mark_running(1_000);
+        assert!(!sup.reset_quarantine());
+        assert_eq!(sup.state(), SupervisorState::Running);
+
+        // In Backoff: no-op
+        sup.record_failure(2_000);
+        assert!(!sup.reset_quarantine());
+        assert!(matches!(sup.state(), SupervisorState::Backoff { .. }));
+
+        // Trip to Quarantined
+        for t in [3_000, 4_000, 5_000, 6_000] {
+            sup.record_failure(t);
+        }
+        assert!(sup.is_quarantined());
+        assert_eq!(sup.failure_count(), 5);
+
+        // Reset quarantine when Quarantined: succeeds and resets to Starting
+        assert!(sup.reset_quarantine());
+        assert_eq!(sup.state(), SupervisorState::Starting);
+        assert_eq!(sup.failure_count(), 0);
+        assert_eq!(sup.last_running_timestamp_ms(), None);
+    }
+
+    #[test]
+    fn test_supervisor_enter_stopping_and_stopped() {
+        let mut sup = DomainSupervisor::new();
+        sup.mark_running(1_000);
+        sup.enter_stopping();
+        assert_eq!(sup.state(), SupervisorState::Stopping);
+        assert_eq!(sup.last_running_timestamp_ms(), None);
+
+        sup.enter_stopped();
+        assert_eq!(sup.state(), SupervisorState::Stopped);
+        assert_eq!(sup.last_running_timestamp_ms(), None);
+
+        // Idempotent calls
+        sup.enter_stopped();
+        assert_eq!(sup.state(), SupervisorState::Stopped);
     }
 }

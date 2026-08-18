@@ -5,12 +5,10 @@ use std::{
 
 use anyhow::Result;
 pub use shilpo_domain::{
-    CancellationReason, DomainLifecycle, DomainPortTelemetry, DomainVersion, MailboxPolicy,
-    StaleUpdateError, SupervisorState,
+    CancellationReason, DomainLifecycle, DomainPortTelemetry, DomainSupervisor, DomainVersion,
+    MailboxPolicy, StaleUpdateError, SupervisorState,
 };
-use shilpo_domain::{
-    FAILURE_WINDOW_MS, INITIAL_BACKOFF_MS, MAX_BACKOFF_MS, QUARANTINE_FAILURES, STABLE_RESET_MS,
-};
+
 use tokio::sync::{broadcast, watch};
 use zbus::{Connection, interface, object_server::SignalEmitter};
 
@@ -292,7 +290,7 @@ struct PendingCommandItem {
 }
 
 struct NotificationState {
-    supervisor_state: SupervisorState,
+    supervisor: DomainSupervisor,
     lifecycle: DomainLifecycle,
     owner_generation: u64,
     revision: u64,
@@ -301,9 +299,6 @@ struct NotificationState {
     dnd_enabled: bool,
     last_error: Option<String>,
     had_prior_readiness: bool,
-    last_running_timestamp_ms: Option<u64>,
-    failure_timestamps_ms: Vec<u64>,
-    backoff_attempt: u32,
     queue: VecDeque<PendingCommandItem>,
     next_notification_id: u32,
     overloads: u64,
@@ -333,7 +328,7 @@ impl NotificationDomainState {
         Self {
             capacity,
             state: Mutex::new(NotificationState {
-                supervisor_state: SupervisorState::Starting,
+                supervisor: DomainSupervisor::new(),
                 lifecycle: DomainLifecycle::Unavailable,
                 owner_generation: 0,
                 revision: 0,
@@ -342,9 +337,6 @@ impl NotificationDomainState {
                 dnd_enabled: false,
                 last_error: None,
                 had_prior_readiness: false,
-                last_running_timestamp_ms: None,
-                failure_timestamps_ms: Vec::new(),
-                backoff_attempt: 0,
                 queue: VecDeque::new(),
                 next_notification_id: 0,
                 overloads: 0,
@@ -390,44 +382,28 @@ impl NotificationDomainState {
         }
     }
 
-    fn backoff_delay_for_attempt(attempt: u32) -> u64 {
-        let multiplier = 2u64.saturating_pow(attempt.saturating_sub(1));
-        INITIAL_BACKOFF_MS
-            .saturating_mul(multiplier)
-            .min(MAX_BACKOFF_MS)
-    }
-
     fn check_clock_state(
         state: &mut NotificationState,
         now_ms: u64,
         watch_tx: &watch::Sender<NotificationSnapshot>,
     ) {
-        match state.supervisor_state {
-            SupervisorState::Backoff { retry_at_ms, .. } => {
-                if now_ms >= retry_at_ms {
-                    state.owner_generation += 1;
-                    state.revision = 0;
-                    state.restarts += 1;
-                    Self::cancel_queue(state, CancellationReason::OwnerReplaced);
-                    state.supervisor_state = SupervisorState::Starting;
-                    state.lifecycle = if state.had_prior_readiness {
-                        DomainLifecycle::Reconnecting
-                    } else {
-                        DomainLifecycle::Connecting
-                    };
-                    state.last_running_timestamp_ms = None;
-                    Self::notify_subscribers(state, watch_tx);
-                }
-            }
-            SupervisorState::Running => {
-                if let Some(start_ts) = state.last_running_timestamp_ms
-                    && now_ms.saturating_sub(start_ts) >= STABLE_RESET_MS
-                {
-                    state.failure_timestamps_ms.clear();
-                    state.backoff_attempt = 0;
-                }
-            }
-            _ => {}
+        let prev_state = state.supervisor.state();
+        state.supervisor.tick(now_ms);
+        let new_state = state.supervisor.state();
+
+        if matches!(prev_state, SupervisorState::Backoff { .. })
+            && matches!(new_state, SupervisorState::Starting)
+        {
+            state.owner_generation += 1;
+            state.revision = 0;
+            state.restarts += 1;
+            Self::cancel_queue(state, CancellationReason::OwnerReplaced);
+            state.lifecycle = if state.had_prior_readiness {
+                DomainLifecycle::Reconnecting
+            } else {
+                DomainLifecycle::Connecting
+            };
+            Self::notify_subscribers(state, watch_tx);
         }
     }
 
@@ -441,7 +417,7 @@ impl NotificationDomainState {
         Self::cancel_queue(&mut state, CancellationReason::OwnerReplaced);
         state.owner_generation += 1;
         state.revision = 0;
-        state.supervisor_state = SupervisorState::Starting;
+        state.supervisor = DomainSupervisor::new();
         state.lifecycle = if state.had_prior_readiness {
             DomainLifecycle::Reconnecting
         } else {
@@ -452,33 +428,20 @@ impl NotificationDomainState {
 
     pub fn mark_ready(&self, now_ms: u64) {
         let mut state = self.state.lock().unwrap();
-        state.supervisor_state = SupervisorState::Running;
+        state.supervisor.mark_running(now_ms);
         state.lifecycle = DomainLifecycle::Ready;
         state.had_prior_readiness = true;
-        state.last_running_timestamp_ms = Some(now_ms);
         Self::notify_subscribers(&state, &self.watch_tx);
     }
 
     pub fn report_owner_failure(&self, error: String, now_ms: u64) {
         let mut state = self.state.lock().unwrap();
         state.last_error = Some(error);
-        state
-            .failure_timestamps_ms
-            .retain(|&ts| now_ms.saturating_sub(ts) <= FAILURE_WINDOW_MS);
-        state.failure_timestamps_ms.push(now_ms);
-        state.last_running_timestamp_ms = None;
+        let new_state = state.supervisor.record_failure(now_ms);
 
-        if state.failure_timestamps_ms.len() >= QUARANTINE_FAILURES {
-            state.supervisor_state = SupervisorState::Quarantined;
+        if matches!(new_state, SupervisorState::Quarantined) {
             state.lifecycle = DomainLifecycle::Unavailable;
         } else {
-            let attempt = state.failure_timestamps_ms.len() as u32;
-            state.backoff_attempt = attempt;
-            let delay = Self::backoff_delay_for_attempt(attempt);
-            state.supervisor_state = SupervisorState::Backoff {
-                attempt,
-                retry_at_ms: now_ms.saturating_add(delay),
-            };
             state.lifecycle = if state.had_prior_readiness {
                 DomainLifecycle::Reconnecting
             } else {
@@ -676,18 +639,17 @@ impl NotificationDomainState {
             // pass the guard and cancel the queue twice.
             let mut state = self.state.lock().unwrap();
             if matches!(
-                state.supervisor_state,
+                state.supervisor.state(),
                 SupervisorState::Stopping | SupervisorState::Stopped
             ) {
                 return;
             }
-            state.supervisor_state = SupervisorState::Stopping;
+            state.supervisor.enter_stopping();
         }
         let mut state = self.state.lock().unwrap();
         Self::cancel_queue(&mut state, CancellationReason::Shutdown);
-        state.supervisor_state = SupervisorState::Stopped;
+        state.supervisor.enter_stopped();
         state.lifecycle = DomainLifecycle::Unavailable;
-        state.last_running_timestamp_ms = None;
         Self::notify_subscribers(&state, &self.watch_tx);
     }
 }
@@ -727,7 +689,7 @@ impl NotificationPort for NotificationDomainState {
 
         if matches!(state.lifecycle, DomainLifecycle::Unavailable)
             || matches!(
-                state.supervisor_state,
+                state.supervisor.state(),
                 SupervisorState::Quarantined | SupervisorState::Stopped
             )
         {
@@ -790,7 +752,7 @@ impl NotificationPort for NotificationDomainState {
 
     fn supervisor_state(&self) -> SupervisorState {
         let state = self.state.lock().unwrap();
-        state.supervisor_state
+        state.supervisor.state()
     }
 
     fn telemetry(&self) -> DomainPortTelemetry {
@@ -809,11 +771,7 @@ impl NotificationPort for NotificationDomainState {
 
     fn reset_quarantine(&self) {
         let mut state = self.state.lock().unwrap();
-        if matches!(state.supervisor_state, SupervisorState::Quarantined) {
-            state.failure_timestamps_ms.clear();
-            state.backoff_attempt = 0;
-            state.last_running_timestamp_ms = None;
-            state.supervisor_state = SupervisorState::Starting;
+        if state.supervisor.reset_quarantine() {
             state.lifecycle = if state.had_prior_readiness {
                 DomainLifecycle::Reconnecting
             } else {
@@ -1476,18 +1434,15 @@ mod tests {
 
     #[test]
     fn test_backoff_delay_calculation() {
-        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(1), 250);
-        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(2), 500);
-        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(3), 1000);
-        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(4), 2000);
-        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(5), 4000);
-        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(6), 8000);
-        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(7), 16000);
-        assert_eq!(NotificationDomainState::backoff_delay_for_attempt(8), 30000);
-        assert_eq!(
-            NotificationDomainState::backoff_delay_for_attempt(20),
-            30000
-        );
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(1), 250);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(2), 500);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(3), 1000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(4), 2000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(5), 4000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(6), 8000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(7), 16000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(8), 30000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(20), 30000);
     }
 
     #[test]

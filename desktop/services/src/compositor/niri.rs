@@ -26,17 +26,7 @@ use super::{
     broker::{CommandCancellation, StreamCancelHandle, create_stream_cancel_handle},
 };
 
-use crate::domain::{
-    FAILURE_WINDOW_MS, MonotonicTimeSource, QUARANTINE_FAILURES, STABLE_RESET_MS, TimeSource,
-    reconnect_backoff_ms,
-};
-
-#[derive(Debug)]
-struct CompositorSupervisorData {
-    state: SupervisorState,
-    failures_ms: Vec<u64>,
-    stable_since_ms: Option<u64>,
-}
+use crate::domain::{DomainSupervisor, MonotonicTimeSource, TimeSource};
 
 /// Resolves `NIRI_SOCKET`, then `NIRI_SOCKET_PATH`, falling back to scanning `XDG_RUNTIME_DIR`.
 pub fn resolve_niri_socket_path() -> Option<PathBuf> {
@@ -62,7 +52,7 @@ pub struct NiriCompositorService {
     tx: watch::Sender<Arc<CompositorSnapshot>>,
     rx: watch::Receiver<Arc<CompositorSnapshot>>,
     stop_flag: Arc<AtomicBool>,
-    supervisor: Arc<Mutex<CompositorSupervisorData>>,
+    supervisor: Arc<Mutex<DomainSupervisor>>,
     time_source: Arc<dyn TimeSource>,
     broker: Arc<CompositorCommandBroker>,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
@@ -87,11 +77,7 @@ impl NiriCompositorService {
         let (tx, rx) = watch::channel(Arc::new(initial));
         let stop_flag = Arc::new(AtomicBool::new(false));
         let time_source: Arc<dyn TimeSource> = Arc::new(MonotonicTimeSource::new());
-        let supervisor = Arc::new(Mutex::new(CompositorSupervisorData {
-            state: SupervisorState::Starting,
-            failures_ms: Vec::new(),
-            stable_since_ms: None,
-        }));
+        let supervisor = Arc::new(Mutex::new(DomainSupervisor::new()));
 
         let broker =
             CompositorCommandBroker::new(BrokerOptions::default(), Box::new(execute_niri_command));
@@ -132,11 +118,7 @@ impl NiriCompositorService {
         let snap_arc = Arc::new(snapshot);
         let (tx, rx) = watch::channel(snap_arc.clone());
         let stop_flag = Arc::new(AtomicBool::new(true));
-        let supervisor = Arc::new(Mutex::new(CompositorSupervisorData {
-            state: SupervisorState::Starting,
-            failures_ms: Vec::new(),
-            stable_since_ms: None,
-        }));
+        let supervisor = Arc::new(Mutex::new(DomainSupervisor::new()));
 
         if snap_arc.version.owner_generation > 0 {
             broker.set_installed_generation(snap_arc.version.owner_generation);
@@ -164,7 +146,7 @@ impl NiriCompositorService {
     }
 
     pub fn supervisor_state(&self) -> SupervisorState {
-        self.supervisor.lock().unwrap().state
+        self.supervisor.lock().unwrap().state()
     }
 
     pub fn time_source(&self) -> &Arc<dyn TimeSource> {
@@ -172,9 +154,12 @@ impl NiriCompositorService {
     }
 
     pub fn begin_start(&self) {
-        let mut supervisor = self.supervisor.lock().unwrap();
-        supervisor.state = SupervisorState::Starting;
-        drop(supervisor);
+        {
+            let mut supervisor = self.supervisor.lock().unwrap();
+            if !matches!(supervisor.state(), SupervisorState::Starting) {
+                *supervisor = DomainSupervisor::new();
+            }
+        }
 
         let previous = self.rx.borrow().clone();
         let mut current = (*previous).clone();
@@ -200,9 +185,7 @@ impl NiriCompositorService {
     }
 
     pub fn mark_ready(&self, now_ms: u64) {
-        let mut supervisor = self.supervisor.lock().unwrap();
-        supervisor.state = SupervisorState::Running;
-        supervisor.stable_since_ms = Some(now_ms);
+        self.supervisor.lock().unwrap().mark_running(now_ms);
         tracing::info!(target: "shilpo_profile", lifecycle = "ready", "compositor supervisor transition");
     }
 
@@ -242,11 +225,9 @@ impl NiriCompositorService {
 
     /// Explicitly clears quarantine and permits the supervisor to retry ownership.
     pub fn reset_quarantine(&self) {
-        let mut supervisor = self.supervisor.lock().unwrap();
-        supervisor.failures_ms.clear();
-        supervisor.stable_since_ms = None;
-        supervisor.state = SupervisorState::Starting;
-        drop(supervisor);
+        if !self.supervisor.lock().unwrap().reset_quarantine() {
+            return;
+        }
 
         let previous = self.rx.borrow().clone();
         let mut current = (*previous).clone();
@@ -643,7 +624,7 @@ fn publish_reconnecting(
 }
 
 fn record_supervisor_failure(
-    supervisor: &Arc<Mutex<CompositorSupervisorData>>,
+    supervisor: &Arc<Mutex<DomainSupervisor>>,
     broker: &Arc<CompositorCommandBroker>,
     tx: &watch::Sender<Arc<CompositorSnapshot>>,
     owner_generation: u64,
@@ -651,31 +632,20 @@ fn record_supervisor_failure(
     error: String,
     now_ms: u64,
 ) {
-    let (new_state, target_lifecycle, error_msg) = {
-        let mut sup = supervisor.lock().unwrap();
-        sup.stable_since_ms = None;
-        sup.failures_ms
-            .retain(|ts| now_ms.saturating_sub(*ts) <= FAILURE_WINDOW_MS);
-        sup.failures_ms.push(now_ms);
-        let failure_count = sup.failures_ms.len();
-        if failure_count >= QUARANTINE_FAILURES {
-            sup.state = SupervisorState::Quarantined;
+    let new_state = supervisor.lock().unwrap().record_failure(now_ms);
+    let (target_lifecycle, error_msg) = match new_state {
+        SupervisorState::Quarantined => {
             tracing::warn!(target: "shilpo_profile", lifecycle = "quarantined", "compositor supervisor transition");
             (
-                SupervisorState::Quarantined,
                 DomainLifecycle::Unavailable,
                 "Quarantined after five failures in 60s".to_string(),
             )
-        } else {
-            let attempt = failure_count as u32;
-            let retry_at_ms = now_ms.saturating_add(reconnect_backoff_ms(attempt));
-            sup.state = SupervisorState::Backoff {
-                attempt,
-                retry_at_ms,
-            };
-            tracing::info!(target: "shilpo_profile", lifecycle = "backoff", attempt, "compositor supervisor transition");
-            (sup.state, DomainLifecycle::Reconnecting, error)
         }
+        SupervisorState::Backoff { attempt, .. } => {
+            tracing::info!(target: "shilpo_profile", lifecycle = "backoff", attempt, "compositor supervisor transition");
+            (DomainLifecycle::Reconnecting, error)
+        }
+        _ => (DomainLifecycle::Reconnecting, error),
     };
 
     if new_state == SupervisorState::Quarantined {
@@ -697,29 +667,14 @@ fn record_supervisor_failure(
 /// Applies the clock-driven `Backoff -> Starting` and stable-window-clear
 /// transitions. Shared by `NiriCompositorService::tick` and the listener loop
 /// so there is exactly one implementation of the tick-only discipline.
-fn apply_tick(supervisor: &Arc<Mutex<CompositorSupervisorData>>, now_ms: u64) {
-    let mut sup = supervisor.lock().unwrap();
-    match sup.state {
-        SupervisorState::Backoff { retry_at_ms, .. } => {
-            if now_ms >= retry_at_ms {
-                sup.state = SupervisorState::Starting;
-            }
-        }
-        SupervisorState::Running => {
-            if let Some(started) = sup.stable_since_ms
-                && now_ms.saturating_sub(started) >= STABLE_RESET_MS
-            {
-                sup.failures_ms.clear();
-            }
-        }
-        _ => {}
-    }
+fn apply_tick(supervisor: &Arc<Mutex<DomainSupervisor>>, now_ms: u64) {
+    supervisor.lock().unwrap().tick(now_ms);
 }
 
 fn run_niri_listener(
     tx: watch::Sender<Arc<CompositorSnapshot>>,
     stop_flag: Arc<AtomicBool>,
-    supervisor: Arc<Mutex<CompositorSupervisorData>>,
+    supervisor: Arc<Mutex<DomainSupervisor>>,
     time_source: Arc<dyn TimeSource>,
     broker: Arc<CompositorCommandBroker>,
 ) {
@@ -733,7 +688,7 @@ fn run_niri_listener(
         apply_tick(&supervisor, now_ms);
 
         // 2. Check supervisor state
-        let state = supervisor.lock().unwrap().state;
+        let state = supervisor.lock().unwrap().state();
         match state {
             SupervisorState::Quarantined => {
                 sleep_with_stop_flag(Duration::from_millis(100), &stop_flag);
@@ -757,7 +712,9 @@ fn run_niri_listener(
         revision = 0;
         {
             let mut sup = supervisor.lock().unwrap();
-            sup.state = SupervisorState::Starting;
+            if !matches!(sup.state(), SupervisorState::Starting) {
+                *sup = DomainSupervisor::new();
+            }
             tracing::info!(target: "shilpo_profile", lifecycle = "starting", "compositor supervisor transition");
         }
         broker.set_installed_generation(owner_generation);
@@ -943,9 +900,7 @@ fn run_niri_listener(
                         if initial_sync {
                             initial_sync = false;
                             let now_ms = time_source.now_ms();
-                            let mut sup = supervisor.lock().unwrap();
-                            sup.state = SupervisorState::Running;
-                            sup.stable_since_ms = Some(now_ms);
+                            supervisor.lock().unwrap().mark_running(now_ms);
                             tracing::info!(target: "shilpo_profile", lifecycle = "ready", "compositor supervisor transition");
                         }
 
@@ -1713,6 +1668,10 @@ mod tests {
                 retry_at_ms: 303_250
             }
         );
+        for t in [304_000, 305_000, 306_000, 307_000] {
+            service.report_owner_failure("test".into(), t);
+        }
+        assert_eq!(service.supervisor_state(), SupervisorState::Quarantined);
         service.reset_quarantine();
         assert_eq!(service.supervisor_state(), SupervisorState::Starting);
         service.report_owner_failure("test".into(), 400_000);

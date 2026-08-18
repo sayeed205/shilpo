@@ -822,6 +822,36 @@ async fn scenario_19_quarantine_requires_explicit_reset_or_containing_process_re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reset_quarantine_while_not_quarantined_is_a_noop() {
+    let driver = CompositorDomainPortDriver::new(10);
+    driver.begin_start();
+    driver.mark_ready();
+    let initial_gen = driver.snapshot().version.owner_generation;
+    assert_eq!(driver.supervisor_state(), SupervisorState::Running);
+
+    // Calling reset_quarantine while Running must not change state or bump owner generation
+    driver.reset_quarantine();
+    assert_eq!(driver.supervisor_state(), SupervisorState::Running);
+    assert_eq!(driver.snapshot().version.owner_generation, initial_gen);
+
+    // Induce a single failure -> Backoff
+    driver.report_owner_failure("err".to_string());
+    assert!(matches!(
+        driver.supervisor_state(),
+        SupervisorState::Backoff { .. }
+    ));
+    let backoff_gen = driver.snapshot().version.owner_generation;
+
+    // Calling reset_quarantine while in Backoff must not change state or bump owner generation
+    driver.reset_quarantine();
+    assert!(matches!(
+        driver.supervisor_state(),
+        SupervisorState::Backoff { .. }
+    ));
+    assert_eq!(driver.snapshot().version.owner_generation, backoff_gen);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scenario_20_telemetry_reports_generation_queue_depth_capacity_overloads_supersessions_restarts_stale_updates_and_last_error()
  {
     let driver = CompositorDomainPortDriver::new(2);
