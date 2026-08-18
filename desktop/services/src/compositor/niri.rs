@@ -178,9 +178,23 @@ impl NiriCompositorService {
 
         let previous = self.rx.borrow().clone();
         let mut current = (*previous).clone();
+        // The very first `begin_start` (version still `DomainVersion::ZERO`)
+        // must stay at ZERO: `observe_snapshot`'s initial-snapshot exemption
+        // (broker.rs) only applies then, and callers depend on the first
+        // successful start landing at exactly `(1, 0)`. Any later
+        // `begin_start` (e.g. after a `reset_quarantine`, which already
+        // published a real version through the broker) must bump the
+        // revision, or this publish collides with the broker's last observed
+        // snapshot at the same version.
+        if current.version != DomainVersion::ZERO {
+            let next_rev = current.version.revision.saturating_add(1);
+            current.version = DomainVersion::new(current.version.owner_generation, next_rev);
+        }
         current.connection = DomainLifecycle::Connecting;
         let snap_arc = Arc::new(current);
-        let _ = self.tx.send(snap_arc);
+        if self.broker.observe_snapshot(snap_arc.clone()).is_ok() {
+            let _ = self.tx.send(snap_arc);
+        }
 
         tracing::info!(target: "shilpo_profile", lifecycle = "starting", "compositor supervisor transition");
     }
@@ -193,65 +207,22 @@ impl NiriCompositorService {
     }
 
     pub fn report_owner_failure(&self, error: String, now_ms: u64) {
-        let (new_state, target_lifecycle, error_msg) = {
-            let mut supervisor = self.supervisor.lock().unwrap();
-            supervisor.stable_since_ms = None;
-            supervisor
-                .failures_ms
-                .retain(|ts| now_ms.saturating_sub(*ts) <= FAILURE_WINDOW_MS);
-            supervisor.failures_ms.push(now_ms);
-            let failure_count = supervisor.failures_ms.len();
-            if failure_count >= QUARANTINE_FAILURES {
-                supervisor.state = SupervisorState::Quarantined;
-                tracing::warn!(target: "shilpo_profile", lifecycle = "quarantined", "compositor supervisor transition");
-                (
-                    SupervisorState::Quarantined,
-                    DomainLifecycle::Unavailable,
-                    "Quarantined after five failures in 60s".to_string(),
-                )
-            } else {
-                let attempt = failure_count as u32;
-                let retry_at_ms = now_ms.saturating_add(reconnect_backoff_ms(attempt));
-                supervisor.state = SupervisorState::Backoff {
-                    attempt,
-                    retry_at_ms,
-                };
-                tracing::info!(target: "shilpo_profile", lifecycle = "backoff", attempt, "compositor supervisor transition");
-                (supervisor.state, DomainLifecycle::Reconnecting, error)
-            }
-        };
-
-        if new_state == SupervisorState::Quarantined {
-            self.broker.record_quarantine_trip();
-        }
-
-        let previous = self.rx.borrow().clone();
-        let mut current = (*previous).clone();
-        let next_rev = current.version.revision.saturating_add(1);
-        current.version = DomainVersion::new(current.version.owner_generation, next_rev);
-        current.connection = target_lifecycle;
-        current.last_error = Some(error_msg);
-        let snap_arc = Arc::new(current);
-        let _ = self.tx.send(snap_arc);
+        let version = self.rx.borrow().version;
+        let owner_generation = version.owner_generation;
+        let mut revision = version.revision;
+        record_supervisor_failure(
+            &self.supervisor,
+            &self.broker,
+            &self.tx,
+            owner_generation,
+            &mut revision,
+            error,
+            now_ms,
+        );
     }
 
     pub fn tick(&self, now_ms: u64) {
-        let mut supervisor = self.supervisor.lock().unwrap();
-        match supervisor.state {
-            SupervisorState::Backoff { retry_at_ms, .. } => {
-                if now_ms >= retry_at_ms {
-                    supervisor.state = SupervisorState::Starting;
-                }
-            }
-            SupervisorState::Running => {
-                if let Some(started) = supervisor.stable_since_ms
-                    && now_ms.saturating_sub(started) >= STABLE_RESET_MS
-                {
-                    supervisor.failures_ms.clear();
-                }
-            }
-            _ => {}
-        }
+        apply_tick(&self.supervisor, now_ms);
     }
 
     pub fn update_snapshot(&self, snapshot: CompositorSnapshot) -> Result<(), StaleUpdateError> {
@@ -283,7 +254,10 @@ impl NiriCompositorService {
         current.version = DomainVersion::new(next_gen, 0);
         current.connection = DomainLifecycle::Reconnecting;
         let snap_arc = Arc::new(current);
-        let _ = self.tx.send(snap_arc);
+        self.broker.set_installed_generation(next_gen);
+        if self.broker.observe_snapshot(snap_arc.clone()).is_ok() {
+            let _ = self.tx.send(snap_arc);
+        }
     }
 }
 
@@ -720,6 +694,28 @@ fn record_supervisor_failure(
     }
 }
 
+/// Applies the clock-driven `Backoff -> Starting` and stable-window-clear
+/// transitions. Shared by `NiriCompositorService::tick` and the listener loop
+/// so there is exactly one implementation of the tick-only discipline.
+fn apply_tick(supervisor: &Arc<Mutex<CompositorSupervisorData>>, now_ms: u64) {
+    let mut sup = supervisor.lock().unwrap();
+    match sup.state {
+        SupervisorState::Backoff { retry_at_ms, .. } => {
+            if now_ms >= retry_at_ms {
+                sup.state = SupervisorState::Starting;
+            }
+        }
+        SupervisorState::Running => {
+            if let Some(started) = sup.stable_since_ms
+                && now_ms.saturating_sub(started) >= STABLE_RESET_MS
+            {
+                sup.failures_ms.clear();
+            }
+        }
+        _ => {}
+    }
+}
+
 fn run_niri_listener(
     tx: watch::Sender<Arc<CompositorSnapshot>>,
     stop_flag: Arc<AtomicBool>,
@@ -734,24 +730,7 @@ fn run_niri_listener(
         let now_ms = time_source.now_ms();
 
         // 1. Clock-driven transition via tick
-        {
-            let mut sup = supervisor.lock().unwrap();
-            match sup.state {
-                SupervisorState::Backoff { retry_at_ms, .. } => {
-                    if now_ms >= retry_at_ms {
-                        sup.state = SupervisorState::Starting;
-                    }
-                }
-                SupervisorState::Running => {
-                    if let Some(started) = sup.stable_since_ms
-                        && now_ms.saturating_sub(started) >= STABLE_RESET_MS
-                    {
-                        sup.failures_ms.clear();
-                    }
-                }
-                _ => {}
-            }
-        }
+        apply_tick(&supervisor, now_ms);
 
         // 2. Check supervisor state
         let state = supervisor.lock().unwrap().state;

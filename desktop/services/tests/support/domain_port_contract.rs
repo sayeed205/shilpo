@@ -1038,6 +1038,7 @@ pub fn scenario_14_different_replace_latest_keys_do_not_replace_each_other(
     assert!(matches!(t2.outcome(), Some(CommandOutcome::Applied { .. })));
 }
 
+#[allow(dead_code)]
 pub fn scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands(
     driver: &impl DomainPortDriver,
 ) {

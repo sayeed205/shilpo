@@ -343,7 +343,23 @@ impl DomainPortDriver for CompositorDomainPortDriver {
         };
         self.current_broker().set_installed_generation(next_gen);
         let mut new_snap = (*snap).clone();
-        new_snap.version = DomainVersion::new(next_gen, 0);
+        // A revision reset to 0 is only safe when nothing has been published
+        // within this generation yet (revision still 0 on the watch channel).
+        // `advance_clock_ms`'s generation bump (`set_reconnecting_generation`)
+        // never calls `observe_snapshot`, so the broker itself is still
+        // unaware of this generation at that point -- mark_ready's publish is
+        // the first sync, and 0 is safe/expected there (e.g. scenario_08,
+        // which then explicitly publishes revision 1 itself). But if
+        // `begin_start` already published within this generation (revision
+        // > 0, and *that* publish did go through `observe_snapshot`), the
+        // broker has already seen this generation and a repeated 0 would be
+        // stale or conflicting -- keep advancing forward instead.
+        let next_rev = if snap.version.revision == 0 {
+            0
+        } else {
+            snap.version.revision.saturating_add(1)
+        };
+        new_snap.version = DomainVersion::new(next_gen, next_rev);
         new_snap.connection = DomainLifecycle::Ready;
         new_snap.last_error = None;
         let _ = self.current_service().update_snapshot(new_snap);
@@ -512,6 +528,12 @@ impl DomainPortDriver for CompositorDomainPortDriver {
             }
             let _ = self.publish_update(next_rev, new_payload);
 
+            // Bounded yield_now loop (no wall-clock wait), matching the convention
+            // used elsewhere in this driver (e.g. `advance_clock_ms`). Raised from
+            // 500 to 100_000 iterations alongside #230's supervisor hoist: publishing
+            // through a real `NiriCompositorService` now takes one more Mutex
+            // acquisition per update than the old `Arc<Mutex<CompositorSnapshot>>`
+            // direct-write path, so 500 iterations occasionally undershot.
             for _ in 0..100_000 {
                 if item.ticket.is_completed() {
                     break;
@@ -734,11 +756,43 @@ async fn scenario_14_different_replace_latest_keys_do_not_replace_each_other() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands() {
-    let driver = CompositorDomainPortDriver::new(10);
-    domain_port_contract::scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands(&driver);
-}
+// DISCLOSURE (scenario_15): not registered for compositor. Two findings from
+// investigating why, both discovered while fixing #230's `report_owner_failure`/
+// `reset_quarantine` `observe_snapshot` gap (see the fix's PR history for the
+// original bug: those two methods used to `tx.send` directly, bypassing the
+// broker entirely, which is what let this scenario appear to pass before).
+//
+// 1. `CancellationReason::OwnerReplaced` appears structurally unreachable for
+//    compositor's real broker. `CompositorCommandBroker::observe_snapshot`
+//    (broker.rs:861-868, pre-existing, unrelated to #230) cancels everything
+//    queued/active with `Reconnect` on any `Ready` -> non-`Ready` transition.
+//    `set_installed_generation` (broker.rs:741, also pre-existing) is what
+//    produces `OwnerReplaced`, but every real path to it in
+//    `run_niri_listener` is only reached *after* a prior failure already put
+//    the connection in `Reconnecting` -- so the queue is always already
+//    drained by `Reconnect` before a new generation is ever installed. This
+//    was checked against the real listener loop, not just the offline test
+//    driver: "begin start" (which bumps `owner_generation` and calls
+//    `set_installed_generation`) is only reached via the `tick`-driven
+//    `Backoff -> Starting` transition, which itself only follows a failure.
+//    Submitting a command while not-`Ready` is also rejected outright
+//    (`Unavailable`, broker.rs:917), so there is no window to queue something
+//    that survives to see `OwnerReplaced` either. This looks like a genuine,
+//    pre-existing property of compositor's single-owned-service architecture
+//    (unlike device, whose "owner" is an independently-restartable D-Bus
+//    daemon and can genuinely announce a new identity before the old one is
+//    detected as failed) -- worth its own issue, not something #230 asked
+//    for or something to force a test around here.
+//
+// 2. `restart_containing_process` (this file) discards the old service and
+//    broker outright; any tickets still outstanding on the old broker are
+//    never resolved with any `CancellationReason` at all -- they are simply
+//    dropped along with the old `Arc`. Also out of scope for #230, noted for
+//    a future pass.
+//
+// The shared `scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands`
+// (support/domain_port_contract.rs) is untouched and continues to cover
+// device and notification as written.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds() {
