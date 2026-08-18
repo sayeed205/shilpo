@@ -30,11 +30,13 @@ New ADR: copy [`TEMPLATE.md`](TEMPLATE.md), pick the next unused number, add a r
 | [0014](0014-animated-theme-transitions.md)                | Animated Material 3 Theme Transitions                                   | Accepted |
 | [0015](0015-niri-opt-in-shortcut-include.md)              | Extension Keyboard Shortcuts & Opt-In Niri KDL Projection               | Accepted |
 | [0016](0016-wit-extension-contract.md)                    | Canonical WIT Extension Contract and Process Execution Removal          | Accepted |
+| [0017](0017-compositor-support-scope-and-backend-tiers.md) | Compositor Support Scope, Abstraction Boundary, and Backend Tiers       | Accepted |
 
 ## Chains
 
 Some ADRs build directly on an earlier one; read them in order for full context:
 
+- **Compositor**: 0006 (domain ports) → 0015 (shortcut projection) → 0017 (backend tiers and scope)
 - **Config**: 0007 (resolution) → 0008 (migrations) → 0009 (watching/reload) → 0010 (override writes)
 - **Shell control plane**: 0012 (D-Bus control plane) → 0013 (debug interface added to the same bus object)
 - **Theme**: 0002 (crate split) → 0014 (animated transitions, built on the split)
