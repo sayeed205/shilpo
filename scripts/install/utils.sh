@@ -7,6 +7,7 @@ error() { printf 'error: %s\n' "$*" >&2; }
 
 # Keep the installer-owned user-unit inventory in one place.  The same names
 # are used when wiring, validating, and uninstalling a Shilpo session.
+# shellcheck disable=SC2034 # Inventory arrays sourced by setup and installer scripts
 SHILPO_USER_UNITS=(
   shilpo-shell.service
   shilpo-themed.service
@@ -19,6 +20,7 @@ SHILPO_USER_UNITS=(
   shilpo-first-login.service
 )
 
+# shellcheck disable=SC2034
 SHILPO_SESSION_UNITS=(
   shilpo-shell.service
   shilpo-themed.service

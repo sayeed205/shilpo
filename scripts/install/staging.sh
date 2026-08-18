@@ -88,12 +88,10 @@ stage_and_commit_files() {
 
   # Validate binaries exist and are executable
   if [[ "${DRY_RUN:-false}" == "false" ]]; then
-    for b in shilpo; do
-      if [[ ! -x "$staging_dir/bin/$b" ]]; then
-        error "Staged executable $b is invalid or missing"
-        exit 1
-      fi
-    done
+    if [[ ! -x "$staging_dir/bin/shilpo" ]]; then
+      error "Staged executable shilpo is invalid or missing"
+      exit 1
+    fi
   fi
 
   # Validate systemd service units syntax

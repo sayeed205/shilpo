@@ -36,9 +36,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip2
+        run: rustup show
+
 
       - name: Install desktop build dependencies
         run: |
@@ -69,9 +68,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip2
+        run: rustup show
+
 
       - name: Install cargo-codspeed
         run: timeout 5m cargo install cargo-codspeed --version 5.0.1 --locked
