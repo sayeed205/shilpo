@@ -36,7 +36,13 @@ jobs:
           set +e
           audit_output=$(cargo deny check advisories 2>&1)
           audit_status=$?
+          audit_output_ext=$(cargo deny --manifest-path extensions/Cargo.toml check advisories 2>&1)
+          audit_status_ext=$?
           set -e
+          if [[ $audit_status_ext -ne 0 ]]; then
+            audit_status=$audit_status_ext
+            audit_output="$audit_output"$'\n\n--- extensions workspace ---\n\n'"$audit_output_ext"
+          fi
 
           if [[ $audit_status -ne 0 ]]; then
             echo "advisories_failed=true" >> "$GITHUB_OUTPUT"

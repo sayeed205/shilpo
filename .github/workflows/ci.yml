@@ -84,7 +84,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Install shellcheck and desktop static dependencies
+      - name: Install shellcheck
         run: |
           timeout 5m sudo apt-get update
           timeout 5m sudo apt-get install --yes shellcheck
@@ -124,6 +124,9 @@ jobs:
 
       - name: Verify types
         run: deno task check
+
+      - name: Install test fixture dependencies
+        run: npm ci --prefix tests/fixture
 
       - name: Run tests
         run: deno task test

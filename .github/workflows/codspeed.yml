@@ -38,7 +38,6 @@ jobs:
       - name: Set up Rust toolchain
         run: rustup show
 
-
       - name: Install desktop build dependencies
         run: |
           timeout 5m sudo apt-get update
@@ -69,7 +68,6 @@ jobs:
 
       - name: Set up Rust toolchain
         run: rustup show
-
 
       - name: Install cargo-codspeed
         run: timeout 5m cargo install cargo-codspeed --version 5.0.1 --locked

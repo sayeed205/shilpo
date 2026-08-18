@@ -35,7 +35,6 @@ jobs:
       - name: Set up Rust toolchain
         run: rustup show
 
-
       - name: Install desktop build dependencies
         run: |
           timeout 5m sudo apt-get update
