@@ -255,6 +255,7 @@ pub trait NotificationPort: Send + Sync {
     fn supervisor_state(&self) -> SupervisorState;
     fn telemetry(&self) -> DomainPortTelemetry;
     fn reset_quarantine(&self);
+    fn shutdown(&self);
 
     fn push_notification(&self, notif: Notification) {
         let _ = self.submit_command(NotificationCommand::Push(notif));
@@ -380,7 +381,7 @@ impl NotificationDomainState {
         watch_tx: &watch::Sender<NotificationSnapshot>,
     ) {
         let snapshot = Self::snapshot_from_state(state);
-        let _ = watch_tx.send(snapshot);
+        let _ = watch_tx.send_replace(snapshot);
     }
 
     fn cancel_queue(state: &mut NotificationState, reason: CancellationReason) {
@@ -667,6 +668,34 @@ impl NotificationDomainState {
         let mut state = self.state.lock().unwrap();
         Self::process_queue_locked(&mut state, &self.watch_tx, &self.event_tx);
     }
+
+    pub fn shutdown(&self) {
+        {
+            // Enter the ADR-0006 `Stopping` transitional state first, and
+            // check it here too so a second concurrent caller can't also
+            // pass the guard and cancel the queue twice.
+            let mut state = self.state.lock().unwrap();
+            if matches!(
+                state.supervisor_state,
+                SupervisorState::Stopping | SupervisorState::Stopped
+            ) {
+                return;
+            }
+            state.supervisor_state = SupervisorState::Stopping;
+        }
+        let mut state = self.state.lock().unwrap();
+        Self::cancel_queue(&mut state, CancellationReason::Shutdown);
+        state.supervisor_state = SupervisorState::Stopped;
+        state.lifecycle = DomainLifecycle::Unavailable;
+        state.last_running_timestamp_ms = None;
+        Self::notify_subscribers(&state, &self.watch_tx);
+    }
+}
+
+impl Drop for NotificationDomainState {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }
 
 impl NotificationPort for NotificationDomainState {
@@ -792,6 +821,10 @@ impl NotificationPort for NotificationDomainState {
             };
             Self::notify_subscribers(&state, &self.watch_tx);
         }
+    }
+
+    fn shutdown(&self) {
+        self.shutdown();
     }
 }
 
@@ -1132,6 +1165,18 @@ impl NotificationService {
             sink.notification_closed(id, reason);
         }
     }
+
+    pub fn shutdown(&self) {
+        self.adapter.shutdown();
+        *self.connection.lock().unwrap() = None;
+        *self.signal_sink.lock().unwrap() = None;
+    }
+}
+
+impl Drop for NotificationService {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }
 
 impl NotificationPort for NotificationService {
@@ -1186,6 +1231,10 @@ impl NotificationPort for NotificationService {
 
     fn reset_quarantine(&self) {
         self.adapter.reset_quarantine();
+    }
+
+    fn shutdown(&self) {
+        self.shutdown();
     }
 }
 
@@ -1449,6 +1498,137 @@ mod tests {
         assert_eq!(
             service.time_source().now_ms(),
             service.time_source().now_ms()
+        );
+    }
+
+    #[test]
+    fn test_notification_shutdown_cancels_queued_commands() {
+        let adapter = NotificationDomainState::new_ready(10);
+        adapter.set_auto_converge(false);
+
+        let t1 = adapter
+            .submit_command(NotificationCommand::Push(Notification::new("1", "body")))
+            .unwrap();
+        let t2 = adapter
+            .submit_command(NotificationCommand::SetDnd(true))
+            .unwrap();
+        let t3 = adapter
+            .submit_command(NotificationCommand::Dismiss(10))
+            .unwrap();
+
+        assert!(!t1.is_completed());
+        assert!(!t2.is_completed());
+        assert!(!t3.is_completed());
+
+        adapter.shutdown();
+
+        assert_eq!(
+            t1.outcome(),
+            Some(NotificationCommandOutcome::Cancelled {
+                reason: CancellationReason::Shutdown,
+            })
+        );
+        assert_eq!(
+            t2.outcome(),
+            Some(NotificationCommandOutcome::Cancelled {
+                reason: CancellationReason::Shutdown,
+            })
+        );
+        assert_eq!(
+            t3.outcome(),
+            Some(NotificationCommandOutcome::Cancelled {
+                reason: CancellationReason::Shutdown,
+            })
+        );
+    }
+
+    #[test]
+    fn test_notification_shutdown_exactly_once_idempotent() {
+        let adapter = NotificationDomainState::new_ready(10);
+        adapter.set_auto_converge(false);
+
+        let t = adapter
+            .submit_command(NotificationCommand::Push(Notification::new("1", "body")))
+            .unwrap();
+        assert!(!t.is_completed());
+
+        adapter.shutdown();
+        assert_eq!(
+            t.outcome(),
+            Some(NotificationCommandOutcome::Cancelled {
+                reason: CancellationReason::Shutdown,
+            })
+        );
+
+        // Second explicit shutdown is a no-op
+        adapter.shutdown();
+        assert_eq!(
+            t.outcome(),
+            Some(NotificationCommandOutcome::Cancelled {
+                reason: CancellationReason::Shutdown,
+            })
+        );
+
+        // Drop after shutdown is also a no-op (does not emit/resolve again)
+        drop(adapter);
+        assert_eq!(
+            t.outcome(),
+            Some(NotificationCommandOutcome::Cancelled {
+                reason: CancellationReason::Shutdown,
+            })
+        );
+    }
+
+    #[test]
+    fn test_notification_drop_alone_cancels_queued_commands() {
+        let t = {
+            let adapter = NotificationDomainState::new_ready(10);
+            adapter.set_auto_converge(false);
+            let t = adapter
+                .submit_command(NotificationCommand::Push(Notification::new("1", "body")))
+                .unwrap();
+            assert!(!t.is_completed());
+            t
+            // adapter dropped here without calling shutdown()
+        };
+
+        assert_eq!(
+            t.outcome(),
+            Some(NotificationCommandOutcome::Cancelled {
+                reason: CancellationReason::Shutdown,
+            })
+        );
+    }
+
+    #[test]
+    fn test_notification_post_shutdown_submission_rejected() {
+        let adapter = NotificationDomainState::new_ready(10);
+        adapter.shutdown();
+
+        let res = adapter.submit_command(NotificationCommand::Push(Notification::new("1", "body")));
+        assert_eq!(
+            res.unwrap_err(),
+            NotificationCommandOutcome::Rejected {
+                reason: RejectionReason::Unavailable,
+            }
+        );
+    }
+
+    #[test]
+    fn test_notification_terminal_snapshot_published_on_shutdown() {
+        let adapter = NotificationDomainState::new_ready(10);
+        let mut watch_rx = adapter.subscribe();
+
+        assert_eq!(watch_rx.borrow().lifecycle, DomainLifecycle::Ready);
+        assert_eq!(adapter.supervisor_state(), SupervisorState::Running);
+
+        adapter.shutdown();
+
+        assert_eq!(adapter.supervisor_state(), SupervisorState::Stopped);
+        assert_eq!(adapter.snapshot().lifecycle, DomainLifecycle::Unavailable);
+        assert_eq!(
+            watch_rx.borrow_and_update().lifecycle,
+            DomainLifecycle::Unavailable
         );
     }
 }

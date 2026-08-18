@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -7,8 +7,8 @@ use futures_lite::StreamExt;
 use tokio::sync::broadcast;
 
 use crate::protocol::{
-    CommandOutcome, DeviceCommand, DeviceDomain, DomainLifecycle, DomainPayload, DomainState,
-    DomainVersion, PROTOCOL_VERSION,
+    CancellationReason, CommandId, CommandOutcome, DeviceCommand, DeviceDomain, DomainLifecycle,
+    DomainPayload, DomainState, DomainVersion, PROTOCOL_VERSION,
 };
 use shilpo_domain::{
     FAILURE_WINDOW_MS, MonotonicTimeSource, QUARANTINE_FAILURES, STABLE_RESET_MS, SupervisorState,
@@ -38,21 +38,87 @@ struct SupervisorData {
 
 #[derive(Clone)]
 pub struct DeviceClient {
-    domains: Arc<RwLock<HashMap<DeviceDomain, DomainState>>>,
+    inner: Arc<DeviceClientInner>,
+}
+
+struct DeviceClientInner {
+    domains: RwLock<HashMap<DeviceDomain, DomainState>>,
     update_tx: broadcast::Sender<DeviceClientUpdate>,
     outcome_tx: broadcast::Sender<CommandOutcome>,
-    connection: Arc<Mutex<Option<zbus::Connection>>>,
-    connection_identity: Arc<Mutex<Option<String>>>,
-    debounce_tx: tokio::sync::mpsc::Sender<(DeviceCommand, Duration)>,
-    installed_owner_generation: Arc<AtomicU64>,
-    debounce_depth: Arc<AtomicU64>,
-    restarts: Arc<AtomicU64>,
-    last_error: Arc<Mutex<Option<String>>>,
-    stale_updates: Arc<AtomicU64>,
-    overloads: Arc<AtomicU64>,
-    supersessions: Arc<AtomicU64>,
-    supervisor: Arc<Mutex<SupervisorData>>,
+    connection: Mutex<Option<zbus::Connection>>,
+    connection_identity: Mutex<Option<String>>,
+    debounced: Mutex<DebouncedCommands>,
+    installed_owner_generation: AtomicU64,
+    debounce_depth: AtomicU64,
+    restarts: AtomicU64,
+    last_error: Mutex<Option<String>>,
+    stale_updates: AtomicU64,
+    overloads: AtomicU64,
+    supersessions: AtomicU64,
+    supervisor: Mutex<SupervisorData>,
     time_source: Arc<dyn TimeSource>,
+    is_shutdown: AtomicBool,
+    next_command_seq: AtomicU64,
+}
+
+impl DeviceClientInner {
+    fn shutdown(&self) {
+        if self.is_shutdown.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        // 1. Enter the ADR-0006 `Stopping` transitional state while the drain
+        // below is still in flight; only the final step below moves to `Stopped`.
+        {
+            let mut supervisor = self.supervisor.lock().unwrap();
+            supervisor.state = SupervisorState::Stopping;
+            supervisor.last_running_timestamp_ms = None;
+        }
+
+        // 2. Set domain lifecycles to Unavailable and broadcast terminal snapshot
+        {
+            let mut domains = self.domains.write().unwrap();
+            for state in domains.values_mut() {
+                state.lifecycle = DomainLifecycle::Unavailable;
+                let _ = self.update_tx.send(DeviceClientUpdate {
+                    domain: state.domain,
+                    state: state.clone(),
+                });
+            }
+        }
+
+        // 3. Drain all debounced commands and emit Cancelled { Shutdown }. Each
+        // drained command is given a fresh id/sequence number: the debounce
+        // queue never assigned either while pending, so reusing the
+        // coalescing key here would collide across distinct non-coalescible
+        // commands sharing no key at all.
+        let drained = {
+            let mut debounced = self.debounced.lock().unwrap();
+            debounced.drain(&self.debounce_depth)
+        };
+        for cmd in drained {
+            let seq = self.next_command_seq.fetch_add(1, Ordering::SeqCst);
+            let key = cmd.coalescing_key().unwrap_or_else(|| "cmd".to_string());
+            let _ = self.outcome_tx.send(CommandOutcome::Cancelled {
+                command_id: CommandId(format!("{key}-shutdown-{seq}")),
+                arrival_sequence: seq,
+                domain: cmd.domain(),
+                reason: CancellationReason::Shutdown,
+            });
+        }
+
+        // 4. Drop D-Bus connection
+        *self.connection.lock().unwrap() = None;
+
+        // 5. Fully quiesced: move to the terminal `Stopped` state.
+        self.supervisor.lock().unwrap().state = SupervisorState::Stopped;
+    }
+}
+
+impl Drop for DeviceClientInner {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }
 
 #[derive(Default)]
@@ -66,29 +132,26 @@ impl DebouncedCommands {
         &mut self,
         command: DeviceCommand,
         deadline: tokio::time::Instant,
-        supersessions: &Arc<AtomicU64>,
-        depth: &Arc<AtomicU64>,
+        supersessions: &AtomicU64,
+        depth: &AtomicU64,
     ) -> bool {
         if let Some(key) = command.coalescing_key() {
             if self.pending.insert(key, (command, deadline)).is_some() {
                 supersessions.fetch_add(1, Ordering::SeqCst);
-                depth.fetch_sub(1, Ordering::SeqCst);
+            } else {
+                depth.fetch_add(1, Ordering::SeqCst);
             }
         } else {
             if self.pending.len() + self.non_coalescible.len() >= 32 {
-                depth.fetch_sub(1, Ordering::SeqCst);
                 return false;
             }
             self.non_coalescible.push((command, deadline));
+            depth.fetch_add(1, Ordering::SeqCst);
         }
         true
     }
 
-    fn take_due(
-        &mut self,
-        now: tokio::time::Instant,
-        depth: &Arc<AtomicU64>,
-    ) -> Vec<DeviceCommand> {
+    fn take_due(&mut self, now: tokio::time::Instant, depth: &AtomicU64) -> Vec<DeviceCommand> {
         let mut due = Vec::new();
         let due_keys: Vec<String> = self
             .pending
@@ -109,6 +172,19 @@ impl DebouncedCommands {
         due
     }
 
+    fn drain(&mut self, depth: &AtomicU64) -> Vec<DeviceCommand> {
+        let mut all = Vec::new();
+        for (_, (cmd, _)) in self.pending.drain() {
+            all.push(cmd);
+        }
+        for (cmd, _) in self.non_coalescible.drain(..) {
+            all.push(cmd);
+        }
+        depth.fetch_sub(all.len() as u64, Ordering::SeqCst);
+        all
+    }
+
+    #[cfg(test)]
     fn is_empty(&self) -> bool {
         self.pending.is_empty() && self.non_coalescible.is_empty()
     }
@@ -135,32 +211,31 @@ impl DeviceClient {
     pub fn new_with_time_source(time_source: Arc<dyn TimeSource>) -> Self {
         let (update_tx, _) = broadcast::channel(128);
         let (outcome_tx, _) = broadcast::channel(128);
-        let domains = Arc::new(RwLock::new(unavailable_domains()));
-        let connection = Arc::new(Mutex::new(None));
-        let connection_identity = Arc::new(Mutex::new(None));
-        let (debounce_tx, mut debounce_rx) =
-            tokio::sync::mpsc::channel::<(DeviceCommand, Duration)>(32);
-        let installed_owner_generation = Arc::new(AtomicU64::new(0));
-        let debounce_depth = Arc::new(AtomicU64::new(0));
-        let restarts = Arc::new(AtomicU64::new(0));
-        let last_error = Arc::new(Mutex::new(None));
-        let stale_updates = Arc::new(AtomicU64::new(0));
-        let overloads = Arc::new(AtomicU64::new(0));
-        let supersessions = Arc::new(AtomicU64::new(0));
-        let supervisor = Arc::new(Mutex::new(SupervisorData {
+        let domains = RwLock::new(unavailable_domains());
+        let connection = Mutex::new(None);
+        let connection_identity = Mutex::new(None);
+        let debounced = Mutex::new(DebouncedCommands::default());
+        let installed_owner_generation = AtomicU64::new(0);
+        let debounce_depth = AtomicU64::new(0);
+        let restarts = AtomicU64::new(0);
+        let last_error = Mutex::new(None);
+        let stale_updates = AtomicU64::new(0);
+        let overloads = AtomicU64::new(0);
+        let supersessions = AtomicU64::new(0);
+        let supervisor = Mutex::new(SupervisorData {
             state: SupervisorState::Starting,
             failure_timestamps_ms: Vec::new(),
             backoff_attempt: 0,
             last_running_timestamp_ms: None,
-        }));
+        });
 
-        let client = Self {
+        let inner = Arc::new(DeviceClientInner {
             domains,
             update_tx,
             outcome_tx,
             connection,
             connection_identity,
-            debounce_tx,
+            debounced,
             installed_owner_generation,
             debounce_depth,
             restarts,
@@ -170,28 +245,40 @@ impl DeviceClient {
             supersessions,
             supervisor,
             time_source,
+            is_shutdown: AtomicBool::new(false),
+            next_command_seq: AtomicU64::new(0),
+        });
+
+        let client = Self {
+            inner: inner.clone(),
         };
-        let debounce_client = client.clone();
-        let supersessions_counter = client.supersessions.clone();
-        let debounce_depth_counter = client.debounce_depth.clone();
-        let overload_counter = client.overloads.clone();
+        // Debounced submission now inserts directly into a shared mutex
+        // (`send_command_debounced` below) instead of routing through an
+        // mpsc channel, so shutdown can drain everything synchronously under
+        // one lock with no risk of a submission racing in behind the drain.
+        // This worker only needs to poll for due deadlines and exit once
+        // `is_shutdown` is observed.
+        let weak_inner = Arc::downgrade(&inner);
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 handle.spawn(async move {
-                    let mut pending = DebouncedCommands::default();
                     loop {
-                        tokio::select! {
-                            Some((command, delay)) = debounce_rx.recv() => {
-                                if !pending.replace(command, tokio::time::Instant::now() + delay, &supersessions_counter, &debounce_depth_counter) {
-                                    overload_counter.fetch_add(1, Ordering::SeqCst);
-                                }
-                            }
-                            _ = tokio::time::sleep(Duration::from_millis(20)), if !pending.is_empty() => {
-                                for command in pending.take_due(tokio::time::Instant::now(), &debounce_depth_counter) {
-                                    let _ = debounce_client.send_command(command).await;
-                                }
-                            }
-                            else => break,
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        let Some(inner) = weak_inner.upgrade() else {
+                            break;
+                        };
+                        if inner.is_shutdown.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        let due = {
+                            let mut pending = inner.debounced.lock().unwrap();
+                            pending.take_due(tokio::time::Instant::now(), &inner.debounce_depth)
+                        };
+                        for command in due {
+                            let client = DeviceClient {
+                                inner: inner.clone(),
+                            };
+                            let _ = client.send_command(command).await;
                         }
                     }
                 });
@@ -203,32 +290,36 @@ impl DeviceClient {
         client
     }
 
+    pub fn shutdown(&self) {
+        self.inner.shutdown();
+    }
+
     pub fn installed_owner_generation(&self) -> u64 {
-        self.installed_owner_generation.load(Ordering::SeqCst)
+        self.inner.installed_owner_generation.load(Ordering::SeqCst)
     }
 
     pub fn stale_updates(&self) -> u64 {
-        self.stale_updates.load(Ordering::SeqCst)
+        self.inner.stale_updates.load(Ordering::SeqCst)
     }
 
     pub fn overloads(&self) -> u64 {
-        self.overloads.load(Ordering::SeqCst)
+        self.inner.overloads.load(Ordering::SeqCst)
     }
 
     pub fn supersessions(&self) -> u64 {
-        self.supersessions.load(Ordering::SeqCst)
+        self.inner.supersessions.load(Ordering::SeqCst)
     }
 
     pub fn telemetry(&self) -> crate::protocol::DomainPortTelemetry {
         crate::protocol::DomainPortTelemetry {
-            owner_generation: self.installed_owner_generation.load(Ordering::SeqCst),
-            current_queue_depth: self.debounce_depth.load(Ordering::SeqCst) as usize,
+            owner_generation: self.inner.installed_owner_generation.load(Ordering::SeqCst),
+            current_queue_depth: self.inner.debounce_depth.load(Ordering::SeqCst) as usize,
             queue_capacity: 32,
-            overloads: self.overloads.load(Ordering::SeqCst),
-            supersessions: self.supersessions.load(Ordering::SeqCst),
-            restarts: self.restarts.load(Ordering::SeqCst),
-            stale_updates: self.stale_updates.load(Ordering::SeqCst),
-            last_error: self.last_error.lock().unwrap().clone(),
+            overloads: self.inner.overloads.load(Ordering::SeqCst),
+            supersessions: self.inner.supersessions.load(Ordering::SeqCst),
+            restarts: self.inner.restarts.load(Ordering::SeqCst),
+            stale_updates: self.inner.stale_updates.load(Ordering::SeqCst),
+            last_error: self.inner.last_error.lock().unwrap().clone(),
         }
     }
 
@@ -259,7 +350,7 @@ impl DeviceClient {
         // Increment installed owner generation on establishing a new owner connection
         let identity = connection.unique_name().map(ToString::to_string);
         let owner_changed = {
-            let mut installed = self.connection_identity.lock().unwrap();
+            let mut installed = self.inner.connection_identity.lock().unwrap();
             let changed = *installed != identity;
             if changed {
                 *installed = identity;
@@ -267,11 +358,12 @@ impl DeviceClient {
             changed
         };
         if owner_changed {
-            self.installed_owner_generation
+            self.inner
+                .installed_owner_generation
                 .fetch_add(1, Ordering::SeqCst);
         }
         let installed_generation = self.installed_owner_generation();
-        *self.last_error.lock().unwrap() = None;
+        *self.inner.last_error.lock().unwrap() = None;
 
         let mut listener_tasks = Vec::new();
         let mut listener_readiness = Vec::new();
@@ -423,14 +515,14 @@ impl DeviceClient {
 
         // Publish only after every listener and the initial projection are
         // ready. A failed setup therefore cannot leak listeners into a retry.
-        *self.connection.lock().unwrap() = Some(connection.clone());
-        let ready_now_ms = self.time_source.now_ms();
+        *self.inner.connection.lock().unwrap() = Some(connection.clone());
+        let ready_now_ms = self.inner.time_source.now_ms();
         self.mark_ready(ready_now_ms);
         let closed_client = self.clone();
         tokio::spawn(async move {
             connection.closed().await;
-            *closed_client.connection.lock().unwrap() = None;
-            let now_ms = closed_client.time_source.now_ms();
+            *closed_client.inner.connection.lock().unwrap() = None;
+            let now_ms = closed_client.inner.time_source.now_ms();
             closed_client
                 .report_owner_failure("device daemon connection closed".to_string(), now_ms);
         });
@@ -441,7 +533,7 @@ impl DeviceClient {
     /// attempts drive the persistent supervisor state machine.
     pub async fn maintain_connection(&self) {
         loop {
-            let now_ms = self.time_source.now_ms();
+            let now_ms = self.time_source().now_ms();
             self.tick(now_ms);
 
             match self.supervisor_state() {
@@ -456,7 +548,7 @@ impl DeviceClient {
                     }
                 }
                 SupervisorState::Backoff { retry_at_ms, .. } => {
-                    let now_ms = self.time_source.now_ms();
+                    let now_ms = self.time_source().now_ms();
                     if now_ms < retry_at_ms {
                         tokio::time::sleep(Duration::from_millis(retry_at_ms - now_ms)).await;
                     } else {
@@ -468,11 +560,11 @@ impl DeviceClient {
                 }
                 SupervisorState::Starting => match self.connect().await {
                     Ok(()) => {
-                        let ready_now_ms = self.time_source.now_ms();
+                        let ready_now_ms = self.time_source().now_ms();
                         self.mark_ready(ready_now_ms);
                     }
                     Err(error) => {
-                        let fail_now_ms = self.time_source.now_ms();
+                        let fail_now_ms = self.time_source().now_ms();
                         self.report_owner_failure(error, fail_now_ms);
                     }
                 },
@@ -482,11 +574,12 @@ impl DeviceClient {
     }
 
     pub fn is_connected(&self) -> bool {
-        self.connection.lock().unwrap().is_some()
+        self.inner.connection.lock().unwrap().is_some()
     }
 
     pub fn get_domain_state(&self, domain: DeviceDomain) -> DomainState {
-        self.domains
+        self.inner
+            .domains
             .read()
             .unwrap()
             .get(&domain)
@@ -495,17 +588,17 @@ impl DeviceClient {
     }
 
     pub fn subscribe_updates(&self) -> broadcast::Receiver<DeviceClientUpdate> {
-        self.update_tx.subscribe()
+        self.inner.update_tx.subscribe()
     }
 
     pub fn subscribe_outcomes(&self) -> broadcast::Receiver<CommandOutcome> {
-        self.outcome_tx.subscribe()
+        self.inner.outcome_tx.subscribe()
     }
 
     pub fn update_local_domain_state(&self, state: DomainState) {
-        let installed_gen = self.installed_owner_generation.load(Ordering::SeqCst);
+        let installed_gen = self.inner.installed_owner_generation.load(Ordering::SeqCst);
         let domain = state.domain;
-        let mut domains = self.domains.write().unwrap();
+        let mut domains = self.inner.domains.write().unwrap();
         let current = domains
             .get(&domain)
             .cloned()
@@ -513,13 +606,13 @@ impl DeviceClient {
 
         // Reject future/uninstalled generation
         if state.version.owner_generation > installed_gen {
-            self.stale_updates.fetch_add(1, Ordering::SeqCst);
+            self.inner.stale_updates.fetch_add(1, Ordering::SeqCst);
             return;
         }
 
         // Reject stale version (older generation or older revision in same generation)
         if state.version < current.version {
-            self.stale_updates.fetch_add(1, Ordering::SeqCst);
+            self.inner.stale_updates.fetch_add(1, Ordering::SeqCst);
             return;
         }
 
@@ -531,22 +624,26 @@ impl DeviceClient {
             {
                 return;
             }
-            self.stale_updates.fetch_add(1, Ordering::SeqCst);
+            self.inner.stale_updates.fetch_add(1, Ordering::SeqCst);
             return;
         }
 
         // Strictly newer version: accept and update
         domains.insert(domain, state.clone());
         drop(domains);
-        let _ = self.update_tx.send(DeviceClientUpdate { domain, state });
+        let _ = self
+            .inner
+            .update_tx
+            .send(DeviceClientUpdate { domain, state });
     }
 
     pub fn notify_command_outcome(&self, outcome: CommandOutcome) {
-        let _ = self.outcome_tx.send(outcome);
+        let _ = self.inner.outcome_tx.send(outcome);
     }
 
     pub async fn send_command(&self, command: DeviceCommand) -> Result<CommandOutcome, String> {
         let connection = self
+            .inner
             .connection
             .lock()
             .unwrap()
@@ -654,27 +751,27 @@ impl DeviceClient {
     }
 
     pub fn supervisor_state(&self) -> SupervisorState {
-        self.supervisor.lock().unwrap().state
+        self.inner.supervisor.lock().unwrap().state
     }
 
     pub fn time_source(&self) -> &Arc<dyn TimeSource> {
-        &self.time_source
+        &self.inner.time_source
     }
 
     pub fn mark_ready(&self, now_ms: u64) {
-        let mut supervisor = self.supervisor.lock().unwrap();
+        let mut supervisor = self.inner.supervisor.lock().unwrap();
         supervisor.state = SupervisorState::Running;
         supervisor.last_running_timestamp_ms = Some(now_ms);
         drop(supervisor);
-        *self.last_error.lock().unwrap() = None;
+        *self.inner.last_error.lock().unwrap() = None;
     }
 
     pub fn report_owner_failure(&self, error: String, now_ms: u64) {
-        self.restarts.fetch_add(1, Ordering::SeqCst);
-        *self.last_error.lock().unwrap() = Some(error.clone());
+        self.inner.restarts.fetch_add(1, Ordering::SeqCst);
+        *self.inner.last_error.lock().unwrap() = Some(error.clone());
 
         let target_lifecycle = {
-            let mut supervisor = self.supervisor.lock().unwrap();
+            let mut supervisor = self.inner.supervisor.lock().unwrap();
             supervisor.last_running_timestamp_ms = None;
 
             supervisor
@@ -701,11 +798,11 @@ impl DeviceClient {
             target_lifecycle
         };
 
-        let mut domains = self.domains.write().unwrap();
+        let mut domains = self.inner.domains.write().unwrap();
         for state in domains.values_mut() {
             state.lifecycle = target_lifecycle;
             state.error = Some(error.clone());
-            let _ = self.update_tx.send(DeviceClientUpdate {
+            let _ = self.inner.update_tx.send(DeviceClientUpdate {
                 domain: state.domain,
                 state: state.clone(),
             });
@@ -713,7 +810,7 @@ impl DeviceClient {
     }
 
     pub fn tick(&self, now_ms: u64) {
-        let mut supervisor = self.supervisor.lock().unwrap();
+        let mut supervisor = self.inner.supervisor.lock().unwrap();
         match supervisor.state {
             SupervisorState::Backoff { retry_at_ms, .. } => {
                 if now_ms >= retry_at_ms {
@@ -733,17 +830,17 @@ impl DeviceClient {
     }
 
     pub fn reset_quarantine(&self) {
-        let mut supervisor = self.supervisor.lock().unwrap();
+        let mut supervisor = self.inner.supervisor.lock().unwrap();
         if matches!(supervisor.state, SupervisorState::Quarantined) {
             supervisor.failure_timestamps_ms.clear();
             supervisor.backoff_attempt = 0;
             supervisor.last_running_timestamp_ms = None;
             supervisor.state = SupervisorState::Starting;
             drop(supervisor);
-            let mut domains = self.domains.write().unwrap();
+            let mut domains = self.inner.domains.write().unwrap();
             for state in domains.values_mut() {
                 state.lifecycle = DomainLifecycle::Reconnecting;
-                let _ = self.update_tx.send(DeviceClientUpdate {
+                let _ = self.inner.update_tx.send(DeviceClientUpdate {
                     domain: state.domain,
                     state: state.clone(),
                 });
@@ -756,19 +853,29 @@ impl DeviceClient {
         command: DeviceCommand,
         delay: Duration,
     ) -> Result<(), crate::protocol::RejectionReason> {
-        match self.debounce_tx.try_send((command, delay)) {
-            Ok(()) => {
-                self.debounce_depth.fetch_add(1, Ordering::SeqCst);
-                Ok(())
-            }
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                self.overloads.fetch_add(1, Ordering::SeqCst);
-                Err(crate::protocol::RejectionReason::Overloaded)
-            }
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                Err(crate::protocol::RejectionReason::Unavailable)
-            }
+        if self.inner.is_shutdown.load(Ordering::SeqCst) {
+            return Err(crate::protocol::RejectionReason::Unavailable);
         }
+        if matches!(
+            self.inner.supervisor.lock().unwrap().state,
+            SupervisorState::Quarantined | SupervisorState::Stopped
+        ) {
+            return Err(crate::protocol::RejectionReason::Unavailable);
+        }
+        let mut pending = self.inner.debounced.lock().unwrap();
+        if self.inner.is_shutdown.load(Ordering::SeqCst) {
+            return Err(crate::protocol::RejectionReason::Unavailable);
+        }
+        if !pending.replace(
+            command,
+            tokio::time::Instant::now() + delay,
+            &self.inner.supersessions,
+            &self.inner.debounce_depth,
+        ) {
+            self.inner.overloads.fetch_add(1, Ordering::SeqCst);
+            return Err(crate::protocol::RejectionReason::Overloaded);
+        }
+        Ok(())
     }
 }
 
@@ -1063,7 +1170,10 @@ mod tests {
     #[tokio::test]
     async fn stale_domain_signal_cannot_overwrite_newer_projection() {
         let client = DeviceClient::new();
-        client.installed_owner_generation.store(1, Ordering::SeqCst);
+        client
+            .inner
+            .installed_owner_generation
+            .store(1, Ordering::SeqCst);
         let mut newer = unavailable_state(DeviceDomain::Audio);
         newer.version = DomainVersion::new(1, 3);
         newer.lifecycle = DomainLifecycle::Ready;
@@ -1081,7 +1191,10 @@ mod tests {
     #[tokio::test]
     async fn freshness_rejects_uninstalled_generation_and_equal_version_conflicts() {
         let client = DeviceClient::new();
-        client.installed_owner_generation.store(1, Ordering::SeqCst);
+        client
+            .inner
+            .installed_owner_generation
+            .store(1, Ordering::SeqCst);
 
         // 1. Uninstalled generation rejection
         let uninstalled = DomainState {
@@ -1127,8 +1240,8 @@ mod tests {
     async fn debounce_keeps_latest_absolute_intent_per_domain() {
         use crate::protocol::{AudioAction, BrightnessAction};
         let now = tokio::time::Instant::now();
-        let supersessions = Arc::new(AtomicU64::new(0));
-        let depth = Arc::new(AtomicU64::new(0));
+        let supersessions = AtomicU64::new(0);
+        let depth = AtomicU64::new(0);
         let mut pending = DebouncedCommands::default();
         pending.replace(
             DeviceCommand::Audio(AudioAction::SetVolume(20)),
@@ -1317,5 +1430,186 @@ mod tests {
         assert_eq!(reconnect_backoff_ms(8), 30000);
         assert_eq!(reconnect_backoff_ms(9), 30000);
         assert_eq!(reconnect_backoff_ms(32), 30000);
+    }
+
+    #[tokio::test]
+    async fn test_device_shutdown_cancels_queued_commands() {
+        use crate::protocol::{AudioAction, BluetoothAction, BrightnessAction};
+        let client = DeviceClient::new();
+        let mut rx = client.subscribe_outcomes();
+
+        client
+            .send_command_debounced(
+                DeviceCommand::Audio(AudioAction::SetVolume(30)),
+                Duration::from_secs(10),
+            )
+            .unwrap();
+        client
+            .send_command_debounced(
+                DeviceCommand::Brightness(BrightnessAction::SetBrightness(50)),
+                Duration::from_secs(10),
+            )
+            .unwrap();
+        client
+            .send_command_debounced(
+                DeviceCommand::Bluetooth(BluetoothAction::TogglePowered),
+                Duration::from_secs(10),
+            )
+            .unwrap();
+
+        assert_eq!(client.telemetry().current_queue_depth, 3);
+
+        client.shutdown();
+
+        assert_eq!(client.telemetry().current_queue_depth, 0);
+
+        let mut cancelled_domains = Vec::new();
+        for _ in 0..3 {
+            let outcome = rx.try_recv().expect("must receive cancelled outcome");
+            match outcome {
+                CommandOutcome::Cancelled {
+                    domain,
+                    reason: CancellationReason::Shutdown,
+                    ..
+                } => {
+                    cancelled_domains.push(domain);
+                }
+                other => panic!("expected Cancelled Shutdown, got {:?}", other),
+            }
+        }
+        assert!(cancelled_domains.contains(&DeviceDomain::Audio));
+        assert!(cancelled_domains.contains(&DeviceDomain::Brightness));
+        assert!(cancelled_domains.contains(&DeviceDomain::Bluetooth));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_device_shutdown_exactly_once_idempotent() {
+        use crate::protocol::AudioAction;
+        let client = DeviceClient::new();
+        let mut rx = client.subscribe_outcomes();
+
+        client
+            .send_command_debounced(
+                DeviceCommand::Audio(AudioAction::SetVolume(30)),
+                Duration::from_secs(10),
+            )
+            .unwrap();
+
+        client.shutdown();
+
+        let outcome = rx.try_recv().expect("must receive cancelled outcome");
+        assert!(matches!(
+            outcome,
+            CommandOutcome::Cancelled {
+                domain: DeviceDomain::Audio,
+                reason: CancellationReason::Shutdown,
+                ..
+            }
+        ));
+
+        // Second explicit call is a no-op
+        client.shutdown();
+        assert!(rx.try_recv().is_err());
+
+        // Drop after shutdown is also a no-op
+        drop(client);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_device_drop_alone_cancels_queued_commands() {
+        use crate::protocol::{AudioAction, BrightnessAction};
+        let mut rx = {
+            let client = DeviceClient::new();
+            let rx = client.subscribe_outcomes();
+            client
+                .send_command_debounced(
+                    DeviceCommand::Audio(AudioAction::SetVolume(30)),
+                    Duration::from_secs(10),
+                )
+                .unwrap();
+            client
+                .send_command_debounced(
+                    DeviceCommand::Brightness(BrightnessAction::SetBrightness(50)),
+                    Duration::from_secs(10),
+                )
+                .unwrap();
+            rx
+            // client dropped here without calling shutdown()
+        };
+
+        let mut cancelled_domains = Vec::new();
+        for _ in 0..2 {
+            let outcome = rx
+                .try_recv()
+                .expect("must receive cancelled outcome on drop");
+            match outcome {
+                CommandOutcome::Cancelled {
+                    domain,
+                    reason: CancellationReason::Shutdown,
+                    ..
+                } => {
+                    cancelled_domains.push(domain);
+                }
+                other => panic!("expected Cancelled Shutdown on drop, got {:?}", other),
+            }
+        }
+        assert!(cancelled_domains.contains(&DeviceDomain::Audio));
+        assert!(cancelled_domains.contains(&DeviceDomain::Brightness));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_device_post_shutdown_submission_rejected() {
+        use crate::protocol::AudioAction;
+        let client = DeviceClient::new();
+        let mut rx = client.subscribe_outcomes();
+
+        client.shutdown();
+
+        let res = client.send_command_debounced(
+            DeviceCommand::Audio(AudioAction::SetVolume(30)),
+            Duration::from_secs(10),
+        );
+        assert_eq!(res, Err(crate::protocol::RejectionReason::Unavailable));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_device_terminal_snapshot_published_on_shutdown() {
+        let client = DeviceClient::new();
+        let mut update_rx = client.subscribe_updates();
+
+        client.update_local_domain_state(DomainState {
+            domain: DeviceDomain::Audio,
+            version: DomainVersion::new(0, 1),
+            lifecycle: DomainLifecycle::Ready,
+            payload: DomainPayload::empty(DeviceDomain::Audio),
+            error: None,
+        });
+        assert_eq!(
+            client.get_domain_state(DeviceDomain::Audio).lifecycle,
+            DomainLifecycle::Ready
+        );
+
+        client.shutdown();
+
+        assert_eq!(client.supervisor_state(), SupervisorState::Stopped);
+        assert_eq!(
+            client.get_domain_state(DeviceDomain::Audio).lifecycle,
+            DomainLifecycle::Unavailable
+        );
+
+        // Terminal snapshot observed on update stream
+        let mut observed_audio_unavailable = false;
+        while let Ok(update) = update_rx.try_recv() {
+            if update.domain == DeviceDomain::Audio
+                && update.state.lifecycle == DomainLifecycle::Unavailable
+            {
+                observed_audio_unavailable = true;
+            }
+        }
+        assert!(observed_audio_unavailable);
     }
 }
