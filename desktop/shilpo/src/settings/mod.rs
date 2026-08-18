@@ -472,17 +472,32 @@ fn single_instance_socket_path() -> std::path::PathBuf {
 }
 
 fn focus_settings_window_in_compositor() {
-    if let Ok(mut socket) = niri_ipc::socket::Socket::connect()
-        && let Ok(Ok(niri_ipc::Response::Windows(windows))) =
-            socket.send(niri_ipc::Request::Windows)
-        && let Some(settings_win) = windows.iter().find(|w| {
+    let compositor = shilpo_services::init_compositor();
+    let mut rx = compositor.subscribe();
+
+    let try_focus = |snapshot: &shilpo_services::CompositorSnapshot| -> bool {
+        if let Some(settings_win) = snapshot.windows.iter().find(|w| {
             w.app_id.as_deref() == Some("org.shilpo.settings")
                 || w.app_id.as_deref() == Some("shilpo-settings")
-        })
-    {
-        let _ = socket.send(niri_ipc::Request::Action(niri_ipc::Action::FocusWindow {
-            id: settings_win.id,
-        }));
+        }) {
+            let _ = compositor.command_broker().submit(
+                shilpo_services::CompositorCommand::FocusWindow(settings_win.id),
+            );
+            true
+        } else {
+            false
+        }
+    };
+
+    if try_focus(&rx.borrow_and_update()) {
+        return;
+    }
+
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        if rx.has_changed().unwrap_or(false) && try_focus(&rx.borrow_and_update()) {
+            break;
+        }
     }
 }
 

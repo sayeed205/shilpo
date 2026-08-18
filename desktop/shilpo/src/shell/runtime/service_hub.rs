@@ -59,7 +59,7 @@ impl ServiceHub {
         session_store: Option<Arc<shilpo_services::HeedSessionStore>>,
     ) -> (Self, ServiceHubStreams) {
         let compositor: Arc<dyn shilpo_services::CompositorAdapter> =
-            shilpo_services::NiriCompositorService::new();
+            shilpo_services::init_compositor();
         let device_client = shilpo_services::DeviceClient::new();
         let heed_store_available = session_store.is_some();
         let clipboard = shilpo_services::ClipboardService::with_store(session_store);

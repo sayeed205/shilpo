@@ -21,12 +21,35 @@ use tokio::sync::watch;
 
 use super::{
     BrokerOptions, CompositorAdapter, CompositorCapabilities, CompositorCommand,
-    CompositorCommandBroker, CompositorOutput, CompositorSnapshot, DomainLifecycle, DomainVersion,
-    ExecutorAck, RejectionReason, StaleUpdateError, SupervisorState, WindowInfo, WorkspaceInfo,
+    CompositorCommandBroker, CompositorExtras, CompositorOutput, CompositorSnapshot,
+    DomainLifecycle, DomainVersion, ExecutorAck, NiriExtras, RejectionReason, StaleUpdateError,
+    SupervisorState, WindowIdentity, WindowInfo, WorkspaceInfo,
     broker::{CommandCancellation, StreamCancelHandle, create_stream_cancel_handle},
 };
 
 use crate::domain::{DomainSupervisor, MonotonicTimeSource, TimeSource};
+
+pub(crate) fn niri_capabilities(connection: DomainLifecycle) -> CompositorCapabilities {
+    if connection == DomainLifecycle::Ready {
+        CompositorCapabilities {
+            window_identity: WindowIdentity::Exact,
+            can_create_workspace: true,
+            can_move_window: true,
+            can_focus_window: true,
+            can_focus_workspace: true,
+            can_close_window: true,
+        }
+    } else {
+        CompositorCapabilities {
+            window_identity: WindowIdentity::None,
+            can_create_workspace: false,
+            can_move_window: false,
+            can_focus_window: false,
+            can_focus_workspace: false,
+            can_close_window: false,
+        }
+    }
+}
 
 /// Resolves `NIRI_SOCKET`, then `NIRI_SOCKET_PATH`, falling back to scanning `XDG_RUNTIME_DIR`.
 pub fn resolve_niri_socket_path() -> Option<PathBuf> {
@@ -64,7 +87,7 @@ impl NiriCompositorService {
         let initial = CompositorSnapshot {
             version: DomainVersion::ZERO,
             connection: DomainLifecycle::Unavailable,
-            capabilities: CompositorCapabilities::default(),
+            capabilities: niri_capabilities(DomainLifecycle::Unavailable),
             outputs: Vec::new(),
             workspaces: Vec::new(),
             windows: Vec::new(),
@@ -72,6 +95,7 @@ impl NiriCompositorService {
             focused_workspace_id: None,
             focused_window_id: None,
             active_keyboard_layout: None,
+            extras: CompositorExtras::None,
             last_error: None,
         };
         let (tx, rx) = watch::channel(Arc::new(initial));
@@ -171,6 +195,7 @@ impl NiriCompositorService {
             current.version = DomainVersion::new(current.version.owner_generation, next_rev);
         }
         current.connection = DomainLifecycle::Connecting;
+        current.capabilities = niri_capabilities(DomainLifecycle::Connecting);
         let snap_arc = Arc::new(current);
         if self.broker.observe_snapshot(snap_arc.clone()).is_ok() {
             let _ = self.tx.send(snap_arc);
@@ -214,6 +239,8 @@ impl NiriCompositorService {
         let previous = self.rx.borrow().clone();
         let mut current = (*previous).clone();
         current.version = DomainVersion::new(generation, 0);
+        current.connection = DomainLifecycle::Reconnecting;
+        current.capabilities = niri_capabilities(DomainLifecycle::Reconnecting);
         let snap_arc = Arc::new(current);
         let _ = self.tx.send(snap_arc);
     }
@@ -229,6 +256,7 @@ impl NiriCompositorService {
         let next_gen = current.version.owner_generation.saturating_add(1);
         current.version = DomainVersion::new(next_gen, 0);
         current.connection = DomainLifecycle::Reconnecting;
+        current.capabilities = niri_capabilities(DomainLifecycle::Reconnecting);
         let snap_arc = Arc::new(current);
         self.broker.set_installed_generation(next_gen);
         if self.broker.observe_snapshot(snap_arc.clone()).is_ok() {
@@ -611,6 +639,7 @@ fn publish_reconnecting(
     *revision = revision.saturating_add(1);
     current.version = DomainVersion::new(owner_generation, *revision);
     current.connection = DomainLifecycle::Reconnecting;
+    current.capabilities = niri_capabilities(DomainLifecycle::Reconnecting);
     current.last_error = last_error;
     let snap_arc = Arc::new(current);
     if broker.observe_snapshot(snap_arc.clone()).is_ok() {
@@ -652,6 +681,7 @@ fn record_supervisor_failure(
     let mut current = (*previous).clone();
     current.version = DomainVersion::new(owner_generation, *revision);
     current.connection = target_lifecycle;
+    current.capabilities = niri_capabilities(target_lifecycle);
     current.last_error = Some(error_msg);
     let snap_arc = Arc::new(current);
     if broker.observe_snapshot(snap_arc.clone()).is_ok() {
@@ -956,7 +986,7 @@ fn publish_snapshot_from_state(
         .map(|w| WorkspaceInfo {
             id: w.id,
             name: w.name.clone(),
-            idx: w.idx,
+            idx: w.idx as u32,
             is_active: w.is_active,
             is_focused: w.is_focused,
             is_urgent: w.is_urgent,
@@ -974,6 +1004,7 @@ fn publish_snapshot_from_state(
             .then_with(|| a.id.cmp(&b.id))
     });
 
+    let mut window_positions = std::collections::HashMap::new();
     let mut windows: Vec<WindowInfo> = state
         .windows
         .windows
@@ -984,11 +1015,9 @@ fn publish_snapshot_from_state(
                 .tile_pos_in_workspace_view
                 .map(|(x, y)| (Some(x), Some(y)))
                 .unwrap_or((None, None));
-            let (column, row) = w
-                .layout
-                .pos_in_scrolling_layout
-                .map(|(column, row)| (Some(column), Some(row)))
-                .unwrap_or((None, None));
+            if let Some((column, row)) = w.layout.pos_in_scrolling_layout {
+                window_positions.insert(w.id, (column, row));
+            }
             WindowInfo {
                 id: w.id,
                 title: w.title.clone(),
@@ -999,8 +1028,6 @@ fn publish_snapshot_from_state(
                 is_urgent: w.is_urgent,
                 layout_x,
                 layout_y,
-                column,
-                row,
             }
         })
         .collect();
@@ -1027,7 +1054,7 @@ fn publish_snapshot_from_state(
     let new_snapshot = CompositorSnapshot {
         version: DomainVersion::new(owner_generation, *revision),
         connection,
-        capabilities: CompositorCapabilities::default(),
+        capabilities: niri_capabilities(connection),
         outputs: sorted_outputs,
         workspaces,
         windows,
@@ -1035,6 +1062,7 @@ fn publish_snapshot_from_state(
         focused_workspace_id,
         focused_window_id,
         active_keyboard_layout,
+        extras: CompositorExtras::Niri(NiriExtras { window_positions }),
         last_error: None,
     };
 
@@ -1544,6 +1572,7 @@ mod tests {
         let ready_snap = CompositorSnapshot {
             version: DomainVersion::new(1, 1),
             connection: DomainLifecycle::Ready,
+            capabilities: niri_capabilities(DomainLifecycle::Ready),
             workspaces: vec![super::WorkspaceInfo {
                 id: 1,
                 name: None,
@@ -1589,6 +1618,7 @@ mod tests {
         let ready_snap = CompositorSnapshot {
             version: DomainVersion::new(1, 1),
             connection: DomainLifecycle::Ready,
+            capabilities: niri_capabilities(DomainLifecycle::Ready),
             workspaces: vec![super::WorkspaceInfo {
                 id: 1,
                 name: None,
@@ -1610,6 +1640,7 @@ mod tests {
             .observe_snapshot(Arc::new(CompositorSnapshot {
                 version: DomainVersion::new(1, 2),
                 connection: DomainLifecycle::Reconnecting,
+                capabilities: niri_capabilities(DomainLifecycle::Reconnecting),
                 ..Default::default()
             }))
             .unwrap();
@@ -1619,6 +1650,41 @@ mod tests {
                 reason: CancellationReason::Reconnect
             }
         );
+    }
+
+    #[test]
+    fn test_niri_capabilities_tied_to_lifecycle() {
+        let unavail = niri_capabilities(DomainLifecycle::Unavailable);
+        assert_eq!(unavail.window_identity, WindowIdentity::None);
+        assert!(!unavail.can_create_workspace);
+        assert!(!unavail.can_move_window);
+        assert!(!unavail.can_focus_window);
+        assert!(!unavail.can_focus_workspace);
+        assert!(!unavail.can_close_window);
+
+        let connecting = niri_capabilities(DomainLifecycle::Connecting);
+        assert_eq!(connecting.window_identity, WindowIdentity::None);
+        assert!(!connecting.can_create_workspace);
+        assert!(!connecting.can_move_window);
+        assert!(!connecting.can_focus_window);
+        assert!(!connecting.can_focus_workspace);
+        assert!(!connecting.can_close_window);
+
+        let reconnecting = niri_capabilities(DomainLifecycle::Reconnecting);
+        assert_eq!(reconnecting.window_identity, WindowIdentity::None);
+        assert!(!reconnecting.can_create_workspace);
+        assert!(!reconnecting.can_move_window);
+        assert!(!reconnecting.can_focus_window);
+        assert!(!reconnecting.can_focus_workspace);
+        assert!(!reconnecting.can_close_window);
+
+        let ready = niri_capabilities(DomainLifecycle::Ready);
+        assert_eq!(ready.window_identity, WindowIdentity::Exact);
+        assert!(ready.can_create_workspace);
+        assert!(ready.can_move_window);
+        assert!(ready.can_focus_window);
+        assert!(ready.can_focus_workspace);
+        assert!(ready.can_close_window);
     }
 
     #[test]

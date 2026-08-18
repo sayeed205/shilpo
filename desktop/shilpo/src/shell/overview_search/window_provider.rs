@@ -118,7 +118,8 @@ impl SearchProvider for WindowSearchProvider {
 #[cfg(test)]
 mod tests {
     use shilpo_services::{
-        CompositorSnapshot, DomainLifecycle, DomainVersion, TestCompositorAdapter, WindowInfo,
+        CompositorCapabilities, CompositorSnapshot, DomainLifecycle, DomainVersion,
+        TestCompositorAdapter, WindowInfo,
     };
 
     use super::*;
@@ -134,8 +135,6 @@ mod tests {
             is_urgent: false,
             layout_x: None,
             layout_y: None,
-            column: None,
-            row: None,
         }
     }
 
@@ -143,6 +142,10 @@ mod tests {
         CompositorSnapshot {
             version: DomainVersion::new(1, 1),
             connection: DomainLifecycle::Ready,
+            capabilities: CompositorCapabilities {
+                can_focus_window: true,
+                ..Default::default()
+            },
             windows,
             ..Default::default()
         }

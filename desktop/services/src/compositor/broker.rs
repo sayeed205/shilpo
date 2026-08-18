@@ -1298,6 +1298,7 @@ pub fn create_stream_cancel_handle(stream: UnixStream) -> Arc<dyn StreamCancelHa
 
 #[cfg(test)]
 mod tests {
+    use super::super::CompositorCapabilities;
     use super::*;
 
     fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -1318,6 +1319,10 @@ mod tests {
         let snapshot = CompositorSnapshot {
             version: DomainVersion::new(1, 1),
             connection: DomainLifecycle::Ready,
+            capabilities: CompositorCapabilities {
+                can_focus_workspace: true,
+                ..Default::default()
+            },
             workspaces: vec![super::super::WorkspaceInfo {
                 id: 1,
                 name: None,
@@ -1371,6 +1376,10 @@ mod tests {
         let snapshot = CompositorSnapshot {
             version: DomainVersion::new(1, 1),
             connection: DomainLifecycle::Ready,
+            capabilities: CompositorCapabilities {
+                can_focus_workspace: true,
+                ..Default::default()
+            },
             workspaces: vec![
                 super::super::WorkspaceInfo {
                     id: 1,
@@ -1429,6 +1438,10 @@ mod tests {
         let snapshot = CompositorSnapshot {
             version: DomainVersion::new(1, 1),
             connection: DomainLifecycle::Ready,
+            capabilities: CompositorCapabilities {
+                can_focus_workspace: true,
+                ..Default::default()
+            },
             workspaces: vec![super::super::WorkspaceInfo {
                 id: 1,
                 name: None,

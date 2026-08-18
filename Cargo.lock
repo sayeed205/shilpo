@@ -7997,7 +7997,6 @@ dependencies = [
  "image",
  "libc",
  "log",
- "niri-ipc",
  "notify",
  "proptest 1.11.0",
  "resvg 0.48.1",
