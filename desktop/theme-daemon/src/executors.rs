@@ -393,11 +393,11 @@ impl AdapterExecutor {
                     capacity = ADAPTER_MAILBOX_CAPACITY,
                     "adapter mailbox full; projection request rejected"
                 );
-                return ProjectionStatus::Degraded("Adapter executor mailbox full".to_string());
+                return ProjectionStatus::Degraded(MailboxError::Overloaded.to_string());
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 tracing::warn!(site = "AdapterExecutor", "adapter mailbox closed");
-                return ProjectionStatus::Degraded("Adapter executor channel closed".to_string());
+                return ProjectionStatus::Degraded(MailboxError::Unavailable.to_string());
             }
         }
 
@@ -506,10 +506,14 @@ mod tests {
         assert_eq!(executor.status(), status);
     }
 
-    // Test 1: actor mailbox overload
-    // Fill the PersistenceExecutor mailbox to capacity (8), assert the 33rd send
+    // Additional executor coverage: PersistenceExecutor mailbox overload.
+    // Fill the PersistenceExecutor mailbox to capacity (8), assert the next send
     // returns an overload error and increments the counter, then drain and verify
     // all previously accepted messages are delivered.
+    //
+    // actor_tx (the D-Bus-facing channel named first in #228's policy table) is
+    // covered separately in dbus.rs's own tests, against the real
+    // `ThemeDbusService::try_send` path.
     #[tokio::test]
     async fn test_persistence_mailbox_overload() {
         let temp_dir = std::env::temp_dir().join(format!("theme_test_{}", uuid::Uuid::new_v4()));
@@ -565,52 +569,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(temp_dir);
     }
 
-    // Test 2: actor mailbox closed
-    // Drop the receiver so the executor task exits, assert that an enqueue attempt
-    // returns MailboxError::Unavailable and does NOT increment the overload counter.
-    #[tokio::test]
-    async fn test_persistence_mailbox_closed() {
-        // Create a fresh bounded sender/receiver pair directly.
-        let (tx, rx) = mpsc::channel::<PersistenceRequest>(PERSISTENCE_MAILBOX_CAPACITY);
-        // Drop the receiver to close the channel.
-        drop(rx);
+    // Note: a "PersistenceExecutor mailbox closed" test was deliberately not
+    // added. Unlike actor_tx (where ThemeDaemon and ThemeDbusService hold the
+    // sender and receiver independently, so one side can legitimately close
+    // while the other still holds a sender), PersistenceExecutor owns its own
+    // receiver inside its spawned task and its own sender in `self.tx` — the
+    // channel cannot close while the executor is alive to call `enqueue` on
+    // it. There is no real production path that reaches
+    // `TrySendError::Closed` here to test against.
 
-        // Try to send on a closed channel.
-        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
-        let state = DaemonState::default();
-        let send_result = tx.try_send(PersistenceRequest {
-            kind: PersistenceRequestKind::Persist(Box::new(state)),
-            reply: reply_tx,
-        });
-        assert!(
-            matches!(send_result, Err(mpsc::error::TrySendError::Closed(_))),
-            "sending on a closed channel must return Closed"
-        );
-        // The overload counter lives on PersistenceExecutor, not the bare sender;
-        // a Closed error must NOT increment it — verify by checking enqueue returns
-        // the Unavailable string, not Overloaded.
-        let executor = PersistenceExecutor::new(None);
-        // Kill the internal receiver by dropping the task handle indirectly:
-        // we reach into the sender and close it from the outside.
-        // Simplest: get a clone of the raw sender and drop the executor's rx by
-        // taking the only other sender and closing the raw channel.
-        // Instead, just verify the display strings are distinct as a proxy.
-        use shilpo_domain::MailboxError;
-        assert_ne!(
-            MailboxError::Unavailable.to_string(),
-            MailboxError::Overloaded.to_string(),
-            "Unavailable and Overloaded must be distinguishable"
-        );
-        assert_eq!(
-            executor.overloads(),
-            0,
-            "no sends occurred, counter stays 0"
-        );
-    }
-
-    // Test 5: wallpaper result overload
+    // Additional executor coverage: AdapterExecutor mailbox overload.
     // Fill the AdapterExecutor mailbox to capacity, assert the next send returns
     // Degraded (overload) and increments the overload counter.
+    //
+    // wp_tx (the wallpaper-result channel named third in #228's policy table)
+    // is covered separately below by `test_wallpaper_result_mailbox_overload`
+    // in daemon.rs, against the real `spawn_wallpaper_task` path.
     #[tokio::test]
     async fn test_adapter_executor_overload() {
         // Use a blocking adapter so it never drains the queue while we fill it.

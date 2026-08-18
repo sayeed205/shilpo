@@ -249,3 +249,77 @@ pub trait ThemeDbus {
     #[zbus(signal)]
     fn state_changed(&self, state: String) -> zbus::Result<()>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_effects() -> Arc<Mutex<EffectStatus>> {
+        Arc::new(Mutex::new(EffectStatus {
+            durable_revision: 0,
+            projection_status: ProjectionStatus::Applied,
+        }))
+    }
+
+    // actor_tx overload, driven through the real production `try_send` path.
+    //
+    // ThemeDbusService and ThemeDaemon hold the sender and receiver of this
+    // channel independently (unlike PersistenceExecutor/AdapterExecutor, which
+    // each own both halves), so filling the channel here and calling a real
+    // `#[zbus::interface]` method exercises exactly the path a live D-Bus
+    // caller would hit under sustained pressure.
+    #[tokio::test]
+    async fn test_actor_mailbox_overload() {
+        let (tx, _rx) = mpsc::channel(ACTOR_MAILBOX_CAPACITY);
+        let overloads = Arc::new(AtomicU64::new(0));
+        let service = ThemeDbusService::new(tx.clone(), test_effects(), overloads.clone());
+
+        // Fill to capacity via a raw clone; nothing drains `_rx` in this test.
+        for i in 0..ACTOR_MAILBOX_CAPACITY {
+            let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+            tx.try_send(ActorMessage::GetDiagnostics(reply_tx))
+                .unwrap_or_else(|_| {
+                    panic!("slot {i} should fit in capacity {ACTOR_MAILBOX_CAPACITY}")
+                });
+        }
+
+        // The next request goes through the real `get_diagnostics` D-Bus method,
+        // which calls the same `try_send` production path.
+        let result = service.get_diagnostics().await;
+        match result {
+            Err(zbus::fdo::Error::Failed(msg)) => {
+                assert!(
+                    msg.contains("overloaded"),
+                    "expected an overload message, got: {msg}"
+                );
+            }
+            other => panic!("expected Err(Failed(..)) on overload, got {other:?}"),
+        }
+        assert_eq!(overloads.load(Ordering::SeqCst), 1);
+    }
+
+    // actor_tx closed, driven through the real production `try_send` path.
+    #[tokio::test]
+    async fn test_actor_mailbox_closed() {
+        let (tx, rx) = mpsc::channel(ACTOR_MAILBOX_CAPACITY);
+        // ThemeDaemon's actor_rx has been dropped (e.g. mid-shutdown); the
+        // D-Bus service is still alive and holding its sender.
+        drop(rx);
+
+        let overloads = Arc::new(AtomicU64::new(0));
+        let service = ThemeDbusService::new(tx, test_effects(), overloads.clone());
+
+        let result = service.get_state().await;
+        match result {
+            Err(zbus::fdo::Error::Failed(msg)) => {
+                assert!(
+                    msg.contains("Actor connection closed"),
+                    "expected the closed-channel message, got: {msg}"
+                );
+            }
+            other => panic!("expected Err(Failed(..)) on closed channel, got {other:?}"),
+        }
+        // Closed is not an overload — the counter must not move.
+        assert_eq!(overloads.load(Ordering::SeqCst), 0);
+    }
+}

@@ -158,6 +158,9 @@ pub enum DaemonCommand {
     PortalAppearanceChanged(Option<ThemeMode>),
 }
 
+/// Bounded capacity for the wallpaper task result mailbox.
+pub const WALLPAPER_RESULT_MAILBOX_CAPACITY: usize = 32;
+
 pub struct WallpaperTaskResult {
     pub op_id: u64,
     pub path: PathBuf,
@@ -197,7 +200,7 @@ impl ThemeDaemon {
     pub async fn with_options(options: ThemeDaemonOptions) -> Result<Self> {
         let (actor_tx, actor_rx) = mpsc::channel(crate::dbus::ACTOR_MAILBOX_CAPACITY);
         let (portal_tx, portal_rx) = watch::channel::<Option<Option<ThemeMode>>>(None);
-        let (wp_tx, wp_rx) = mpsc::channel(32);
+        let (wp_tx, wp_rx) = mpsc::channel(WALLPAPER_RESULT_MAILBOX_CAPACITY);
         let actor_overloads = Arc::new(AtomicU64::new(0));
 
         let state_path = options
@@ -528,6 +531,25 @@ impl ThemeDaemon {
             .map_err(|error| format!("Failed to persist wallpaper directory: {error}"))
     }
 
+    /// Try-send a wallpaper task result and record an overload on `Full`.
+    /// `Closed` is not distinguished here: the receiver only ever drops with
+    /// the daemon itself, at which point there is nothing left to warn to.
+    fn send_wallpaper_result(
+        tx: &mpsc::Sender<WallpaperTaskResult>,
+        overloads: &Arc<AtomicU64>,
+        result: WallpaperTaskResult,
+    ) {
+        if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(result) {
+            overloads.fetch_add(1, Ordering::SeqCst);
+            tracing::warn!(
+                site = "ThemeDaemon",
+                policy = "Lossless",
+                capacity = WALLPAPER_RESULT_MAILBOX_CAPACITY,
+                "wallpaper result mailbox full; result dropped"
+            );
+        }
+    }
+
     fn spawn_wallpaper_task(
         &mut self,
         path: PathBuf,
@@ -615,15 +637,7 @@ impl ThemeDaemon {
                             error: Some(error),
                             reply,
                         };
-                        if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(result) {
-                            overloads.fetch_add(1, Ordering::SeqCst);
-                            tracing::warn!(
-                                site = "wallpaper_result_tx",
-                                policy = "Lossless",
-                                capacity = 32u64,
-                                "wallpaper result mailbox full; result dropped"
-                            );
-                        }
+                        Self::send_wallpaper_result(&tx, &overloads, result);
                         return;
                     }
                 }
@@ -666,15 +680,7 @@ impl ThemeDaemon {
                 error,
                 reply,
             };
-            if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(result) {
-                overloads.fetch_add(1, Ordering::SeqCst);
-                tracing::warn!(
-                    site = "wallpaper_result_tx",
-                    policy = "Lossless",
-                    capacity = 32u64,
-                    "wallpaper result mailbox full; result dropped"
-                );
-            }
+            Self::send_wallpaper_result(&tx, &overloads, result);
         });
     }
 
@@ -2252,8 +2258,15 @@ mod tests {
 
     // Test 6: diagnostics exposes counters
     //
-    // Drive one channel into overload, assert the GetDiagnostics JSON contains
-    // mailbox_overloads.actor == 1 and that no portal key exists (watch cannot overload).
+    // Drive a real channel into overload and assert the GetDiagnostics JSON
+    // reflects it, plus that no portal key exists (watch cannot overload).
+    //
+    // This drives PersistenceExecutor's real `enqueue` overload path rather
+    // than actor_tx: a headless daemon (the only kind constructible without a
+    // live D-Bus session) never builds a ThemeDbusService, so actor_tx has no
+    // sender reachable from here. actor_tx's own overload-to-diagnostics path
+    // is exercised for real in dbus.rs's `test_actor_mailbox_overload`; this
+    // test only needs to prove the JSON wiring reads whichever counter moved.
     #[tokio::test]
     async fn test_diagnostics_exposes_mailbox_overloads() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -2266,9 +2279,27 @@ mod tests {
         };
         let mut daemon = ThemeDaemon::with_options(options).await.unwrap();
 
-        // Artificially increment the actor_overloads counter by 1 using the AtomicU64 directly.
-        // (In production this happens when the actor mailbox is full at the dbus.rs try_send site.)
-        daemon.actor_overloads.fetch_add(1, Ordering::SeqCst);
+        // Fill PersistenceExecutor to capacity via its raw sender, then push one
+        // more through the real `enqueue` production path to trigger a genuine
+        // overload — not a direct counter increment.
+        let raw_tx = daemon.persistence_executor.sender();
+        for i in 0..crate::executors::PERSISTENCE_MAILBOX_CAPACITY {
+            let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+            let mut state = DaemonState::default();
+            state.theme.revision = (i + 1) as u64;
+            raw_tx
+                .try_send(crate::executors::PersistenceRequest {
+                    kind: crate::executors::PersistenceRequestKind::Persist(Box::new(state)),
+                    reply: reply_tx,
+                })
+                .unwrap_or_else(|_| panic!("slot {i} should fit"));
+        }
+        let overflow = daemon.persistence_executor.enqueue(DaemonState::default());
+        assert!(
+            overflow.is_err(),
+            "enqueue on a full mailbox must be rejected"
+        );
+        assert_eq!(daemon.persistence_executor.overloads(), 1);
 
         // Ask for diagnostics via handle_actor_message.
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<String>();
@@ -2286,17 +2317,74 @@ mod tests {
             "mailbox_overloads key must be present in GetDiagnostics JSON"
         );
         assert_eq!(
-            overloads["actor"].as_u64().unwrap_or(9999),
+            overloads["persistence"].as_u64().unwrap_or(9999),
             1,
-            "mailbox_overloads.actor must be 1 after one artificial increment"
+            "mailbox_overloads.persistence must reflect the real overload"
         );
         assert!(
             overloads.get("portal").is_none(),
             "mailbox_overloads must NOT contain a 'portal' key (watch cannot overload)"
         );
         // All other counters must start at 0.
+        assert_eq!(overloads["actor"].as_u64().unwrap_or(9999), 0);
         assert_eq!(overloads["wallpaper_result"].as_u64().unwrap_or(9999), 0);
-        assert_eq!(overloads["persistence"].as_u64().unwrap_or(9999), 0);
         assert_eq!(overloads["adapter"].as_u64().unwrap_or(9999), 0);
+    }
+
+    // wp_tx overload, driven through the real production `spawn_wallpaper_task`
+    // path (Lossless capacity 32, the channel named third in #228's policy
+    // table — previously untested despite the "Test 5" label on a different,
+    // substituted test).
+    #[tokio::test]
+    async fn test_wallpaper_result_mailbox_overload() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("wallpaper.png");
+        image::RgbaImage::new(2, 2).save(&path).unwrap();
+
+        let options = ThemeDaemonOptions {
+            headless: true,
+            state_path: Some(temp_dir.path().join("colors.json")),
+            wallpaper_extractor: Some(Arc::new(|_| Ok((0xff112233, SchemeVariant::Expressive)))),
+            wallpaper_backend: Some(Arc::new(|_| Ok(()))),
+            ..Default::default()
+        };
+        let mut daemon = ThemeDaemon::with_options(options).await.unwrap();
+
+        // Fill wallpaper_result_tx to capacity via a raw clone; nothing drains
+        // wallpaper_result_rx in this test.
+        let raw_tx = daemon.wallpaper_result_tx.clone();
+        for i in 0..WALLPAPER_RESULT_MAILBOX_CAPACITY {
+            let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+            raw_tx
+                .try_send(WallpaperTaskResult {
+                    op_id: i as u64,
+                    path: path.clone(),
+                    seed: 0,
+                    detected_variant: SchemeVariant::Auto,
+                    error: None,
+                    reply: reply_tx,
+                })
+                .unwrap_or_else(|_| panic!("slot {i} should fit"));
+        }
+
+        // Spawn one more task through the real production path — its
+        // completion send must overflow and increment the counter.
+        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+        daemon.spawn_wallpaper_task(path.clone(), reply_tx);
+
+        // The overflowing send happens inside a spawned task; yield until it
+        // lands. Deterministic and bounded — no wall-clock sleep.
+        for _ in 0..10_000 {
+            if daemon.wallpaper_result_overloads.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        assert_eq!(
+            daemon.wallpaper_result_overloads.load(Ordering::SeqCst),
+            1,
+            "wallpaper result mailbox overload must be recorded"
+        );
     }
 }
