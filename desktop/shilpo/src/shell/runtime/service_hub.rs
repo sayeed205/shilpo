@@ -271,6 +271,10 @@ impl ServiceHub {
         self.notification.reset_quarantine();
     }
 
+    pub(crate) fn reset_device_quarantine(&self) {
+        self.device_client.reset_quarantine();
+    }
+
     pub(crate) fn copy_text(&self, text: &str) -> anyhow::Result<()> {
         self.clipboard.copy_text(text)
     }

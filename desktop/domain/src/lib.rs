@@ -152,6 +152,37 @@ pub struct DomainPortTelemetry {
     pub last_error: Option<String>,
 }
 
+/// Monotonic time source for supervision timing.
+pub trait TimeSource: Send + Sync {
+    fn now_ms(&self) -> u64;
+}
+
+/// Monotonic time source implementation based on `std::time::Instant`.
+#[derive(Debug, Clone)]
+pub struct MonotonicTimeSource {
+    start: std::time::Instant,
+}
+
+impl MonotonicTimeSource {
+    pub fn new() -> Self {
+        Self {
+            start: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Default for MonotonicTimeSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TimeSource for MonotonicTimeSource {
+    fn now_ms(&self) -> u64 {
+        self.start.elapsed().as_millis() as u64
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,5 +370,14 @@ mod tests {
         assert_eq!(FAILURE_WINDOW_MS, 60_000);
         assert_eq!(STABLE_RESET_MS, 300_000);
         assert_eq!(QUARANTINE_FAILURES, 5);
+    }
+
+    #[test]
+    fn test_monotonic_time_source() {
+        let ts = MonotonicTimeSource::new();
+        let t1 = ts.now_ms();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let t2 = ts.now_ms();
+        assert!(t2 >= t1);
     }
 }

@@ -282,36 +282,7 @@ pub trait NotificationPort: Send + Sync {
     }
 }
 
-/// Monotonic time source for supervision timing.
-pub trait TimeSource: Send + Sync {
-    fn now_ms(&self) -> u64;
-}
-
-/// Monotonic time source implementation based on `std::time::Instant`.
-#[derive(Debug, Clone)]
-pub struct MonotonicTimeSource {
-    start: std::time::Instant,
-}
-
-impl MonotonicTimeSource {
-    pub fn new() -> Self {
-        Self {
-            start: std::time::Instant::now(),
-        }
-    }
-}
-
-impl Default for MonotonicTimeSource {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TimeSource for MonotonicTimeSource {
-    fn now_ms(&self) -> u64 {
-        self.start.elapsed().as_millis() as u64
-    }
-}
+pub use shilpo_domain::{MonotonicTimeSource, TimeSource};
 
 struct PendingCommandItem {
     command: NotificationCommand,
