@@ -1,0 +1,138 @@
+name: CI Quality Gate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, nextest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        run: rustup show
+
+      - name: Install desktop build dependencies
+        run: |
+          timeout 5m sudo apt-get update
+          timeout 5m sudo apt-get install --yes \
+            clang cmake libasound2-dev libdrm-dev libfontconfig1-dev libglib2.0-dev \
+            libpipewire-0.3-dev libpulse-dev libsqlite3-dev libssl-dev libudev-dev libva-dev \
+            libvulkan-dev libwayland-dev libxcb1-dev libxkbcommon-x11-dev libzstd-dev pkg-config
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify formatting
+        run: timeout 5m cargo fmt --all -- --check
+
+      - name: Verify clippy lints
+        run: timeout 20m cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run workspace tests
+        run: timeout 20m cargo nextest run --workspace
+
+      - name: Verify clean worktree
+        run: test -z "$(git status --porcelain --untracked-files=all)"
+
+  supply-chain:
+    name: Supply Chain (cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        run: rustup show
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Check bans, licenses, and sources (root workspace)
+        run: timeout 5m cargo deny check bans licenses sources
+
+      - name: Check bans, licenses, and sources (extensions workspace)
+        run: timeout 5m cargo deny --manifest-path extensions/Cargo.toml check bans licenses sources
+
+      - name: Verify clean worktree
+        run: test -z "$(git status --porcelain --untracked-files=all)"
+
+  static:
+    name: Static Checks & Validations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          timeout 5m sudo apt-get update
+          timeout 5m sudo apt-get install --yes shellcheck
+
+      - name: Run static checks
+        env:
+          CI: "1"
+        run: timeout 5m bash scripts/static_checks.sh
+
+      - name: Verify clean worktree
+        run: test -z "$(git status --porcelain --untracked-files=all)"
+
+  typescript:
+    name: TypeScript SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.5
+
+      - name: Verify generated sources
+        run: deno task generate:check
+
+      - name: Verify formatting
+        run: deno task fmt:check
+
+      - name: Verify lint
+        run: deno task lint
+
+      - name: Verify types
+        run: deno task check
+
+      - name: Install test fixture dependencies
+        run: npm ci --prefix tests/fixture
+
+      - name: Run tests
+        run: deno task test
+
+      - name: Validate package boundary
+        run: deno task publish:check
+
+      - name: Verify clean worktree
+        run: test -z "$(git status --porcelain --untracked-files=all)"

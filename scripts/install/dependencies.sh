@@ -2,6 +2,7 @@
 # Auditable Arch Linux desktop dependency inventory for Shilpo.
 # Target: Arch Linux exclusive desktop contract.
 
+# shellcheck disable=SC2034 # Exported arrays sourced by setup and installer scripts
 SHILPO_BUILD_PACKAGES=(
   base-devel clang cmake git pkgconf rustup
   alsa-lib fontconfig glib2 libdrm libva libxcb libxkbcommon-x11

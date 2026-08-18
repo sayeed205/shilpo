@@ -1,0 +1,88 @@
+name: Security Audit
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # Daily at 00:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Check Cargo Advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        run: rustup show
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Run advisory checks
+        id: run_audit
+        run: |
+          set +e
+          audit_output=$(cargo deny check advisories 2>&1)
+          audit_status=$?
+          audit_output_ext=$(cargo deny --manifest-path extensions/Cargo.toml check advisories 2>&1)
+          audit_status_ext=$?
+          set -e
+          if [[ $audit_status_ext -ne 0 ]]; then
+            audit_status=$audit_status_ext
+            audit_output="$audit_output"$'\n\n--- extensions workspace ---\n\n'"$audit_output_ext"
+          fi
+
+          if [[ $audit_status -ne 0 ]]; then
+            echo "advisories_failed=true" >> "$GITHUB_OUTPUT"
+            echo "audit_log<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$audit_output" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "$audit_output" >&2
+          else
+            echo "advisories_failed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: File or update tracking issue on advisory failure
+        if: steps.run_audit.outputs.advisories_failed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          LOG: ${{ steps.run_audit.outputs.audit_log }}
+        run: |
+          issue_title="Security advisories detected by cargo-deny"
+          existing_issue=$(gh issue list --repo "$REPO" --state open --search "$issue_title in:title" --json number --jq '.[0].number')
+
+          body_content=$(cat <<EOF
+          ## Automated Security Advisory Detection
+
+          \`cargo deny check advisories\` reported security or maintenance advisories against the current dependency tree.
+
+          ### Audit Log
+          \`\`\`text
+          $LOG
+          \`\`\`
+
+          _Automated run: https://github.com/$REPO/actions/runs/${{ github.run_id }}_
+          EOF
+          )
+
+          if [[ -n "$existing_issue" && "$existing_issue" != "null" ]]; then
+            gh issue comment "$existing_issue" --repo "$REPO" --body "$body_content"
+          else
+            gh issue create --repo "$REPO" \
+              --title "$issue_title" \
+              --body "$body_content"
+          fi
+          exit 1
