@@ -4,7 +4,6 @@ use tokio::sync::watch;
 use super::{
     BrokerOptions, CompositorAdapter, CompositorCapabilities, CompositorCommandBroker,
     CompositorExtras, CompositorSnapshot, DomainLifecycle, DomainVersion, RejectionReason,
-    WindowIdentity,
 };
 
 /// Tier 0 Null compositor backend fallback.
@@ -22,14 +21,7 @@ impl NullCompositorBackend {
         let snapshot = Arc::new(CompositorSnapshot {
             version: DomainVersion::ZERO,
             connection: DomainLifecycle::Unavailable,
-            capabilities: CompositorCapabilities {
-                window_identity: WindowIdentity::None,
-                can_create_workspace: false,
-                can_move_window: false,
-                can_focus_window: false,
-                can_focus_workspace: false,
-                can_close_window: false,
-            },
+            capabilities: CompositorCapabilities::default(),
             outputs: Vec::new(),
             workspaces: Vec::new(),
             windows: Vec::new(),
@@ -56,24 +48,6 @@ impl NullCompositorBackend {
     }
 }
 
-impl Default for NullCompositorBackend {
-    fn default() -> Self {
-        let snapshot = Arc::new(CompositorSnapshot::default());
-        let (tx, _rx) = watch::channel(snapshot.clone());
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions::default(),
-            Box::new(|_cmd, _timeout, _cancel, _register| Err(RejectionReason::Unsupported)),
-        );
-        let _ = broker.observe_snapshot(snapshot.clone());
-
-        Self {
-            snapshot,
-            tx,
-            broker,
-        }
-    }
-}
-
 impl CompositorAdapter for NullCompositorBackend {
     fn current(&self) -> Arc<CompositorSnapshot> {
         self.snapshot.clone()
@@ -92,7 +66,7 @@ impl CompositorAdapter for NullCompositorBackend {
 mod tests {
     use super::*;
     use crate::CommandOutcome;
-    use crate::compositor::CompositorCommand;
+    use crate::compositor::{CompositorCommand, WindowIdentity};
 
     #[test]
     fn test_null_backend_reports_unavailable_and_all_caps_false() {

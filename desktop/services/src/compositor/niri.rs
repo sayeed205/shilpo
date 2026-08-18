@@ -31,23 +31,9 @@ use crate::domain::{DomainSupervisor, MonotonicTimeSource, TimeSource};
 
 pub(crate) fn niri_capabilities(connection: DomainLifecycle) -> CompositorCapabilities {
     if connection == DomainLifecycle::Ready {
-        CompositorCapabilities {
-            window_identity: WindowIdentity::Exact,
-            can_create_workspace: true,
-            can_move_window: true,
-            can_focus_window: true,
-            can_focus_workspace: true,
-            can_close_window: true,
-        }
+        CompositorCapabilities::full(WindowIdentity::Exact)
     } else {
-        CompositorCapabilities {
-            window_identity: WindowIdentity::None,
-            can_create_workspace: false,
-            can_move_window: false,
-            can_focus_window: false,
-            can_focus_workspace: false,
-            can_close_window: false,
-        }
+        CompositorCapabilities::default()
     }
 }
 

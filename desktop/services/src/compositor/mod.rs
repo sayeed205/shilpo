@@ -117,6 +117,20 @@ impl Default for CompositorCapabilities {
     }
 }
 
+impl CompositorCapabilities {
+    /// All capabilities enabled, for a backend that is fully connected and ready.
+    pub fn full(window_identity: WindowIdentity) -> Self {
+        Self {
+            window_identity,
+            can_create_workspace: true,
+            can_move_window: true,
+            can_focus_window: true,
+            can_focus_workspace: true,
+            can_close_window: true,
+        }
+    }
+}
+
 /// Generic workspace information.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkspaceInfo {
