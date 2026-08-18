@@ -555,7 +555,16 @@ pub(crate) fn probe_runtime(dir: &Path, manifest: &ExtensionManifest) -> Result<
     };
     let module =
         WasmModule::from_file(&dir.join(&library.path)).map_err(|error| error.to_string())?;
-    let mut runtime = WasmRuntime::new().map_err(|error| error.to_string())?;
+    let temp_store_dir =
+        std::env::temp_dir().join(format!("shilpo-probe-{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&temp_store_dir);
+    let state_store =
+        crate::state::HeedStateStore::open(&temp_store_dir).map_err(|error| error.to_string())?;
+    let mut runtime = WasmRuntime::with_broker_and_state_store(
+        std::sync::Arc::new(crate::secrets::FakeSecretBroker::new()),
+        std::sync::Arc::new(state_store),
+    )
+    .map_err(|error| error.to_string())?;
     runtime
         .load(&manifest.id, module, RuntimeBudget::default())
         .map_err(|error| error.to_string())?;

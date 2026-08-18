@@ -35,6 +35,9 @@ jobs:
       - name: Set up Rust toolchain
         run: rustup show
 
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
       - name: Install desktop build dependencies
         run: |
           timeout 5m sudo apt-get update

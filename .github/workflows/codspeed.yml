@@ -38,6 +38,11 @@ jobs:
       - name: Set up Rust toolchain
         run: rustup show
 
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: smoke-${{ matrix.suite }}
+
       - name: Install desktop build dependencies
         run: |
           timeout 5m sudo apt-get update
@@ -68,6 +73,9 @@ jobs:
 
       - name: Set up Rust toolchain
         run: rustup show
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-codspeed
         run: timeout 5m cargo install cargo-codspeed --version 5.0.1 --locked
