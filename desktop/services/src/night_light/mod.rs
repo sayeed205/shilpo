@@ -2,11 +2,17 @@ pub mod color;
 pub mod dbus;
 pub mod wayland;
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use anyhow::Result;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
+
+/// Capacity for bounded night light command mailbox under `MailboxPolicy::Lossless`.
+pub const NIGHT_LIGHT_MAILBOX_CAPACITY: usize = 32;
 
 /// Represents status of the system night light / color temperature service.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,8 +62,9 @@ pub fn should_use_dark_mode(schedule: &ThemeSchedule, current_hour: u8) -> bool 
     }
 }
 
-#[derive(Debug)]
-enum NightLightCommand {
+/// Commands accepted by the night light backend loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NightLightCommand {
     SetActive(bool),
     SetTemperature(u32),
 }
@@ -71,14 +78,18 @@ enum ActiveBackend {
 /// Service managing Wayland night light color temperature via native WLR gamma control or DBus fallback.
 pub struct NightLightService {
     tx: watch::Sender<NightLightInfo>,
-    cmd_tx: Option<mpsc::UnboundedSender<NightLightCommand>>,
+    cmd_tx: Option<mpsc::Sender<NightLightCommand>>,
+    overloads: Arc<AtomicU64>,
     _task: Option<Arc<tokio::task::JoinHandle<()>>>,
 }
 
 impl NightLightService {
     pub fn new() -> Result<Self> {
         let (tx, _) = watch::channel(NightLightInfo::default());
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<NightLightCommand>();
+        // Bounded night light command mailbox: MailboxPolicy::Lossless, capacity 32.
+        // SetActive / SetTemperature are distinct user intents; dropping one loses a user action.
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<NightLightCommand>(NIGHT_LIGHT_MAILBOX_CAPACITY);
+        let overloads = Arc::new(AtomicU64::new(0));
 
         let tx_clone = tx.clone();
         let task = tokio::spawn(async move {
@@ -88,6 +99,7 @@ impl NightLightService {
         Ok(Self {
             tx,
             cmd_tx: Some(cmd_tx),
+            overloads,
             _task: Some(Arc::new(task)),
         })
     }
@@ -97,6 +109,7 @@ impl NightLightService {
         Self {
             tx,
             cmd_tx: None,
+            overloads: Arc::new(AtomicU64::new(0)),
             _task: None,
         }
     }
@@ -109,15 +122,41 @@ impl NightLightService {
         self.tx.borrow().clone()
     }
 
+    pub fn overloads(&self) -> u64 {
+        self.overloads.load(Ordering::SeqCst)
+    }
+
+    fn send_command(&self, command: NightLightCommand) {
+        let Some(ref cmd_tx) = self.cmd_tx else {
+            return;
+        };
+        match cmd_tx.try_send(command) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.overloads.fetch_add(1, Ordering::SeqCst);
+                tracing::warn!(
+                    site = "NightLightService",
+                    policy = "Lossless",
+                    capacity = NIGHT_LIGHT_MAILBOX_CAPACITY,
+                    "night light command mailbox full; command rejected"
+                );
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::warn!(
+                    site = "NightLightService",
+                    "night light command mailbox closed"
+                );
+            }
+        }
+    }
+
     pub fn set_active(&self, active: bool) -> bool {
         let current = self.info();
         if !current.available {
             return false;
         }
 
-        if let Some(ref cmd_tx) = self.cmd_tx {
-            let _ = cmd_tx.send(NightLightCommand::SetActive(active));
-        }
+        self.send_command(NightLightCommand::SetActive(active));
 
         let mut updated = current;
         updated.is_active = active;
@@ -136,9 +175,7 @@ impl NightLightService {
             return false;
         }
 
-        if let Some(ref cmd_tx) = self.cmd_tx {
-            let _ = cmd_tx.send(NightLightCommand::SetTemperature(kelvin));
-        }
+        self.send_command(NightLightCommand::SetTemperature(kelvin));
 
         let mut updated = current;
         updated.temperature_kelvin = kelvin;
@@ -154,7 +191,7 @@ impl NightLightService {
 
 async fn run_backend_loop(
     tx: watch::Sender<NightLightInfo>,
-    cmd_rx: &mut mpsc::UnboundedReceiver<NightLightCommand>,
+    cmd_rx: &mut mpsc::Receiver<NightLightCommand>,
 ) {
     let active_backend = if let Ok(backend) = wayland::WlrGammaBackend::try_init() {
         info!("NightLightService using native WLR Wayland gamma control");
@@ -257,5 +294,36 @@ mod tests {
         assert!(should_use_dark_mode(&sched, 23));
         assert!(should_use_dark_mode(&sched, 5));
         assert!(!should_use_dark_mode(&sched, 14));
+    }
+
+    #[tokio::test]
+    async fn test_night_light_lossless_overload() {
+        let (tx, _) = watch::channel(NightLightInfo {
+            available: true,
+            ..Default::default()
+        });
+        let (cmd_tx, _cmd_rx) = mpsc::channel(NIGHT_LIGHT_MAILBOX_CAPACITY);
+        let overloads = Arc::new(AtomicU64::new(0));
+        let service = NightLightService {
+            tx,
+            cmd_tx: Some(cmd_tx),
+            overloads: overloads.clone(),
+            _task: None,
+        };
+
+        // Fill the capacity (32 items)
+        for i in 0..NIGHT_LIGHT_MAILBOX_CAPACITY {
+            let active = i % 2 == 0;
+            assert_eq!(service.set_active(active), active);
+        }
+        assert_eq!(service.overloads(), 0);
+
+        // 33rd send overloads the mailbox
+        service.set_active(true);
+        assert_eq!(service.overloads(), 1);
+
+        // Temperature set also triggers overload when full
+        service.set_temperature(4000);
+        assert_eq!(service.overloads(), 2);
     }
 }

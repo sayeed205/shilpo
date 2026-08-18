@@ -135,13 +135,9 @@ impl PowerProfileService {
         if !self.runtime.get().available {
             return Err(anyhow::anyhow!("Power profile service is offline"));
         }
-        if self.runtime.send_command(PowerProfileCommand::Set(profile)) {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!(
-                "Failed to send command to PowerProfileService"
-            ))
-        }
+        self.runtime
+            .send_command(PowerProfileCommand::Set(profile))
+            .map_err(|e| anyhow::anyhow!("Failed to send command to PowerProfileService: {e}"))
     }
 }
 

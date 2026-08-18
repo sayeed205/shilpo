@@ -1,7 +1,12 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Duration;
 
 use anyhow::Result;
 use futures_lite::StreamExt;
+use shilpo_domain::MailboxError;
 use tokio::sync::watch;
 use zbus::{Connection, proxy};
 
@@ -15,6 +20,9 @@ const UPOWER_SERVICE: &str = "org.freedesktop.UPower";
 const DISPLAY_DEVICE_PATH: &str = "/org/freedesktop/UPower/devices/DisplayDevice";
 const UPOWER_PATH: &str = "/org/freedesktop/UPower";
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
+
+/// Capacity for physical changed signal channel under `MailboxPolicy::ReplaceLatest`.
+const PHYSICAL_CHANGED_CAPACITY: usize = 1;
 
 #[proxy(
     interface = "org.freedesktop.UPower.Device",
@@ -304,16 +312,45 @@ async fn physical_device_paths(
     manager.enumerate_devices().await.unwrap_or_default()
 }
 
+fn send_physical_changed(
+    tx: &tokio::sync::mpsc::Sender<()>,
+    overloads: &AtomicU64,
+) -> Result<(), MailboxError> {
+    match tx.try_send(()) {
+        Ok(()) => Ok(()),
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            // MailboxPolicy::ReplaceLatest { key: "physical_changed" }, capacity 1.
+            // The payload is `()`, so a pending signal already queued carries the same
+            // information a new one would; the new send is coalesced into it rather than
+            // enqueued separately, which is equivalent to "newer replaces older" here.
+            overloads.fetch_add(1, Ordering::SeqCst);
+            tracing::warn!(
+                site = "upower",
+                policy = "ReplaceLatest",
+                key = "physical_changed",
+                "physical property changed signal coalesced"
+            );
+            Ok(())
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            tracing::warn!(site = "upower", "physical changed mailbox closed");
+            Err(MailboxError::Unavailable)
+        }
+    }
+}
+
 fn spawn_physical_property_watchers(
     connection: &Connection,
     paths: Vec<zbus::zvariant::OwnedObjectPath>,
-    changed: tokio::sync::mpsc::UnboundedSender<()>,
+    changed: tokio::sync::mpsc::Sender<()>,
+    overloads: Arc<AtomicU64>,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     paths
         .into_iter()
         .map(|path| {
             let connection = connection.clone();
             let changed = changed.clone();
+            let overloads = overloads.clone();
             tokio::spawn(async move {
                 let Ok(builder) = zbus::fdo::PropertiesProxy::builder(&connection)
                     .destination(UPOWER_SERVICE)
@@ -333,7 +370,7 @@ fn spawn_physical_property_watchers(
                         .ok()
                         .is_some_and(|args| args.interface_name == "org.freedesktop.UPower.Device")
                     {
-                        let _ = changed.send(());
+                        let _ = send_physical_changed(&changed, &overloads);
                     }
                 }
             })
@@ -501,11 +538,17 @@ async fn run_upower_loop(ctx: StateContext<BatteryInfo>) {
         };
         let mut device_added = manager.receive_device_added().await.ok();
         let mut device_removed = manager.receive_device_removed().await.ok();
-        let (physical_changed_tx, mut physical_changed_rx) = tokio::sync::mpsc::unbounded_channel();
+        // Bounded physical property changed channel: MailboxPolicy::ReplaceLatest { key: "physical_changed" }, capacity 1.
+        // The receiver's only reaction is ctx.send_replace(fetch_battery_snapshot(..).await) -- a full re-read.
+        // A queue of N identical wake signals produces N identical re-reads; one suffices.
+        let (physical_changed_tx, mut physical_changed_rx) =
+            tokio::sync::mpsc::channel(PHYSICAL_CHANGED_CAPACITY);
+        let overloads = Arc::new(AtomicU64::new(0));
         let mut physical_watchers = spawn_physical_property_watchers(
             &connection,
             physical_device_paths(&manager).await,
             physical_changed_tx.clone(),
+            overloads.clone(),
         );
 
         let owner_changes = if let Ok(dbus) = zbus::fdo::DBusProxy::new(&connection).await {
@@ -541,6 +584,7 @@ async fn run_upower_loop(ctx: StateContext<BatteryInfo>) {
                             &connection,
                             physical_device_paths(&manager).await,
                             physical_changed_tx.clone(),
+                            overloads.clone(),
                         );
                         ctx.send_replace(fetch_battery_snapshot(&connection).await);
                     }
@@ -556,6 +600,7 @@ async fn run_upower_loop(ctx: StateContext<BatteryInfo>) {
                             &connection,
                             physical_device_paths(&manager).await,
                             physical_changed_tx.clone(),
+                            overloads.clone(),
                         );
                         ctx.send_replace(fetch_battery_snapshot(&connection).await);
                     }
@@ -728,5 +773,39 @@ mod tests {
         ];
 
         assert_eq!(physical_capacity_percent(&devices).get(), Some(70.0));
+    }
+
+    #[tokio::test]
+    async fn test_upower_replace_latest_coalescing() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(PHYSICAL_CHANGED_CAPACITY);
+        let overloads = AtomicU64::new(0);
+
+        // First send: enqueued successfully, overloads == 0
+        assert_eq!(send_physical_changed(&tx, &overloads), Ok(()));
+        assert_eq!(overloads.load(Ordering::SeqCst), 0);
+
+        // Second send without receiving: coalesced (returns Ok(()) and increments overloads)
+        assert_eq!(send_physical_changed(&tx, &overloads), Ok(()));
+        assert_eq!(overloads.load(Ordering::SeqCst), 1);
+
+        // Third send without receiving: coalesced again (returns Ok(()) and increments overloads)
+        assert_eq!(send_physical_changed(&tx, &overloads), Ok(()));
+        assert_eq!(overloads.load(Ordering::SeqCst), 2);
+
+        // Receiver drains the single queued signal
+        assert_eq!(rx.try_recv(), Ok(()));
+
+        // Queue is now empty (proving coalescing, not multiple queues)
+        assert_eq!(
+            rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        );
+
+        // Channel closed returns Unavailable
+        drop(rx);
+        assert_eq!(
+            send_physical_changed(&tx, &overloads),
+            Err(MailboxError::Unavailable)
+        );
     }
 }

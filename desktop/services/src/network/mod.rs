@@ -314,23 +314,16 @@ impl NetworkService {
 
     /// Enable or disable Wi-Fi radio.
     pub fn set_wifi_enabled(&self, enabled: bool) -> Result<()> {
-        if self
-            .runtime
+        self.runtime
             .send_command(NetworkCommand::SetWifiEnabled(enabled))
-        {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
-        }
+            .map_err(|e| anyhow::anyhow!("Failed to send command to NetworkService: {e}"))
     }
 
     /// Request a Wi-Fi background scan.
     pub fn scan_wifi(&self) -> Result<()> {
-        if self.runtime.send_command(NetworkCommand::ScanWifi) {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
-        }
+        self.runtime
+            .send_command(NetworkCommand::ScanWifi)
+            .map_err(|e| anyhow::anyhow!("Failed to send command to NetworkService: {e}"))
     }
 
     /// Connect to a Wi-Fi network by SSID and optional access point path.
@@ -339,59 +332,40 @@ impl NetworkService {
             ssid: ssid.to_string(),
             object_path: object_path.map(|s| s.to_string()),
         };
-        if self.runtime.send_command(cmd) {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
-        }
+        self.runtime
+            .send_command(cmd)
+            .map_err(|e| anyhow::anyhow!("Failed to send command to NetworkService: {e}"))
     }
 
     /// Deactivate an active network connection.
     pub fn deactivate_connection(&self, active_conn_path: &str) -> Result<()> {
         let path = active_conn_path.to_string();
-        if self
-            .runtime
+        self.runtime
             .send_command(NetworkCommand::DeactivateConnection(path))
-        {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
-        }
+            .map_err(|e| anyhow::anyhow!("Failed to send command to NetworkService: {e}"))
     }
 
     /// Connect to a VPN connection profile by name or UUID.
     pub fn connect_vpn(&self, name_or_uuid: &str) -> Result<()> {
         let name = name_or_uuid.to_string();
-        if self.runtime.send_command(NetworkCommand::ConnectVpn(name)) {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
-        }
+        self.runtime
+            .send_command(NetworkCommand::ConnectVpn(name))
+            .map_err(|e| anyhow::anyhow!("Failed to send command to NetworkService: {e}"))
     }
 
     /// Disconnect an active VPN connection by profile name or path.
     pub fn disconnect_vpn(&self, name_or_path: &str) -> Result<()> {
         let name = name_or_path.to_string();
-        if self
-            .runtime
+        self.runtime
             .send_command(NetworkCommand::DisconnectVpn(name))
-        {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
-        }
+            .map_err(|e| anyhow::anyhow!("Failed to send command to NetworkService: {e}"))
     }
 
     /// Enable or disable airplane mode (disabling airplane mode restores Wi-Fi and WWAN radio status).
     pub fn set_airplane_mode_enabled(&self, enabled: bool) -> Result<()> {
-        if self
-            .runtime
+        self.runtime
             .send_command(NetworkCommand::SetAirplaneModeEnabled(enabled))
-        {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Failed to send command to NetworkService"))
-        }
+            .map_err(|e| anyhow::anyhow!("Failed to send command to NetworkService: {e}"))
     }
 }
 
