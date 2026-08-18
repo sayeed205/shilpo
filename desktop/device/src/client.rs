@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -23,6 +23,19 @@ pub struct DeviceClientUpdate {
     pub state: DomainState,
 }
 
+/// Supervision state for `maintain_connection`'s reconnect loop, kept behind
+/// one lock so every transition (`tick`, `mark_ready`, `report_owner_failure`,
+/// `reset_quarantine`) is atomic. A prior revision spread these across
+/// independently-locked fields; nothing currently reads `failure_timestamps_ms`
+/// or `backoff_attempt` outside the methods that already hold this lock, but
+/// splitting them invited a future reader to observe a torn state.
+struct SupervisorData {
+    state: SupervisorState,
+    failure_timestamps_ms: Vec<u64>,
+    backoff_attempt: u32,
+    last_running_timestamp_ms: Option<u64>,
+}
+
 #[derive(Clone)]
 pub struct DeviceClient {
     domains: Arc<RwLock<HashMap<DeviceDomain, DomainState>>>,
@@ -38,10 +51,7 @@ pub struct DeviceClient {
     stale_updates: Arc<AtomicU64>,
     overloads: Arc<AtomicU64>,
     supersessions: Arc<AtomicU64>,
-    supervisor_state: Arc<Mutex<SupervisorState>>,
-    failure_timestamps_ms: Arc<Mutex<Vec<u64>>>,
-    backoff_attempt: Arc<AtomicU32>,
-    last_running_timestamp_ms: Arc<Mutex<Option<u64>>>,
+    supervisor: Arc<Mutex<SupervisorData>>,
     time_source: Arc<dyn TimeSource>,
 }
 
@@ -137,10 +147,12 @@ impl DeviceClient {
         let stale_updates = Arc::new(AtomicU64::new(0));
         let overloads = Arc::new(AtomicU64::new(0));
         let supersessions = Arc::new(AtomicU64::new(0));
-        let supervisor_state = Arc::new(Mutex::new(SupervisorState::Starting));
-        let failure_timestamps_ms = Arc::new(Mutex::new(Vec::new()));
-        let backoff_attempt = Arc::new(AtomicU32::new(0));
-        let last_running_timestamp_ms = Arc::new(Mutex::new(None));
+        let supervisor = Arc::new(Mutex::new(SupervisorData {
+            state: SupervisorState::Starting,
+            failure_timestamps_ms: Vec::new(),
+            backoff_attempt: 0,
+            last_running_timestamp_ms: None,
+        }));
 
         let client = Self {
             domains,
@@ -156,10 +168,7 @@ impl DeviceClient {
             stale_updates,
             overloads,
             supersessions,
-            supervisor_state,
-            failure_timestamps_ms,
-            backoff_attempt,
-            last_running_timestamp_ms,
+            supervisor,
             time_source,
         };
         let debounce_client = client.clone();
@@ -645,7 +654,7 @@ impl DeviceClient {
     }
 
     pub fn supervisor_state(&self) -> SupervisorState {
-        *self.supervisor_state.lock().unwrap()
+        self.supervisor.lock().unwrap().state
     }
 
     pub fn time_source(&self) -> &Arc<dyn TimeSource> {
@@ -653,37 +662,45 @@ impl DeviceClient {
     }
 
     pub fn mark_ready(&self, now_ms: u64) {
-        *self.supervisor_state.lock().unwrap() = SupervisorState::Running;
-        *self.last_running_timestamp_ms.lock().unwrap() = Some(now_ms);
+        let mut supervisor = self.supervisor.lock().unwrap();
+        supervisor.state = SupervisorState::Running;
+        supervisor.last_running_timestamp_ms = Some(now_ms);
+        drop(supervisor);
         *self.last_error.lock().unwrap() = None;
     }
 
     pub fn report_owner_failure(&self, error: String, now_ms: u64) {
         self.restarts.fetch_add(1, Ordering::SeqCst);
         *self.last_error.lock().unwrap() = Some(error.clone());
-        *self.last_running_timestamp_ms.lock().unwrap() = None;
 
-        let mut failures = self.failure_timestamps_ms.lock().unwrap();
-        failures.retain(|&ts| now_ms.saturating_sub(ts) <= FAILURE_WINDOW_MS);
-        failures.push(now_ms);
-        let failure_count = failures.len();
-        let (new_state, target_lifecycle) = if failure_count >= QUARANTINE_FAILURES {
-            (SupervisorState::Quarantined, DomainLifecycle::Unavailable)
-        } else {
-            let attempt = failure_count as u32;
-            self.backoff_attempt.store(attempt, Ordering::SeqCst);
-            let delay = reconnect_backoff(attempt).as_millis() as u64;
-            (
-                SupervisorState::Backoff {
-                    attempt,
-                    retry_at_ms: now_ms.saturating_add(delay),
-                },
-                DomainLifecycle::Reconnecting,
-            )
+        let target_lifecycle = {
+            let mut supervisor = self.supervisor.lock().unwrap();
+            supervisor.last_running_timestamp_ms = None;
+
+            supervisor
+                .failure_timestamps_ms
+                .retain(|&ts| now_ms.saturating_sub(ts) <= FAILURE_WINDOW_MS);
+            supervisor.failure_timestamps_ms.push(now_ms);
+            let failure_count = supervisor.failure_timestamps_ms.len();
+
+            let (new_state, target_lifecycle) = if failure_count >= QUARANTINE_FAILURES {
+                (SupervisorState::Quarantined, DomainLifecycle::Unavailable)
+            } else {
+                let attempt = failure_count as u32;
+                supervisor.backoff_attempt = attempt;
+                let delay = reconnect_backoff(attempt).as_millis() as u64;
+                (
+                    SupervisorState::Backoff {
+                        attempt,
+                        retry_at_ms: now_ms.saturating_add(delay),
+                    },
+                    DomainLifecycle::Reconnecting,
+                )
+            };
+            supervisor.state = new_state;
+            target_lifecycle
         };
-        drop(failures);
 
-        *self.supervisor_state.lock().unwrap() = new_state;
         let mut domains = self.domains.write().unwrap();
         for state in domains.values_mut() {
             state.lifecycle = target_lifecycle;
@@ -696,19 +713,19 @@ impl DeviceClient {
     }
 
     pub fn tick(&self, now_ms: u64) {
-        let mut supervisor = self.supervisor_state.lock().unwrap();
-        match *supervisor {
+        let mut supervisor = self.supervisor.lock().unwrap();
+        match supervisor.state {
             SupervisorState::Backoff { retry_at_ms, .. } => {
                 if now_ms >= retry_at_ms {
-                    *supervisor = SupervisorState::Starting;
+                    supervisor.state = SupervisorState::Starting;
                 }
             }
             SupervisorState::Running => {
-                if let Some(start_ts) = *self.last_running_timestamp_ms.lock().unwrap()
+                if let Some(start_ts) = supervisor.last_running_timestamp_ms
                     && now_ms.saturating_sub(start_ts) >= STABLE_RESET_MS
                 {
-                    self.failure_timestamps_ms.lock().unwrap().clear();
-                    self.backoff_attempt.store(0, Ordering::SeqCst);
+                    supervisor.failure_timestamps_ms.clear();
+                    supervisor.backoff_attempt = 0;
                 }
             }
             _ => {}
@@ -716,12 +733,13 @@ impl DeviceClient {
     }
 
     pub fn reset_quarantine(&self) {
-        let mut supervisor = self.supervisor_state.lock().unwrap();
-        if matches!(*supervisor, SupervisorState::Quarantined) {
-            self.failure_timestamps_ms.lock().unwrap().clear();
-            self.backoff_attempt.store(0, Ordering::SeqCst);
-            *self.last_running_timestamp_ms.lock().unwrap() = None;
-            *supervisor = SupervisorState::Starting;
+        let mut supervisor = self.supervisor.lock().unwrap();
+        if matches!(supervisor.state, SupervisorState::Quarantined) {
+            supervisor.failure_timestamps_ms.clear();
+            supervisor.backoff_attempt = 0;
+            supervisor.last_running_timestamp_ms = None;
+            supervisor.state = SupervisorState::Starting;
+            drop(supervisor);
             let mut domains = self.domains.write().unwrap();
             for state in domains.values_mut() {
                 state.lifecycle = DomainLifecycle::Reconnecting;
