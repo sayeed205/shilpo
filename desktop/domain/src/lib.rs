@@ -144,6 +144,16 @@ impl DomainSupervisor {
         self.last_running_timestamp_ms = Some(now_ms);
     }
 
+    /// Forces a transition to `Starting`, e.g. when a port explicitly begins
+    /// a new connection attempt outside the normal `Backoff -> Starting`
+    /// tick. Deliberately does not touch `failure_timestamps_ms`: the
+    /// rolling failure window must survive a restart-triggered re-entry into
+    /// `Starting`, or repeated rapid restarts could never accumulate enough
+    /// failures to trip quarantine.
+    pub fn mark_starting(&mut self) {
+        self.state = SupervisorState::Starting;
+    }
+
     pub fn record_failure(&mut self, now_ms: u64) -> SupervisorState {
         self.last_running_timestamp_ms = None;
         self.failure_timestamps_ms
@@ -651,6 +661,33 @@ mod tests {
         // Tick after stable reset duration
         sup.tick(2_000 + STABLE_RESET_MS);
         assert_eq!(sup.failure_count(), 0);
+    }
+
+    #[test]
+    fn test_supervisor_mark_starting_preserves_failure_history() {
+        let mut sup = DomainSupervisor::new();
+        sup.record_failure(1_000);
+        sup.record_failure(2_000);
+        assert_eq!(sup.failure_count(), 2);
+        assert!(matches!(sup.state(), SupervisorState::Backoff { .. }));
+
+        // A restart-triggered re-entry into Starting must not reset the
+        // rolling failure window, or repeated rapid restarts could never
+        // accumulate enough failures to trip quarantine.
+        sup.mark_starting();
+        assert_eq!(sup.state(), SupervisorState::Starting);
+        assert_eq!(sup.failure_count(), 2);
+
+        // The next failure builds on the preserved history, not from zero.
+        let state = sup.record_failure(3_000);
+        assert_eq!(sup.failure_count(), 3);
+        assert_eq!(
+            state,
+            SupervisorState::Backoff {
+                attempt: 3,
+                retry_at_ms: 3_000 + reconnect_backoff_ms(3),
+            }
+        );
     }
 
     #[test]

@@ -417,7 +417,7 @@ impl NotificationDomainState {
         Self::cancel_queue(&mut state, CancellationReason::OwnerReplaced);
         state.owner_generation += 1;
         state.revision = 0;
-        state.supervisor = DomainSupervisor::new();
+        state.supervisor.mark_starting();
         state.lifecycle = if state.had_prior_readiness {
             DomainLifecycle::Reconnecting
         } else {

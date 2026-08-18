@@ -154,12 +154,7 @@ impl NiriCompositorService {
     }
 
     pub fn begin_start(&self) {
-        {
-            let mut supervisor = self.supervisor.lock().unwrap();
-            if !matches!(supervisor.state(), SupervisorState::Starting) {
-                *supervisor = DomainSupervisor::new();
-            }
-        }
+        self.supervisor.lock().unwrap().mark_starting();
 
         let previous = self.rx.borrow().clone();
         let mut current = (*previous).clone();
@@ -711,10 +706,7 @@ fn run_niri_listener(
         owner_generation += 1;
         revision = 0;
         {
-            let mut sup = supervisor.lock().unwrap();
-            if !matches!(sup.state(), SupervisorState::Starting) {
-                *sup = DomainSupervisor::new();
-            }
+            supervisor.lock().unwrap().mark_starting();
             tracing::info!(target: "shilpo_profile", lifecycle = "starting", "compositor supervisor transition");
         }
         broker.set_installed_generation(owner_generation);
