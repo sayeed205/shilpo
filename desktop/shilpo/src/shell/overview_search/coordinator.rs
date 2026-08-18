@@ -760,12 +760,11 @@ mod tests {
 
     #[test]
     fn test_every_action_result_variant_produced_by_domain_providers_via_coordinator() {
-        use std::path::PathBuf;
-
         use shilpo_services::{
-            AppScanner, Application, ClipboardItem, CompositorSnapshot, DomainLifecycle,
-            DomainVersion, TestCompositorAdapter, WindowInfo,
+            AppScanner, Application, ClipboardItem, CompositorCapabilities, CompositorSnapshot,
+            DomainLifecycle, DomainVersion, TestCompositorAdapter, WindowInfo,
         };
+        use std::path::PathBuf;
         use tokio::sync::watch;
 
         use crate::actions::{ActionCategory, ActionDescriptor, ActionId, ActionInputRequirement};
@@ -777,6 +776,10 @@ mod tests {
         let snapshot = CompositorSnapshot {
             version: DomainVersion::new(1, 1),
             connection: DomainLifecycle::Ready,
+            capabilities: CompositorCapabilities {
+                can_focus_window: true,
+                ..Default::default()
+            },
             windows: vec![WindowInfo {
                 id: 42,
                 title: Some("Terminal".to_string()),
@@ -787,8 +790,6 @@ mod tests {
                 is_urgent: false,
                 layout_x: None,
                 layout_y: None,
-                column: None,
-                row: None,
             }],
             ..Default::default()
         };

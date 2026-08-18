@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use shilpo_services::compositor::{
     BrokerOptions, CommandExecutorFn, CompositorAdapter, CompositorCapabilities, CompositorCommand,
-    CompositorCommandBroker, CompositorSnapshot, ExecutorAck, NiriCompositorService, WindowInfo,
-    WorkspaceInfo,
+    CompositorCommandBroker, CompositorSnapshot, ExecutorAck, NiriCompositorService,
+    WindowIdentity, WindowInfo, WorkspaceInfo,
 };
 use shilpo_services::{
     CancellationReason, DomainLifecycle, DomainPortTelemetry, DomainVersion, MailboxPolicy,
@@ -100,7 +100,6 @@ pub struct CompositorPayload {
     pub windows: Vec<WindowInfo>,
     pub focused_workspace_id: Option<u64>,
     pub focused_window_id: Option<u64>,
-    pub capabilities: CompositorCapabilities,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,7 +123,7 @@ fn default_workspaces() -> Vec<WorkspaceInfo> {
         .map(|id| WorkspaceInfo {
             id,
             name: Some(format!("ws-{id}")),
-            idx: (id % 10) as u8,
+            idx: (id % 10) as u32,
             is_active: true,
             is_focused: false,
             is_urgent: false,
@@ -187,7 +186,6 @@ impl DomainPortDriver for CompositorDomainPortDriver {
             windows: Vec::new(),
             focused_workspace_id: None,
             focused_window_id: None,
-            capabilities: CompositorCapabilities::default(),
         }
     }
 
@@ -196,7 +194,7 @@ impl DomainPortDriver for CompositorDomainPortDriver {
             workspaces: vec![WorkspaceInfo {
                 id: seed,
                 name: Some(format!("ws-{seed}")),
-                idx: (seed % 10) as u8,
+                idx: (seed % 10) as u32,
                 is_active: true,
                 is_focused: true,
                 is_urgent: false,
@@ -206,7 +204,6 @@ impl DomainPortDriver for CompositorDomainPortDriver {
             windows: Vec::new(),
             focused_workspace_id: Some(seed),
             focused_window_id: None,
-            capabilities: CompositorCapabilities::default(),
         }
     }
 
@@ -238,7 +235,6 @@ impl DomainPortDriver for CompositorDomainPortDriver {
                 windows: snap.windows.clone(),
                 focused_workspace_id: snap.focused_workspace_id,
                 focused_window_id: snap.focused_window_id,
-                capabilities: snap.capabilities.clone(),
             },
             last_error: snap.last_error.clone(),
         }
@@ -256,7 +252,6 @@ impl DomainPortDriver for CompositorDomainPortDriver {
                     windows: snap.windows.clone(),
                     focused_workspace_id: snap.focused_workspace_id,
                     focused_window_id: snap.focused_window_id,
-                    capabilities: snap.capabilities.clone(),
                 },
                 last_error: snap.last_error.clone(),
             }
@@ -361,6 +356,7 @@ impl DomainPortDriver for CompositorDomainPortDriver {
         };
         new_snap.version = DomainVersion::new(next_gen, next_rev);
         new_snap.connection = DomainLifecycle::Ready;
+        new_snap.capabilities = CompositorCapabilities::full(WindowIdentity::Exact);
         new_snap.last_error = None;
         let _ = self.current_service().update_snapshot(new_snap);
     }
@@ -398,7 +394,11 @@ impl DomainPortDriver for CompositorDomainPortDriver {
             windows: payload.windows,
             focused_workspace_id: payload.focused_workspace_id,
             focused_window_id: payload.focused_window_id,
-            capabilities: payload.capabilities,
+            capabilities: if lifecycle == DomainLifecycle::Ready {
+                CompositorCapabilities::full(WindowIdentity::Exact)
+            } else {
+                CompositorCapabilities::default()
+            },
             last_error: error,
             ..Default::default()
         };
@@ -507,7 +507,6 @@ impl DomainPortDriver for CompositorDomainPortDriver {
                 windows: current.windows.clone(),
                 focused_workspace_id: Some(item.workspace_id),
                 focused_window_id: current.focused_window_id,
-                capabilities: current.capabilities.clone(),
             };
 
             if !new_payload
@@ -518,7 +517,7 @@ impl DomainPortDriver for CompositorDomainPortDriver {
                 new_payload.workspaces.push(WorkspaceInfo {
                     id: item.workspace_id,
                     name: Some(format!("ws-{}", item.workspace_id)),
-                    idx: (item.workspace_id % 10) as u8,
+                    idx: (item.workspace_id % 10) as u32,
                     is_active: true,
                     is_focused: true,
                     is_urgent: false,
@@ -862,4 +861,84 @@ async fn scenario_20_telemetry_reports_generation_queue_depth_capacity_overloads
 async fn scenario_21_reconciled_and_timed_out_commands_have_typed_terminal_outcomes() {
     let driver = CompositorDomainPortDriver::new(10);
     domain_port_contract::scenario_21_reconciled_and_timed_out_commands_have_typed_terminal_outcomes(&driver);
+}
+
+// ---------------------------------------------------------------------------
+// NullCompositorBackend Conformance Contract Tests
+//
+// NullCompositorBackend is intentionally not driven through the 19
+// `scenario_*` reference scenarios above (via a `DomainPortDriver` impl):
+// those scenarios model a domain with a live owning process that starts,
+// fails, backs off, and reconnects (`begin_start`/`mark_ready`/
+// `report_owner_failure`/`restart_containing_process`/quarantine). Null has
+// no owning process by design -- it is the static "no compositor is
+// available" fallback and never transitions state. Fabricating supervisor
+// dynamics for it would test behavior the backend structurally cannot have.
+//
+// What *is* meaningful to verify -- and is not already covered by the unit
+// tests in `compositor/null.rs` -- is checked here: the backend reached via
+// the production `CompositorRegistry` fallback path behaves identically to a
+// directly-constructed one, every command is rejected under both
+// `MailboxPolicy` variants (not just `Lossless`), and telemetry/version never
+// advance across repeated command attempts and repeated observation --
+// the static-backend analogue of what the dynamic scenarios verify for a
+// live one.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_null_compositor_backend_conformance() {
+    let registry = shilpo_services::compositor::CompositorRegistry::empty();
+    let (backend, name) = registry.select_backend(shilpo_services::compositor::CompositorKind::Kde);
+    assert_eq!(name, "null");
+
+    let broker = backend.command_broker();
+    let commands = [
+        CompositorCommand::CreateWorkspace,
+        CompositorCommand::FocusWorkspace(1),
+        CompositorCommand::FocusWindow(10),
+        CompositorCommand::FocusPreviousWindow,
+        CompositorCommand::CloseWindow(10),
+        CompositorCommand::MoveWindowToWorkspace {
+            window_id: 10,
+            workspace_id: 1,
+        },
+    ];
+
+    for policy in [
+        MailboxPolicy::Lossless,
+        MailboxPolicy::ReplaceLatest {
+            key: "null-conformance".to_string(),
+        },
+    ] {
+        for cmd in commands.clone() {
+            let res = broker.submit_with_policy(cmd, policy.clone());
+            match res {
+                Err(shilpo_services::CommandOutcome::Rejected { reason }) => {
+                    assert!(matches!(
+                        reason,
+                        shilpo_services::RejectionReason::Unavailable
+                            | shilpo_services::RejectionReason::Unsupported
+                    ));
+                }
+                other => panic!("expected Rejected(Unavailable | Unsupported), got: {other:?}"),
+            }
+        }
+    }
+
+    let version_before = backend.current().version;
+    let telemetry_before = broker.telemetry();
+    let mut rx = backend.subscribe();
+    let _ = rx.borrow_and_update();
+
+    assert_eq!(backend.current().version, version_before);
+    let telemetry_after = broker.telemetry();
+    assert_eq!(telemetry_after.restarts, telemetry_before.restarts);
+    assert_eq!(
+        telemetry_after.supersessions,
+        telemetry_before.supersessions
+    );
+    assert_eq!(
+        telemetry_after.current_queue_depth,
+        telemetry_before.current_queue_depth
+    );
 }

@@ -1,5 +1,8 @@
 pub mod broker;
+pub mod detect;
 pub mod niri;
+pub mod null;
+pub mod registry;
 pub mod test_adapter;
 
 use std::sync::Arc;
@@ -9,7 +12,12 @@ pub use broker::{
     BrokerOptions, CommandCancellation, CommandExecutorFn, CommandOutcome, CommandTicket,
     CompositorBrokerTelemetry, CompositorCommandBroker, CompositorTarget,
 };
+pub use detect::{CompositorKind, detect, detect_from};
 pub use niri::NiriCompositorService;
+pub use null::NullCompositorBackend;
+pub use registry::{
+    BackendFactory, CandidateBackend, CompositorRegistry, init_compositor, init_compositor_with,
+};
 pub use shilpo_domain::{
     CancellationReason, DomainLifecycle, DomainVersion, MailboxPolicy, StaleUpdateError,
     SupervisorState,
@@ -70,9 +78,25 @@ pub struct CompositorOutput {
     pub scale: f64,
 }
 
+/// Window identity level supported by a compositor backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowIdentity {
+    /// No window model at all.
+    None,
+    /// Protocol handles only; focus/close work, but IDs are not stable across reconnects
+    /// and cannot be joined with an external window model.
+    Fuzzy,
+    /// Compositor-assigned IDs, stable and addressable.
+    Exact,
+}
+
 /// Compositor capabilities descriptor.
+///
+/// Default is all-false with WindowIdentity::None (degrade closed).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CompositorCapabilities {
+    pub window_identity: WindowIdentity,
     pub can_create_workspace: bool,
     pub can_move_window: bool,
     pub can_focus_window: bool,
@@ -83,6 +107,21 @@ pub struct CompositorCapabilities {
 impl Default for CompositorCapabilities {
     fn default() -> Self {
         Self {
+            window_identity: WindowIdentity::None,
+            can_create_workspace: false,
+            can_move_window: false,
+            can_focus_window: false,
+            can_focus_workspace: false,
+            can_close_window: false,
+        }
+    }
+}
+
+impl CompositorCapabilities {
+    /// All capabilities enabled, for a backend that is fully connected and ready.
+    pub fn full(window_identity: WindowIdentity) -> Self {
+        Self {
+            window_identity,
             can_create_workspace: true,
             can_move_window: true,
             can_focus_window: true,
@@ -97,7 +136,7 @@ impl Default for CompositorCapabilities {
 pub struct WorkspaceInfo {
     pub id: u64,
     pub name: Option<String>,
-    pub idx: u8,
+    pub idx: u32,
     pub is_active: bool,
     pub is_focused: bool,
     pub is_urgent: bool,
@@ -117,8 +156,20 @@ pub struct WindowInfo {
     pub is_urgent: bool,
     pub layout_x: Option<f64>,
     pub layout_y: Option<f64>,
-    pub column: Option<usize>,
-    pub row: Option<usize>,
+}
+
+/// Niri-specific layout extras.
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct NiriExtras {
+    pub window_positions: std::collections::HashMap<u64, (usize, usize)>,
+}
+
+/// Backend-specific extra data attached to a compositor snapshot.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum CompositorExtras {
+    #[default]
+    None,
+    Niri(NiriExtras),
 }
 
 /// Revisioned atomic snapshot of the compositor state.
@@ -134,6 +185,7 @@ pub struct CompositorSnapshot {
     pub focused_workspace_id: Option<u64>,
     pub focused_window_id: Option<u64>,
     pub active_keyboard_layout: Option<String>,
+    pub extras: CompositorExtras,
     pub last_error: Option<String>,
 }
 
@@ -150,6 +202,7 @@ impl Default for CompositorSnapshot {
             focused_workspace_id: None,
             focused_window_id: None,
             active_keyboard_layout: None,
+            extras: CompositorExtras::None,
             last_error: None,
         }
     }
@@ -182,4 +235,54 @@ pub trait CompositorAdapter: Send + Sync {
     fn current(&self) -> Arc<CompositorSnapshot>;
     fn subscribe(&self) -> watch::Receiver<Arc<CompositorSnapshot>>;
     fn command_broker(&self) -> Arc<CompositorCommandBroker>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_capabilities_default_all_false() {
+        let caps = CompositorCapabilities::default();
+        assert_eq!(caps.window_identity, WindowIdentity::None);
+        assert!(!caps.can_create_workspace);
+        assert!(!caps.can_move_window);
+        assert!(!caps.can_focus_window);
+        assert!(!caps.can_focus_workspace);
+        assert!(!caps.can_close_window);
+    }
+
+    #[test]
+    fn test_default_snapshot_rejects_every_command() {
+        let broker = CompositorCommandBroker::new(
+            BrokerOptions::default(),
+            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success)),
+        );
+        let _ = broker.observe_snapshot(Arc::new(CompositorSnapshot::default()));
+
+        let commands = [
+            CompositorCommand::CreateWorkspace,
+            CompositorCommand::FocusWorkspace(1),
+            CompositorCommand::FocusWindow(10),
+            CompositorCommand::FocusPreviousWindow,
+            CompositorCommand::CloseWindow(10),
+            CompositorCommand::MoveWindowToWorkspace {
+                window_id: 10,
+                workspace_id: 1,
+            },
+        ];
+
+        for cmd in commands {
+            let res = broker.submit_with_policy(cmd, MailboxPolicy::Lossless);
+            assert!(
+                matches!(
+                    res,
+                    Err(CommandOutcome::Rejected {
+                        reason: RejectionReason::Unavailable | RejectionReason::Unsupported
+                    })
+                ),
+                "command should be rejected on default snapshot"
+            );
+        }
+    }
 }

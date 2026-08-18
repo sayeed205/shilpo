@@ -552,6 +552,7 @@ mod tests {
         let snapshot = CompositorSnapshot {
             connection: shilpo_services::DomainLifecycle::Ready,
             capabilities: shilpo_services::CompositorCapabilities {
+                can_create_workspace: true,
                 can_focus_workspace: false,
                 ..Default::default()
             },

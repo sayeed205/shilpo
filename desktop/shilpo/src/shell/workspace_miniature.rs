@@ -27,19 +27,8 @@ pub(crate) fn compare_windows_spatially(a: &WindowInfo, b: &WindowInfo) -> Order
         }
     }
 
-    fn compare_usize_opt(a: Option<usize>, b: Option<usize>) -> Ordering {
-        match (a, b) {
-            (Some(a), Some(b)) => a.cmp(&b),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => Ordering::Equal,
-        }
-    }
-
     compare_f64_opt(a.layout_x, b.layout_x)
         .then_with(|| compare_f64_opt(a.layout_y, b.layout_y))
-        .then_with(|| compare_usize_opt(a.column, b.column))
-        .then_with(|| compare_usize_opt(a.row, b.row))
         .then_with(|| a.id.cmp(&b.id))
 }
 
@@ -459,7 +448,7 @@ impl RenderOnce for WorkspaceMiniature {
 mod tests {
     use super::*;
 
-    fn make_workspace(id: u64, idx: u8, name: Option<&str>, is_active: bool) -> WorkspaceInfo {
+    fn make_workspace(id: u64, idx: u32, name: Option<&str>, is_active: bool) -> WorkspaceInfo {
         WorkspaceInfo {
             id,
             name: name.map(String::from),
@@ -490,8 +479,6 @@ mod tests {
             is_urgent: false,
             layout_x: x,
             layout_y: y,
-            column: None,
-            row: None,
         }
     }
 
@@ -582,28 +569,21 @@ mod tests {
         assert_eq!(compare_windows_spatially(&w1, &w2), Ordering::Greater);
         assert_eq!(compare_windows_spatially(&w2, &w1), Ordering::Less);
 
-        // Layout coords vs column/row vs missing
+        // Layout coords vs missing
         w1.layout_x = None;
         w1.layout_y = None;
-        w1.column = Some(0);
-        w1.row = Some(1);
 
-        w2.layout_x = None;
-        w2.layout_y = None;
-        w2.column = Some(1);
-        w2.row = Some(0);
+        w2.layout_x = Some(10.0);
+        w2.layout_y = Some(0.0);
 
-        assert_eq!(compare_windows_spatially(&w1, &w2), Ordering::Less);
+        assert_eq!(compare_windows_spatially(&w1, &w2), Ordering::Greater);
+        assert_eq!(compare_windows_spatially(&w2, &w1), Ordering::Less);
 
         // Missing metadata tie breaker by ID
-        w2.column = Some(0);
-        w2.row = Some(1);
+        w2.layout_x = None;
+        w2.layout_y = None;
         assert_eq!(compare_windows_spatially(&w1, &w2), Ordering::Less);
-
-        // Known compositor coordinates sort before missing coordinates.
-        w2.column = None;
-        w2.row = None;
-        assert_eq!(compare_windows_spatially(&w1, &w2), Ordering::Less);
+        assert_eq!(compare_windows_spatially(&w2, &w1), Ordering::Greater);
     }
 
     #[test]

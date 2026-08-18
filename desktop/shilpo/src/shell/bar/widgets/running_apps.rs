@@ -70,11 +70,7 @@ fn sort_windows_spatially(windows: &mut [WindowInfo]) {
                 .then_with(|| a.id.cmp(&b.id)),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
-            (None, None) => a
-                .column
-                .cmp(&b.column)
-                .then_with(|| a.row.cmp(&b.row))
-                .then_with(|| a.id.cmp(&b.id)),
+            (None, None) => a.id.cmp(&b.id),
         }
     });
 }
@@ -405,13 +401,7 @@ impl RenderOnce for RunningAppsWidget {
 mod tests {
     use super::*;
 
-    fn mock_window(
-        id: u64,
-        x: Option<f64>,
-        y: Option<f64>,
-        col: Option<usize>,
-        row: Option<usize>,
-    ) -> WindowInfo {
+    fn mock_window(id: u64, x: Option<f64>, y: Option<f64>) -> WindowInfo {
         WindowInfo {
             id,
             title: Some(format!("Win {id}")),
@@ -422,17 +412,15 @@ mod tests {
             is_urgent: false,
             layout_x: x,
             layout_y: y,
-            column: col,
-            row,
         }
     }
 
     #[test]
     fn test_spatial_window_sorting() {
         let mut windows = vec![
-            mock_window(3, Some(100.0), Some(20.0), None, None),
-            mock_window(1, Some(10.0), Some(50.0), None, None),
-            mock_window(2, Some(10.0), Some(10.0), None, None),
+            mock_window(3, Some(100.0), Some(20.0)),
+            mock_window(1, Some(10.0), Some(50.0)),
+            mock_window(2, Some(10.0), Some(10.0)),
         ];
 
         sort_windows_spatially(&mut windows);
@@ -443,17 +431,17 @@ mod tests {
     }
 
     #[test]
-    fn test_spatial_window_sorting_fallback_to_column_row_id() {
+    fn test_spatial_window_sorting_fallback_to_id() {
         let mut windows = vec![
-            mock_window(10, None, None, Some(2), Some(1)),
-            mock_window(5, None, None, Some(1), Some(2)),
-            mock_window(7, None, None, Some(1), Some(1)),
+            mock_window(10, None, None),
+            mock_window(5, None, None),
+            mock_window(7, None, None),
         ];
 
         sort_windows_spatially(&mut windows);
 
-        assert_eq!(windows[0].id, 7);
-        assert_eq!(windows[1].id, 5);
+        assert_eq!(windows[0].id, 5);
+        assert_eq!(windows[1].id, 7);
         assert_eq!(windows[2].id, 10);
     }
 
@@ -468,9 +456,9 @@ mod tests {
     #[test]
     fn spatial_sort_is_total_with_partial_and_non_finite_coordinates() {
         let mut windows = vec![
-            mock_window(3, None, Some(2.0), Some(1), Some(1)),
-            mock_window(1, Some(f64::NAN), Some(0.0), None, None),
-            mock_window(2, Some(1.0), Some(0.0), None, None),
+            mock_window(3, None, Some(2.0)),
+            mock_window(1, Some(f64::NAN), Some(0.0)),
+            mock_window(2, Some(1.0), Some(0.0)),
         ];
         sort_windows_spatially(&mut windows);
         assert_eq!(

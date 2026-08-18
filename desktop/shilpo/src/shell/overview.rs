@@ -323,8 +323,6 @@ impl WorkspaceOverview {
                 is_urgent: false,
                 layout_x: None,
                 layout_y: None,
-                column: None,
-                row: None,
             }],
             Some(1),
         )
