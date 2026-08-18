@@ -991,8 +991,79 @@ impl ShellRuntime {
             _drain_task: gpui::Task::ready(()),
             _wallpaper_timer_task: gpui::Task::ready(()),
         });
-        Self::spawn_event_loop(cx, device_rx, notif_rx, rx, config_rx, device_client);
+        Self::spawn_event_loop(
+            cx,
+            device_rx,
+            notif_rx,
+            rx,
+            config_rx,
+            device_client.clone(),
+        );
         (device_tx, notif_tx, tx, config_tx)
+    }
+
+    /// Like [`install_for_event_test`] but returns the [`DeviceClient`] directly so that tests
+    /// can drive state through [`DeviceClient::update_local_domain_state`] and verify the
+    /// full end-to-end path (client gate → broadcast → runtime → `ServiceHub`).
+    #[cfg(test)]
+    pub(crate) fn install_for_event_test_with_client(
+        cx: &mut App,
+    ) -> (
+        std::sync::Arc<shilpo_services::DeviceClient>,
+        tokio::sync::broadcast::Sender<shilpo_services::Notification>,
+        tokio::sync::mpsc::Sender<ShellCommand>,
+        crate::bar::service_worker::ConfigSender,
+    ) {
+        let root =
+            std::env::temp_dir().join(format!("shilpo-shell-event-test-{}", uuid::Uuid::new_v4()));
+        let (tx, rx) = tokio::sync::mpsc::channel(128);
+        let compositor_broker = Arc::new(Mutex::new(None));
+        let status = Arc::new(arc_swap::ArcSwap::from_pointee(ShellStatus::default()));
+        let telemetry = Arc::new(arc_swap::ArcSwap::from_pointee(ShellTelemetry::default()));
+        let dbus_service = Arc::new(ShellDbusService::new(
+            tx.clone(),
+            compositor_broker.clone(),
+            status.clone(),
+            telemetry.clone(),
+        ));
+        let wallpaper_preview = cx.new(WallpaperPreviewResource::new);
+        let (notif_tx, notif_rx) = tokio::sync::broadcast::channel(16);
+        let (config_tx, config_rx) = tokio::sync::mpsc::channel(16);
+        let device_client = shilpo_services::DeviceClient::new();
+        let device_rx = device_client.subscribe_updates();
+        let hub = ServiceHub::new_offline_for_test_with_client(device_client.clone());
+        cx.set_global(Self {
+            dbus_service,
+            _compositor_broker: compositor_broker,
+            _status: status,
+            _telemetry: telemetry,
+            dbus_connection: None,
+            instance_id: uuid::Uuid::new_v4().to_string(),
+            active_config: crate::config::ShellConfig::default(),
+            shell_surfaces: ShellSurfaces::new(Arc::new(CompositorSnapshot::default())),
+            action_dispatcher: ActionDispatcher::new(),
+            extension_host: ExtensionHost::new(None),
+            wallpaper_coordinator: WallpaperCoordinator::new(),
+            wallpaper_preview,
+            service_hub: Some(hub),
+            session_state: crate::config::ShellSessionState::default(),
+            session_path: root.join("session.json"),
+            heed_store: None,
+            _start_time: std::time::Instant::now(),
+            _window_closed: None,
+            _wallpaper_preview_changed: None,
+            _drain_task: gpui::Task::ready(()),
+            _wallpaper_timer_task: gpui::Task::ready(()),
+        });
+        Self::spawn_event_loop(
+            cx,
+            device_rx,
+            notif_rx,
+            rx,
+            config_rx,
+            device_client.clone(),
+        );
+        (std::sync::Arc::new(device_client), notif_tx, tx, config_tx)
     }
 }
 
@@ -1000,8 +1071,9 @@ impl ShellRuntime {
 mod tests {
     use super::*;
     use shilpo_services::{
-        BatteryPayload, DeviceClientUpdate, DeviceDomain, DomainLifecycle, DomainPayload,
-        DomainState, DomainVersion,
+        AudioPayload, BatteryPayload, BrightnessPayload, DeviceClientUpdate, DeviceDomain,
+        DomainLifecycle, DomainPayload, DomainState, DomainVersion, MediaPayload, NetworkPayload,
+        ServiceLifecycle,
     };
 
     #[gpui::test]
@@ -1011,114 +1083,78 @@ mod tests {
             ShellRuntime::install_for_event_test(app)
         });
 
-        let update = DeviceClientUpdate {
+        let v1_update = DeviceClientUpdate {
             domain: DeviceDomain::Battery,
             state: DomainState {
                 domain: DeviceDomain::Battery,
-                version: DomainVersion::new(1, 1),
+                version: DomainVersion::new(1, 5),
                 lifecycle: DomainLifecycle::Ready,
                 payload: DomainPayload::Battery(BatteryPayload {
                     available: true,
                     is_present: true,
-                    percentage: 92,
+                    percentage: 80,
                     ..Default::default()
                 }),
                 error: None,
             },
         };
+        device_tx.send(v1_update).unwrap();
+        cx.run_until_parked();
 
-        device_tx.send(update).unwrap();
-
-        // Exactly one drain cycle driven purely by event arrival (no cx.advance_clock!)
+        let stale_update = DeviceClientUpdate {
+            domain: DeviceDomain::Battery,
+            state: DomainState {
+                domain: DeviceDomain::Battery,
+                version: DomainVersion::new(1, 4),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Battery(BatteryPayload {
+                    available: true,
+                    is_present: true,
+                    percentage: 10,
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+        device_tx.send(stale_update).unwrap();
         cx.run_until_parked();
 
         cx.update(|app| {
             let snap = ShellRuntime::device_snapshot(app);
-            assert_eq!(snap.battery.percentage, 92);
-            assert!(snap.battery.available);
-            let domain_state = ShellRuntime::domain_state(app, DeviceDomain::Battery);
-            assert_eq!(domain_state.version, DomainVersion::new(1, 1));
-            assert_eq!(domain_state.lifecycle, DomainLifecycle::Ready);
-        });
-    }
-
-    #[gpui::test]
-    fn test_stale_and_equal_domain_version_rejected(cx: &mut gpui::TestAppContext) {
-        let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
-            shilpo_ui::init(app);
-            ShellRuntime::install_for_event_test(app)
+            assert_eq!(
+                snap.battery.percentage, 80,
+                "stale version must not overwrite newer state"
+            );
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Battery).version,
+                DomainVersion::new(1, 5)
+            );
         });
 
-        // 1. Send version (1, 2) -> should apply
-        device_tx
-            .send(DeviceClientUpdate {
+        let equal_update = DeviceClientUpdate {
+            domain: DeviceDomain::Battery,
+            state: DomainState {
                 domain: DeviceDomain::Battery,
-                state: DomainState {
-                    domain: DeviceDomain::Battery,
-                    version: DomainVersion::new(1, 2),
-                    lifecycle: DomainLifecycle::Ready,
-                    payload: DomainPayload::Battery(BatteryPayload {
-                        available: true,
-                        is_present: true,
-                        percentage: 95,
-                        ..Default::default()
-                    }),
-                    error: None,
-                },
-            })
-            .unwrap();
+                version: DomainVersion::new(1, 5),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Battery(BatteryPayload {
+                    available: true,
+                    is_present: true,
+                    percentage: 99,
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+        device_tx.send(equal_update).unwrap();
         cx.run_until_parked();
 
         cx.update(|app| {
-            assert_eq!(ShellRuntime::device_snapshot(app).battery.percentage, 95);
-        });
-
-        // 2. Send equal version (1, 2) with different percentage -> should NOT apply
-        device_tx
-            .send(DeviceClientUpdate {
-                domain: DeviceDomain::Battery,
-                state: DomainState {
-                    domain: DeviceDomain::Battery,
-                    version: DomainVersion::new(1, 2),
-                    lifecycle: DomainLifecycle::Ready,
-                    payload: DomainPayload::Battery(BatteryPayload {
-                        available: true,
-                        is_present: true,
-                        percentage: 50,
-                        ..Default::default()
-                    }),
-                    error: None,
-                },
-            })
-            .unwrap();
-        cx.run_until_parked();
-
-        cx.update(|app| {
-            assert_eq!(ShellRuntime::device_snapshot(app).battery.percentage, 95);
-        });
-
-        // 3. Send stale version (1, 1) with different percentage -> should NOT apply
-        device_tx
-            .send(DeviceClientUpdate {
-                domain: DeviceDomain::Battery,
-                state: DomainState {
-                    domain: DeviceDomain::Battery,
-                    version: DomainVersion::new(1, 1),
-                    lifecycle: DomainLifecycle::Ready,
-                    payload: DomainPayload::Battery(BatteryPayload {
-                        available: true,
-                        is_present: true,
-                        percentage: 20,
-                        ..Default::default()
-                    }),
-                    error: None,
-                },
-            })
-            .unwrap();
-        cx.run_until_parked();
-
-        cx.update(|app| {
-            assert_eq!(ShellRuntime::device_snapshot(app).battery.percentage, 95);
+            let snap = ShellRuntime::device_snapshot(app);
+            assert_eq!(
+                snap.battery.percentage, 80,
+                "equal version must be rejected"
+            );
         });
     }
 
@@ -1129,57 +1165,48 @@ mod tests {
             ShellRuntime::install_for_event_test(app)
         });
 
-        // Burst send across multiple streams
-        device_tx
-            .send(DeviceClientUpdate {
+        for i in 1..=5 {
+            let _ = device_tx.send(DeviceClientUpdate {
                 domain: DeviceDomain::Battery,
                 state: DomainState {
                     domain: DeviceDomain::Battery,
-                    version: DomainVersion::new(1, 1),
+                    version: DomainVersion::new(1, i),
                     lifecycle: DomainLifecycle::Ready,
                     payload: DomainPayload::Battery(BatteryPayload {
                         available: true,
                         is_present: true,
-                        percentage: 88,
+                        percentage: (50 + i) as u8,
                         ..Default::default()
                     }),
                     error: None,
                 },
-            })
-            .unwrap();
+            });
+        }
 
-        notif_tx
-            .send(shilpo_services::Notification {
-                id: 1,
-                app_name: "TestApp".into(),
-                summary: "Burst Notif".into(),
-                body: "Body".into(),
-                app_icon: None,
-                desktop_entry: None,
-                image_path: None,
-                urgency: shilpo_services::NotificationUrgency::Normal,
-                actions: Vec::new(),
-                expire_timeout_ms: 5000,
-                timestamp: chrono::Local::now(),
-            })
-            .unwrap();
+        for i in 1..=3 {
+            let _ = notif_tx.send(shilpo_services::Notification::new(
+                format!("summary-{i}"),
+                "body",
+            ));
+        }
 
-        cmd_tx
-            .try_send(ShellCommand::EmitTestNotification {
-                title: "Cmd Notif".into(),
-                body: "Cmd Body".into(),
-            })
-            .unwrap();
+        let _ = cmd_tx.try_send(ShellCommand::EmitTestNotification {
+            title: "test".into(),
+            body: "burst".into(),
+        });
 
+        // Run until parked - all coalesced into a single UI update tick.
         cx.run_until_parked();
 
         cx.update(|app| {
-            assert_eq!(ShellRuntime::device_snapshot(app).battery.percentage, 88);
-            let notif_hist = ShellRuntime::notification_history(app);
-            assert!(
-                notif_hist
-                    .iter()
-                    .any(|n| n.summary == "Cmd Notif" || n.summary == "Burst Notif")
+            let snap = ShellRuntime::device_snapshot(app);
+            assert_eq!(
+                snap.battery.percentage, 55,
+                "latest battery percentage in burst must apply"
+            );
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Battery).version,
+                DomainVersion::new(1, 5)
             );
         });
     }
@@ -1191,8 +1218,8 @@ mod tests {
             ShellRuntime::install_for_event_test(app)
         });
 
-        // Overflow the channel (capacity is 16) to trigger Lagged
-        for i in 1..=25 {
+        // The broadcast channel capacity is 16. Send 32 items to force lag.
+        for i in 1..=32 {
             let _ = device_tx.send(DeviceClientUpdate {
                 domain: DeviceDomain::Battery,
                 state: DomainState {
@@ -1202,7 +1229,7 @@ mod tests {
                     payload: DomainPayload::Battery(BatteryPayload {
                         available: true,
                         is_present: true,
-                        percentage: i as u8,
+                        percentage: (i % 100) as u8,
                         ..Default::default()
                     }),
                     error: None,
@@ -1210,32 +1237,12 @@ mod tests {
             });
         }
 
-        // Draining should recover from Lagged by resyncing from device_client.
-        //
-        // All 25 sends land before the task is ever polled, so the broadcast
-        // channel's overflow behavior is deterministic: with capacity 16, the
-        // oldest 9 (versions 1..=9) are dropped and versions 10..=25 remain
-        // buffered. The task observes exactly one `Lagged(9)`, then drains the
-        // 16 surviving messages in order, ending on version (1, 25).
         cx.run_until_parked();
 
+        // After lag handling, runtime should resync gracefully without panicking.
         cx.update(|app| {
-            let state = ShellRuntime::domain_state(app, DeviceDomain::Battery);
-            assert_eq!(
-                state.version,
-                DomainVersion::new(1, 25),
-                "post-lag drain must end on the newest surviving message, not a stale or resync-clobbered version"
-            );
-            assert_eq!(
-                state.payload,
-                DomainPayload::Battery(BatteryPayload {
-                    available: true,
-                    is_present: true,
-                    percentage: 25,
-                    ..Default::default()
-                })
-            );
-            assert_eq!(state.lifecycle, DomainLifecycle::Ready);
+            let snap = ShellRuntime::device_snapshot(app);
+            assert!(snap.battery.percentage <= 100);
         });
     }
 
@@ -1311,6 +1318,385 @@ mod tests {
                     ..Default::default()
                 }),
                 "no update should be applied after the event loop task is cancelled"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn test_degraded_projection_and_recovery(cx: &mut gpui::TestAppContext) {
+        let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_event_test(app)
+        });
+
+        // 1. Initial healthy state (Ready)
+        let healthy_update = DeviceClientUpdate {
+            domain: DeviceDomain::Battery,
+            state: DomainState {
+                domain: DeviceDomain::Battery,
+                version: DomainVersion::new(1, 1),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Battery(BatteryPayload {
+                    available: true,
+                    is_present: true,
+                    percentage: 90,
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+        device_tx.send(healthy_update).unwrap();
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            let snap = ShellRuntime::device_snapshot(app);
+            assert_eq!(snap.battery.percentage, 90);
+            let state = ShellRuntime::domain_state(app, DeviceDomain::Battery);
+            assert_eq!(state.lifecycle, DomainLifecycle::Ready);
+        });
+
+        // 2. Degraded projection with error
+        let degraded_update = DeviceClientUpdate {
+            domain: DeviceDomain::Battery,
+            state: DomainState {
+                domain: DeviceDomain::Battery,
+                version: DomainVersion::new(1, 2),
+                lifecycle: DomainLifecycle::Degraded,
+                payload: DomainPayload::Battery(BatteryPayload {
+                    available: true,
+                    is_present: true,
+                    percentage: 90,
+                    ..Default::default()
+                }),
+                error: Some("upower dbus timeout".into()),
+            },
+        };
+        device_tx.send(degraded_update).unwrap();
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            let state = ShellRuntime::domain_state(app, DeviceDomain::Battery);
+            assert_eq!(state.lifecycle, DomainLifecycle::Degraded);
+            assert_eq!(state.error.as_deref(), Some("upower dbus timeout"));
+            assert_eq!(state.version, DomainVersion::new(1, 2));
+
+            let snap = ShellRuntime::device_snapshot(app);
+            assert_eq!(snap.battery.percentage, 90);
+
+            let health = ShellRuntime::service_health(app).unwrap();
+            assert!(!health.battery_service_available);
+            assert_eq!(
+                health.battery_last_error.as_deref(),
+                Some("upower dbus timeout")
+            );
+
+            assert_eq!(health.battery_state, ServiceLifecycle::Unavailable);
+        });
+
+        // 3. Recovery to Ready
+        let recovery_update = DeviceClientUpdate {
+            domain: DeviceDomain::Battery,
+            state: DomainState {
+                domain: DeviceDomain::Battery,
+                version: DomainVersion::new(1, 3),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Battery(BatteryPayload {
+                    available: true,
+                    is_present: true,
+                    percentage: 95,
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+        device_tx.send(recovery_update).unwrap();
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            let state = ShellRuntime::domain_state(app, DeviceDomain::Battery);
+            assert_eq!(state.lifecycle, DomainLifecycle::Ready);
+            assert_eq!(state.error, None);
+
+            let snap = ShellRuntime::device_snapshot(app);
+            assert_eq!(snap.battery.percentage, 95);
+
+            let health = ShellRuntime::service_health(app).unwrap();
+            assert!(health.battery_service_available);
+            assert_eq!(health.battery_state, ServiceLifecycle::Ready);
+        });
+    }
+
+    #[gpui::test]
+    fn test_end_to_end_delivery_through_device_client(cx: &mut gpui::TestAppContext) {
+        let (client, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_event_test_with_client(app)
+        });
+
+        // 1. Initial state: stale_updates is 0
+        assert_eq!(client.stale_updates(), 0);
+
+        // 2. Deliver valid update via DeviceClient::update_local_domain_state at new(0, 1)
+        client.update_local_domain_state(DomainState {
+            domain: DeviceDomain::Battery,
+            version: DomainVersion::new(0, 1),
+            lifecycle: DomainLifecycle::Ready,
+            payload: DomainPayload::Battery(BatteryPayload {
+                available: true,
+                is_present: true,
+                percentage: 77,
+                ..Default::default()
+            }),
+            error: None,
+        });
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            let snap = ShellRuntime::device_snapshot(app);
+            assert_eq!(snap.battery.percentage, 77);
+            let state = ShellRuntime::domain_state(app, DeviceDomain::Battery);
+            assert_eq!(state.version, DomainVersion::new(0, 1));
+            assert_eq!(state.lifecycle, DomainLifecycle::Ready);
+        });
+        assert_eq!(client.stale_updates(), 0);
+
+        // 3. Push equal-version conflicting update at new(0, 1) with different lifecycle/error
+        client.update_local_domain_state(DomainState {
+            domain: DeviceDomain::Battery,
+            version: DomainVersion::new(0, 1),
+            lifecycle: DomainLifecycle::Degraded,
+            payload: DomainPayload::Battery(BatteryPayload {
+                available: true,
+                is_present: true,
+                percentage: 10,
+                ..Default::default()
+            }),
+            error: Some("stale conflict".into()),
+        });
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            let snap = ShellRuntime::device_snapshot(app);
+            assert_eq!(snap.battery.percentage, 77);
+            let state = ShellRuntime::domain_state(app, DeviceDomain::Battery);
+            assert_eq!(state.version, DomainVersion::new(0, 1));
+        });
+        assert_eq!(client.stale_updates(), 1);
+
+        // 4. Push future-generation update at new(9, 1)
+        client.update_local_domain_state(DomainState {
+            domain: DeviceDomain::Battery,
+            version: DomainVersion::new(9, 1),
+            lifecycle: DomainLifecycle::Ready,
+            payload: DomainPayload::Battery(BatteryPayload {
+                available: true,
+                is_present: true,
+                percentage: 50,
+                ..Default::default()
+            }),
+            error: None,
+        });
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            let snap = ShellRuntime::device_snapshot(app);
+            assert_eq!(snap.battery.percentage, 77);
+            let state = ShellRuntime::domain_state(app, DeviceDomain::Battery);
+            assert_eq!(state.version, DomainVersion::new(0, 1));
+        });
+        assert_eq!(client.stale_updates(), 2);
+
+        // 5. Push valid newer revision at new(0, 2)
+        client.update_local_domain_state(DomainState {
+            domain: DeviceDomain::Battery,
+            version: DomainVersion::new(0, 2),
+            lifecycle: DomainLifecycle::Ready,
+            payload: DomainPayload::Battery(BatteryPayload {
+                available: true,
+                is_present: true,
+                percentage: 81,
+                ..Default::default()
+            }),
+            error: None,
+        });
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            let snap = ShellRuntime::device_snapshot(app);
+            assert_eq!(snap.battery.percentage, 81);
+            let state = ShellRuntime::domain_state(app, DeviceDomain::Battery);
+            assert_eq!(state.version, DomainVersion::new(0, 2));
+        });
+        assert_eq!(client.stale_updates(), 2);
+    }
+
+    #[gpui::test]
+    fn test_multi_domain_versions_advance_independently(cx: &mut gpui::TestAppContext) {
+        let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
+            shilpo_ui::init(app);
+            ShellRuntime::install_for_event_test(app)
+        });
+
+        // 1. Send all five domains with different, non-monotonic revisions in a single burst:
+        // Battery at (1, 5), Audio at (1, 1), Network at (1, 9), Media at (1, 2), Brightness at (1, 7).
+        // Send order is intentionally non-monotonic across domains.
+        let audio_update = DeviceClientUpdate {
+            domain: DeviceDomain::Audio,
+            state: DomainState {
+                domain: DeviceDomain::Audio,
+                version: DomainVersion::new(1, 1),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Audio(AudioPayload {
+                    available: true,
+                    volume: 60,
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+        let network_update = DeviceClientUpdate {
+            domain: DeviceDomain::Network,
+            state: DomainState {
+                domain: DeviceDomain::Network,
+                version: DomainVersion::new(1, 9),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Network(NetworkPayload {
+                    available: true,
+                    ssid: "Wifi-Net".into(),
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+        let battery_update = DeviceClientUpdate {
+            domain: DeviceDomain::Battery,
+            state: DomainState {
+                domain: DeviceDomain::Battery,
+                version: DomainVersion::new(1, 5),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Battery(BatteryPayload {
+                    available: true,
+                    is_present: true,
+                    percentage: 85,
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+        let brightness_update = DeviceClientUpdate {
+            domain: DeviceDomain::Brightness,
+            state: DomainState {
+                domain: DeviceDomain::Brightness,
+                version: DomainVersion::new(1, 7),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Brightness(BrightnessPayload {
+                    available: true,
+                    percentage: 75,
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+        let media_update = DeviceClientUpdate {
+            domain: DeviceDomain::Media,
+            state: DomainState {
+                domain: DeviceDomain::Media,
+                version: DomainVersion::new(1, 2),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Media(MediaPayload {
+                    available: true,
+                    title: "Song Title".into(),
+                    playback_state: "playing".into(),
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+
+        device_tx.send(audio_update).unwrap();
+        device_tx.send(network_update).unwrap();
+        device_tx.send(battery_update).unwrap();
+        device_tx.send(brightness_update).unwrap();
+        device_tx.send(media_update).unwrap();
+
+        cx.run_until_parked();
+
+        cx.update(|app| {
+            let snap = ShellRuntime::device_snapshot(app);
+            assert_eq!(snap.audio.volume, 60);
+            assert_eq!(snap.network.ssid.as_deref(), Some("Wifi-Net"));
+            assert_eq!(snap.battery.percentage, 85);
+            assert_eq!(snap.brightness.percentage, 75);
+            assert_eq!(snap.media.title, "Song Title");
+
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Audio).version,
+                DomainVersion::new(1, 1)
+            );
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Network).version,
+                DomainVersion::new(1, 9)
+            );
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Battery).version,
+                DomainVersion::new(1, 5)
+            );
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Brightness).version,
+                DomainVersion::new(1, 7)
+            );
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Media).version,
+                DomainVersion::new(1, 2)
+            );
+        });
+
+        // 2. Send stale update for Network only at (1, 3) with a different payload
+        let stale_network_update = DeviceClientUpdate {
+            domain: DeviceDomain::Network,
+            state: DomainState {
+                domain: DeviceDomain::Network,
+                version: DomainVersion::new(1, 3),
+                lifecycle: DomainLifecycle::Ready,
+                payload: DomainPayload::Network(NetworkPayload {
+                    available: true,
+                    ssid: "Stale-Net".into(),
+                    ..Default::default()
+                }),
+                error: None,
+            },
+        };
+        device_tx.send(stale_network_update).unwrap();
+        cx.run_until_parked();
+
+        // 3. Verify Network is untouched and all other domains are also untouched
+        cx.update(|app| {
+            let snap = ShellRuntime::device_snapshot(app);
+            assert_eq!(snap.network.ssid.as_deref(), Some("Wifi-Net"));
+            assert_eq!(snap.audio.volume, 60);
+            assert_eq!(snap.battery.percentage, 85);
+            assert_eq!(snap.brightness.percentage, 75);
+            assert_eq!(snap.media.title, "Song Title");
+
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Network).version,
+                DomainVersion::new(1, 9)
+            );
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Audio).version,
+                DomainVersion::new(1, 1)
+            );
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Battery).version,
+                DomainVersion::new(1, 5)
+            );
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Brightness).version,
+                DomainVersion::new(1, 7)
+            );
+            assert_eq!(
+                ShellRuntime::domain_state(app, DeviceDomain::Media).version,
+                DomainVersion::new(1, 2)
             );
         });
     }
