@@ -22,6 +22,8 @@ pub trait DeviceAdapter: Send + Sync {
 pub struct InMemoryDeviceAdapter {
     states: Arc<Mutex<HashMap<DeviceDomain, DomainState>>>,
     pub forced_delay: Arc<Mutex<Option<Duration>>>,
+    delay_tx: Arc<tokio::sync::watch::Sender<Option<Duration>>>,
+    delay_rx: tokio::sync::watch::Receiver<Option<Duration>>,
     pub forced_error: Arc<Mutex<Option<String>>>,
 }
 
@@ -48,33 +50,34 @@ impl InMemoryDeviceAdapter {
                     payload: match domain {
                         DeviceDomain::Audio => DomainPayload::Audio(crate::device_protocol::AudioPayload {
                             volume: 50,
+                            is_muted: false,
                             ..Default::default()
                         }),
-                        DeviceDomain::Brightness => {
-                            DomainPayload::Brightness(crate::device_protocol::BrightnessPayload {
-                                percentage: 70,
-                                ..Default::default()
-                            })
+                        DeviceDomain::Bluetooth => {
+                            DomainPayload::Bluetooth(crate::device_protocol::BluetoothPayload::default())
                         }
-                        DeviceDomain::NightLight => {
-                            DomainPayload::NightLight(crate::device_protocol::NightLightPayload {
-                                temperature: 4000,
+                        DeviceDomain::Brightness => DomainPayload::Brightness(
+                            crate::device_protocol::BrightnessPayload {
+                                percentage: 50,
                                 ..Default::default()
-                            })
+                            },
+                        ),
+
+                        DeviceDomain::Network => {
+                            DomainPayload::Network(crate::device_protocol::NetworkPayload::default())
+                        }
+                        DeviceDomain::NightLight => DomainPayload::NightLight(
+                            crate::device_protocol::NightLightPayload::default(),
+                        ),
+                        DeviceDomain::PowerProfile => DomainPayload::PowerProfile(
+                            crate::device_protocol::PowerProfilePayload::default(),
+                        ),
+                        DeviceDomain::Media => {
+                            DomainPayload::Media(crate::device_protocol::MediaPayload::default())
                         }
                         DeviceDomain::Caffeine => {
                             DomainPayload::Caffeine(crate::device_protocol::CaffeinePayload::default())
                         }
-                        DeviceDomain::Bluetooth => {
-                            DomainPayload::Bluetooth(crate::device_protocol::BluetoothPayload::default())
-                        }
-                        DeviceDomain::Network => {
-                            DomainPayload::Network(crate::device_protocol::NetworkPayload::default())
-                        }
-                        DeviceDomain::PowerProfile => {
-                            DomainPayload::PowerProfile(crate::device_protocol::PowerProfilePayload::default())
-                        }
-                        DeviceDomain::Media => DomainPayload::Media(crate::device_protocol::MediaPayload::default()),
                         DeviceDomain::Battery => {
                             DomainPayload::Battery(crate::device_protocol::BatteryPayload::default())
                         }
@@ -84,15 +87,19 @@ impl InMemoryDeviceAdapter {
             );
         }
 
+        let (delay_tx, delay_rx) = tokio::sync::watch::channel(None);
         Self {
             states: Arc::new(Mutex::new(states)),
             forced_delay: Arc::new(Mutex::new(None)),
+            delay_tx: Arc::new(delay_tx),
+            delay_rx,
             forced_error: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn set_forced_delay(&self, delay: Option<Duration>) {
         *self.forced_delay.lock().unwrap() = delay;
+        let _ = self.delay_tx.send(delay);
     }
 
     pub fn set_forced_error(&self, error: Option<String>) {
@@ -121,14 +128,17 @@ impl DeviceAdapter for InMemoryDeviceAdapter {
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<DomainState, String>> + Send + 'static>,
     > {
-        let forced_delay = self.forced_delay.clone();
+        let mut delay_rx = self.delay_rx.clone();
         let forced_error = self.forced_error.clone();
         let states = self.states.clone();
 
         Box::pin(async move {
-            let delay = *forced_delay.lock().unwrap();
+            let delay = *delay_rx.borrow_and_update();
             if let Some(delay) = delay {
-                tokio::time::sleep(delay).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {},
+                    _ = delay_rx.changed() => {},
+                }
             }
 
             let forced_err = forced_error.lock().unwrap().clone();

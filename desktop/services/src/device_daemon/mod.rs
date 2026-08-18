@@ -39,6 +39,7 @@ pub struct PendingDeviceCommand {
 struct DomainQueueHandle {
     pending: Arc<std::sync::Mutex<VecDeque<PendingDeviceCommand>>>,
     notify: Arc<tokio::sync::Notify>,
+    in_flight: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl DomainQueueHandle {
@@ -46,11 +47,17 @@ impl DomainQueueHandle {
         Self {
             pending: Arc::new(std::sync::Mutex::new(VecDeque::new())),
             notify: Arc::new(tokio::sync::Notify::new()),
+            in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
     fn queue_depth(&self) -> usize {
         self.pending.lock().unwrap().len()
+            + if self.in_flight.load(Ordering::SeqCst) {
+                1
+            } else {
+                0
+            }
     }
 }
 
@@ -77,10 +84,15 @@ pub struct DeviceDaemonService {
     supersessions: Arc<AtomicU64>,
     stale_updates: Arc<AtomicU64>,
     restarts: Arc<AtomicU64>,
+    capacity: usize,
 }
 
 impl DeviceDaemonService {
     pub fn new(adapter: Arc<dyn DeviceAdapter>) -> Self {
+        Self::new_with_capacity(DOMAIN_QUEUE_CAPACITY, adapter)
+    }
+
+    pub fn new_with_capacity(capacity: usize, adapter: Arc<dyn DeviceAdapter>) -> Self {
         let next_arrival_sequence = Arc::new(AtomicU64::new(1));
         let owner_generation = Arc::new(AtomicU64::new(1));
         let owner_generation_notify = Arc::new(Notify::new());
@@ -109,6 +121,7 @@ impl DeviceDaemonService {
             let owner_gen_clone = owner_generation.clone();
             let owner_gen_notify_clone = owner_generation_notify.clone();
 
+            let in_flight_clone = queue_handle.in_flight.clone();
             tokio::spawn(async move {
                 loop {
                     let next_item = {
@@ -117,8 +130,10 @@ impl DeviceDaemonService {
                     };
 
                     if let Some(first) = next_item {
+                        in_flight_clone.store(true, Ordering::SeqCst);
                         let current_gen = owner_gen_clone.load(Ordering::SeqCst);
                         if first.generation != current_gen {
+                            in_flight_clone.store(false, Ordering::SeqCst);
                             let outcome = CommandOutcome::Cancelled {
                                 command_id: first.id,
                                 arrival_sequence: first.arrival_sequence,
@@ -149,6 +164,7 @@ impl DeviceDaemonService {
                         )
                         .await;
 
+                        in_flight_clone.store(false, Ordering::SeqCst);
                         let _ = first.reply.send(outcome.clone());
                     } else {
                         notify.notified().await;
@@ -172,6 +188,7 @@ impl DeviceDaemonService {
             supersessions,
             stale_updates,
             restarts,
+            capacity,
         }
     }
 
@@ -217,8 +234,9 @@ impl DeviceDaemonService {
         DomainPortTelemetry {
             owner_generation: self.owner_generation.load(Ordering::SeqCst),
             current_queue_depth,
-            queue_capacity: DOMAIN_QUEUE_CAPACITY * DeviceDomain::ALL.len(),
+            queue_capacity: self.capacity,
             overloads: self.overloads.load(Ordering::SeqCst),
+
             supersessions: self.supersessions.load(Ordering::SeqCst),
             restarts: self.restarts.load(Ordering::SeqCst),
             stale_updates: self.stale_updates.load(Ordering::SeqCst),
@@ -494,8 +512,14 @@ impl DeviceDaemonService {
         }
 
         // Bounded capacity overflow check
-        if queue.len() >= DOMAIN_QUEUE_CAPACITY {
+        let in_flight_count = if queue_handle.in_flight.load(Ordering::SeqCst) {
+            1
+        } else {
+            0
+        };
+        if queue.len() + in_flight_count >= self.capacity {
             self.overloads.fetch_add(1, Ordering::SeqCst);
+
             let outcome = CommandOutcome::Rejected {
                 command_id: id.clone(),
                 arrival_sequence,

@@ -273,6 +273,12 @@ impl DeviceClient {
         self.inner.installed_owner_generation.load(Ordering::SeqCst)
     }
 
+    pub fn set_installed_owner_generation(&self, generation: u64) {
+        self.inner
+            .installed_owner_generation
+            .store(generation, Ordering::SeqCst);
+    }
+
     pub fn stale_updates(&self) -> u64 {
         self.inner.stale_updates.load(Ordering::SeqCst)
     }
@@ -733,13 +739,37 @@ impl DeviceClient {
         &self.inner.time_source
     }
 
+    pub fn begin_start(&self) {
+        self.inner.supervisor.lock().unwrap().mark_starting();
+        let mut domains = self.inner.domains.write().unwrap();
+        for state in domains.values_mut() {
+            state.lifecycle = DomainLifecycle::Connecting;
+            let _ = self.inner.update_tx.send(DeviceClientUpdate {
+                domain: state.domain,
+                state: state.clone(),
+            });
+        }
+    }
+
     pub fn mark_ready(&self, now_ms: u64) {
         self.inner.supervisor.lock().unwrap().mark_running(now_ms);
         *self.inner.last_error.lock().unwrap() = None;
+        let mut domains = self.inner.domains.write().unwrap();
+        for state in domains.values_mut() {
+            if state.version == DomainVersion::ZERO {
+                let installed = self.installed_owner_generation().max(1);
+                state.version = DomainVersion::new(installed, 0);
+            }
+            state.lifecycle = DomainLifecycle::Ready;
+            state.error = None;
+            let _ = self.inner.update_tx.send(DeviceClientUpdate {
+                domain: state.domain,
+                state: state.clone(),
+            });
+        }
     }
 
     pub fn report_owner_failure(&self, error: String, now_ms: u64) {
-        self.inner.restarts.fetch_add(1, Ordering::SeqCst);
         *self.inner.last_error.lock().unwrap() = Some(error.clone());
 
         let new_state = self.inner.supervisor.lock().unwrap().record_failure(now_ms);
@@ -760,7 +790,14 @@ impl DeviceClient {
     }
 
     pub fn tick(&self, now_ms: u64) {
+        let prev = self.inner.supervisor.lock().unwrap().state();
         self.inner.supervisor.lock().unwrap().tick(now_ms);
+        let next = self.inner.supervisor.lock().unwrap().state();
+        if matches!(prev, SupervisorState::Backoff { .. })
+            && matches!(next, SupervisorState::Starting)
+        {
+            self.inner.restarts.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     pub fn reset_quarantine(&self) {
