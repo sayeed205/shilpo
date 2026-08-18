@@ -319,6 +319,10 @@ fn send_physical_changed(
     match tx.try_send(()) {
         Ok(()) => Ok(()),
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            // MailboxPolicy::ReplaceLatest { key: "physical_changed" }, capacity 1.
+            // The payload is `()`, so a pending signal already queued carries the same
+            // information a new one would; the new send is coalesced into it rather than
+            // enqueued separately, which is equivalent to "newer replaces older" here.
             overloads.fetch_add(1, Ordering::SeqCst);
             tracing::warn!(
                 site = "upower",
@@ -328,7 +332,10 @@ fn send_physical_changed(
             );
             Ok(())
         }
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Err(MailboxError::Unavailable),
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            tracing::warn!(site = "upower", "physical changed mailbox closed");
+            Err(MailboxError::Unavailable)
+        }
     }
 }
 

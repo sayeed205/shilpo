@@ -126,32 +126,37 @@ impl NightLightService {
         self.overloads.load(Ordering::SeqCst)
     }
 
+    fn send_command(&self, command: NightLightCommand) {
+        let Some(ref cmd_tx) = self.cmd_tx else {
+            return;
+        };
+        match cmd_tx.try_send(command) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.overloads.fetch_add(1, Ordering::SeqCst);
+                tracing::warn!(
+                    site = "NightLightService",
+                    policy = "Lossless",
+                    capacity = NIGHT_LIGHT_MAILBOX_CAPACITY,
+                    "night light command mailbox full; command rejected"
+                );
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::warn!(
+                    site = "NightLightService",
+                    "night light command mailbox closed"
+                );
+            }
+        }
+    }
+
     pub fn set_active(&self, active: bool) -> bool {
         let current = self.info();
         if !current.available {
             return false;
         }
 
-        if let Some(ref cmd_tx) = self.cmd_tx {
-            match cmd_tx.try_send(NightLightCommand::SetActive(active)) {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    self.overloads.fetch_add(1, Ordering::SeqCst);
-                    tracing::warn!(
-                        site = "NightLightService",
-                        policy = "Lossless",
-                        capacity = NIGHT_LIGHT_MAILBOX_CAPACITY,
-                        "night light command mailbox full; command rejected"
-                    );
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    tracing::warn!(
-                        site = "NightLightService",
-                        "night light command mailbox closed"
-                    );
-                }
-            }
-        }
+        self.send_command(NightLightCommand::SetActive(active));
 
         let mut updated = current;
         updated.is_active = active;
@@ -170,26 +175,7 @@ impl NightLightService {
             return false;
         }
 
-        if let Some(ref cmd_tx) = self.cmd_tx {
-            match cmd_tx.try_send(NightLightCommand::SetTemperature(kelvin)) {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    self.overloads.fetch_add(1, Ordering::SeqCst);
-                    tracing::warn!(
-                        site = "NightLightService",
-                        policy = "Lossless",
-                        capacity = NIGHT_LIGHT_MAILBOX_CAPACITY,
-                        "night light command mailbox full; command rejected"
-                    );
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    tracing::warn!(
-                        site = "NightLightService",
-                        "night light command mailbox closed"
-                    );
-                }
-            }
-        }
+        self.send_command(NightLightCommand::SetTemperature(kelvin));
 
         let mut updated = current;
         updated.temperature_kelvin = kelvin;

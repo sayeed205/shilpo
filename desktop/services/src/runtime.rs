@@ -205,7 +205,10 @@ impl<State: Clone + Send + Sync + 'static, Command: Send + 'static> CommandRunti
                     );
                     Err(MailboxError::Overloaded)
                 }
-                Err(mpsc::error::TrySendError::Closed(_)) => Err(MailboxError::Unavailable),
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    tracing::warn!(site = "CommandRuntime", "adapter command mailbox closed");
+                    Err(MailboxError::Unavailable)
+                }
             }
         } else {
             Err(MailboxError::Unavailable)
@@ -319,13 +322,13 @@ mod tests {
         let runtime2 = runtime1.clone();
         drop(runtime1);
 
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), drop_rx.recv())
-                .await
-                .is_err()
-        );
+        // Task should still be running because runtime2 exists
+        tokio::task::yield_now().await;
+        assert!(drop_rx.try_recv().is_err());
 
+        // Dropping last runtime clone should abort task
         drop(runtime2);
+        tokio::task::yield_now().await;
         assert!(drop_rx.recv().await.is_none());
     }
 
