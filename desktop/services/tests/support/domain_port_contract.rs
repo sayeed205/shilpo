@@ -217,6 +217,7 @@ impl<P: Clone + Send + 'static> SnapshotSubscription<P> {
 }
 
 /// Test driver trait exposed by support module so scenarios can be run against any driver.
+#[allow(dead_code)]
 pub trait DomainPortDriver {
     type Payload: Clone + PartialEq + std::fmt::Debug + Send + 'static;
     type Command;
@@ -1066,6 +1067,7 @@ pub fn scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_co
     assert_eq!(driver.snapshot().version.owner_generation, 2);
 }
 
+#[allow(dead_code)]
 pub fn scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds(
     driver: &impl DomainPortDriver,
 ) {
@@ -1077,6 +1079,7 @@ pub fn scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds(
     assert_eq!(driver.backoff_delay_ms(32), 30_000);
 }
 
+#[allow(dead_code)]
 pub fn scenario_17_five_failures_inside_60_seconds_enter_quarantine(
     driver: &impl DomainPortDriver,
 ) {
@@ -1095,6 +1098,7 @@ pub fn scenario_17_five_failures_inside_60_seconds_enter_quarantine(
     assert_eq!(driver.snapshot().lifecycle, DomainLifecycle::Unavailable);
 }
 
+#[allow(dead_code)]
 pub fn scenario_18_five_minutes_stable_clears_rolling_failure_window_but_preserves_session_restart_telemetry(
     driver: &impl DomainPortDriver,
 ) {
@@ -1125,6 +1129,7 @@ pub fn scenario_18_five_minutes_stable_clears_rolling_failure_window_but_preserv
     assert_eq!(driver.telemetry().restarts, 3); // Restarts preserved until next retry completes
 }
 
+#[allow(dead_code)]
 pub fn scenario_19_quarantine_requires_explicit_reset_or_containing_process_restart(
     driver: &impl DomainPortDriver,
 ) {
