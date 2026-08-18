@@ -2,6 +2,7 @@ mod support;
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,6 +18,45 @@ use support::domain_port_contract::{
     self, CommandId, CommandOutcome, CommandResolver, CommandTicket, DomainPortDriver,
     DomainSnapshot, ManualClock, RejectionReason, SnapshotSubscription,
 };
+
+/// CommandId reserved by reference scenario_21 for the command that must
+/// resolve via the broker's real `RejectionReason::TimedOut` executor path
+/// (`broker.rs:1217`). Verified unique across `domain_port_contract.rs`.
+const TIMEOUT_GATE_COMMAND_ID: &str = "timed-out";
+
+/// Constructs the shared `CommandExecutorFn` used by both the initial broker
+/// and any broker rebuilt by `restart_containing_process`.
+///
+/// For every command except the one submitted with id
+/// `TIMEOUT_GATE_COMMAND_ID`, this behaves exactly as before: apply the
+/// workspace focus and return `Ok(ExecutorAck::Success)` immediately, with no
+/// blocking. This keeps every other scenario's cancellation semantics
+/// (e.g. scenario_15's in-flight/pending cancellation via the broker's
+/// post-execution convergence loop) unaffected.
+///
+/// When `gate_rx_slot` holds a receiver (installed by `submit_command` only
+/// for the reserved id), the executor blocks on it until
+/// `timeout_front_command` sends the fire signal, then genuinely returns
+/// `Err(RejectionReason::TimedOut)` -- the real broker path that produces
+/// `CommandOutcome::TimedOut` at `broker.rs:1217`, no fabricated outcome.
+fn make_executor(
+    active_workspace: Arc<Mutex<Option<u64>>>,
+    gate_rx_slot: Arc<Mutex<Option<std_mpsc::Receiver<()>>>>,
+) -> CommandExecutorFn {
+    Box::new(move |cmd, _timeout, _cancel, _register| {
+        let gate = gate_rx_slot.lock().unwrap().take();
+        if let Some(rx) = gate {
+            return match rx.recv() {
+                Ok(()) => Err(shilpo_services::RejectionReason::TimedOut),
+                Err(_) => Ok(ExecutorAck::Success),
+            };
+        }
+        if let CompositorCommand::FocusWorkspace(id) = cmd {
+            *active_workspace.lock().unwrap() = Some(*id);
+        }
+        Ok(ExecutorAck::Success)
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Compositor Domain Port Driver (Implements Generic DomainPortDriver)
@@ -71,6 +111,8 @@ pub struct CompositorDomainPortDriver {
     supervisor_state: Arc<Mutex<SupervisorState>>,
     driver_supersessions: AtomicU64,
     active_workspace: Arc<Mutex<Option<u64>>>,
+    timeout_gate: Arc<Mutex<Option<std_mpsc::Sender<()>>>>,
+    timeout_gate_rx_slot: Arc<Mutex<Option<std_mpsc::Receiver<()>>>>,
 }
 
 impl CompositorDomainPortDriver {
@@ -80,13 +122,15 @@ impl CompositorDomainPortDriver {
             ..Default::default()
         }));
         let active_workspace = Arc::new(Mutex::new(None));
-        let active_workspace_exec = active_workspace.clone();
-        let executor: CommandExecutorFn = Box::new(move |cmd, _timeout, _cancel, _register| {
-            if let CompositorCommand::FocusWorkspace(id) = cmd {
-                *active_workspace_exec.lock().unwrap() = Some(*id);
-            }
-            Ok(ExecutorAck::Success)
-        });
+        let timeout_gate_rx_slot = Arc::new(Mutex::new(None));
+        let executor = make_executor(active_workspace.clone(), timeout_gate_rx_slot.clone());
+        // The broker reserves one slot for the actively-executing command
+        // separately from its queue (see `broker.rs`'s `active` vs `queue`).
+        // `telemetry()` below reports `current_queue_depth` as the broker's
+        // queued count plus 1 when a command is in flight, so the driver's
+        // total effective capacity as observed through this trait is
+        // `max_queue_len + 1`. Reserving one slot here keeps that total
+        // equal to the `capacity` this driver was constructed with.
         let max_queue_len = capacity.saturating_sub(1).max(1);
         let broker = CompositorCommandBroker::new(
             BrokerOptions {
@@ -104,6 +148,8 @@ impl CompositorDomainPortDriver {
             supervisor_state: Arc::new(Mutex::new(SupervisorState::Starting)),
             driver_supersessions: AtomicU64::new(0),
             active_workspace,
+            timeout_gate: Arc::new(Mutex::new(None)),
+            timeout_gate_rx_slot,
         }
     }
 
@@ -245,10 +291,21 @@ impl DomainPortDriver for CompositorDomainPortDriver {
             broker.record_restart();
             snap.version = DomainVersion::new(next_gen, 0);
 
-            self.pending.lock().unwrap().clear();
+            let drained: Vec<DriverPendingItem> = self.pending.lock().unwrap().drain(..).collect();
             *self.active_workspace.lock().unwrap() = None;
 
-            std::thread::sleep(Duration::from_millis(5));
+            // `set_installed_generation` synchronously cancels the active and
+            // queued broker items and fires their oneshot outcome channels.
+            // Yield (no wall-clock wait) until this driver's spawned
+            // resolution tasks have observed that and resolved the tickets.
+            for item in &drained {
+                for _ in 0..100_000 {
+                    if item.ticket.is_completed() {
+                        break;
+                    }
+                    std::thread::yield_now();
+                }
+            }
         }
     }
 
@@ -330,6 +387,16 @@ impl DomainPortDriver for CompositorDomainPortDriver {
             CompositorCommand::FocusWorkspace(id) => id,
             _ => 1,
         };
+
+        // Install the timeout gate before submitting, so it is in place
+        // before worker_loop can pop and call the executor. See
+        // `make_executor` and `timeout_front_command`.
+        if command.id.0 == TIMEOUT_GATE_COMMAND_ID {
+            let (tx, rx) = std_mpsc::channel::<()>();
+            *self.timeout_gate.lock().unwrap() = Some(tx);
+            *self.timeout_gate_rx_slot.lock().unwrap() = Some(rx);
+        }
+
         let broker = self.current_broker();
         let broker_ticket = broker
             .submit_with_policy(command.command, command.policy.clone())
@@ -374,11 +441,11 @@ impl DomainPortDriver for CompositorDomainPortDriver {
         });
 
         // Yield briefly to let worker_loop pop from queue if idle
-        for _ in 0..50 {
+        for _ in 0..100_000 {
             if broker.telemetry().in_flight {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(1));
+            std::thread::yield_now();
         }
 
         Ok(driver_ticket)
@@ -403,11 +470,11 @@ impl DomainPortDriver for CompositorDomainPortDriver {
                 continue;
             }
 
-            for _ in 0..100 {
+            for _ in 0..100_000 {
                 if *self.active_workspace.lock().unwrap() == Some(item.workspace_id) {
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(1));
+                std::thread::yield_now();
             }
 
             let current = self.current_snapshot.lock().unwrap().clone();
@@ -458,6 +525,16 @@ impl DomainPortDriver for CompositorDomainPortDriver {
     fn reconcile_front_command(&self) {
         let mut pending = self.pending.lock().unwrap();
         if let Some(item) = pending.pop_front() {
+            // Abort the spawned resolution task, dropping the real
+            // `broker_ticket` it held. `CommandTicket`'s `Drop` impl cancels
+            // the broker-side item, which frees the broker's single worker
+            // thread (otherwise stuck forever in its convergence-wait loop
+            // for a command this method never actually converges). Same
+            // pattern already used for `ReplaceLatest` supersession above.
+            // Without this, a scenario that calls this method before
+            // submitting a later command (e.g. scenario_21) would starve
+            // that later command on the broker's serial worker.
+            item.task_handle.abort();
             let snap = self.snapshot();
             item.resolver.resolve(CommandOutcome::ReconciledApplied {
                 version: snap.version,
@@ -465,13 +542,25 @@ impl DomainPortDriver for CompositorDomainPortDriver {
         }
     }
 
+    // Unlike `reconcile_front_command`, this is genuinely driven through the
+    // real broker: the front pending command was submitted with
+    // `TIMEOUT_GATE_COMMAND_ID`, so its executor call is currently blocked
+    // (see `make_executor`) awaiting this fire signal. Sending it causes the
+    // executor to return `Err(RejectionReason::TimedOut)`, which the broker
+    // maps to `CommandOutcome::TimedOut` at `broker.rs:1217` -- no outcome is
+    // fabricated on the driver.
     fn timeout_front_command(&self) {
-        let mut pending = self.pending.lock().unwrap();
-        if let Some(item) = pending.pop_front() {
-            let snap = self.snapshot();
-            item.resolver.resolve(CommandOutcome::TimedOut {
-                last_observed_version: snap.version,
-            });
+        if let Some(tx) = self.timeout_gate.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
+        let item = self.pending.lock().unwrap().pop_front();
+        if let Some(item) = item {
+            for _ in 0..100_000 {
+                if item.ticket.is_completed() {
+                    break;
+                }
+                std::thread::yield_now();
+            }
         }
     }
 
@@ -486,13 +575,9 @@ impl DomainPortDriver for CompositorDomainPortDriver {
         }));
         let active_workspace = self.active_workspace.clone();
         *active_workspace.lock().unwrap() = None;
-        let active_workspace_exec = active_workspace;
-        let executor: CommandExecutorFn = Box::new(move |cmd, _timeout, _cancel, _register| {
-            if let CompositorCommand::FocusWorkspace(id) = cmd {
-                *active_workspace_exec.lock().unwrap() = Some(*id);
-            }
-            Ok(ExecutorAck::Success)
-        });
+        *self.timeout_gate.lock().unwrap() = None;
+        *self.timeout_gate_rx_slot.lock().unwrap() = None;
+        let executor = make_executor(active_workspace, self.timeout_gate_rx_slot.clone());
         let max_queue_len = self.capacity.saturating_sub(1).max(1);
         let new_broker = CompositorCommandBroker::new(
             BrokerOptions {
