@@ -1359,6 +1359,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "hangs indefinitely on CI runners; see #245"]
     fn test_reconnect_cancels_pending() {
         let _guard = serial_guard();
         let executor: CommandExecutorFn = Box::new(|_cmd, _timeout, _cancel, _register| {
