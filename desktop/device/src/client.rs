@@ -10,10 +10,7 @@ use crate::protocol::{
     CancellationReason, CommandId, CommandOutcome, DeviceCommand, DeviceDomain, DomainLifecycle,
     DomainPayload, DomainState, DomainVersion, PROTOCOL_VERSION,
 };
-use shilpo_domain::{
-    FAILURE_WINDOW_MS, MonotonicTimeSource, QUARANTINE_FAILURES, STABLE_RESET_MS, SupervisorState,
-    TimeSource, reconnect_backoff_ms,
-};
+use shilpo_domain::{DomainSupervisor, MonotonicTimeSource, SupervisorState, TimeSource};
 
 const QUARANTINE_IDLE_POLL_MS: u64 = 2_000;
 
@@ -21,19 +18,6 @@ const QUARANTINE_IDLE_POLL_MS: u64 = 2_000;
 pub struct DeviceClientUpdate {
     pub domain: DeviceDomain,
     pub state: DomainState,
-}
-
-/// Supervision state for `maintain_connection`'s reconnect loop, kept behind
-/// one lock so every transition (`tick`, `mark_ready`, `report_owner_failure`,
-/// `reset_quarantine`) is atomic. A prior revision spread these across
-/// independently-locked fields; nothing currently reads `failure_timestamps_ms`
-/// or `backoff_attempt` outside the methods that already hold this lock, but
-/// splitting them invited a future reader to observe a torn state.
-struct SupervisorData {
-    state: SupervisorState,
-    failure_timestamps_ms: Vec<u64>,
-    backoff_attempt: u32,
-    last_running_timestamp_ms: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -55,7 +39,7 @@ struct DeviceClientInner {
     stale_updates: AtomicU64,
     overloads: AtomicU64,
     supersessions: AtomicU64,
-    supervisor: Mutex<SupervisorData>,
+    supervisor: Mutex<DomainSupervisor>,
     time_source: Arc<dyn TimeSource>,
     is_shutdown: AtomicBool,
     next_command_seq: AtomicU64,
@@ -69,11 +53,7 @@ impl DeviceClientInner {
 
         // 1. Enter the ADR-0006 `Stopping` transitional state while the drain
         // below is still in flight; only the final step below moves to `Stopped`.
-        {
-            let mut supervisor = self.supervisor.lock().unwrap();
-            supervisor.state = SupervisorState::Stopping;
-            supervisor.last_running_timestamp_ms = None;
-        }
+        self.supervisor.lock().unwrap().enter_stopping();
 
         // 2. Set domain lifecycles to Unavailable and broadcast terminal snapshot
         {
@@ -111,7 +91,7 @@ impl DeviceClientInner {
         *self.connection.lock().unwrap() = None;
 
         // 5. Fully quiesced: move to the terminal `Stopped` state.
-        self.supervisor.lock().unwrap().state = SupervisorState::Stopped;
+        self.supervisor.lock().unwrap().enter_stopped();
     }
 }
 
@@ -222,12 +202,7 @@ impl DeviceClient {
         let stale_updates = AtomicU64::new(0);
         let overloads = AtomicU64::new(0);
         let supersessions = AtomicU64::new(0);
-        let supervisor = Mutex::new(SupervisorData {
-            state: SupervisorState::Starting,
-            failure_timestamps_ms: Vec::new(),
-            backoff_attempt: 0,
-            last_running_timestamp_ms: None,
-        });
+        let supervisor = Mutex::new(DomainSupervisor::new());
 
         let inner = Arc::new(DeviceClientInner {
             domains,
@@ -751,7 +726,7 @@ impl DeviceClient {
     }
 
     pub fn supervisor_state(&self) -> SupervisorState {
-        self.inner.supervisor.lock().unwrap().state
+        self.inner.supervisor.lock().unwrap().state()
     }
 
     pub fn time_source(&self) -> &Arc<dyn TimeSource> {
@@ -759,10 +734,7 @@ impl DeviceClient {
     }
 
     pub fn mark_ready(&self, now_ms: u64) {
-        let mut supervisor = self.inner.supervisor.lock().unwrap();
-        supervisor.state = SupervisorState::Running;
-        supervisor.last_running_timestamp_ms = Some(now_ms);
-        drop(supervisor);
+        self.inner.supervisor.lock().unwrap().mark_running(now_ms);
         *self.inner.last_error.lock().unwrap() = None;
     }
 
@@ -770,32 +742,10 @@ impl DeviceClient {
         self.inner.restarts.fetch_add(1, Ordering::SeqCst);
         *self.inner.last_error.lock().unwrap() = Some(error.clone());
 
-        let target_lifecycle = {
-            let mut supervisor = self.inner.supervisor.lock().unwrap();
-            supervisor.last_running_timestamp_ms = None;
-
-            supervisor
-                .failure_timestamps_ms
-                .retain(|&ts| now_ms.saturating_sub(ts) <= FAILURE_WINDOW_MS);
-            supervisor.failure_timestamps_ms.push(now_ms);
-            let failure_count = supervisor.failure_timestamps_ms.len();
-
-            let (new_state, target_lifecycle) = if failure_count >= QUARANTINE_FAILURES {
-                (SupervisorState::Quarantined, DomainLifecycle::Unavailable)
-            } else {
-                let attempt = failure_count as u32;
-                supervisor.backoff_attempt = attempt;
-                let delay = reconnect_backoff_ms(attempt);
-                (
-                    SupervisorState::Backoff {
-                        attempt,
-                        retry_at_ms: now_ms.saturating_add(delay),
-                    },
-                    DomainLifecycle::Reconnecting,
-                )
-            };
-            supervisor.state = new_state;
-            target_lifecycle
+        let new_state = self.inner.supervisor.lock().unwrap().record_failure(now_ms);
+        let target_lifecycle = match new_state {
+            SupervisorState::Quarantined => DomainLifecycle::Unavailable,
+            _ => DomainLifecycle::Reconnecting,
         };
 
         let mut domains = self.inner.domains.write().unwrap();
@@ -810,33 +760,11 @@ impl DeviceClient {
     }
 
     pub fn tick(&self, now_ms: u64) {
-        let mut supervisor = self.inner.supervisor.lock().unwrap();
-        match supervisor.state {
-            SupervisorState::Backoff { retry_at_ms, .. } => {
-                if now_ms >= retry_at_ms {
-                    supervisor.state = SupervisorState::Starting;
-                }
-            }
-            SupervisorState::Running => {
-                if let Some(start_ts) = supervisor.last_running_timestamp_ms
-                    && now_ms.saturating_sub(start_ts) >= STABLE_RESET_MS
-                {
-                    supervisor.failure_timestamps_ms.clear();
-                    supervisor.backoff_attempt = 0;
-                }
-            }
-            _ => {}
-        }
+        self.inner.supervisor.lock().unwrap().tick(now_ms);
     }
 
     pub fn reset_quarantine(&self) {
-        let mut supervisor = self.inner.supervisor.lock().unwrap();
-        if matches!(supervisor.state, SupervisorState::Quarantined) {
-            supervisor.failure_timestamps_ms.clear();
-            supervisor.backoff_attempt = 0;
-            supervisor.last_running_timestamp_ms = None;
-            supervisor.state = SupervisorState::Starting;
-            drop(supervisor);
+        if self.inner.supervisor.lock().unwrap().reset_quarantine() {
             let mut domains = self.inner.domains.write().unwrap();
             for state in domains.values_mut() {
                 state.lifecycle = DomainLifecycle::Reconnecting;
@@ -857,7 +785,7 @@ impl DeviceClient {
             return Err(crate::protocol::RejectionReason::Unavailable);
         }
         if matches!(
-            self.inner.supervisor.lock().unwrap().state,
+            self.inner.supervisor.lock().unwrap().state(),
             SupervisorState::Quarantined | SupervisorState::Stopped
         ) {
             return Err(crate::protocol::RejectionReason::Unavailable);
@@ -1419,17 +1347,17 @@ mod tests {
 
     #[test]
     fn reconnect_backoff_progression_and_30s_cap() {
-        assert_eq!(reconnect_backoff_ms(0), 250);
-        assert_eq!(reconnect_backoff_ms(1), 250);
-        assert_eq!(reconnect_backoff_ms(2), 500);
-        assert_eq!(reconnect_backoff_ms(3), 1000);
-        assert_eq!(reconnect_backoff_ms(4), 2000);
-        assert_eq!(reconnect_backoff_ms(5), 4000);
-        assert_eq!(reconnect_backoff_ms(6), 8000);
-        assert_eq!(reconnect_backoff_ms(7), 16000);
-        assert_eq!(reconnect_backoff_ms(8), 30000);
-        assert_eq!(reconnect_backoff_ms(9), 30000);
-        assert_eq!(reconnect_backoff_ms(32), 30000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(0), 250);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(1), 250);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(2), 500);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(3), 1000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(4), 2000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(5), 4000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(6), 8000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(7), 16000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(8), 30000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(9), 30000);
+        assert_eq!(shilpo_domain::reconnect_backoff_ms(32), 30000);
     }
 
     #[tokio::test]
