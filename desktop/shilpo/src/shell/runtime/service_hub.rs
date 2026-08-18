@@ -134,6 +134,28 @@ impl ServiceHub {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_offline_for_test_with_client(
+        device_client: shilpo_services::DeviceClient,
+    ) -> Self {
+        let (_config_tx, _config_rx, service_commands, _commands_rx) = service_worker::channels();
+        let adapter = Arc::new(shilpo_services::NotificationDomainState::new_ready(32));
+        Self {
+            compositor: Arc::new(shilpo_services::TestCompositorAdapter::new_default()),
+            notification: adapter,
+            clipboard: shilpo_services::ClipboardService::with_store(None),
+            app_scanner: shilpo_services::AppScanner::new_empty(),
+            device_client,
+            service_commands,
+            device_snapshot: crate::bar::service_worker::DeviceSnapshot::default(),
+            domain_states: std::collections::HashMap::new(),
+            _service_task: None,
+            _app_watcher: None,
+            started_at: std::time::Instant::now(),
+            heed_store_available: false,
+        }
+    }
+
     pub(crate) fn compositor(&self) -> Arc<dyn shilpo_services::CompositorAdapter> {
         self.compositor.clone()
     }
