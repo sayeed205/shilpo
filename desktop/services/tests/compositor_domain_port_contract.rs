@@ -7,12 +7,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use shilpo_services::compositor::{
-    BrokerOptions, CommandExecutorFn, CompositorCapabilities, CompositorCommand,
-    CompositorCommandBroker, CompositorSnapshot, ExecutorAck, WindowInfo, WorkspaceInfo,
+    BrokerOptions, CommandExecutorFn, CompositorAdapter, CompositorCapabilities, CompositorCommand,
+    CompositorCommandBroker, CompositorSnapshot, ExecutorAck, NiriCompositorService, WindowInfo,
+    WorkspaceInfo,
 };
 use shilpo_services::{
     CancellationReason, DomainLifecycle, DomainPortTelemetry, DomainVersion, MailboxPolicy,
-    StaleUpdateError, SupervisorState,
+    StaleUpdateError, SupervisorState, TimeSource,
 };
 use support::domain_port_contract::{
     self, CommandId, CommandOutcome, CommandResolver, CommandTicket, DomainPortDriver,
@@ -56,6 +57,37 @@ fn make_executor(
         }
         Ok(ExecutorAck::Success)
     })
+}
+
+struct ManualTimeSource(ManualClock);
+
+impl TimeSource for ManualTimeSource {
+    fn now_ms(&self) -> u64 {
+        self.0.now_ms()
+    }
+}
+
+fn make_service(
+    capacity: usize,
+    clock: &ManualClock,
+    active_workspace: Arc<Mutex<Option<u64>>>,
+    timeout_gate_rx_slot: Arc<Mutex<Option<std_mpsc::Receiver<()>>>>,
+) -> Arc<NiriCompositorService> {
+    let initial_snapshot = CompositorSnapshot {
+        workspaces: default_workspaces(),
+        ..Default::default()
+    };
+    let executor = make_executor(active_workspace, timeout_gate_rx_slot);
+    let max_queue_len = capacity.saturating_sub(1).max(1);
+    let broker = CompositorCommandBroker::new(
+        BrokerOptions {
+            timeout: Duration::from_millis(1500),
+            max_queue_len,
+        },
+        executor,
+    );
+    let time_source: Arc<dyn TimeSource> = Arc::new(ManualTimeSource(clock.clone()));
+    NiriCompositorService::new_offline_with(initial_snapshot, time_source, broker)
 }
 
 // ---------------------------------------------------------------------------
@@ -104,11 +136,9 @@ fn default_workspaces() -> Vec<WorkspaceInfo> {
 
 pub struct CompositorDomainPortDriver {
     capacity: usize,
-    broker: Mutex<Arc<CompositorCommandBroker>>,
-    current_snapshot: Arc<Mutex<CompositorSnapshot>>,
+    service: Mutex<Arc<NiriCompositorService>>,
     clock: ManualClock,
     pending: Arc<Mutex<VecDeque<DriverPendingItem>>>,
-    supervisor_state: Arc<Mutex<SupervisorState>>,
     driver_supersessions: AtomicU64,
     active_workspace: Arc<Mutex<Option<u64>>>,
     timeout_gate: Arc<Mutex<Option<std_mpsc::Sender<()>>>>,
@@ -117,35 +147,20 @@ pub struct CompositorDomainPortDriver {
 
 impl CompositorDomainPortDriver {
     pub fn new(capacity: usize) -> Self {
-        let snapshot = Arc::new(Mutex::new(CompositorSnapshot {
-            workspaces: default_workspaces(),
-            ..Default::default()
-        }));
         let active_workspace = Arc::new(Mutex::new(None));
         let timeout_gate_rx_slot = Arc::new(Mutex::new(None));
-        let executor = make_executor(active_workspace.clone(), timeout_gate_rx_slot.clone());
-        // The broker reserves one slot for the actively-executing command
-        // separately from its queue (see `broker.rs`'s `active` vs `queue`).
-        // `telemetry()` below reports `current_queue_depth` as the broker's
-        // queued count plus 1 when a command is in flight, so the driver's
-        // total effective capacity as observed through this trait is
-        // `max_queue_len + 1`. Reserving one slot here keeps that total
-        // equal to the `capacity` this driver was constructed with.
-        let max_queue_len = capacity.saturating_sub(1).max(1);
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions {
-                timeout: Duration::from_millis(1500),
-                max_queue_len,
-            },
-            executor,
+        let clock = ManualClock::new();
+        let service = make_service(
+            capacity,
+            &clock,
+            active_workspace.clone(),
+            timeout_gate_rx_slot.clone(),
         );
         Self {
             capacity,
-            broker: Mutex::new(broker),
-            current_snapshot: snapshot,
-            clock: ManualClock::new(),
+            service: Mutex::new(service),
+            clock,
             pending: Arc::new(Mutex::new(VecDeque::new())),
-            supervisor_state: Arc::new(Mutex::new(SupervisorState::Starting)),
             driver_supersessions: AtomicU64::new(0),
             active_workspace,
             timeout_gate: Arc::new(Mutex::new(None)),
@@ -153,8 +168,12 @@ impl CompositorDomainPortDriver {
         }
     }
 
+    fn current_service(&self) -> Arc<NiriCompositorService> {
+        self.service.lock().unwrap().clone()
+    }
+
     fn current_broker(&self) -> Arc<CompositorCommandBroker> {
-        self.broker.lock().unwrap().clone()
+        self.current_service().command_broker()
     }
 }
 
@@ -210,51 +229,42 @@ impl DomainPortDriver for CompositorDomainPortDriver {
     }
 
     fn snapshot(&self) -> DomainSnapshot<Self::Payload> {
-        let snap = self.current_snapshot.lock().unwrap().clone();
+        let snap = self.current_service().current();
         DomainSnapshot {
             version: snap.version,
             lifecycle: snap.connection,
             payload: CompositorPayload {
-                workspaces: snap.workspaces,
-                windows: snap.windows,
+                workspaces: snap.workspaces.clone(),
+                windows: snap.windows.clone(),
                 focused_workspace_id: snap.focused_workspace_id,
                 focused_window_id: snap.focused_window_id,
-                capabilities: snap.capabilities,
+                capabilities: snap.capabilities.clone(),
             },
-            last_error: snap.last_error,
+            last_error: snap.last_error.clone(),
         }
     }
 
     fn subscribe(&self) -> SnapshotSubscription<Self::Payload> {
-        let current_snapshot = self.current_snapshot.clone();
+        let service = self.current_service();
         SnapshotSubscription::from_fn(move || {
-            let snap = current_snapshot.lock().unwrap().clone();
+            let snap = service.current();
             DomainSnapshot {
                 version: snap.version,
                 lifecycle: snap.connection,
                 payload: CompositorPayload {
-                    workspaces: snap.workspaces,
-                    windows: snap.windows,
+                    workspaces: snap.workspaces.clone(),
+                    windows: snap.windows.clone(),
                     focused_workspace_id: snap.focused_workspace_id,
                     focused_window_id: snap.focused_window_id,
-                    capabilities: snap.capabilities,
+                    capabilities: snap.capabilities.clone(),
                 },
-                last_error: snap.last_error,
+                last_error: snap.last_error.clone(),
             }
         })
     }
 
-    // DISCLOSURE: Compositor supervision (`CompositorSupervisor`) is currently
-    // private, loop-local in `desktop/services/src/compositor/niri.rs`, wall-clock driven,
-    // and only spawned behind a live Niri socket.
-    //
-    // Therefore, `supervisor_state()` returns driver-local bookkeeping (`Starting` before
-    // `mark_ready()`, `Running` after) rather than querying production supervision state.
-    // This is why Scenarios 16-19 (exponential backoff, quarantine after 5 failures in 60s,
-    // 5-minute stable window reset, and explicit quarantine reset) are OUT OF SCOPE
-    // and deferred to #230.
     fn supervisor_state(&self) -> SupervisorState {
-        *self.supervisor_state.lock().unwrap()
+        self.current_service().supervisor_state()
     }
 
     fn telemetry(&self) -> DomainPortTelemetry {
@@ -264,7 +274,7 @@ impl DomainPortDriver for CompositorDomainPortDriver {
         let supersessions = t
             .supersessions
             .max(self.driver_supersessions.load(Ordering::Relaxed));
-        let last_error = self.current_snapshot.lock().unwrap().last_error.clone();
+        let last_error = self.current_service().current().last_error.clone();
         DomainPortTelemetry {
             owner_generation: t.owner_generation,
             current_queue_depth: t.current_queue_depth + in_flight_count,
@@ -283,15 +293,18 @@ impl DomainPortDriver for CompositorDomainPortDriver {
 
     fn advance_clock_ms(&self, ms: u64) {
         self.clock.advance_ms(ms);
-        let mut snap = self.current_snapshot.lock().unwrap();
-        if snap.connection == DomainLifecycle::Reconnecting {
+        self.tick();
+        let state = self.current_service().supervisor_state();
+        let snap = self.current_service().current();
+        if state == SupervisorState::Starting && snap.connection == DomainLifecycle::Reconnecting {
             let next_gen = snap.version.owner_generation + 1;
             let broker = self.current_broker();
             broker.set_installed_generation(next_gen);
             broker.record_restart();
-            snap.version = DomainVersion::new(next_gen, 0);
+            self.current_service().set_reconnecting_generation(next_gen);
 
             let drained: Vec<DriverPendingItem> = self.pending.lock().unwrap().drain(..).collect();
+
             *self.active_workspace.lock().unwrap() = None;
 
             // `set_installed_generation` synchronously cancels the active and
@@ -314,30 +327,47 @@ impl DomainPortDriver for CompositorDomainPortDriver {
     }
 
     fn begin_start(&self) {
-        *self.supervisor_state.lock().unwrap() = SupervisorState::Starting;
-        let mut snap = self.current_snapshot.lock().unwrap();
-        snap.connection = DomainLifecycle::Connecting;
+        self.current_service().begin_start();
     }
 
     fn mark_ready(&self) {
-        *self.supervisor_state.lock().unwrap() = SupervisorState::Running;
-        let mut snap = self.current_snapshot.lock().unwrap();
+        let now_ms = self.clock.now_ms();
+        self.current_service().mark_ready(now_ms);
+        let snap = self.current_service().current();
         let current_gen = snap.version.owner_generation;
-        let next_gen = if current_gen == 0 { 1 } else { current_gen };
+        let installed_gen = self.current_broker().telemetry().owner_generation;
+        let next_gen = if current_gen == 0 {
+            1
+        } else {
+            current_gen.max(installed_gen)
+        };
         self.current_broker().set_installed_generation(next_gen);
-        snap.version = DomainVersion::new(next_gen, 0);
-        snap.connection = DomainLifecycle::Ready;
-        snap.last_error = None;
-        let snap_clone = snap.clone();
-        drop(snap);
-        let _ = self.current_broker().observe_snapshot(Arc::new(snap_clone));
+        let mut new_snap = (*snap).clone();
+        // A revision reset to 0 is only safe when nothing has been published
+        // within this generation yet (revision still 0 on the watch channel).
+        // `advance_clock_ms`'s generation bump (`set_reconnecting_generation`)
+        // never calls `observe_snapshot`, so the broker itself is still
+        // unaware of this generation at that point -- mark_ready's publish is
+        // the first sync, and 0 is safe/expected there (e.g. scenario_08,
+        // which then explicitly publishes revision 1 itself). But if
+        // `begin_start` already published within this generation (revision
+        // > 0, and *that* publish did go through `observe_snapshot`), the
+        // broker has already seen this generation and a repeated 0 would be
+        // stale or conflicting -- keep advancing forward instead.
+        let next_rev = if snap.version.revision == 0 {
+            0
+        } else {
+            snap.version.revision.saturating_add(1)
+        };
+        new_snap.version = DomainVersion::new(next_gen, next_rev);
+        new_snap.connection = DomainLifecycle::Ready;
+        new_snap.last_error = None;
+        let _ = self.current_service().update_snapshot(new_snap);
     }
 
     fn report_owner_failure(&self, error: String) {
-        *self.supervisor_state.lock().unwrap() = SupervisorState::Starting;
-        let mut snap = self.current_snapshot.lock().unwrap();
-        snap.connection = DomainLifecycle::Reconnecting;
-        snap.last_error = Some(error);
+        let now_ms = self.clock.now_ms();
+        self.current_service().report_owner_failure(error, now_ms);
     }
 
     fn publish_update(
@@ -345,12 +375,7 @@ impl DomainPortDriver for CompositorDomainPortDriver {
         revision: u64,
         payload: Self::Payload,
     ) -> Result<(), StaleUpdateError> {
-        let current_gen = self
-            .current_snapshot
-            .lock()
-            .unwrap()
-            .version
-            .owner_generation;
+        let current_gen = self.current_service().current().version.owner_generation;
         self.publish_raw_update(
             DomainVersion::new(current_gen, revision),
             DomainLifecycle::Ready,
@@ -366,7 +391,7 @@ impl DomainPortDriver for CompositorDomainPortDriver {
         payload: Self::Payload,
         error: Option<String>,
     ) -> Result<(), StaleUpdateError> {
-        let new_snap = Arc::new(CompositorSnapshot {
+        let new_snap = CompositorSnapshot {
             version,
             connection: lifecycle,
             workspaces: payload.workspaces,
@@ -376,10 +401,8 @@ impl DomainPortDriver for CompositorDomainPortDriver {
             capabilities: payload.capabilities,
             last_error: error,
             ..Default::default()
-        });
-        self.current_broker().observe_snapshot(new_snap.clone())?;
-        *self.current_snapshot.lock().unwrap() = (*new_snap).clone();
-        Ok(())
+        };
+        self.current_service().update_snapshot(new_snap)
     }
 
     fn submit_command(&self, command: Self::Command) -> Result<CommandTicket, CommandOutcome> {
@@ -477,7 +500,7 @@ impl DomainPortDriver for CompositorDomainPortDriver {
                 std::thread::yield_now();
             }
 
-            let current = self.current_snapshot.lock().unwrap().clone();
+            let current = self.current_service().current();
             let next_rev = current.version.revision + 1;
             let mut new_payload = CompositorPayload {
                 workspaces: current.workspaces.clone(),
@@ -486,6 +509,7 @@ impl DomainPortDriver for CompositorDomainPortDriver {
                 focused_window_id: current.focused_window_id,
                 capabilities: current.capabilities.clone(),
             };
+
             if !new_payload
                 .workspaces
                 .iter()
@@ -504,7 +528,13 @@ impl DomainPortDriver for CompositorDomainPortDriver {
             }
             let _ = self.publish_update(next_rev, new_payload);
 
-            for _ in 0..500 {
+            // Bounded yield_now loop (no wall-clock wait), matching the convention
+            // used elsewhere in this driver (e.g. `advance_clock_ms`). Raised from
+            // 500 to 100_000 iterations alongside #230's supervisor hoist: publishing
+            // through a real `NiriCompositorService` now takes one more Mutex
+            // acquisition per update than the old `Arc<Mutex<CompositorSnapshot>>`
+            // direct-write path, so 500 iterations occasionally undershot.
+            for _ in 0..100_000 {
                 if item.ticket.is_completed() {
                     break;
                 }
@@ -565,42 +595,31 @@ impl DomainPortDriver for CompositorDomainPortDriver {
     }
 
     fn reset_quarantine(&self) {
-        // No-op: compositor supervision is loop-local
+        self.current_service().reset_quarantine();
     }
 
     fn restart_containing_process(&self) {
-        let snapshot = Arc::new(Mutex::new(CompositorSnapshot {
-            workspaces: default_workspaces(),
-            ..Default::default()
-        }));
         let active_workspace = self.active_workspace.clone();
         *active_workspace.lock().unwrap() = None;
         *self.timeout_gate.lock().unwrap() = None;
         *self.timeout_gate_rx_slot.lock().unwrap() = None;
-        let executor = make_executor(active_workspace, self.timeout_gate_rx_slot.clone());
-        let max_queue_len = self.capacity.saturating_sub(1).max(1);
-        let new_broker = CompositorCommandBroker::new(
-            BrokerOptions {
-                timeout: Duration::from_millis(1500),
-                max_queue_len,
-            },
-            executor,
+        let new_service = make_service(
+            self.capacity,
+            &self.clock,
+            active_workspace,
+            self.timeout_gate_rx_slot.clone(),
         );
-        *self.broker.lock().unwrap() = new_broker;
-        *self.current_snapshot.lock().unwrap() = (*snapshot.lock().unwrap()).clone();
+        *self.service.lock().unwrap() = new_service;
         self.pending.lock().unwrap().clear();
-        *self.supervisor_state.lock().unwrap() = SupervisorState::Starting;
     }
 
     fn backoff_delay_ms(&self, attempt: u32) -> u64 {
-        let multiplier = 2u64.saturating_pow(attempt.saturating_sub(1));
-        shilpo_domain::INITIAL_BACKOFF_MS
-            .saturating_mul(multiplier)
-            .min(shilpo_domain::MAX_BACKOFF_MS)
+        shilpo_domain::reconnect_backoff_ms(attempt)
     }
 
     fn tick(&self) {
-        // No-op: compositor supervision is loop-local
+        let now_ms = self.clock.now_ms();
+        self.current_service().tick(now_ms);
     }
 }
 
@@ -626,24 +645,6 @@ fn map_outcome(outcome: shilpo_services::CommandOutcome) -> CommandOutcome {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Scenarios Excluded From Compositor Domain Port Conformance
-// ---------------------------------------------------------------------------
-//
-// Scenarios 16-19 are excluded from the compositor contract suite because
-// `CompositorSupervisor` is private, loop-local in `desktop/services/src/compositor/niri.rs`,
-// wall-clock driven, and only spawned behind a real Niri socket.
-//
-// | Scenario | Reason |
-// |---|---|
-// | 16 (exponential backoff) | Supervisor unreachable from compositor broker. |
-// | 17 (quarantine after 5 failures/60s) | Same. |
-// | 18 (5-minute stable window reset) | Same. |
-// | 19 (quarantine needs explicit reset) | Same. `reset_quarantine()` is public but its effect is only observable from inside the listener thread. |
-//
-// Refactoring CompositorSupervisor to be clock-injected and hoisted onto CompositorService
-// is tracked in #230.
 
 // ---------------------------------------------------------------------------
 // Pre-existing Unit Tests Preserved
@@ -755,10 +756,69 @@ async fn scenario_14_different_replace_latest_keys_do_not_replace_each_other() {
     );
 }
 
+// DISCLOSURE (scenario_15): not registered for compositor. Two findings from
+// investigating why, both discovered while fixing #230's `report_owner_failure`/
+// `reset_quarantine` `observe_snapshot` gap (see the fix's PR history for the
+// original bug: those two methods used to `tx.send` directly, bypassing the
+// broker entirely, which is what let this scenario appear to pass before).
+//
+// 1. `CancellationReason::OwnerReplaced` appears structurally unreachable for
+//    compositor's real broker. `CompositorCommandBroker::observe_snapshot`
+//    (broker.rs:861-868, pre-existing, unrelated to #230) cancels everything
+//    queued/active with `Reconnect` on any `Ready` -> non-`Ready` transition.
+//    `set_installed_generation` (broker.rs:741, also pre-existing) is what
+//    produces `OwnerReplaced`, but every real path to it in
+//    `run_niri_listener` is only reached *after* a prior failure already put
+//    the connection in `Reconnecting` -- so the queue is always already
+//    drained by `Reconnect` before a new generation is ever installed. This
+//    was checked against the real listener loop, not just the offline test
+//    driver: "begin start" (which bumps `owner_generation` and calls
+//    `set_installed_generation`) is only reached via the `tick`-driven
+//    `Backoff -> Starting` transition, which itself only follows a failure.
+//    Submitting a command while not-`Ready` is also rejected outright
+//    (`Unavailable`, broker.rs:917), so there is no window to queue something
+//    that survives to see `OwnerReplaced` either. This looks like a genuine,
+//    pre-existing property of compositor's single-owned-service architecture
+//    (unlike device, whose "owner" is an independently-restartable D-Bus
+//    daemon and can genuinely announce a new identity before the old one is
+//    detected as failed) -- worth its own issue, not something #230 asked
+//    for or something to force a test around here.
+//
+// 2. `restart_containing_process` (this file) discards the old service and
+//    broker outright; any tickets still outstanding on the old broker are
+//    never resolved with any `CancellationReason` at all -- they are simply
+//    dropped along with the old `Arc`. Also out of scope for #230, noted for
+//    a future pass.
+//
+// The shared `scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands`
+// (support/domain_port_contract.rs) is untouched and continues to cover
+// device and notification as written.
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands() {
+async fn scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds() {
     let driver = CompositorDomainPortDriver::new(10);
-    domain_port_contract::scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands(&driver);
+    domain_port_contract::scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds(
+        &driver,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scenario_17_five_failures_inside_60_seconds_enter_quarantine() {
+    let driver = CompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_17_five_failures_inside_60_seconds_enter_quarantine(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scenario_18_five_minutes_stable_clears_rolling_failure_window_but_preserves_session_restart_telemetry()
+ {
+    let driver = CompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_18_five_minutes_stable_clears_rolling_failure_window_but_preserves_session_restart_telemetry(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scenario_19_quarantine_requires_explicit_reset_or_containing_process_restart() {
+    let driver = CompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_19_quarantine_requires_explicit_reset_or_containing_process_restart(&driver);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

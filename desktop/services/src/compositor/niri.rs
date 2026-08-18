@@ -22,82 +22,20 @@ use tokio::sync::watch;
 use super::{
     BrokerOptions, CompositorAdapter, CompositorCapabilities, CompositorCommand,
     CompositorCommandBroker, CompositorOutput, CompositorSnapshot, DomainLifecycle, DomainVersion,
-    ExecutorAck, RejectionReason, SupervisorState, WindowInfo, WorkspaceInfo,
+    ExecutorAck, RejectionReason, StaleUpdateError, SupervisorState, WindowInfo, WorkspaceInfo,
     broker::{CommandCancellation, StreamCancelHandle, create_stream_cancel_handle},
 };
+
 use crate::domain::{
-    FAILURE_WINDOW_MS, INITIAL_BACKOFF_MS, MAX_BACKOFF_MS, QUARANTINE_FAILURES, STABLE_RESET_MS,
+    FAILURE_WINDOW_MS, MonotonicTimeSource, QUARANTINE_FAILURES, STABLE_RESET_MS, TimeSource,
+    reconnect_backoff_ms,
 };
 
 #[derive(Debug)]
-struct CompositorSupervisor {
+struct CompositorSupervisorData {
     state: SupervisorState,
     failures_ms: Vec<u64>,
-    backoff_ms: u64,
     stable_since_ms: Option<u64>,
-}
-
-impl CompositorSupervisor {
-    fn new() -> Self {
-        Self {
-            state: SupervisorState::Starting,
-            failures_ms: Vec::new(),
-            backoff_ms: INITIAL_BACKOFF_MS,
-            stable_since_ms: None,
-        }
-    }
-
-    fn begin_start(&mut self) {
-        self.state = SupervisorState::Starting;
-        tracing::info!(target: "shilpo_profile", lifecycle = "starting", "compositor supervisor transition");
-    }
-
-    fn record_failure(&mut self, now_ms: u64) {
-        self.failures_ms
-            .retain(|timestamp| now_ms.saturating_sub(*timestamp) <= FAILURE_WINDOW_MS);
-        self.failures_ms.push(now_ms);
-        self.stable_since_ms = None;
-        if self.failures_ms.len() >= QUARANTINE_FAILURES {
-            self.state = SupervisorState::Quarantined;
-            tracing::warn!(target: "shilpo_profile", lifecycle = "quarantined", "compositor supervisor transition");
-        } else {
-            let attempt = self.failures_ms.len() as u32;
-            self.state = SupervisorState::Backoff {
-                attempt,
-                retry_at_ms: now_ms.saturating_add(self.backoff_ms),
-            };
-            tracing::info!(target: "shilpo_profile", lifecycle = "backoff", attempt, "compositor supervisor transition");
-            self.backoff_ms = (self.backoff_ms.saturating_mul(2)).min(MAX_BACKOFF_MS);
-        }
-    }
-
-    fn mark_ready(&mut self, now_ms: u64) {
-        self.state = SupervisorState::Running;
-        tracing::info!(target: "shilpo_profile", lifecycle = "ready", "compositor supervisor transition");
-        self.stable_since_ms = Some(now_ms);
-        self.backoff_ms = INITIAL_BACKOFF_MS;
-    }
-
-    fn tick(&mut self, now_ms: u64) {
-        if self
-            .stable_since_ms
-            .is_some_and(|started| now_ms.saturating_sub(started) >= STABLE_RESET_MS)
-        {
-            self.failures_ms.clear();
-            self.backoff_ms = INITIAL_BACKOFF_MS;
-        }
-    }
-
-    fn reset(&mut self) {
-        self.failures_ms.clear();
-        self.stable_since_ms = None;
-        self.backoff_ms = INITIAL_BACKOFF_MS;
-        self.state = SupervisorState::Starting;
-    }
-
-    fn is_quarantined(&self) -> bool {
-        matches!(self.state, SupervisorState::Quarantined)
-    }
 }
 
 /// Resolves `NIRI_SOCKET`, then `NIRI_SOCKET_PATH`, falling back to scanning `XDG_RUNTIME_DIR`.
@@ -124,7 +62,8 @@ pub struct NiriCompositorService {
     tx: watch::Sender<Arc<CompositorSnapshot>>,
     rx: watch::Receiver<Arc<CompositorSnapshot>>,
     stop_flag: Arc<AtomicBool>,
-    quarantine_reset: Arc<AtomicBool>,
+    supervisor: Arc<Mutex<CompositorSupervisorData>>,
+    time_source: Arc<dyn TimeSource>,
     broker: Arc<CompositorCommandBroker>,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
 }
@@ -147,41 +86,58 @@ impl NiriCompositorService {
         };
         let (tx, rx) = watch::channel(Arc::new(initial));
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let quarantine_reset = Arc::new(AtomicBool::new(false));
+        let time_source: Arc<dyn TimeSource> = Arc::new(MonotonicTimeSource::new());
+        let supervisor = Arc::new(Mutex::new(CompositorSupervisorData {
+            state: SupervisorState::Starting,
+            failures_ms: Vec::new(),
+            stable_since_ms: None,
+        }));
 
         let broker =
             CompositorCommandBroker::new(BrokerOptions::default(), Box::new(execute_niri_command));
 
         let tx_clone = tx.clone();
         let stop_clone = stop_flag.clone();
-        let quarantine_reset_clone = quarantine_reset.clone();
+        let supervisor_clone = supervisor.clone();
+        let time_source_clone = time_source.clone();
         let broker_clone = broker.clone();
 
         let handle = thread::spawn(move || {
-            run_niri_listener(tx_clone, stop_clone, quarantine_reset_clone, broker_clone);
+            run_niri_listener(
+                tx_clone,
+                stop_clone,
+                supervisor_clone,
+                time_source_clone,
+                broker_clone,
+            );
         });
 
         Arc::new(Self {
             tx,
             rx,
             stop_flag,
-            quarantine_reset,
+            supervisor,
+            time_source,
             broker,
             handle: Mutex::new(Some(handle)),
         })
     }
 
-    /// Construct offline instance for testing with specified initial snapshot.
-    pub fn new_offline(snapshot: CompositorSnapshot) -> Arc<Self> {
+    /// Construct offline instance with injected clock and broker.
+    pub fn new_offline_with(
+        snapshot: CompositorSnapshot,
+        time_source: Arc<dyn TimeSource>,
+        broker: Arc<CompositorCommandBroker>,
+    ) -> Arc<Self> {
         let snap_arc = Arc::new(snapshot);
         let (tx, rx) = watch::channel(snap_arc.clone());
         let stop_flag = Arc::new(AtomicBool::new(true));
-        let quarantine_reset = Arc::new(AtomicBool::new(false));
+        let supervisor = Arc::new(Mutex::new(CompositorSupervisorData {
+            state: SupervisorState::Starting,
+            failures_ms: Vec::new(),
+            stable_since_ms: None,
+        }));
 
-        let broker = CompositorCommandBroker::new(
-            BrokerOptions::default(),
-            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success)),
-        );
         if snap_arc.version.owner_generation > 0 {
             broker.set_installed_generation(snap_arc.version.owner_generation);
         }
@@ -191,22 +147,117 @@ impl NiriCompositorService {
             tx,
             rx,
             stop_flag,
-            quarantine_reset,
+            supervisor,
+            time_source,
             broker,
             handle: Mutex::new(None),
         })
     }
 
-    pub fn update_snapshot(&self, snapshot: CompositorSnapshot) {
-        let snap_arc = Arc::new(snapshot);
+    /// Construct offline instance for testing with specified initial snapshot.
+    pub fn new_offline(snapshot: CompositorSnapshot) -> Arc<Self> {
+        let broker = CompositorCommandBroker::new(
+            BrokerOptions::default(),
+            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success)),
+        );
+        Self::new_offline_with(snapshot, Arc::new(MonotonicTimeSource::new()), broker)
+    }
+
+    pub fn supervisor_state(&self) -> SupervisorState {
+        self.supervisor.lock().unwrap().state
+    }
+
+    pub fn time_source(&self) -> &Arc<dyn TimeSource> {
+        &self.time_source
+    }
+
+    pub fn begin_start(&self) {
+        let mut supervisor = self.supervisor.lock().unwrap();
+        supervisor.state = SupervisorState::Starting;
+        drop(supervisor);
+
+        let previous = self.rx.borrow().clone();
+        let mut current = (*previous).clone();
+        // The very first `begin_start` (version still `DomainVersion::ZERO`)
+        // must stay at ZERO: `observe_snapshot`'s initial-snapshot exemption
+        // (broker.rs) only applies then, and callers depend on the first
+        // successful start landing at exactly `(1, 0)`. Any later
+        // `begin_start` (e.g. after a `reset_quarantine`, which already
+        // published a real version through the broker) must bump the
+        // revision, or this publish collides with the broker's last observed
+        // snapshot at the same version.
+        if current.version != DomainVersion::ZERO {
+            let next_rev = current.version.revision.saturating_add(1);
+            current.version = DomainVersion::new(current.version.owner_generation, next_rev);
+        }
+        current.connection = DomainLifecycle::Connecting;
+        let snap_arc = Arc::new(current);
         if self.broker.observe_snapshot(snap_arc.clone()).is_ok() {
             let _ = self.tx.send(snap_arc);
         }
+
+        tracing::info!(target: "shilpo_profile", lifecycle = "starting", "compositor supervisor transition");
+    }
+
+    pub fn mark_ready(&self, now_ms: u64) {
+        let mut supervisor = self.supervisor.lock().unwrap();
+        supervisor.state = SupervisorState::Running;
+        supervisor.stable_since_ms = Some(now_ms);
+        tracing::info!(target: "shilpo_profile", lifecycle = "ready", "compositor supervisor transition");
+    }
+
+    pub fn report_owner_failure(&self, error: String, now_ms: u64) {
+        let version = self.rx.borrow().version;
+        let owner_generation = version.owner_generation;
+        let mut revision = version.revision;
+        record_supervisor_failure(
+            &self.supervisor,
+            &self.broker,
+            &self.tx,
+            owner_generation,
+            &mut revision,
+            error,
+            now_ms,
+        );
+    }
+
+    pub fn tick(&self, now_ms: u64) {
+        apply_tick(&self.supervisor, now_ms);
+    }
+
+    pub fn update_snapshot(&self, snapshot: CompositorSnapshot) -> Result<(), StaleUpdateError> {
+        let snap_arc = Arc::new(snapshot);
+        self.broker.observe_snapshot(snap_arc.clone())?;
+        let _ = self.tx.send(snap_arc);
+        Ok(())
+    }
+
+    pub fn set_reconnecting_generation(&self, generation: u64) {
+        let previous = self.rx.borrow().clone();
+        let mut current = (*previous).clone();
+        current.version = DomainVersion::new(generation, 0);
+        let snap_arc = Arc::new(current);
+        let _ = self.tx.send(snap_arc);
     }
 
     /// Explicitly clears quarantine and permits the supervisor to retry ownership.
     pub fn reset_quarantine(&self) {
-        self.quarantine_reset.store(true, Ordering::Release);
+        let mut supervisor = self.supervisor.lock().unwrap();
+        supervisor.failures_ms.clear();
+        supervisor.stable_since_ms = None;
+        supervisor.state = SupervisorState::Starting;
+        drop(supervisor);
+
+        let previous = self.rx.borrow().clone();
+        let mut current = (*previous).clone();
+        let next_gen = current.version.owner_generation.saturating_add(1);
+        current.version = DomainVersion::new(next_gen, 0);
+        current.connection = DomainLifecycle::Reconnecting;
+        let snap_arc = Arc::new(current);
+        self.broker.set_installed_generation(next_gen);
+        if self.broker.observe_snapshot(snap_arc.clone()).is_ok() {
+            let _ = self.tx.send(snap_arc);
+        }
     }
 }
 
@@ -591,51 +642,124 @@ fn publish_reconnecting(
     }
 }
 
+fn record_supervisor_failure(
+    supervisor: &Arc<Mutex<CompositorSupervisorData>>,
+    broker: &Arc<CompositorCommandBroker>,
+    tx: &watch::Sender<Arc<CompositorSnapshot>>,
+    owner_generation: u64,
+    revision: &mut u64,
+    error: String,
+    now_ms: u64,
+) {
+    let (new_state, target_lifecycle, error_msg) = {
+        let mut sup = supervisor.lock().unwrap();
+        sup.stable_since_ms = None;
+        sup.failures_ms
+            .retain(|ts| now_ms.saturating_sub(*ts) <= FAILURE_WINDOW_MS);
+        sup.failures_ms.push(now_ms);
+        let failure_count = sup.failures_ms.len();
+        if failure_count >= QUARANTINE_FAILURES {
+            sup.state = SupervisorState::Quarantined;
+            tracing::warn!(target: "shilpo_profile", lifecycle = "quarantined", "compositor supervisor transition");
+            (
+                SupervisorState::Quarantined,
+                DomainLifecycle::Unavailable,
+                "Quarantined after five failures in 60s".to_string(),
+            )
+        } else {
+            let attempt = failure_count as u32;
+            let retry_at_ms = now_ms.saturating_add(reconnect_backoff_ms(attempt));
+            sup.state = SupervisorState::Backoff {
+                attempt,
+                retry_at_ms,
+            };
+            tracing::info!(target: "shilpo_profile", lifecycle = "backoff", attempt, "compositor supervisor transition");
+            (sup.state, DomainLifecycle::Reconnecting, error)
+        }
+    };
+
+    if new_state == SupervisorState::Quarantined {
+        broker.record_quarantine_trip();
+    }
+
+    *revision = revision.saturating_add(1);
+    let previous = tx.borrow().clone();
+    let mut current = (*previous).clone();
+    current.version = DomainVersion::new(owner_generation, *revision);
+    current.connection = target_lifecycle;
+    current.last_error = Some(error_msg);
+    let snap_arc = Arc::new(current);
+    if broker.observe_snapshot(snap_arc.clone()).is_ok() {
+        let _ = tx.send(snap_arc);
+    }
+}
+
+/// Applies the clock-driven `Backoff -> Starting` and stable-window-clear
+/// transitions. Shared by `NiriCompositorService::tick` and the listener loop
+/// so there is exactly one implementation of the tick-only discipline.
+fn apply_tick(supervisor: &Arc<Mutex<CompositorSupervisorData>>, now_ms: u64) {
+    let mut sup = supervisor.lock().unwrap();
+    match sup.state {
+        SupervisorState::Backoff { retry_at_ms, .. } => {
+            if now_ms >= retry_at_ms {
+                sup.state = SupervisorState::Starting;
+            }
+        }
+        SupervisorState::Running => {
+            if let Some(started) = sup.stable_since_ms
+                && now_ms.saturating_sub(started) >= STABLE_RESET_MS
+            {
+                sup.failures_ms.clear();
+            }
+        }
+        _ => {}
+    }
+}
+
 fn run_niri_listener(
     tx: watch::Sender<Arc<CompositorSnapshot>>,
     stop_flag: Arc<AtomicBool>,
-    quarantine_reset: Arc<AtomicBool>,
+    supervisor: Arc<Mutex<CompositorSupervisorData>>,
+    time_source: Arc<dyn TimeSource>,
     broker: Arc<CompositorCommandBroker>,
 ) {
-    let mut backoff = Duration::from_millis(INITIAL_BACKOFF_MS);
     let mut owner_generation = 0u64;
     let mut revision = 0u64;
-    let start_instant = std::time::Instant::now();
-    let mut supervisor = CompositorSupervisor::new();
-    let mut quarantine_published = false;
 
     while !stop_flag.load(Ordering::Relaxed) {
-        let now_ms = start_instant.elapsed().as_millis() as u64;
-        supervisor.tick(now_ms);
+        let now_ms = time_source.now_ms();
 
-        if quarantine_reset.swap(false, Ordering::AcqRel) {
-            supervisor.reset();
-            backoff = Duration::from_millis(INITIAL_BACKOFF_MS);
-            quarantine_published = false;
-        }
+        // 1. Clock-driven transition via tick
+        apply_tick(&supervisor, now_ms);
 
-        if supervisor.is_quarantined() {
-            if !quarantine_published {
-                quarantine_published = true;
-                broker.record_quarantine_trip();
-                let previous = tx.borrow().clone();
-                let mut current = (*previous).clone();
-                revision += 1;
-                current.version = DomainVersion::new(owner_generation, revision);
-                current.connection = DomainLifecycle::Unavailable;
-                current.last_error = Some("Quarantined after five failures in 60s".into());
-                let snap_arc = Arc::new(current);
-                if broker.observe_snapshot(snap_arc.clone()).is_ok() {
-                    let _ = tx.send(snap_arc);
-                }
+        // 2. Check supervisor state
+        let state = supervisor.lock().unwrap().state;
+        match state {
+            SupervisorState::Quarantined => {
+                sleep_with_stop_flag(Duration::from_millis(100), &stop_flag);
+                continue;
             }
-            sleep_with_stop_flag(Duration::from_millis(100), &stop_flag);
-            continue;
+            SupervisorState::Backoff { retry_at_ms, .. } => {
+                let remaining_ms = retry_at_ms.saturating_sub(now_ms);
+                let sleep_duration = Duration::from_millis(remaining_ms.clamp(1, 100));
+                sleep_with_stop_flag(sleep_duration, &stop_flag);
+                continue;
+            }
+
+            SupervisorState::Starting | SupervisorState::Running => {}
+            SupervisorState::Stopping | SupervisorState::Stopped => {
+                break;
+            }
         }
 
+        // 3. Begin start
         owner_generation += 1;
         revision = 0;
-        supervisor.begin_start();
+        {
+            let mut sup = supervisor.lock().unwrap();
+            sup.state = SupervisorState::Starting;
+            tracing::info!(target: "shilpo_profile", lifecycle = "starting", "compositor supervisor transition");
+        }
         broker.set_installed_generation(owner_generation);
         broker.record_restart();
 
@@ -653,16 +777,17 @@ fn run_niri_listener(
         let socket_path = match resolve_niri_socket_path() {
             Some(path) => path,
             None => {
-                supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
-                publish_reconnecting(
-                    &tx,
+                let err_msg = "Neither NIRI_SOCKET nor NIRI_SOCKET_PATH is set".to_string();
+                let now_ms = time_source.now_ms();
+                record_supervisor_failure(
+                    &supervisor,
                     &broker,
+                    &tx,
                     owner_generation,
                     &mut revision,
-                    Some("Neither NIRI_SOCKET nor NIRI_SOCKET_PATH is set".to_string()),
+                    err_msg,
+                    now_ms,
                 );
-                sleep_with_stop_flag(backoff, &stop_flag);
-                backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
                 continue;
             }
         };
@@ -670,16 +795,17 @@ fn run_niri_listener(
         let outputs = match query_outputs_from_socket_path(&socket_path) {
             Ok(outputs) => outputs,
             Err(err) => {
-                supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
-                publish_reconnecting(
-                    &tx,
+                let err_msg = format!("Failed to query Niri outputs: {err}");
+                let now_ms = time_source.now_ms();
+                record_supervisor_failure(
+                    &supervisor,
                     &broker,
+                    &tx,
                     owner_generation,
                     &mut revision,
-                    Some(format!("Failed to query Niri outputs: {err}")),
+                    err_msg,
+                    now_ms,
                 );
-                sleep_with_stop_flag(backoff, &stop_flag);
-                backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
                 continue;
             }
         };
@@ -687,16 +813,17 @@ fn run_niri_listener(
         let mut event_stream = match UnixStream::connect(&socket_path) {
             Ok(s) => s,
             Err(err) => {
-                supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
-                publish_reconnecting(
-                    &tx,
+                let err_msg = format!("Failed to connect to Niri event socket: {err}");
+                let now_ms = time_source.now_ms();
+                record_supervisor_failure(
+                    &supervisor,
                     &broker,
+                    &tx,
                     owner_generation,
                     &mut revision,
-                    Some(format!("Failed to connect to Niri event socket: {err}")),
+                    err_msg,
+                    now_ms,
                 );
-                sleep_with_stop_flag(backoff, &stop_flag);
-                backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
                 continue;
             }
         };
@@ -707,31 +834,33 @@ fn run_niri_listener(
                 j
             }
             Err(err) => {
-                supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
-                publish_reconnecting(
-                    &tx,
+                let err_msg = format!("Failed to serialize EventStream request: {err}");
+                let now_ms = time_source.now_ms();
+                record_supervisor_failure(
+                    &supervisor,
                     &broker,
+                    &tx,
                     owner_generation,
                     &mut revision,
-                    Some(format!("Failed to serialize EventStream request: {err}")),
+                    err_msg,
+                    now_ms,
                 );
-                sleep_with_stop_flag(backoff, &stop_flag);
-                backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
                 continue;
             }
         };
 
         if let Err(err) = event_stream.write_all(req_json.as_bytes()) {
-            supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
-            publish_reconnecting(
-                &tx,
+            let err_msg = format!("Failed to send EventStream request: {err}");
+            let now_ms = time_source.now_ms();
+            record_supervisor_failure(
+                &supervisor,
                 &broker,
+                &tx,
                 owner_generation,
                 &mut revision,
-                Some(format!("Failed to send EventStream request: {err}")),
+                err_msg,
+                now_ms,
             );
-            sleep_with_stop_flag(backoff, &stop_flag);
-            backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
             continue;
         }
 
@@ -739,16 +868,17 @@ fn run_niri_listener(
             .set_read_timeout(Some(Duration::from_millis(200)))
             .is_err()
         {
-            supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
-            publish_reconnecting(
-                &tx,
+            let err_msg = "Failed to set read timeout on Niri socket".to_string();
+            let now_ms = time_source.now_ms();
+            record_supervisor_failure(
+                &supervisor,
                 &broker,
+                &tx,
                 owner_generation,
                 &mut revision,
-                Some("Failed to set read timeout on Niri socket".to_string()),
+                err_msg,
+                now_ms,
             );
-            sleep_with_stop_flag(backoff, &stop_flag);
-            backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
             continue;
         }
 
@@ -764,13 +894,16 @@ fn run_niri_listener(
             line.clear();
             match reader.read_line(&mut line) {
                 Ok(0) => {
-                    supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
-                    publish_reconnecting(
-                        &tx,
+                    let err_msg = "Niri socket EOF reached".to_string();
+                    let now_ms = time_source.now_ms();
+                    record_supervisor_failure(
+                        &supervisor,
                         &broker,
+                        &tx,
                         owner_generation,
                         &mut revision,
-                        Some("Niri socket EOF reached".to_string()),
+                        err_msg,
+                        now_ms,
                     );
                     break;
                 }
@@ -809,8 +942,11 @@ fn run_niri_listener(
                     if !initial_sync || initial_sync_boundary {
                         if initial_sync {
                             initial_sync = false;
-                            supervisor.mark_ready(now_ms);
-                            backoff = Duration::from_millis(INITIAL_BACKOFF_MS);
+                            let now_ms = time_source.now_ms();
+                            let mut sup = supervisor.lock().unwrap();
+                            sup.state = SupervisorState::Running;
+                            sup.stable_since_ms = Some(now_ms);
+                            tracing::info!(target: "shilpo_profile", lifecycle = "ready", "compositor supervisor transition");
                         }
 
                         publish_snapshot_from_state(
@@ -831,21 +967,21 @@ fn run_niri_listener(
                     continue;
                 }
                 Err(err) => {
-                    supervisor.record_failure(start_instant.elapsed().as_millis() as u64);
-                    publish_reconnecting(
-                        &tx,
+                    let err_msg = format!("Niri socket read error: {err}");
+                    let now_ms = time_source.now_ms();
+                    record_supervisor_failure(
+                        &supervisor,
                         &broker,
+                        &tx,
                         owner_generation,
                         &mut revision,
-                        Some(format!("Niri socket read error: {err}")),
+                        err_msg,
+                        now_ms,
                     );
                     break;
                 }
             }
         }
-
-        sleep_with_stop_flag(backoff, &stop_flag);
-        backoff = (backoff * 2).min(Duration::from_millis(MAX_BACKOFF_MS));
     }
 
     publish_reconnecting(
@@ -1540,52 +1676,83 @@ mod tests {
 
     #[test]
     fn supervisor_uses_capped_exponential_backoff_and_quarantines() {
-        let mut supervisor = CompositorSupervisor::new();
-        supervisor.record_failure(0);
+        let service = NiriCompositorService::new_offline(CompositorSnapshot::default());
+        service.report_owner_failure("test".into(), 0);
         assert_eq!(
-            supervisor.state,
+            service.supervisor_state(),
             SupervisorState::Backoff {
                 attempt: 1,
                 retry_at_ms: 250
             }
         );
-        supervisor.record_failure(1_000);
+        service.report_owner_failure("test".into(), 1_000);
         assert_eq!(
-            supervisor.state,
+            service.supervisor_state(),
             SupervisorState::Backoff {
                 attempt: 2,
                 retry_at_ms: 1_500
             }
         );
-        supervisor.record_failure(2_000);
-        supervisor.record_failure(3_000);
-        supervisor.record_failure(4_000);
-        assert_eq!(supervisor.state, SupervisorState::Quarantined);
+        service.report_owner_failure("test".into(), 2_000);
+        service.report_owner_failure("test".into(), 3_000);
+        service.report_owner_failure("test".into(), 4_000);
+        assert_eq!(service.supervisor_state(), SupervisorState::Quarantined);
     }
 
     #[test]
     fn supervisor_clears_failures_after_stable_period_and_supports_reset() {
-        let mut supervisor = CompositorSupervisor::new();
-        supervisor.record_failure(0);
-        supervisor.mark_ready(1_000);
-        supervisor.tick(302_000);
-        supervisor.record_failure(303_000);
+        let service = NiriCompositorService::new_offline(CompositorSnapshot::default());
+        service.report_owner_failure("test".into(), 0);
+        service.mark_ready(1_000);
+        service.tick(302_000);
+        service.report_owner_failure("test".into(), 303_000);
         assert_eq!(
-            supervisor.state,
+            service.supervisor_state(),
             SupervisorState::Backoff {
                 attempt: 1,
                 retry_at_ms: 303_250
             }
         );
-        supervisor.reset();
-        assert_eq!(supervisor.state, SupervisorState::Starting);
-        supervisor.record_failure(400_000);
+        service.reset_quarantine();
+        assert_eq!(service.supervisor_state(), SupervisorState::Starting);
+        service.report_owner_failure("test".into(), 400_000);
         assert_eq!(
-            supervisor.state,
+            service.supervisor_state(),
             SupervisorState::Backoff {
                 attempt: 1,
                 retry_at_ms: 400_250
             }
         );
+    }
+
+    #[test]
+    fn supervisor_tick_only_discipline_getters_do_not_mutate_state() {
+        let service = NiriCompositorService::new_offline(CompositorSnapshot::default());
+        service.report_owner_failure("test".into(), 0);
+        assert_eq!(
+            service.supervisor_state(),
+            SupervisorState::Backoff {
+                attempt: 1,
+                retry_at_ms: 250
+            }
+        );
+
+        // Advance past retry_at_ms without calling tick()
+        // Repeatedly calling getters must NOT cause Backoff -> Starting transition.
+        for _ in 0..10 {
+            assert_eq!(
+                service.supervisor_state(),
+                SupervisorState::Backoff {
+                    attempt: 1,
+                    retry_at_ms: 250
+                }
+            );
+            assert_eq!(service.command_broker().telemetry().owner_generation, 0);
+            assert_eq!(service.current().connection, DomainLifecycle::Reconnecting);
+        }
+
+        // Only explicit tick() causes the clock-driven transition to Starting
+        service.tick(250);
+        assert_eq!(service.supervisor_state(), SupervisorState::Starting);
     }
 }

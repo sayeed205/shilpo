@@ -15,6 +15,16 @@ pub const STABLE_RESET_MS: u64 = 300_000;
 /// Number of failures within the rolling failure window that trips the supervisor into quarantine.
 pub const QUARANTINE_FAILURES: usize = 5;
 
+/// Calculates exponential backoff delay in milliseconds for reconnect attempts.
+///
+/// Follows `INITIAL_BACKOFF_MS * 2^(attempt.saturating_sub(1).min(7))`, clamped
+/// to `MAX_BACKOFF_MS`. Both `attempt: 0` and `attempt: 1` yield 250 ms.
+pub fn reconnect_backoff_ms(attempt: u32) -> u64 {
+    INITIAL_BACKOFF_MS
+        .saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1).min(7)))
+        .min(MAX_BACKOFF_MS)
+}
+
 /// DomainVersion tuple containing owner_generation and revision with strict lexicographical ordering.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, zvariant::Type,
@@ -412,5 +422,16 @@ mod tests {
             "mailbox is at capacity"
         );
         assert_ne!(MailboxError::Unavailable, MailboxError::Overloaded);
+    }
+
+    #[test]
+    fn test_reconnect_backoff_ms() {
+        assert_eq!(reconnect_backoff_ms(0), 250);
+        assert_eq!(reconnect_backoff_ms(1), 250);
+        assert_eq!(reconnect_backoff_ms(2), 500);
+        assert_eq!(reconnect_backoff_ms(4), 2000);
+        assert_eq!(reconnect_backoff_ms(7), 16000);
+        assert_eq!(reconnect_backoff_ms(8), 30000);
+        assert_eq!(reconnect_backoff_ms(32), 30000);
     }
 }

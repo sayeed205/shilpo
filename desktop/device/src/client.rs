@@ -11,8 +11,8 @@ use crate::protocol::{
     DomainVersion, PROTOCOL_VERSION,
 };
 use shilpo_domain::{
-    FAILURE_WINDOW_MS, INITIAL_BACKOFF_MS, MAX_BACKOFF_MS, MonotonicTimeSource,
-    QUARANTINE_FAILURES, STABLE_RESET_MS, SupervisorState, TimeSource,
+    FAILURE_WINDOW_MS, MonotonicTimeSource, QUARANTINE_FAILURES, STABLE_RESET_MS, SupervisorState,
+    TimeSource, reconnect_backoff_ms,
 };
 
 const QUARANTINE_IDLE_POLL_MS: u64 = 2_000;
@@ -688,7 +688,7 @@ impl DeviceClient {
             } else {
                 let attempt = failure_count as u32;
                 supervisor.backoff_attempt = attempt;
-                let delay = reconnect_backoff(attempt).as_millis() as u64;
+                let delay = reconnect_backoff_ms(attempt);
                 (
                     SupervisorState::Backoff {
                         attempt,
@@ -770,13 +770,6 @@ impl DeviceClient {
             }
         }
     }
-}
-
-fn reconnect_backoff(attempt: u32) -> Duration {
-    Duration::from_millis(
-        INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1).min(7))),
-    )
-    .min(Duration::from_millis(MAX_BACKOFF_MS))
 }
 
 fn state_from_wire(
@@ -1313,16 +1306,16 @@ mod tests {
 
     #[test]
     fn reconnect_backoff_progression_and_30s_cap() {
-        assert_eq!(reconnect_backoff(0), Duration::from_millis(250));
-        assert_eq!(reconnect_backoff(1), Duration::from_millis(250));
-        assert_eq!(reconnect_backoff(2), Duration::from_millis(500));
-        assert_eq!(reconnect_backoff(3), Duration::from_millis(1000));
-        assert_eq!(reconnect_backoff(4), Duration::from_millis(2000));
-        assert_eq!(reconnect_backoff(5), Duration::from_millis(4000));
-        assert_eq!(reconnect_backoff(6), Duration::from_millis(8000));
-        assert_eq!(reconnect_backoff(7), Duration::from_millis(16000));
-        assert_eq!(reconnect_backoff(8), Duration::from_millis(30000));
-        assert_eq!(reconnect_backoff(9), Duration::from_millis(30000));
-        assert_eq!(reconnect_backoff(32), Duration::from_millis(30000));
+        assert_eq!(reconnect_backoff_ms(0), 250);
+        assert_eq!(reconnect_backoff_ms(1), 250);
+        assert_eq!(reconnect_backoff_ms(2), 500);
+        assert_eq!(reconnect_backoff_ms(3), 1000);
+        assert_eq!(reconnect_backoff_ms(4), 2000);
+        assert_eq!(reconnect_backoff_ms(5), 4000);
+        assert_eq!(reconnect_backoff_ms(6), 8000);
+        assert_eq!(reconnect_backoff_ms(7), 16000);
+        assert_eq!(reconnect_backoff_ms(8), 30000);
+        assert_eq!(reconnect_backoff_ms(9), 30000);
+        assert_eq!(reconnect_backoff_ms(32), 30000);
     }
 }
