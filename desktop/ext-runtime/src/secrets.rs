@@ -183,10 +183,11 @@ pub struct Oo7SecretBroker {
 
 impl Oo7SecretBroker {
     pub fn new() -> Result<Self, SecretBrokerError> {
-        Ok(Self {})
+        smol::block_on(async { oo7::Keyring::new().await })
+            .map(|_| Self {})
+            .map_err(map_oo7_error)
     }
 }
-
 
 fn map_oo7_error(error: oo7::Error) -> SecretBrokerError {
     match error {
