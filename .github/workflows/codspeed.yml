@@ -26,7 +26,7 @@ jobs:
       matrix:
         include:
           - suite: core
-            command_timeout: 8m
+            command_timeout: 20m
           - suite: config
             command_timeout: 20m
           - suite: wasm
