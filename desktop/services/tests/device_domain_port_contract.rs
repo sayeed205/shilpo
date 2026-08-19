@@ -649,6 +649,10 @@ impl DomainPortDriver for DeviceDomainPortDriver {
             client.mark_ready(now_ms);
         }
     }
+
+    fn owner_replacement_reason(&self) -> CancellationReason {
+        CancellationReason::OwnerReplaced
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -8,8 +8,8 @@ use shilpo_services::notifications::{
     NotificationCommand, NotificationDomainState, NotificationPort, NotificationRejectionReason,
 };
 use shilpo_services::{
-    DomainLifecycle, DomainPortTelemetry, DomainVersion, Notification, NotificationService,
-    StaleUpdateError, SupervisorState, TimeSource,
+    CancellationReason, DomainLifecycle, DomainPortTelemetry, DomainVersion, Notification,
+    NotificationService, StaleUpdateError, SupervisorState, TimeSource,
 };
 use support::domain_port_contract::{
     self, CommandId, CommandOutcome, CommandTicket, DomainPortDriver, DomainSnapshot, ManualClock,
@@ -312,6 +312,10 @@ impl DomainPortDriver for NotificationDomainPortDriver {
 
     fn tick(&self) {
         self.current_adapter().tick(self.clock.now_ms());
+    }
+
+    fn owner_replacement_reason(&self) -> CancellationReason {
+        CancellationReason::OwnerReplaced
     }
 }
 
