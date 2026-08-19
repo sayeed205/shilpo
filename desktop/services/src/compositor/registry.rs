@@ -52,7 +52,6 @@ impl CompositorRegistry {
             CompositorKind::Dwl,
             CompositorKind::River,
             CompositorKind::Kde,
-            CompositorKind::Hyprland,
             CompositorKind::Unknown,
         ] {
             registry.register(
@@ -203,6 +202,14 @@ mod tests {
         let registry = CompositorRegistry::default_registry();
         let (_, name) = registry.select_backend(CompositorKind::Niri);
         assert_eq!(name, "niri");
+    }
+
+    #[test]
+    fn test_default_registry_has_no_hyprland_candidate() {
+        // Hyprland is reserved for #106; the generic backend must not be wired to it here.
+        let registry = CompositorRegistry::default_registry();
+        let (_, name) = registry.select_backend(CompositorKind::Hyprland);
+        assert_eq!(name, "null");
     }
 
     #[test]

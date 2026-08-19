@@ -2,8 +2,11 @@
 //!
 //! Operates over standardized Wayland protocols:
 //! - `ext-workspace-v1` for workspace discovery, active state, and workspace switching.
-//! - `ext-foreign-toplevel-list-v1` for toplevel listing, title/app_id observation, activation and close.
-//! - `zwlr-foreign-toplevel-management-unstable-v1` as fallback for toplevel management.
+//! - `ext-foreign-toplevel-list-v1` for toplevel listing and title/app_id observation. This
+//!   protocol is read-only: it has no `activate`/`close` requests, so it grants
+//!   `WindowIdentity::Fuzzy` but never `can_focus_window`/`can_close_window`.
+//! - `zwlr-foreign-toplevel-management-unstable-v1` for actual window activation and close, and
+//!   as the toplevel-listing fallback where `ext-foreign-toplevel-list-v1` is absent.
 //!
 //! Capabilities are derived from the runtime-bound protocols and degrade closed when disconnected.
 
@@ -66,6 +69,12 @@ impl BoundProtocols {
     /// Derives capabilities from bound protocols and connection lifecycle state.
     ///
     /// Degrades closed: all capabilities are false unless `lifecycle == DomainLifecycle::Ready`.
+    ///
+    /// `ext-foreign-toplevel-list-v1` has no `activate`/`close` requests (only `stop` and
+    /// `destroy`, which release the client-side proxy, not the compositor-side window) — it is
+    /// read-only. Only `wlr-foreign-toplevel-management-v1` can actually focus or close a
+    /// window, so `can_focus_window`/`can_close_window` must gate on `wlr_foreign_toplevel`
+    /// specifically, not on `has_toplevel()`.
     pub fn capabilities(&self, lifecycle: DomainLifecycle) -> CompositorCapabilities {
         if lifecycle != DomainLifecycle::Ready {
             return CompositorCapabilities::default();
@@ -81,9 +90,9 @@ impl BoundProtocols {
             window_identity,
             can_create_workspace: false,
             can_move_window: false,
-            can_focus_window: self.has_toplevel(),
+            can_focus_window: self.wlr_foreign_toplevel,
             can_focus_workspace: self.ext_workspace,
-            can_close_window: self.has_toplevel(),
+            can_close_window: self.wlr_foreign_toplevel,
         }
     }
 }
@@ -391,10 +400,9 @@ fn execute_generic_command(
                     Err(RejectionReason::Unavailable)
                 }
             } else if guard.ext_windows.contains_key(id) {
-                if let Some(ref conn) = guard.connection {
-                    let _ = conn.flush();
-                }
-                Ok(ExecutorAck::Success)
+                // `ext-foreign-toplevel-list-v1` has no `activate` request -- it is read-only.
+                // A window only known via that protocol cannot actually be focused.
+                Err(RejectionReason::Unsupported)
             } else {
                 Err(RejectionReason::InvalidTarget(CompositorTarget::Window(
                     *id,
@@ -408,12 +416,11 @@ fn execute_generic_command(
                     let _ = conn.flush();
                 }
                 Ok(ExecutorAck::Success)
-            } else if let Some(ext_win) = guard.ext_windows.get(id) {
-                ext_win.destroy();
-                if let Some(ref conn) = guard.connection {
-                    let _ = conn.flush();
-                }
-                Ok(ExecutorAck::Success)
+            } else if guard.ext_windows.contains_key(id) {
+                // `ext-foreign-toplevel-list-v1` has no `close` request -- `destroy` only
+                // releases the client-side proxy, it does not ask the compositor to close the
+                // window. A window only known via that protocol cannot actually be closed.
+                Err(RejectionReason::Unsupported)
             } else {
                 Err(RejectionReason::InvalidTarget(CompositorTarget::Window(
                     *id,
@@ -1188,19 +1195,19 @@ mod tests {
 
     #[test]
     fn test_bound_protocols_capability_matrix() {
-        // 1. All protocols present when Ready
-        let both = BoundProtocols {
+        // 1. Workspace + ext-only toplevel listing (read-only: no activate/close requests)
+        let ext_only = BoundProtocols {
             ext_workspace: true,
             ext_foreign_toplevel: true,
             wlr_foreign_toplevel: false,
         };
-        let caps = both.capabilities(DomainLifecycle::Ready);
+        let caps = ext_only.capabilities(DomainLifecycle::Ready);
         assert_eq!(caps.window_identity, WindowIdentity::Fuzzy);
         assert!(caps.can_focus_workspace);
         assert!(!caps.can_create_workspace);
         assert!(!caps.can_move_window);
-        assert!(caps.can_focus_window);
-        assert!(caps.can_close_window);
+        assert!(!caps.can_focus_window);
+        assert!(!caps.can_close_window);
 
         // 2. Only workspace present
         let ws_only = BoundProtocols {
@@ -1233,6 +1240,18 @@ mod tests {
         assert!(!caps_none.can_focus_workspace);
         assert!(!caps_none.can_focus_window);
         assert!(!caps_none.can_close_window);
+
+        // 5. Both toplevel protocols present: wlr grants real control regardless of ext also
+        // being bound.
+        let both = BoundProtocols {
+            ext_workspace: true,
+            ext_foreign_toplevel: true,
+            wlr_foreign_toplevel: true,
+        };
+        let caps_both = both.capabilities(DomainLifecycle::Ready);
+        assert_eq!(caps_both.window_identity, WindowIdentity::Fuzzy);
+        assert!(caps_both.can_focus_window);
+        assert!(caps_both.can_close_window);
     }
 
     #[test]
