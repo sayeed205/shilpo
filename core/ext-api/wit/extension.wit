@@ -104,6 +104,61 @@ interface types {
         reload,
         error-quarantine,
     }
+
+    /// Scope classification of search modes supported by search providers.
+    enum search-mode {
+        default,
+        apps,
+        actions,
+        clipboard,
+        calculator,
+        command,
+        web-search,
+        keybindings,
+    }
+
+    /// Classification of candidate search results.
+    enum search-result-category {
+        window,
+        application,
+        action,
+        clipboard,
+        calculator,
+        command,
+        web-search,
+        file-path,
+        uri,
+        keybinding,
+        custom,
+    }
+
+    /// Icon descriptor for search candidate presentation.
+    variant search-icon {
+        none,
+        named(string),
+        asset(string),
+    }
+
+    /// Inbound query request passed to an extension search provider.
+    record search-request {
+        raw-query: string,
+        query: string,
+        mode: search-mode,
+        generation: u64,
+    }
+
+    /// Search candidate emitted by an extension search provider.
+    record search-candidate {
+        id: string,
+        title: string,
+        subtitle: option<string>,
+        aliases: list<string>,
+        keywords: list<string>,
+        category: search-result-category,
+        icon: option<search-icon>,
+        activation-verb: string,
+        activation-payload: string,
+    }
 }
 
 /// Host import for wallpaper reading and setting.
@@ -592,7 +647,7 @@ interface theme {
 
 /// Canonical Shilpo extension component world.
 world extension {
-    use types.{activation, deactivate-reason, error};
+    use types.{activation, deactivate-reason, error, search-candidate, search-request};
     use events.{extension-event};
     use view.{view-tree};
 
@@ -611,4 +666,5 @@ world extension {
     export deactivate: func(reason: deactivate-reason) -> result<_, error>;
     export on-event: func(event: extension-event) -> result<_, error>;
     export view: func(contribution-id: string) -> result<option<view-tree>, error>;
+    export search: func(contribution-id: string, request: search-request) -> result<list<search-candidate>, error>;
 }

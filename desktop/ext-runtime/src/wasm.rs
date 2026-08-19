@@ -1459,6 +1459,55 @@ impl ExtensionRuntime for WasmRuntime {
         self.deliver_pending_state_events(extension_id, &mut ops);
         Ok(outcome)
     }
+
+    fn search(
+        &mut self,
+        extension_id: &ExtensionId,
+        contribution_id: &str,
+        request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+        budget: RuntimeBudget,
+    ) -> Result<
+        Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>,
+        RuntimeError,
+    > {
+        let span = tracing::info_span!(
+            target: "shilpo_profile",
+            "extension_wasm_call",
+            extension_id = %extension_id,
+            operation = "search",
+            fuel = budget.fuel,
+            memory_limit = budget.max_memory_bytes,
+            outcome = "failure",
+        );
+        let _enter = span.enter();
+        let instance = self.instance_mut(extension_id)?;
+        Self::prepare_call(instance, budget)?;
+        let wit_request = convert_search_request_to_wit(request);
+        let result = instance
+            .extension
+            .call_search(&mut instance.store, contribution_id, &wit_request)
+            .map_err(|error| classify_wasmtime_error("search call failed", error))?;
+        let mut ops = Vec::new();
+        let outcome = match result {
+            Ok(candidates) => {
+                span.record("outcome", "success");
+                candidates
+                    .into_iter()
+                    .take(64)
+                    .map(convert_search_candidate_from_wit)
+                    .collect()
+            }
+            Err(err) => {
+                span.record("outcome", "failure");
+                return Err(RuntimeError::with_kind(
+                    RuntimeFailureKind::InvalidOutput,
+                    format!("search failed: {}", err.message),
+                ));
+            }
+        };
+        self.deliver_pending_state_events(extension_id, &mut ops);
+        Ok(outcome)
+    }
 }
 
 impl Drop for WasmRuntime {
@@ -2618,6 +2667,69 @@ mod bar_menu_component_fixture_tests {
             panic!("second row child must be text");
         };
         assert_eq!(updated_text.content, "Count: 43");
+    }
+}
+
+fn convert_search_request_to_wit(
+    req: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+) -> self::shilpo::extension::types::SearchRequest {
+    use self::shilpo::extension::types as wit_types;
+    use shilpo_ext_api::bindings::shilpo::extension::types as api_types;
+
+    let mode = match req.mode {
+        api_types::SearchMode::Default => wit_types::SearchMode::Default,
+        api_types::SearchMode::Apps => wit_types::SearchMode::Apps,
+        api_types::SearchMode::Actions => wit_types::SearchMode::Actions,
+        api_types::SearchMode::Clipboard => wit_types::SearchMode::Clipboard,
+        api_types::SearchMode::Calculator => wit_types::SearchMode::Calculator,
+        api_types::SearchMode::Command => wit_types::SearchMode::Command,
+        api_types::SearchMode::WebSearch => wit_types::SearchMode::WebSearch,
+        api_types::SearchMode::Keybindings => wit_types::SearchMode::Keybindings,
+    };
+    wit_types::SearchRequest {
+        raw_query: req.raw_query.clone(),
+        query: req.query.clone(),
+        mode,
+        generation: req.generation,
+    }
+}
+
+fn convert_search_candidate_from_wit(
+    cand: self::shilpo::extension::types::SearchCandidate,
+) -> shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate {
+    use self::shilpo::extension::types as wit_types;
+    use shilpo_ext_api::bindings::shilpo::extension::types as api_types;
+
+    let category = match cand.category {
+        wit_types::SearchResultCategory::Window => api_types::SearchResultCategory::Window,
+        wit_types::SearchResultCategory::Application => {
+            api_types::SearchResultCategory::Application
+        }
+        wit_types::SearchResultCategory::Action => api_types::SearchResultCategory::Action,
+        wit_types::SearchResultCategory::Clipboard => api_types::SearchResultCategory::Clipboard,
+        wit_types::SearchResultCategory::Calculator => api_types::SearchResultCategory::Calculator,
+        wit_types::SearchResultCategory::Command => api_types::SearchResultCategory::Command,
+        wit_types::SearchResultCategory::WebSearch => api_types::SearchResultCategory::WebSearch,
+        wit_types::SearchResultCategory::FilePath => api_types::SearchResultCategory::FilePath,
+        wit_types::SearchResultCategory::Uri => api_types::SearchResultCategory::Uri,
+        wit_types::SearchResultCategory::Keybinding => api_types::SearchResultCategory::Keybinding,
+        wit_types::SearchResultCategory::Custom => api_types::SearchResultCategory::Custom,
+    };
+    let icon = cand.icon.map(|i| match i {
+        wit_types::SearchIcon::None => api_types::SearchIcon::None,
+        wit_types::SearchIcon::Named(s) => api_types::SearchIcon::Named(s),
+        wit_types::SearchIcon::Asset(s) => api_types::SearchIcon::Asset(s),
+    });
+    api_types::SearchCandidate {
+        id: cand.id,
+        title: cand.title,
+        subtitle: cand.subtitle,
+        aliases: cand.aliases,
+        keywords: cand.keywords,
+        category,
+        icon,
+        activation_verb: cand.activation_verb,
+        activation_payload: cand.activation_payload,
     }
 }
 

@@ -37,8 +37,8 @@ impl SearchProvider for ActionSearchProvider {
         ProviderId::from_static("action-search")
     }
 
-    fn declared_modes(&self) -> &'static [SearchMode] {
-        &[SearchMode::Default, SearchMode::Actions]
+    fn declared_modes(&self) -> std::borrow::Cow<'static, [SearchMode]> {
+        std::borrow::Cow::Borrowed(&[SearchMode::Default, SearchMode::Actions])
     }
 
     fn prefix_icon(&self, mode: SearchMode) -> Option<IconName> {
@@ -139,7 +139,7 @@ mod tests {
     fn test_action_search_emits_executable_actions() {
         let provider = ActionSearchProvider::new(sample_actions());
         assert_eq!(
-            provider.declared_modes(),
+            provider.declared_modes().as_ref(),
             &[SearchMode::Default, SearchMode::Actions]
         );
         assert_eq!(

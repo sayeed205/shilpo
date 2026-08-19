@@ -43,6 +43,7 @@ name = "Showcase Side Panel"
 [[contributions.search_providers]]
 id = "search-commands"
 name = "Showcase Search"
+modes = ["default", "command"]
 
 [[contributions.actions]]
 id = "toggle-power"
@@ -98,3 +99,6 @@ actions = ["toggle-power"]
 kind = "network:http"
 hosts = ["api.example.com"]
 paths = ["/showcase"]
+
+[[capabilities]]
+kind = "search:provide"

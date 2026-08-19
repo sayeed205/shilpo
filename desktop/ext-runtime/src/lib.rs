@@ -198,6 +198,8 @@ mod tests {
           (func (export "on-event") (param {on_event}) (result i32)
             {on_event_body})
           (func (export "view") (param i32 i32) (result i32)
+            i32.const 0)
+          (func (export "search") (param i32 i32 i32 i32 i32 i32 i32 i64) (result i32)
             i32.const 0))
         "#
         )
@@ -844,6 +846,19 @@ mod tests {
             _budget: RuntimeBudget,
         ) -> Result<Option<ViewTree>, RuntimeError> {
             Ok(None)
+        }
+
+        fn search(
+            &mut self,
+            _extension_id: &ExtensionId,
+            _contribution_id: &str,
+            _request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+            _budget: RuntimeBudget,
+        ) -> Result<
+            Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>,
+            RuntimeError,
+        > {
+            Ok(Vec::new())
         }
     }
 

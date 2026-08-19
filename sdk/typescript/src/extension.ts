@@ -7,6 +7,8 @@ import type {
   HttpResponseEvent,
   InputEvent,
   LocationResponseEvent,
+  SearchCandidate,
+  SearchRequest,
   StateEvent,
   ViewTree,
   WallpaperRequest,
@@ -26,6 +28,11 @@ export interface ExtensionDefinition {
     contributionId: string,
     host: HostFacade,
   ) => ViewTree | ViewElement | undefined | null;
+  search?: (
+    contributionId: string,
+    request: SearchRequest,
+    host: HostFacade,
+  ) => SearchCandidate[] | undefined | null;
 
   // Specific event handlers for ergonomics
   onInput?: (event: InputEvent, host: HostFacade) => void;
@@ -43,6 +50,7 @@ export interface ExtensionExports {
   deactivate: (reason: DeactivateReason) => void;
   onEvent: (event: ExtensionEvent) => void;
   view: (contributionId: string) => ViewTree | undefined;
+  search: (contributionId: string, request: SearchRequest) => SearchCandidate[];
 }
 
 function sanitizeErrorMessage(err: unknown): string {
@@ -162,6 +170,16 @@ export function defineExtension(
           return buildViewTree(children[0]!);
         }
         return buildViewTree(result as ViewNodeSpec);
+      });
+    },
+
+    search(contributionId: string, request: SearchRequest): SearchCandidate[] {
+      return runSync(() => {
+        if (!definition.search) {
+          return [];
+        }
+        const result = definition.search(contributionId, request, host);
+        return result ?? [];
       });
     },
   };

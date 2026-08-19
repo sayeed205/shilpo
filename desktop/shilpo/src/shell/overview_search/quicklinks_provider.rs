@@ -47,13 +47,13 @@ impl SearchProvider for QuicklinksSearchProvider {
         ProviderId::from_static("quicklinks-search")
     }
 
-    fn declared_modes(&self) -> &'static [SearchMode] {
-        &[
+    fn declared_modes(&self) -> std::borrow::Cow<'static, [SearchMode]> {
+        std::borrow::Cow::Borrowed(&[
             SearchMode::Default,
             SearchMode::Command,
             SearchMode::WebSearch,
             SearchMode::Keybindings,
-        ]
+        ])
     }
 
     fn prefix_icon(&self, mode: SearchMode) -> Option<IconName> {
@@ -316,7 +316,7 @@ mod tests {
     fn test_quicklinks_declared_modes_and_prefix_icons() {
         let provider = QuicklinksSearchProvider::new(test_keybindings());
         assert_eq!(
-            provider.declared_modes(),
+            provider.declared_modes().as_ref(),
             &[
                 SearchMode::Default,
                 SearchMode::Command,

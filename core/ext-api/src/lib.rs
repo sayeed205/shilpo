@@ -22,9 +22,10 @@ pub use manifest::{
     ActionContribution, BackgroundTaskContribution, BarMenuContribution, BarWidgetContribution,
     Capability, CapabilityKind, Contributions, DesktopWidgetContribution, ExtensionManifest,
     LibraryConfig, ManifestError, SUPPORTED_API_VERSION, SUPPORTED_SCHEMA_VERSION,
-    SearchProviderContribution, SecretPurpose, SecretRef, SettingsPageContribution,
-    SidePanelContribution, Subscription, WallpaperMode, WallpaperProviderContribution,
-    WallpaperTargetKind, valid_virtual_path_pattern, wildcard_matches,
+    SearchProviderContribution, SearchProviderMode, SecretPurpose, SecretRef,
+    SettingsPageContribution, SidePanelContribution, Subscription, WallpaperMode,
+    WallpaperProviderContribution, WallpaperTargetKind, valid_virtual_path_pattern,
+    wildcard_matches,
 };
 pub use view::{
     Alignment, BadgeNode, ButtonNode, ContainerDirection, ContainerNode, IconButtonNode, IconNode,
@@ -50,6 +51,10 @@ mod contract_tests {
 
         [[subscriptions]]
         event = "timer_fired"
+
+        [[capabilities]]
+        kind = "events:subscribe"
+        events = ["timer_fired"]
     "#;
 
     #[test]

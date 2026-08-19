@@ -986,23 +986,6 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     wallpaper_targets: None,
                 });
             }
-            for contrib in &m.contributions.search_providers {
-                descriptors.push(ContributionDescriptor {
-                    id: CanonicalId::new(ext_id.clone(), contrib.id.clone()),
-                    extension_name: m.name.clone(),
-                    name: contrib.name.clone(),
-                    surface: ContributionSurface::Search,
-                    runtime_kind: ExtensionRuntimeKind::Wasm,
-                    settings_schema: None,
-                    default_size: None,
-                    minimum_size: None,
-                    bar_widget: None,
-                    action: None,
-                    default_binding: None,
-                    wallpaper_modes: None,
-                    wallpaper_targets: None,
-                });
-            }
             for contrib in &m.contributions.actions {
                 descriptors.push(ContributionDescriptor {
                     id: CanonicalId::new(ext_id.clone(), contrib.id.clone()),
@@ -1999,8 +1982,9 @@ mod tests {
             id = "io.github.search.web"
             name = "Web Search Engine"
             version = "1.0.0"
+            schema_version = 1
 
-            [[contributions.search_providers]]
+            [[contributions.actions]]
             id = "web-provider"
             name = "Web Search Provider"
         "#;
@@ -2025,20 +2009,20 @@ mod tests {
         );
 
         let snapshot = engine.build_snapshot(false);
-        let search_descriptors: Vec<_> = snapshot
+        let action_descriptors: Vec<_> = snapshot
             .descriptors
             .iter()
-            .filter(|d| d.surface == ContributionSurface::Search)
+            .filter(|d| d.surface == ContributionSurface::Action)
             .collect();
 
-        assert_eq!(search_descriptors.len(), 1);
-        let desc = search_descriptors[0];
+        assert_eq!(action_descriptors.len(), 1);
+        let desc = action_descriptors[0];
         assert_eq!(desc.id.to_string(), "io.github.search.web/web-provider");
         assert_eq!(desc.id.extension_id.as_str(), "io.github.search.web");
         assert_eq!(desc.id.contribution_id.as_str(), "web-provider");
         assert_eq!(desc.extension_name, "Web Search Engine");
         assert_eq!(desc.name, "Web Search Provider");
-        assert_eq!(desc.surface, ContributionSurface::Search);
+        assert_eq!(desc.surface, ContributionSurface::Action);
         assert_eq!(desc.runtime_kind, ExtensionRuntimeKind::Wasm);
     }
 

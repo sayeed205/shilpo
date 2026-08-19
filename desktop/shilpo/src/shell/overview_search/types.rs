@@ -6,6 +6,12 @@ use shilpo_ui::IconName;
 use super::{parser::SearchMode, sink::SearchSink};
 use crate::actions::ActionDescriptor;
 
+/// Default bound on candidates collected from a single trusted (built-in) provider's
+/// scratch sink before ranking. Must comfortably exceed any realistic single provider's
+/// output (hundreds of installed applications, dozens of actions, clipboard history,
+/// keybindings) so a real candidate is never dropped before the ranker gets to see it.
+pub const DEFAULT_SCRATCH_CAPACITY: usize = 4096;
+
 /// Unique identifier for a registered search provider.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ProviderId(Cow<'static, str>);
@@ -106,6 +112,10 @@ pub enum SearchResultIcon {
     AppIcon(Option<PathBuf>),
     Named(IconName),
     Initial(char),
+    ExtensionAsset {
+        extension_id: shilpo_ext_api::ExtensionId,
+        relative_path: PathBuf,
+    },
 }
 
 /// Immutable request carrying monotonic query generation and parsed query text.
@@ -159,7 +169,13 @@ pub enum ActionResult {
     OpenPath(PathBuf),
     OpenUri(String),
     CopyKeybinding(String),
-    Handled { close_overview: bool },
+    Handled {
+        close_overview: bool,
+    },
+    InvokeExtension {
+        canonical: shilpo_ext_api::CanonicalId,
+        payload: String,
+    },
 }
 
 /// Error type returned during search query execution or item activation.
@@ -244,13 +260,21 @@ pub trait SearchProvider: Send + Sync {
     ///
     /// The coordinator inspects declared modes before dispatching a query and
     /// only spawns search workers for providers declaring support for `request.mode`.
-    fn declared_modes(&self) -> &'static [SearchMode] {
-        &[SearchMode::Default]
+    fn declared_modes(&self) -> Cow<'static, [SearchMode]> {
+        Cow::Borrowed(&[SearchMode::Default])
     }
 
     /// Returns the prefix icon for a specific search mode, if declared.
     fn prefix_icon(&self, _mode: SearchMode) -> Option<IconName> {
         None
+    }
+
+    /// Returns the maximum number of candidates this provider's scratch sink accepts
+    /// before ranking. Untrusted providers (e.g. extensions) should override this with
+    /// a much smaller bound than the default, so a hostile or buggy provider cannot
+    /// force the ranker to score thousands of candidates per keystroke.
+    fn scratch_capacity(&self) -> usize {
+        DEFAULT_SCRATCH_CAPACITY
     }
 
     /// Executes search and streams candidates into the provided sink.

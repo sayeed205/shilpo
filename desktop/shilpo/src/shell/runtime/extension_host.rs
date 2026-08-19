@@ -211,39 +211,6 @@ impl ExtensionHost {
         }
     }
 
-    pub(crate) fn send_lifecycle_for(
-        &self,
-        surface: ContributionSurface,
-        mounted: bool,
-        width: f32,
-        height: f32,
-    ) {
-        if let Some(ext) = &self.extensions {
-            let expected_gen = ext.generation();
-            for descriptor in self.descriptors_for(surface) {
-                let event = if mounted {
-                    ExtensionEvent::ContributionMounted {
-                        contribution_id: descriptor.id.contribution_id.to_string(),
-                        instance_id: None,
-                        width,
-                        height,
-                    }
-                } else {
-                    ExtensionEvent::ContributionUnmounted {
-                        contribution_id: descriptor.id.contribution_id.to_string(),
-                        instance_id: None,
-                    }
-                };
-                if let Err(error) = ext.send_command(ExtensionCommand::Lifecycle {
-                    expected: expected_gen,
-                    event,
-                }) {
-                    tracing::warn!(%error, "extension lifecycle event was not queued");
-                }
-            }
-        }
-    }
-
     pub(crate) fn send_instance_reconciliation(&mut self, desired: Vec<ContributionInstance>) {
         if let Some(ext) = &self.extensions
             && let Err(error) = ext.send_command(ExtensionCommand::ReconcileInstances {
@@ -850,18 +817,6 @@ impl ShellRuntime {
         cx.global_mut::<Self>()
             .extension_host_mut()
             .send_event_to_extension(extension_id, event);
-    }
-
-    pub(crate) fn dispatch_surface_lifecycle(
-        cx: &mut App,
-        surface: ContributionSurface,
-        mounted: bool,
-        width: f32,
-        height: f32,
-    ) {
-        cx.global_mut::<Self>()
-            .extension_host_mut()
-            .send_lifecycle_for(surface, mounted, width, height);
     }
 }
 

@@ -383,13 +383,14 @@ fn inspect_extension_full_with_timeout(
     }
 
     // 2. Manifest Versioning & Compatibility
-    if manifest.schema_version != 1 {
+    if manifest.schema_version != shilpo_ext_api::SUPPORTED_SCHEMA_VERSION {
         diagnostics.push(
             LintDiagnostic::error(
                 "manifest.unsupported-schema",
                 format!(
-                    "manifest schema_version {} is unsupported; expected 1",
-                    manifest.schema_version
+                    "manifest schema_version {} is unsupported; expected {}",
+                    manifest.schema_version,
+                    shilpo_ext_api::SUPPORTED_SCHEMA_VERSION,
                 ),
             )
             .with_path("extension.toml"),
