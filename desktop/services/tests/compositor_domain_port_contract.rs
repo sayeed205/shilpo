@@ -603,6 +603,9 @@ impl DomainPortDriver for CompositorDomainPortDriver {
         *active_workspace.lock().unwrap() = None;
         *self.timeout_gate.lock().unwrap() = None;
         *self.timeout_gate_rx_slot.lock().unwrap() = None;
+
+        let drained: Vec<DriverPendingItem> = self.pending.lock().unwrap().drain(..).collect();
+
         let new_service = make_service(
             self.capacity,
             &self.clock,
@@ -610,7 +613,19 @@ impl DomainPortDriver for CompositorDomainPortDriver {
             self.timeout_gate_rx_slot.clone(),
         );
         *self.service.lock().unwrap() = new_service;
-        self.pending.lock().unwrap().clear();
+
+        for item in &drained {
+            for _ in 0..100_000 {
+                if item.ticket.is_completed() {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            assert!(
+                item.ticket.is_completed(),
+                "pending ticket must reach a terminal outcome upon restart_containing_process"
+            );
+        }
     }
 
     fn backoff_delay_ms(&self, attempt: u32) -> u64 {
@@ -620,6 +635,12 @@ impl DomainPortDriver for CompositorDomainPortDriver {
     fn tick(&self) {
         let now_ms = self.clock.now_ms();
         self.current_service().tick(now_ms);
+    }
+
+    // Compositor has no externally-restartable owner (see #235); reconnection
+    // is internal to the backend and cancels in-flight/queued commands with Reconnect.
+    fn owner_replacement_reason(&self) -> CancellationReason {
+        CancellationReason::Reconnect
     }
 }
 
@@ -756,43 +777,13 @@ async fn scenario_14_different_replace_latest_keys_do_not_replace_each_other() {
     );
 }
 
-// DISCLOSURE (scenario_15): not registered for compositor. Two findings from
-// investigating why, both discovered while fixing #230's `report_owner_failure`/
-// `reset_quarantine` `observe_snapshot` gap (see the fix's PR history for the
-// original bug: those two methods used to `tx.send` directly, bypassing the
-// broker entirely, which is what let this scenario appear to pass before).
-//
-// 1. `CancellationReason::OwnerReplaced` appears structurally unreachable for
-//    compositor's real broker. `CompositorCommandBroker::observe_snapshot`
-//    (broker.rs:861-868, pre-existing, unrelated to #230) cancels everything
-//    queued/active with `Reconnect` on any `Ready` -> non-`Ready` transition.
-//    `set_installed_generation` (broker.rs:741, also pre-existing) is what
-//    produces `OwnerReplaced`, but every real path to it in
-//    `run_niri_listener` is only reached *after* a prior failure already put
-//    the connection in `Reconnecting` -- so the queue is always already
-//    drained by `Reconnect` before a new generation is ever installed. This
-//    was checked against the real listener loop, not just the offline test
-//    driver: "begin start" (which bumps `owner_generation` and calls
-//    `set_installed_generation`) is only reached via the `tick`-driven
-//    `Backoff -> Starting` transition, which itself only follows a failure.
-//    Submitting a command while not-`Ready` is also rejected outright
-//    (`Unavailable`, broker.rs:917), so there is no window to queue something
-//    that survives to see `OwnerReplaced` either. This looks like a genuine,
-//    pre-existing property of compositor's single-owned-service architecture
-//    (unlike device, whose "owner" is an independently-restartable D-Bus
-//    daemon and can genuinely announce a new identity before the old one is
-//    detected as failed) -- worth its own issue, not something #230 asked
-//    for or something to force a test around here.
-//
-// 2. `restart_containing_process` (this file) discards the old service and
-//    broker outright; any tickets still outstanding on the old broker are
-//    never resolved with any `CancellationReason` at all -- they are simply
-//    dropped along with the old `Arc`. Also out of scope for #230, noted for
-//    a future pass.
-//
-// The shared `scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands`
-// (support/domain_port_contract.rs) is untouched and continues to cover
-// device and notification as written.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands() {
+    let driver = CompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands(
+        &driver,
+    );
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds() {
@@ -1407,6 +1398,9 @@ impl DomainPortDriver for GenericCompositorDomainPortDriver {
         *active_workspace.lock().unwrap() = None;
         *self.timeout_gate.lock().unwrap() = None;
         *self.timeout_gate_rx_slot.lock().unwrap() = None;
+
+        let drained: Vec<DriverPendingItem> = self.pending.lock().unwrap().drain(..).collect();
+
         let new_service = make_generic_service(
             self.capacity,
             &self.clock,
@@ -1414,7 +1408,19 @@ impl DomainPortDriver for GenericCompositorDomainPortDriver {
             self.timeout_gate_rx_slot.clone(),
         );
         *self.service.lock().unwrap() = new_service;
-        self.pending.lock().unwrap().clear();
+
+        for item in &drained {
+            for _ in 0..100_000 {
+                if item.ticket.is_completed() {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            assert!(
+                item.ticket.is_completed(),
+                "pending ticket must reach a terminal outcome upon restart_containing_process"
+            );
+        }
     }
 
     fn backoff_delay_ms(&self, attempt: u32) -> u64 {
@@ -1424,6 +1430,12 @@ impl DomainPortDriver for GenericCompositorDomainPortDriver {
     fn tick(&self) {
         let now_ms = self.clock.now_ms();
         self.current_service().tick(now_ms);
+    }
+
+    // Compositor has no externally-restartable owner (see #235); reconnection
+    // is internal to the backend and cancels in-flight/queued commands with Reconnect.
+    fn owner_replacement_reason(&self) -> CancellationReason {
+        CancellationReason::Reconnect
     }
 }
 
@@ -1523,6 +1535,14 @@ async fn generic_scenario_13_replace_latest_supersedes_pending_command_with_same
 async fn generic_scenario_14_different_replace_latest_keys_do_not_replace_each_other() {
     let driver = GenericCompositorDomainPortDriver::new(10);
     domain_port_contract::scenario_14_different_replace_latest_keys_do_not_replace_each_other(
+        &driver,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands(
         &driver,
     );
 }
@@ -2011,6 +2031,9 @@ impl DomainPortDriver for HyprlandCompositorDomainPortDriver {
         *active_workspace.lock().unwrap() = None;
         *self.timeout_gate.lock().unwrap() = None;
         *self.timeout_gate_rx_slot.lock().unwrap() = None;
+
+        let drained: Vec<DriverPendingItem> = self.pending.lock().unwrap().drain(..).collect();
+
         let new_service = make_hyprland_service(
             self.capacity,
             &self.clock,
@@ -2018,7 +2041,19 @@ impl DomainPortDriver for HyprlandCompositorDomainPortDriver {
             self.timeout_gate_rx_slot.clone(),
         );
         *self.service.lock().unwrap() = new_service;
-        self.pending.lock().unwrap().clear();
+
+        for item in &drained {
+            for _ in 0..100_000 {
+                if item.ticket.is_completed() {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            assert!(
+                item.ticket.is_completed(),
+                "pending ticket must reach a terminal outcome upon restart_containing_process"
+            );
+        }
     }
 
     fn backoff_delay_ms(&self, attempt: u32) -> u64 {
@@ -2028,6 +2063,12 @@ impl DomainPortDriver for HyprlandCompositorDomainPortDriver {
     fn tick(&self) {
         let now_ms = self.clock.now_ms();
         self.current_service().tick(now_ms);
+    }
+
+    // Compositor has no externally-restartable owner (see #235); reconnection
+    // is internal to the backend and cancels in-flight/queued commands with Reconnect.
+    fn owner_replacement_reason(&self) -> CancellationReason {
+        CancellationReason::Reconnect
     }
 }
 
@@ -2133,6 +2174,15 @@ async fn hyprland_scenario_14_different_replace_latest_keys_do_not_replace_each_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hyprland_scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands()
+{
+    let driver = HyprlandCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_commands(
+        &driver,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hyprland_scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds() {
     let driver = HyprlandCompositorDomainPortDriver::new(10);
     domain_port_contract::scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds(
@@ -2170,4 +2220,95 @@ async fn hyprland_scenario_20_telemetry_reports_generation_queue_depth_capacity_
 async fn hyprland_scenario_21_reconciled_and_timed_out_commands_have_typed_terminal_outcomes() {
     let driver = HyprlandCompositorDomainPortDriver::new(10);
     domain_port_contract::scenario_21_reconciled_and_timed_out_commands_have_typed_terminal_outcomes(&driver);
+}
+
+// ---------------------------------------------------------------------------
+// Process Restart Ordering Regression Tests (#235)
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_compositor_restart_containing_process_resolves_queued_commands() {
+    let driver = CompositorDomainPortDriver::new(10);
+    driver.begin_start();
+    driver.mark_ready();
+
+    let cmd1 = driver.lossless_command("cmd-queued-1", 10);
+    let cmd2 = driver.lossless_command("cmd-queued-2", 20);
+    let t1 = driver.submit_command(cmd1).unwrap();
+    let t2 = driver.submit_command(cmd2).unwrap();
+
+    driver.restart_containing_process();
+
+    assert!(t1.is_completed());
+    assert!(t2.is_completed());
+    assert_eq!(
+        t1.outcome(),
+        Some(CommandOutcome::Cancelled {
+            reason: CancellationReason::Shutdown,
+        })
+    );
+    assert_eq!(
+        t2.outcome(),
+        Some(CommandOutcome::Cancelled {
+            reason: CancellationReason::Shutdown,
+        })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_generic_restart_containing_process_resolves_queued_commands() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    driver.begin_start();
+    driver.mark_ready();
+
+    let cmd1 = driver.lossless_command("cmd-queued-1", 10);
+    let cmd2 = driver.lossless_command("cmd-queued-2", 20);
+    let t1 = driver.submit_command(cmd1).unwrap();
+    let t2 = driver.submit_command(cmd2).unwrap();
+
+    driver.restart_containing_process();
+
+    assert!(t1.is_completed());
+    assert!(t2.is_completed());
+    assert_eq!(
+        t1.outcome(),
+        Some(CommandOutcome::Cancelled {
+            reason: CancellationReason::Shutdown,
+        })
+    );
+    assert_eq!(
+        t2.outcome(),
+        Some(CommandOutcome::Cancelled {
+            reason: CancellationReason::Shutdown,
+        })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_hyprland_restart_containing_process_resolves_queued_commands() {
+    let driver = HyprlandCompositorDomainPortDriver::new(10);
+    driver.begin_start();
+    driver.mark_ready();
+
+    let cmd1 = driver.lossless_command("cmd-queued-1", 10);
+    let cmd2 = driver.lossless_command("cmd-queued-2", 20);
+    let t1 = driver.submit_command(cmd1).unwrap();
+    let t2 = driver.submit_command(cmd2).unwrap();
+
+    driver.restart_containing_process();
+
+    assert!(t1.is_completed());
+    assert!(t2.is_completed());
+    assert_eq!(
+        t1.outcome(),
+        Some(CommandOutcome::Cancelled {
+            reason: CancellationReason::Shutdown,
+        })
+    );
+    assert_eq!(
+        t2.outcome(),
+        Some(CommandOutcome::Cancelled {
+            reason: CancellationReason::Shutdown,
+        })
+    );
 }

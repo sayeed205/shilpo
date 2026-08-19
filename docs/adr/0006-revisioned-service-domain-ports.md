@@ -278,6 +278,16 @@ Consumer semantics remain identical regardless of owner deployment:
 - **In-process (Task):** Narrow cloneable handle serves as the port. Supervisor task owns lifecycle and publishes watch
   snapshots and command outcomes. `owner_generation` is assigned on task spawn.
 
+### 10.1. Owner replacement and cancellation semantics
+
+Not every domain port has an externally-restartable owner independent of its broker/supervisor — process-owned (D-Bus)
+ports do, while in-process single-owned ports (like compositor) do not. Reconnection in in-process domains occurs
+entirely within the long-lived backend, producing `CancellationReason::Reconnect` rather than
+`CancellationReason::OwnerReplaced`.
+
+Domain ports declare which `CancellationReason` they produce on owner replacement via `owner_replacement_reason()` on
+`DomainPortDriver`, rather than the conformance suite assuming uniformity (see #235).
+
 ---
 
 ## 11. Observability
@@ -316,7 +326,7 @@ The test harness enforces 20 deterministic scenarios:
 12. Lossless mailbox rejects overflow without dropping accepted commands.
 13. Replace-latest supersedes pending command with same key and emits terminal cancellation.
 14. Different replace-latest keys do not replace each other.
-15. Owner replacement cancels old-generation pending/in-flight commands.
+15. Owner replacement cancels old-generation pending/in-flight commands (per-port cancellation reason).
 16. Backoff is exponential from 250 ms and capped at 30 seconds.
 17. Five failures inside 60 seconds enter quarantine.
 18. Five minutes stable clears rolling failure window but preserves session restart telemetry.

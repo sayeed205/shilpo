@@ -253,6 +253,7 @@ pub trait DomainPortDriver {
     fn backoff_delay_ms(&self, attempt: u32) -> u64;
     #[allow(dead_code)]
     fn tick(&self);
+    fn owner_replacement_reason(&self) -> CancellationReason;
 
     // Factory methods
     fn default_payload(&self) -> Self::Payload;
@@ -759,6 +760,10 @@ impl DomainPortDriver for ReferenceDomainPort {
         let mut state = self.state.lock().unwrap();
         Self::check_clock_state(&mut state, self.clock.now_ms());
     }
+
+    fn owner_replacement_reason(&self) -> CancellationReason {
+        CancellationReason::OwnerReplaced
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1060,7 +1065,7 @@ pub fn scenario_15_owner_replacement_cancels_old_generation_pending_in_flight_co
         assert_eq!(
             ticket.outcome(),
             Some(CommandOutcome::Cancelled {
-                reason: CancellationReason::OwnerReplaced
+                reason: driver.owner_replacement_reason(),
             })
         );
         assert_eq!(ticket.completion_attempts(), 1);
