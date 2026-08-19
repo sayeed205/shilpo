@@ -194,3 +194,14 @@ ignored = ["log", "anyhow", "serde"]
 [patch.crates-io]
 # Use stacker's psm version which may have better WASM support
 psm = { git = "https://github.com/rust-lang/stacker", branch = "master" }
+
+# Fork of gpui adding ext-session-lock-v1 support (WindowKind::SessionLock), used to implement
+# shilpo's lock screen (#135). Tracks https://github.com/sayeed205/shilpo/issues/262. Pinned by
+# exact rev, never by branch, so this build is reproducible regardless of later fork commits.
+# Also fixes gpui previously being an unpinned git dependency.
+[patch."https://github.com/zed-industries/zed"]
+gpui = { git = "https://github.com/sayeed205/zed", rev = "9e336ac", version = "=0.2.2" }
+gpui_platform = { git = "https://github.com/sayeed205/zed", rev = "9e336ac", version = "=0.1.0" }
+gpui_macros = { git = "https://github.com/sayeed205/zed", rev = "9e336ac", version = "=0.1.0" }
+gpui_web = { git = "https://github.com/sayeed205/zed", rev = "9e336ac", version = "=0.1.0" }
+reqwest_client = { git = "https://github.com/sayeed205/zed", rev = "9e336ac", version = "=0.1.0" }

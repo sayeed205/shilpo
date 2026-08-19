@@ -2254,7 +2254,7 @@ mod tests {
     ) {
         let frame_drained = Rc::new(Cell::new(false));
         let handle = cx.add_window(|_, _| LifecycleTestView);
-        cx.update_window(handle.into(), |_, window, app| window.draw(app).clear(app))
+        cx.update_window(handle.into(), |_, window, app| window.draw(app).clear())
             .unwrap();
 
         cx.update(|app| {
