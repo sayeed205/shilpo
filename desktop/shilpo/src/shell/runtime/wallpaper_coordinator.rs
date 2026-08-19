@@ -458,6 +458,7 @@ mod tests {
             default_binding: None,
             wallpaper_modes: Some(vec![WallpaperMode::Manual, WallpaperMode::Slideshow]),
             wallpaper_targets: Some(vec![WallpaperTargetKind::Global]),
+            search_modes: None,
         }
     }
 

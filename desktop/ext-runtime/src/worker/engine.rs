@@ -523,6 +523,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                 extension_id,
                 ..
             } => self.handle_dev_unload(&session_id, &extension_id),
+            ExtensionCommand::Search { .. } => None,
             ExtensionCommand::Shutdown => {
                 self.script_runtime.shutdown();
                 None
@@ -548,6 +549,39 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
             _span.record("outcome", "success");
         }
         result
+    }
+
+    pub fn handle_search(
+        &mut self,
+        canonical: &CanonicalId,
+        request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+        budget: crate::RuntimeBudget,
+    ) -> Result<
+        Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>,
+        super::protocol::WorkerSearchError,
+    > {
+        self.session
+            .host
+            .search(canonical, request, budget)
+            .map_err(|err| match err {
+                crate::adapter::HostError::NotRegistered(id) => {
+                    super::protocol::WorkerSearchError::NotRegistered(id)
+                }
+                crate::adapter::HostError::UnknownContribution(cid) => {
+                    super::protocol::WorkerSearchError::UnknownContribution(cid)
+                }
+                crate::adapter::HostError::Disabled(id) => {
+                    super::protocol::WorkerSearchError::Disabled(id)
+                }
+                crate::adapter::HostError::Runtime(runtime_err) => {
+                    if runtime_err.kind() == crate::RuntimeFailureKind::Timeout {
+                        super::protocol::WorkerSearchError::Timeout
+                    } else {
+                        super::protocol::WorkerSearchError::Guest(runtime_err.message().to_string())
+                    }
+                }
+                other => super::protocol::WorkerSearchError::Other(other.to_string()),
+            })
     }
 
     fn reconcile_instances(&mut self, desired: Vec<ContributionInstance>) -> ExtensionChanges {
@@ -901,6 +935,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_binding: None,
                     wallpaper_modes: None,
                     wallpaper_targets: None,
+                    search_modes: None,
                 });
             }
             for contrib in &m.contributions.bar_menus {
@@ -918,6 +953,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_binding: None,
                     wallpaper_modes: None,
                     wallpaper_targets: None,
+                    search_modes: None,
                 });
             }
             for contrib in &m.contributions.desktop_widgets {
@@ -943,6 +979,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_binding: None,
                     wallpaper_modes: None,
                     wallpaper_targets: None,
+                    search_modes: None,
                 });
             }
             for contrib in &m.contributions.settings_pages {
@@ -967,6 +1004,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_binding: None,
                     wallpaper_modes: None,
                     wallpaper_targets: None,
+                    search_modes: None,
                 });
             }
             for contrib in &m.contributions.side_panels {
@@ -984,6 +1022,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_binding: None,
                     wallpaper_modes: None,
                     wallpaper_targets: None,
+                    search_modes: None,
                 });
             }
             for contrib in &m.contributions.actions {
@@ -1001,6 +1040,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_binding: None,
                     wallpaper_modes: None,
                     wallpaper_targets: None,
+                    search_modes: None,
                 });
             }
             for contrib in &m.contributions.keyboard_shortcuts {
@@ -1018,6 +1058,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_binding: contrib.default_binding.clone(),
                     wallpaper_modes: None,
                     wallpaper_targets: None,
+                    search_modes: None,
                 });
             }
             for contrib in &m.contributions.background_tasks {
@@ -1035,6 +1076,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_binding: None,
                     wallpaper_modes: None,
                     wallpaper_targets: None,
+                    search_modes: None,
                 });
             }
             for contrib in &m.contributions.wallpaper_providers {
@@ -1052,6 +1094,25 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     default_binding: None,
                     wallpaper_modes: Some(contrib.modes.clone()),
                     wallpaper_targets: Some(contrib.targets.clone()),
+                    search_modes: None,
+                });
+            }
+            for contrib in &m.contributions.search_providers {
+                descriptors.push(ContributionDescriptor {
+                    id: CanonicalId::new(ext_id.clone(), contrib.id.clone()),
+                    extension_name: m.name.clone(),
+                    name: contrib.name.clone(),
+                    surface: ContributionSurface::SearchProvider,
+                    runtime_kind: ExtensionRuntimeKind::Wasm,
+                    settings_schema: None,
+                    default_size: None,
+                    minimum_size: None,
+                    bar_widget: None,
+                    action: None,
+                    default_binding: None,
+                    wallpaper_modes: None,
+                    wallpaper_targets: None,
+                    search_modes: Some(contrib.modes.clone()),
                 });
             }
         }

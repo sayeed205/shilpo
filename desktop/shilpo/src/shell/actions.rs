@@ -1070,6 +1070,7 @@ mod tests {
             default_binding: Some("Super+Space".into()),
             wallpaper_modes: None,
             wallpaper_targets: None,
+            search_modes: None,
         };
         let mut manager = KeybindingManager::new();
         let user = vec![crate::config::KeybindingConfig {

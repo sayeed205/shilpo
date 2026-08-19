@@ -43,7 +43,6 @@ const _: () = assert!(
 /// deadline even though it does not shrink as the query's actual elapsed time grows.
 pub const ASSUMED_QUERY_BUDGET: Duration = Duration::from_millis(250);
 
-/// Abstraction allowing `ExtensionSearchProvider` to query the extension host adapter or mocks.
 pub trait ExtensionSearchRunner: Send + Sync {
     fn search(
         &self,
@@ -51,6 +50,70 @@ pub trait ExtensionSearchRunner: Send + Sync {
         request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
         budget: RuntimeBudget,
     ) -> Result<Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>, HostError>;
+}
+
+impl<T: ExtensionSearchRunner + ?Sized> ExtensionSearchRunner for Arc<T> {
+    fn search(
+        &self,
+        canonical: &CanonicalId,
+        request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+        budget: RuntimeBudget,
+    ) -> Result<Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>, HostError>
+    {
+        (**self).search(canonical, request, budget)
+    }
+}
+
+impl ExtensionSearchRunner for crate::shell::extensions::ExtensionSupervisor {
+    fn search(
+        &self,
+        canonical: &CanonicalId,
+        request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+        budget: RuntimeBudget,
+    ) -> Result<Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>, HostError>
+    {
+        self.search(canonical, request, budget)
+            .map_err(|err| match err {
+                crate::shell::extensions::supervisor::SearchDispatchError::NotRegistered(id) => {
+                    HostError::NotRegistered(id)
+                }
+                crate::shell::extensions::supervisor::SearchDispatchError::UnknownContribution(
+                    cid,
+                ) => HostError::UnknownContribution(cid),
+                crate::shell::extensions::supervisor::SearchDispatchError::CircuitOpen(id)
+                | crate::shell::extensions::supervisor::SearchDispatchError::Disabled(id) => {
+                    HostError::Disabled(id)
+                }
+                crate::shell::extensions::supervisor::SearchDispatchError::GuestTimeout
+                | crate::shell::extensions::supervisor::SearchDispatchError::CoordinatorTimeout => {
+                    HostError::Runtime(shilpo_ext_runtime::RuntimeError::with_kind(
+                        shilpo_ext_runtime::RuntimeFailureKind::Timeout,
+                        "search timeout",
+                    ))
+                }
+                crate::shell::extensions::supervisor::SearchDispatchError::GuestError(msg) => {
+                    HostError::Runtime(shilpo_ext_runtime::RuntimeError::with_kind(
+                        shilpo_ext_runtime::RuntimeFailureKind::Trap,
+                        msg,
+                    ))
+                }
+                other => {
+                    HostError::Runtime(shilpo_ext_runtime::RuntimeError::new(other.to_string()))
+                }
+            })
+    }
+}
+
+impl ExtensionSearchRunner for crate::shell::extensions::ExtensionCoordinator {
+    fn search(
+        &self,
+        canonical: &CanonicalId,
+        request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+        budget: RuntimeBudget,
+    ) -> Result<Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>, HostError>
+    {
+        ExtensionSearchRunner::search(self.supervisor(), canonical, request, budget)
+    }
 }
 
 /// Constructs a secure host-namespaced candidate identity that guests cannot forge.
@@ -556,5 +619,43 @@ mod tests {
             derive_guest_deadline(Duration::from_millis(30), ASSUMED_QUERY_BUDGET),
         );
         assert_eq!(observed.deadline, Duration::from_millis(30));
+    }
+
+    #[test]
+    fn test_extension_search_provider_wired_into_shell() {
+        let ext_id = ExtensionId::new("org.shilpo.weather").unwrap();
+        let cand = api_types::SearchCandidate {
+            id: "forecast".into(),
+            title: "Forecast".into(),
+            subtitle: Some("Sunny 75F".into()),
+            category: api_types::SearchResultCategory::Custom,
+            icon: None,
+            activation_verb: "View".into(),
+            activation_payload: "view_forecast".into(),
+            aliases: vec![],
+            keywords: vec![],
+        };
+
+        let runner = Arc::new(MockRunner::new(vec![cand]));
+        let provider = Arc::new(ExtensionSearchProvider::new(
+            ext_id.clone(),
+            "weather-search",
+            vec![SearchMode::Default],
+            runner,
+        ));
+
+        let coordinator = super::super::coordinator::SearchCoordinator::new(vec![provider]);
+        let sink = SearchSink::for_test(1);
+        let summary = coordinator.search("Fore", 1, &sink);
+        let results = sink.snapshot();
+
+        assert_eq!(summary.raw_candidate_count, 1);
+        assert_eq!(summary.ranked_candidate_count, 1);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Forecast");
+        assert_eq!(
+            results[0].canonical_id,
+            "ext:org.shilpo.weather/weather-search/forecast"
+        );
     }
 }

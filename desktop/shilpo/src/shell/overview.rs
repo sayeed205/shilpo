@@ -733,17 +733,67 @@ impl WorkspaceOverview {
         let clipboard_provider = Arc::new(ClipboardSearchProvider::new(clipboard_sub));
         let calc_provider = Arc::new(CalculatorSearchProvider::new());
         let quicklinks_provider = Arc::new(QuicklinksSearchProvider::new(keybindings));
-        let search_coordinator = Arc::new(
-            SearchCoordinator::new(vec![
-                window_provider,
-                app_provider,
-                action_provider,
-                clipboard_provider,
-                calc_provider,
-                quicklinks_provider,
-            ])
-            .with_learning_store(learning_store),
-        );
+
+        let mut providers: Vec<Arc<dyn crate::shell::overview_search::SearchProvider>> = vec![
+            window_provider,
+            app_provider,
+            action_provider,
+            clipboard_provider,
+            calc_provider,
+            quicklinks_provider,
+        ];
+
+        if let Some(coordinator) = ShellRuntime::extension_coordinator(cx) {
+            let descriptors = ShellRuntime::extension_descriptors_for(
+                cx,
+                crate::extensions::ContributionSurface::SearchProvider,
+            );
+            for desc in descriptors {
+                let modes: Vec<crate::shell::overview_search::parser::SearchMode> = desc
+                    .search_modes
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|m| match m {
+                        shilpo_ext_api::SearchProviderMode::Default => {
+                            crate::shell::overview_search::parser::SearchMode::Default
+                        }
+                        shilpo_ext_api::SearchProviderMode::Apps => {
+                            crate::shell::overview_search::parser::SearchMode::Apps
+                        }
+                        shilpo_ext_api::SearchProviderMode::Actions => {
+                            crate::shell::overview_search::parser::SearchMode::Actions
+                        }
+                        shilpo_ext_api::SearchProviderMode::Clipboard => {
+                            crate::shell::overview_search::parser::SearchMode::Clipboard
+                        }
+                        shilpo_ext_api::SearchProviderMode::Calculator => {
+                            crate::shell::overview_search::parser::SearchMode::Calculator
+                        }
+                        shilpo_ext_api::SearchProviderMode::Command => {
+                            crate::shell::overview_search::parser::SearchMode::Command
+                        }
+                        shilpo_ext_api::SearchProviderMode::WebSearch => {
+                            crate::shell::overview_search::parser::SearchMode::WebSearch
+                        }
+                        shilpo_ext_api::SearchProviderMode::Keybindings => {
+                            crate::shell::overview_search::parser::SearchMode::Keybindings
+                        }
+                    })
+                    .collect();
+
+                let ext_provider =
+                    Arc::new(crate::shell::overview_search::ExtensionSearchProvider::new(
+                        desc.id.extension_id,
+                        desc.id.contribution_id.as_str(),
+                        modes,
+                        coordinator.clone(),
+                    ));
+                providers.push(ext_provider);
+            }
+        }
+
+        let search_coordinator =
+            Arc::new(SearchCoordinator::new(providers).with_learning_store(learning_store));
 
         window.on_window_should_close(cx, move |_, cx| {
             lifecycle.window_closed(cx);

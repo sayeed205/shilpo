@@ -483,6 +483,7 @@ impl ScriptRuntime {
                         default_binding: None,
                         wallpaper_modes: None,
                         wallpaper_targets: None,
+                        search_modes: None,
                     })
             })
             .collect()

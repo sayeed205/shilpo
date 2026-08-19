@@ -9,6 +9,7 @@ pub mod bindings {
     wit_bindgen::generate!({
         path: "wit",
         world: "extension",
+        additional_derives: [serde::Serialize, serde::Deserialize, PartialEq],
     });
 }
 

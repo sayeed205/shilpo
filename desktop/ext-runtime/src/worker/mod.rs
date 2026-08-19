@@ -12,5 +12,5 @@ pub use process::{
 pub use protocol::{
     ContributionDescriptor, ContributionInstance, ContributionSurface, DevReloadOutcome,
     ExtensionChanges, ExtensionCommand, ExtensionGeneration, ExtensionSnapshot, ExtensionUpdate,
-    ReplaceableEvent, ScriptExtensionStatus,
+    ReplaceableEvent, ScriptExtensionStatus, WorkerSearchError,
 };

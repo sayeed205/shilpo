@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use shilpo_ext_api::{
     CanonicalId, Capability, ContributionId, ExtensionEvent, ExtensionId, ExtensionManifest,
     HostOperation, IdError, ManifestError, TextNode, ViewLimits, ViewNode, ViewTree,
@@ -73,7 +75,7 @@ impl fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeBudget {
     pub max_memory_bytes: usize,
     pub fuel: u64,
