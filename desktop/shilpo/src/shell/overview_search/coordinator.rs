@@ -50,6 +50,8 @@ impl SearchBudget {
 
 /// Execution summary returned by [`SearchCoordinator::search`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[must_use = "a query summary reports timed-out and skipped providers; \
+              discarding it silently hides degraded search behavior"]
 pub struct SearchSummary {
     /// Providers that timed out and were cancelled at the query deadline.
     pub timed_out_providers: Vec<ProviderId>,
@@ -400,7 +402,7 @@ mod tests {
         let coordinator = SearchCoordinator::new(vec![p1, p2]);
         let sink = SearchSink::for_test(1);
 
-        coordinator.search("hello", 1, &sink);
+        let _ = coordinator.search("hello", 1, &sink);
 
         let results = sink.snapshot();
         assert_eq!(results.len(), 2);
@@ -464,7 +466,7 @@ mod tests {
         let sink = SearchSink::for_test(1);
 
         // Searching generates impressions but records 0 activations in learning store
-        coordinator.search("query", 1, &sink);
+        let _ = coordinator.search("query", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert_eq!(learning.score_boost(&results[0].canonical_id), 0);
@@ -533,7 +535,7 @@ mod tests {
         let sink = SearchSink::for_test(1);
 
         let start = std::time::Instant::now();
-        coordinator.search("Result", 1, &sink);
+        let _ = coordinator.search("Result", 1, &sink);
         let elapsed = start.elapsed();
 
         let results = sink.snapshot();
@@ -581,7 +583,7 @@ mod tests {
 
         let coordinator = SearchCoordinator::new(vec![slow, fast]);
         let sink = SearchSink::for_test(1);
-        coordinator.search("Result", 1, &sink);
+        let _ = coordinator.search("Result", 1, &sink);
 
         let results = sink.snapshot();
         assert!(results.iter().any(|c| c.title == "Fast Result"));
@@ -639,7 +641,7 @@ mod tests {
 
         let coordinator = SearchCoordinator::new(vec![Arc::new(ManyCandidatesProvider)]);
         let sink = SearchSink::for_test(1);
-        coordinator.search("Zzzedge", 1, &sink);
+        let _ = coordinator.search("Zzzedge", 1, &sink);
 
         let results = sink.snapshot();
         assert!(
@@ -710,28 +712,28 @@ mod tests {
 
         // 1. Query with '>' scopes to Apps mode: only app_prov dispatched
         let sink1 = SearchSink::for_test(1);
-        coordinator.search(">term", 1, &sink1);
+        let _ = coordinator.search(">term", 1, &sink1);
         assert_eq!(app_dispatches.load(Ordering::SeqCst), 1);
         assert_eq!(calc_dispatches.load(Ordering::SeqCst), 0);
         assert_eq!(clip_dispatches.load(Ordering::SeqCst), 0);
 
         // 2. Query with '=' scopes to Calculator mode: only calc_prov dispatched
         let sink2 = SearchSink::for_test(2);
-        coordinator.search("=2+2", 2, &sink2);
+        let _ = coordinator.search("=2+2", 2, &sink2);
         assert_eq!(app_dispatches.load(Ordering::SeqCst), 1);
         assert_eq!(calc_dispatches.load(Ordering::SeqCst), 1);
         assert_eq!(clip_dispatches.load(Ordering::SeqCst), 0);
 
         // 3. Query with ';' scopes to Clipboard mode: only clip_prov dispatched
         let sink3 = SearchSink::for_test(3);
-        coordinator.search(";note", 3, &sink3);
+        let _ = coordinator.search(";note", 3, &sink3);
         assert_eq!(app_dispatches.load(Ordering::SeqCst), 1);
         assert_eq!(calc_dispatches.load(Ordering::SeqCst), 1);
         assert_eq!(clip_dispatches.load(Ordering::SeqCst), 1);
 
         // 4. Default query: only app_prov dispatched (declared Default)
         let sink4 = SearchSink::for_test(4);
-        coordinator.search("firefox", 4, &sink4);
+        let _ = coordinator.search("firefox", 4, &sink4);
         assert_eq!(app_dispatches.load(Ordering::SeqCst), 2);
         assert_eq!(calc_dispatches.load(Ordering::SeqCst), 1);
         assert_eq!(clip_dispatches.load(Ordering::SeqCst), 1);
@@ -802,21 +804,21 @@ mod tests {
 
         // 1. '/' scopes to actions
         let sink = SearchSink::for_test(1);
-        coordinator.search("/toggle", 1, &sink);
+        let _ = coordinator.search("/toggle", 1, &sink);
         let res = sink.snapshot();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].category, ResultCategory::Action);
 
         // 2. ';' scopes to clipboard
         let sink = SearchSink::for_test(2);
-        coordinator.search(";copied", 2, &sink);
+        let _ = coordinator.search(";copied", 2, &sink);
         let res = sink.snapshot();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].category, ResultCategory::Clipboard);
 
         // 3. '=' scopes to calculator
         let sink = SearchSink::for_test(3);
-        coordinator.search("=5 * 5", 3, &sink);
+        let _ = coordinator.search("=5 * 5", 3, &sink);
         let res = sink.snapshot();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].title, "25");
@@ -824,14 +826,14 @@ mod tests {
 
         // 4. '?' scopes to web search
         let sink = SearchSink::for_test(4);
-        coordinator.search("?rust documentation", 4, &sink);
+        let _ = coordinator.search("?rust documentation", 4, &sink);
         let res = sink.snapshot();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].category, ResultCategory::WebSearch);
 
         // 5. '<' scopes to keybindings
         let sink = SearchSink::for_test(5);
-        coordinator.search("<Super", 5, &sink);
+        let _ = coordinator.search("<Super", 5, &sink);
         let res = sink.snapshot();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].category, ResultCategory::Keybinding);
@@ -846,21 +848,21 @@ mod tests {
 
         // Bare implicit arithmetic
         let sink1 = SearchSink::for_test(1);
-        coordinator.search("2 + 2", 1, &sink1);
+        let _ = coordinator.search("2 + 2", 1, &sink1);
         let res1 = sink1.snapshot();
         assert_eq!(res1.len(), 1);
         assert_eq!(res1[0].title, "4");
 
         // Complex implicit expression with parenthesis
         let sink2 = SearchSink::for_test(2);
-        coordinator.search("10 * (5 - 3)", 2, &sink2);
+        let _ = coordinator.search("10 * (5 - 3)", 2, &sink2);
         let res2 = sink2.snapshot();
         assert_eq!(res2.len(), 1);
         assert_eq!(res2[0].title, "20");
 
         // Non-arithmetic query "hello 2" parses as Default and is NOT dispatched to Calculator
         let sink3 = SearchSink::for_test(3);
-        coordinator.search("hello 2", 3, &sink3);
+        let _ = coordinator.search("hello 2", 3, &sink3);
         let res3 = sink3.snapshot();
         assert_eq!(res3.len(), 0);
     }
@@ -905,7 +907,7 @@ mod tests {
         let coordinator = SearchCoordinator::new(vec![app_prov, action_prov, quick_prov]);
 
         let sink = SearchSink::for_test(1);
-        coordinator.search("terminal", 1, &sink);
+        let _ = coordinator.search("terminal", 1, &sink);
         let results = sink.snapshot();
 
         // Must contain results from AppSearchProvider, ActionSearchProvider, and QuicklinksSearchProvider
@@ -1029,7 +1031,7 @@ mod tests {
 
         // 1. LaunchApp
         let sink = SearchSink::for_test(1);
-        coordinator.search(">Calc", 1, &sink);
+        let _ = coordinator.search(">Calc", 1, &sink);
         let cand = &sink.snapshot()[0];
         let res = coordinator
             .activate(
@@ -1042,7 +1044,7 @@ mod tests {
 
         // 2. Handled (Window)
         let sink = SearchSink::for_test(2);
-        coordinator.search("Terminal", 2, &sink);
+        let _ = coordinator.search("Terminal", 2, &sink);
         let win_cand = sink
             .snapshot()
             .into_iter()
@@ -1064,7 +1066,7 @@ mod tests {
 
         // 3. InvokeAction
         let sink = SearchSink::for_test(3);
-        coordinator.search("/quit", 3, &sink);
+        let _ = coordinator.search("/quit", 3, &sink);
         let act_cand = &sink.snapshot()[0];
         let res = coordinator
             .activate(
@@ -1077,7 +1079,7 @@ mod tests {
 
         // 4. CopyClipboard
         let sink = SearchSink::for_test(4);
-        coordinator.search(";saved", 4, &sink);
+        let _ = coordinator.search(";saved", 4, &sink);
         let clip_cand = &sink.snapshot()[0];
         let res = coordinator
             .activate(
@@ -1090,7 +1092,7 @@ mod tests {
 
         // 5. CopyCalculation
         let sink = SearchSink::for_test(5);
-        coordinator.search("=100 + 200", 5, &sink);
+        let _ = coordinator.search("=100 + 200", 5, &sink);
         let calc_cand = &sink.snapshot()[0];
         let res = coordinator
             .activate(
@@ -1103,7 +1105,7 @@ mod tests {
 
         // 6. OpenPath
         let sink = SearchSink::for_test(6);
-        coordinator.search("~/", 6, &sink);
+        let _ = coordinator.search("~/", 6, &sink);
         let path_cand = sink
             .snapshot()
             .into_iter()
@@ -1121,7 +1123,7 @@ mod tests {
 
         // 7. OpenUri
         let sink = SearchSink::for_test(7);
-        coordinator.search("https://example.com/test", 7, &sink);
+        let _ = coordinator.search("https://example.com/test", 7, &sink);
         let uri_cand = sink
             .snapshot()
             .into_iter()
@@ -1141,7 +1143,7 @@ mod tests {
 
         // 8. ExecuteCommand
         let sink = SearchSink::for_test(8);
-        coordinator.search("$echo hi", 8, &sink);
+        let _ = coordinator.search("$echo hi", 8, &sink);
         if let Some(cmd_cand) = sink
             .snapshot()
             .into_iter()
@@ -1159,7 +1161,7 @@ mod tests {
 
         // 9. OpenWeb
         let sink = SearchSink::for_test(9);
-        coordinator.search("?rust lang", 9, &sink);
+        let _ = coordinator.search("?rust lang", 9, &sink);
         let web_cand = sink
             .snapshot()
             .into_iter()
@@ -1179,7 +1181,7 @@ mod tests {
 
         // 10. CopyKeybinding
         let sink = SearchSink::for_test(10);
-        coordinator.search("<Super", 10, &sink);
+        let _ = coordinator.search("<Super", 10, &sink);
         let key_cand = sink
             .snapshot()
             .into_iter()
@@ -1283,9 +1285,14 @@ mod tests {
             prefix: "Fast",
         });
 
-        // 50ms budget allows fast provider (instant) to finish, but hung provider (blocked on channel) will time out
+        // A generous budget lets the instant `fast` provider finish well within it,
+        // while `hung` — blocked on a test-controlled channel we never release until
+        // after assertions — is *guaranteed* still outstanding when the budget expires.
+        // Only the budget's lower bound matters for determinism; using the same generous
+        // value as the "everything completes" path keeps this from depending on how much
+        // real time thread scheduling happens to take under CI load (see #254 Determinism).
         let coordinator = SearchCoordinator::new(vec![fast, hung])
-            .with_per_query_budget(Duration::from_millis(50));
+            .with_per_query_budget(Duration::from_millis(500));
         let sink = SearchSink::for_test(1);
 
         let summary = coordinator.search("hello", 1, &sink);
@@ -1451,7 +1458,7 @@ mod tests {
         let coordinator2 =
             SearchCoordinator::new(vec![fast]).with_per_query_budget(Duration::from_millis(500));
         let sink2 = SearchSink::for_test(2);
-        coordinator2.search("second", 2, &sink2);
+        let _ = coordinator2.search("second", 2, &sink2);
 
         let results2 = sink2.snapshot();
         assert_eq!(results2.len(), 1);
@@ -1480,6 +1487,17 @@ mod tests {
             vec![ProviderId::from_static("hung")]
         );
         assert_eq!(summary1.skipped_providers, Vec::<ProviderId>::new());
+
+        // With a ZERO budget, `search()` returns before the spawned provider thread is
+        // guaranteed to have started running — the deadline check fires on the coordinator's
+        // first loop iteration, without waiting on anything. Wait for the thread to actually
+        // record its call before asserting on it, rather than racing its scheduling.
+        for _ in 0..10_000 {
+            if calls.load(std::sync::atomic::Ordering::SeqCst) == 1 {
+                break;
+            }
+            std::thread::yield_now();
+        }
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         // Query 2: Hung provider is still in-flight, so it is skipped
@@ -1569,8 +1587,12 @@ mod tests {
             prefix: "Fast",
         });
 
+        // See test_fast_provider_completes_and_delivers_when_another_provider_is_hung for
+        // why a generous, non-racy budget is used instead of a short one: `hung-prov` stays
+        // blocked on a channel this test controls, so it is guaranteed to still be
+        // outstanding when any budget expires, regardless of its length.
         let coordinator = SearchCoordinator::new(vec![hung, fast])
-            .with_per_query_budget(Duration::from_millis(50));
+            .with_per_query_budget(Duration::from_millis(500));
         let sink = SearchSink::for_test(1);
 
         let summary = coordinator.search("test", 1, &sink);

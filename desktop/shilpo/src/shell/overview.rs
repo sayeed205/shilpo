@@ -483,7 +483,13 @@ impl WorkspaceOverview {
                 let bg_text = text.clone();
                 cx.background_executor()
                     .spawn(async move {
-                        coordinator.search(&bg_text, query_gen, &bg_sink);
+                        let summary = coordinator.search(&bg_text, query_gen, &bg_sink);
+                        if summary.has_timed_out() {
+                            tracing::warn!(
+                                providers = ?summary.timed_out_providers,
+                                "search providers timed out"
+                            );
+                        }
                     })
                     .await;
             }
@@ -532,7 +538,13 @@ impl WorkspaceOverview {
                 let coordinator = coordinator.clone();
                 cx.background_executor()
                     .spawn(async move {
-                        coordinator.search(&bg_text, query_gen, &bg_sink);
+                        let summary = coordinator.search(&bg_text, query_gen, &bg_sink);
+                        if summary.has_timed_out() {
+                            tracing::warn!(
+                                providers = ?summary.timed_out_providers,
+                                "search providers timed out"
+                            );
+                        }
                     })
                     .await;
             }
@@ -822,7 +834,13 @@ impl WorkspaceOverview {
                                 let generation = view.query_generation;
                                 if let Some(coordinator) = &view.search {
                                     let sink = SearchSink::with_default_config(generation);
-                                    coordinator.search(&query, generation, &sink);
+                                    let summary = coordinator.search(&query, generation, &sink);
+                                    if summary.has_timed_out() {
+                                        tracing::warn!(
+                                            providers = ?summary.timed_out_providers,
+                                            "search providers timed out"
+                                        );
+                                    }
                                     view.set_search_results(sink.snapshot(), generation, cx);
                                 }
                             } else {

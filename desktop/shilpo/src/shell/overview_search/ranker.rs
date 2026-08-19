@@ -835,7 +835,7 @@ mod tests {
         let coord1 =
             SearchCoordinator::new(vec![Arc::new(ProlificProvider), Arc::new(TargetedProvider)]);
         let sink1 = SearchSink::for_test(1);
-        coord1.search("Targeted", 1, &sink1);
+        let _ = coord1.search("Targeted", 1, &sink1);
         let res1 = sink1.snapshot();
         assert_eq!(
             res1[0].canonical_id, "targeted:exact",
@@ -846,7 +846,7 @@ mod tests {
         let coord2 =
             SearchCoordinator::new(vec![Arc::new(TargetedProvider), Arc::new(ProlificProvider)]);
         let sink2 = SearchSink::for_test(1);
-        coord2.search("Targeted", 1, &sink2);
+        let _ = coord2.search("Targeted", 1, &sink2);
         let res2 = sink2.snapshot();
         assert_eq!(
             res2[0].canonical_id, "targeted:exact",
