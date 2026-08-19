@@ -185,4 +185,109 @@ declare module "shilpo:extension/types@0.1.0" {
     | "shell-shutdown"
     | "reload"
     | "error-quarantine";
+  /**
+   * Scope classification of search modes supported by search providers.
+   * # Variants
+   *
+   * ## `"default"`
+   *
+   * ## `"apps"`
+   *
+   * ## `"actions"`
+   *
+   * ## `"clipboard"`
+   *
+   * ## `"calculator"`
+   *
+   * ## `"command"`
+   *
+   * ## `"web-search"`
+   *
+   * ## `"keybindings"`
+   */
+  export type SearchMode =
+    | "default"
+    | "apps"
+    | "actions"
+    | "clipboard"
+    | "calculator"
+    | "command"
+    | "web-search"
+    | "keybindings";
+  /**
+   * Classification of candidate search results.
+   * # Variants
+   *
+   * ## `"window"`
+   *
+   * ## `"application"`
+   *
+   * ## `"action"`
+   *
+   * ## `"clipboard"`
+   *
+   * ## `"calculator"`
+   *
+   * ## `"command"`
+   *
+   * ## `"web-search"`
+   *
+   * ## `"file-path"`
+   *
+   * ## `"uri"`
+   *
+   * ## `"keybinding"`
+   *
+   * ## `"custom"`
+   */
+  export type SearchResultCategory =
+    | "window"
+    | "application"
+    | "action"
+    | "clipboard"
+    | "calculator"
+    | "command"
+    | "web-search"
+    | "file-path"
+    | "uri"
+    | "keybinding"
+    | "custom";
+  /**
+   * Icon descriptor for search candidate presentation.
+   */
+  export type SearchIcon = SearchIconNone | SearchIconNamed | SearchIconAsset;
+  export interface SearchIconNone {
+    tag: "none";
+  }
+  export interface SearchIconNamed {
+    tag: "named";
+    val: string;
+  }
+  export interface SearchIconAsset {
+    tag: "asset";
+    val: string;
+  }
+  /**
+   * Inbound query request passed to an extension search provider.
+   */
+  export interface SearchRequest {
+    rawQuery: string;
+    query: string;
+    mode: SearchMode;
+    generation: bigint;
+  }
+  /**
+   * Search candidate emitted by an extension search provider.
+   */
+  export interface SearchCandidate {
+    id: string;
+    title: string;
+    subtitle?: string;
+    aliases: Array<string>;
+    keywords: Array<string>;
+    category: SearchResultCategory;
+    icon?: SearchIcon;
+    activationVerb: string;
+    activationPayload: string;
+  }
 }

@@ -4,6 +4,7 @@ pub mod calculator;
 pub mod calculator_provider;
 pub mod clipboard_provider;
 pub mod coordinator;
+pub mod extension_provider;
 pub mod learning;
 pub mod matcher;
 pub mod parser;
@@ -21,6 +22,11 @@ pub use clipboard_provider::ClipboardSearchProvider;
 pub use coordinator::{
     DEFAULT_MAX_IN_FLIGHT_PER_PROVIDER, DEFAULT_PER_QUERY_BUDGET, SearchBudget, SearchCoordinator,
     SearchSummary,
+};
+pub use extension_provider::{
+    DEFAULT_EXTENSION_SEARCH_BUDGET, EXTENSION_MAX_CANDIDATES, ExtensionSearchProvider,
+    ExtensionSearchRunner, derive_guest_deadline, host_namespace_candidate_id, parse_named_icon,
+    sanitize_relative_asset_path,
 };
 pub use learning::{
     DEFAULT_HALF_LIFE_SECS, HeedSearchLearningStore, LearningClock, MAX_INFLUENCE_BOOST,

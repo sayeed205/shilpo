@@ -38,8 +38,8 @@ impl SearchProvider for ClipboardSearchProvider {
         ProviderId::from_static("clipboard-search")
     }
 
-    fn declared_modes(&self) -> &'static [SearchMode] {
-        &[SearchMode::Clipboard]
+    fn declared_modes(&self) -> std::borrow::Cow<'static, [SearchMode]> {
+        std::borrow::Cow::Borrowed(&[SearchMode::Clipboard])
     }
 
     fn prefix_icon(&self, mode: SearchMode) -> Option<IconName> {
@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn test_clipboard_declared_modes_and_prefix_icon() {
         let provider = ClipboardSearchProvider::new(None);
-        assert_eq!(provider.declared_modes(), &[SearchMode::Clipboard]);
+        assert_eq!(provider.declared_modes().as_ref(), &[SearchMode::Clipboard]);
         assert_eq!(
             provider.prefix_icon(SearchMode::Clipboard),
             Some(IconName::Star)

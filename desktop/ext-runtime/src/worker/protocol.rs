@@ -12,8 +12,6 @@ pub enum ContributionSurface {
     Desktop,
     Settings,
     SidePanel,
-    #[serde(rename = "search")]
-    Search,
     Action,
     Background,
     Shortcut,
@@ -245,15 +243,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_contribution_surface_search_serialization_round_trip() {
-        let surface = ContributionSurface::Search;
-        let json =
-            serde_json::to_string(&surface).expect("ContributionSurface::Search should serialize");
-        assert_eq!(json, "\"search\"");
+    fn test_contribution_surface_wallpaper_serialization_round_trip() {
+        let surface = ContributionSurface::Wallpaper;
+        let json = serde_json::to_string(&surface)
+            .expect("ContributionSurface::Wallpaper should serialize");
+        assert_eq!(json, "\"wallpaper\"");
 
         let deserialized: ContributionSurface =
-            serde_json::from_str(&json).expect("ContributionSurface::Search should deserialize");
-        assert_eq!(deserialized, ContributionSurface::Search);
+            serde_json::from_str(&json).expect("ContributionSurface::Wallpaper should deserialize");
+        assert_eq!(deserialized, ContributionSurface::Wallpaper);
 
         // Legacy surface names must be rejected.
         let legacy_json = "\"Launcher\"";

@@ -81,7 +81,7 @@
     "schema_version": {
       "type": "integer",
       "format": "uint32",
-      "default": 1,
+      "default": 2,
       "minimum": 0
     },
     "subscriptions": {
@@ -415,6 +415,19 @@
             "kind",
             "purposes"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "search:provide"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
         }
       ]
     },
@@ -612,8 +625,21 @@
     "SearchProviderContribution": {
       "type": "object",
       "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "id": {
           "$ref": "#/$defs/ContributionId"
+        },
+        "modes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SearchProviderMode"
+          }
         },
         "name": {
           "type": "string"
@@ -622,7 +648,21 @@
       "additionalProperties": false,
       "required": [
         "id",
-        "name"
+        "name",
+        "modes"
+      ]
+    },
+    "SearchProviderMode": {
+      "type": "string",
+      "enum": [
+        "default",
+        "apps",
+        "actions",
+        "clipboard",
+        "calculator",
+        "command",
+        "web_search",
+        "keybindings"
       ]
     },
     "SecretPurpose": {

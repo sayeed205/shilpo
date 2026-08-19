@@ -2,7 +2,6 @@ import { assertEquals } from "@std/assert";
 import { DataValue } from "@shilpo/ext-sdk";
 import { createTestHost } from "@shilpo/ext-sdk/testing";
 import { createShowcaseExtension } from "../src/extension.tsx";
-import { searchCommands } from "../src/contributions/search_provider.ts";
 import { generateWallpaper } from "../src/contributions/wallpaper_provider.ts";
 
 Deno.test("Showcase Events - handles input, actions, shortcuts, tasks, and system events", () => {
@@ -85,9 +84,15 @@ Deno.test("Showcase Events - handles input, actions, shortcuts, tasks, and syste
   });
 
   // 10. Search Provider
-  const searchResults = searchCommands("toggle");
+  const searchResults = showcase.ext.search("search-commands", {
+    rawQuery: "toggle",
+    query: "toggle",
+    mode: "default",
+    generation: 1n,
+  });
   assertEquals(searchResults.length, 1);
   assertEquals(searchResults[0]?.id, "toggle-power");
+  assertEquals(searchResults[0]?.activationPayload, "toggle-power");
 
   // 11. Wallpaper Provider
   const wallpaper = generateWallpaper(showcase.store.snapshot);

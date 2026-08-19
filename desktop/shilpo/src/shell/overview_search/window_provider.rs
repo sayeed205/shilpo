@@ -30,8 +30,8 @@ impl SearchProvider for WindowSearchProvider {
         ProviderId::from_static("window-search")
     }
 
-    fn declared_modes(&self) -> &'static [SearchMode] {
-        &[SearchMode::Default]
+    fn declared_modes(&self) -> std::borrow::Cow<'static, [SearchMode]> {
+        std::borrow::Cow::Borrowed(&[SearchMode::Default])
     }
 
     fn search(&self, request: SearchRequest, sink: SearchSink) {

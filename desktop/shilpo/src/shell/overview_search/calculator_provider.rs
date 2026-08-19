@@ -35,8 +35,8 @@ impl SearchProvider for CalculatorSearchProvider {
         ProviderId::from_static("calculator-search")
     }
 
-    fn declared_modes(&self) -> &'static [SearchMode] {
-        &[SearchMode::Calculator]
+    fn declared_modes(&self) -> std::borrow::Cow<'static, [SearchMode]> {
+        std::borrow::Cow::Borrowed(&[SearchMode::Calculator])
     }
 
     fn prefix_icon(&self, mode: SearchMode) -> Option<IconName> {
@@ -98,7 +98,10 @@ mod tests {
     #[test]
     fn test_calculator_declared_modes_and_prefix_icon() {
         let provider = CalculatorSearchProvider::new();
-        assert_eq!(provider.declared_modes(), &[SearchMode::Calculator]);
+        assert_eq!(
+            provider.declared_modes().as_ref(),
+            &[SearchMode::Calculator]
+        );
         assert_eq!(
             provider.prefix_icon(SearchMode::Calculator),
             Some(IconName::Star)

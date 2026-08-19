@@ -1,7 +1,9 @@
 //! Extension lifecycle trait and export macro.
 
 use crate::bindings::shilpo::extension::events::ExtensionEvent;
-use crate::bindings::shilpo::extension::types::{Activation, DeactivateReason, Error};
+use crate::bindings::shilpo::extension::types::{
+    Activation, DeactivateReason, Error, SearchCandidate, SearchRequest,
+};
 use crate::bindings::shilpo::extension::view::ViewTree;
 
 /// High-level extension lifecycle trait.
@@ -31,6 +33,16 @@ pub trait Extension: Default {
     fn view(&mut self, contribution_id: &str) -> Result<Option<ViewTree>, Error> {
         let _ = contribution_id;
         Ok(None)
+    }
+
+    /// Called by the host to query an extension search provider.
+    fn search(
+        &mut self,
+        contribution_id: &str,
+        request: SearchRequest,
+    ) -> Result<Vec<SearchCandidate>, Error> {
+        let _ = (contribution_id, request);
+        Ok(Vec::new())
     }
 }
 
@@ -141,6 +153,18 @@ macro_rules! export_extension {
             > {
                 $crate::extension::invoke_callback(|| {
                     __with_instance(|inst| <$ext as $crate::extension::Extension>::view(inst, &contribution_id))
+                })
+            }
+
+            fn search(
+                contribution_id: ::std::string::String,
+                request: $crate::bindings::shilpo::extension::types::SearchRequest,
+            ) -> ::core::result::Result<
+                ::std::vec::Vec<$crate::bindings::shilpo::extension::types::SearchCandidate>,
+                $crate::bindings::shilpo::extension::types::Error,
+            > {
+                $crate::extension::invoke_callback(|| {
+                    __with_instance(|inst| <$ext as $crate::extension::Extension>::search(inst, &contribution_id, request))
                 })
             }
         }

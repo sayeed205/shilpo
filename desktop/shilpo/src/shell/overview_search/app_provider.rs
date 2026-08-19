@@ -37,8 +37,8 @@ impl SearchProvider for AppSearchProvider {
         ProviderId::from_static("app-search")
     }
 
-    fn declared_modes(&self) -> &'static [SearchMode] {
-        &[SearchMode::Default, SearchMode::Apps]
+    fn declared_modes(&self) -> std::borrow::Cow<'static, [SearchMode]> {
+        std::borrow::Cow::Borrowed(&[SearchMode::Default, SearchMode::Apps])
     }
 
     fn prefix_icon(&self, mode: SearchMode) -> Option<IconName> {

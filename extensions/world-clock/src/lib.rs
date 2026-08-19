@@ -70,6 +70,13 @@ mod guest {
                 root: 0,
             }))
         }
+
+        fn search(
+            _contribution_id: String,
+            _request: types::SearchRequest,
+        ) -> Result<Vec<types::SearchCandidate>, types::Error> {
+            Ok(Vec::new())
+        }
     }
 
     export!(WorldClock);

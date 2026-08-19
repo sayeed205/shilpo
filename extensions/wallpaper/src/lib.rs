@@ -155,6 +155,13 @@ mod guest {
         fn view(_contribution_id: String) -> Result<Option<view::ViewTree>, types::Error> {
             Ok(None)
         }
+
+        fn search(
+            _contribution_id: String,
+            _request: types::SearchRequest,
+        ) -> Result<Vec<types::SearchCandidate>, types::Error> {
+            Ok(Vec::new())
+        }
     }
 
     export!(WallpaperExtension);

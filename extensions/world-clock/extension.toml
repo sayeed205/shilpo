@@ -1,7 +1,7 @@
 id = "io.github.alice.world-clock"
 name = "World Clock"
 version = "1.0.0"
-schema_version = 1
+schema_version = 2
 api_version = "0.1.0"
 min_shilpo_version = "0.1.0"
 authors = ["Alice <alice@example.com>"]

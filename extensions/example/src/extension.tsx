@@ -16,6 +16,7 @@ import { renderSidePanel } from "./contributions/side_panel.tsx";
 import { handleAction } from "./contributions/actions.ts";
 import { handleShortcut } from "./contributions/keyboard_shortcuts.ts";
 import { handleBackgroundTask } from "./contributions/background_task.ts";
+import { handleSearch } from "./contributions/search_provider.ts";
 
 export function createShowcaseExtension(customHost?: HostFacade) {
   const store = new ShowcaseStateStore();
@@ -142,6 +143,10 @@ export function createShowcaseExtension(customHost?: HostFacade) {
             return undefined;
         }
       },
+
+      search(contributionId, request) {
+        return handleSearch(contributionId, request);
+      },
     },
     customHost,
   );
@@ -152,6 +157,8 @@ export function createShowcaseExtension(customHost?: HostFacade) {
     handleAction: (actionId: string) => handleAction(actionId, store, customHost),
     handleShortcut: (shortcutId: string) => handleShortcut(shortcutId, store, customHost),
     handleBackgroundTask: (taskId: string) => handleBackgroundTask(taskId, store, customHost),
+    handleSearch: (contributionId: string, req: Parameters<typeof handleSearch>[1]) =>
+      handleSearch(contributionId, req),
   };
 }
 
@@ -169,3 +176,4 @@ export const activate = defaultInstance.ext.activate;
 export const deactivate = defaultInstance.ext.deactivate;
 export const onEvent = defaultInstance.ext.onEvent;
 export const view = defaultInstance.ext.view;
+export const search = defaultInstance.ext.search;

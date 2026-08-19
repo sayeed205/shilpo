@@ -59,6 +59,9 @@ export type Capability =
   | {
     kind: "secrets";
     purposes: SecretPurpose[];
+  }
+  | {
+    kind: "search:provide";
   };
 export type EventKind =
   | "outputs_changed"
@@ -76,6 +79,15 @@ export type SecretPurpose = string;
  * A single-segment identifier naming one contribution within an extension (e.g. `clock`).
  */
 export type ContributionId = string;
+export type SearchProviderMode =
+  | "default"
+  | "apps"
+  | "actions"
+  | "clipboard"
+  | "calculator"
+  | "command"
+  | "web_search"
+  | "keybindings";
 export type WallpaperMode = "manual" | "slideshow";
 export type WallpaperTargetKind = "global" | "workspace";
 /**
@@ -145,7 +157,9 @@ export interface KeyboardShortcutContribution {
   name: string;
 }
 export interface SearchProviderContribution {
+  description?: string | null;
   id: ContributionId;
+  modes: SearchProviderMode[];
   name: string;
 }
 export interface SettingsPageContribution {

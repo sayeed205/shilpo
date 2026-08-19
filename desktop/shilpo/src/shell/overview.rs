@@ -7,7 +7,6 @@ use gpui::{
     ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, StyledText, Window, div,
     prelude::FluentBuilder, px,
 };
-use shilpo_ext_api::CanonicalId;
 use shilpo_services::{CompositorSnapshot, WindowInfo, WorkspaceInfo};
 use shilpo_ui::{
     ActiveTheme, Colorize, FocusTrapElement, Icon, IconName, StyledExt,
@@ -193,17 +192,6 @@ impl LauncherSearchState {
     pub fn is_ready_for_generation(&self, generation: u64) -> bool {
         matches!(self, Self::Ready { generation: g } if *g == generation)
     }
-}
-
-fn search_provider_queries(
-    descriptors: &[crate::extensions::ContributionDescriptor],
-    generation: u64,
-) -> Vec<(CanonicalId, u64)> {
-    descriptors
-        .iter()
-        .filter(|descriptor| descriptor.surface == crate::extensions::ContributionSurface::Search)
-        .map(|descriptor| (descriptor.id.clone(), generation))
-        .collect()
 }
 
 /// Interactive Niri workspace filmstrip overview surface.
@@ -503,34 +491,6 @@ impl WorkspaceOverview {
                 }
             });
 
-            cx.background_executor()
-                .timer(Duration::from_millis(60))
-                .await;
-            cx.update(|cx| {
-                if let Some(entity) = this.upgrade() {
-                    entity.update(cx, |view, cx| {
-                        if view.query_generation == query_gen {
-                            let descriptors = ShellRuntime::extension_descriptors(
-                                cx,
-                                crate::extensions::ContributionSurface::Search,
-                            );
-                            for (contribution, generation) in
-                                search_provider_queries(&descriptors, query_gen)
-                            {
-                                ShellRuntime::dispatch_extension_input(
-                                    cx,
-                                    &contribution,
-                                    None,
-                                    "query",
-                                    Some(text.clone().into()),
-                                );
-                                debug_assert_eq!(generation, query_gen);
-                            }
-                        }
-                    });
-                }
-            });
-
             let sink = SearchSink::with_default_config(query_gen);
             if let Some(coordinator) = &coordinator {
                 let bg_sink = sink.clone();
@@ -648,6 +608,16 @@ impl WorkspaceOverview {
                     if close_overview {
                         self.begin_close(OverviewCloseReason::Selection, cx);
                     }
+                }
+                Ok(ActionResult::InvokeExtension { canonical, payload }) => {
+                    ShellRuntime::dispatch_extension_input(
+                        cx,
+                        &canonical,
+                        None,
+                        "search:activate",
+                        Some(serde_json::Value::String(payload)),
+                    );
+                    self.begin_close(OverviewCloseReason::Selection, cx);
                 }
                 Err(error) => {
                     tracing::warn!(%error, "search candidate activation failed");
@@ -850,15 +820,6 @@ impl WorkspaceOverview {
                     }
                 }
             }));
-
-            // Mount extension surface for Search contributions
-            ShellRuntime::dispatch_surface_lifecycle(
-                cx,
-                crate::extensions::ContributionSurface::Search,
-                true,
-                640.,
-                480.,
-            );
 
             // Schedule entry → visible transition.
             let gen_id = ov.generation;
@@ -1294,16 +1255,6 @@ impl Render for WorkspaceOverview {
                 .into_any_element()
         } else {
             let scale_factor = window.scale_factor();
-            let provider_views = ShellRuntime::extension_surface_views(
-                cx,
-                crate::extensions::ContributionSurface::Search,
-            )
-            .into_iter()
-            .map(|(id, tree)| {
-                crate::bar::ext_view_adapter::render_ext_view_tree(&id, None, &tree, window, cx)
-            })
-            .collect::<Vec<_>>();
-
             let result_items: Vec<_> = self
                 .search_results
                 .iter()
@@ -1362,6 +1313,28 @@ impl Render for WorkspaceOverview {
                         SearchResultIcon::Initial(ch) => {
                             div().child(ch.to_string()).into_any_element()
                         }
+                        SearchResultIcon::ExtensionAsset {
+                            extension_id,
+                            relative_path,
+                        } => {
+                            let contrib_id = shilpo_ext_api::ContributionId::new("search")
+                                .unwrap_or_else(|_| {
+                                    shilpo_ext_api::ContributionId::new("default").unwrap()
+                                });
+                            let cid =
+                                shilpo_ext_api::CanonicalId::new(extension_id.clone(), contrib_id);
+                            let asset = ShellRuntime::extension_asset_path(
+                                cx,
+                                &cid,
+                                &relative_path.to_string_lossy(),
+                            )
+                            .ok();
+                            if let Some(asset) = asset {
+                                gpui::img(asset).w(px(22.)).h(px(22.)).into_any_element()
+                            } else {
+                                Icon::new(IconName::Search).size(px(22.)).into_any_element()
+                            }
+                        }
                     };
 
                     let subtitle_text = result.subtitle.clone().unwrap_or_default();
@@ -1410,43 +1383,45 @@ impl Render for WorkspaceOverview {
                                 .justify_center()
                                 .child(icon_element),
                         )
-                        .child(if is_calculation {
+                        .child(
                             v_flex()
                                 .flex_1()
-                                .gap_0()
+                                .min_w_0()
+                                .overflow_hidden()
                                 .child(title_el)
-                                .child(div().text_xs().text_color(desc_color).child(subtitle_text))
-                                .into_any_element()
-                        } else if is_suggestion {
-                            v_flex()
-                                .flex_1()
-                                .gap_0()
-                                .child(div().text_xs().text_color(desc_color).child(subtitle_text))
-                                .child(title_el)
-                                .into_any_element()
-                        } else {
-                            v_flex()
-                                .flex_1()
-                                .gap_0()
-                                .child(title_el)
-                                .child(div().text_xs().text_color(desc_color).child(subtitle_text))
-                                .into_any_element()
-                        })
-                        .when(is_interactive, |el| {
-                            el.on_click(cx.listener(move |view, _, window, cx| {
-                                cx.stop_propagation();
-                                view.activate_result(index, window, cx);
-                            }))
-                        })
+                                .when(!subtitle_text.is_empty(), |container| {
+                                    container.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(desc_color)
+                                            .truncate()
+                                            .child(subtitle_text),
+                                    )
+                                }),
+                        )
+                        .when(
+                            !is_suggestion && !is_calculation && !result.activation_verb.is_empty(),
+                            |item| {
+                                item.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(desc_color)
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_md()
+                                        .bg(theme.surface_container_highest.opacity(0.6))
+                                        .child(result.activation_verb.clone()),
+                                )
+                            },
+                        )
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.activate_result(index, window, cx);
+                        }))
                         .into_any_element()
                 })
                 .collect();
 
-            let provider_views = provider_views
-                .into_iter()
-                .take(8usize.saturating_sub(result_items.len()))
-                .collect::<Vec<_>>();
-            if result_items.is_empty() && provider_views.is_empty() {
+            if result_items.is_empty() {
                 div()
                     .w(px(SEARCH_SURFACE_WIDTH))
                     .py_4()
@@ -1458,7 +1433,7 @@ impl Render for WorkspaceOverview {
                     .child("No matching results")
                     .into_any_element()
             } else {
-                let result_count = result_items.len() + provider_views.len();
+                let result_count = result_items.len();
                 let list_height = (result_count as f32 * 56.0
                     + result_count.saturating_sub(1) as f32 * 8.0)
                     .min(360.0);
@@ -1471,8 +1446,7 @@ impl Render for WorkspaceOverview {
                     .gap_2()
                     .flex()
                     .flex_col()
-                    .children(result_items)
-                    .children(provider_views);
+                    .children(result_items);
                 div()
                     .id("overview-search-results")
                     .w(px(SEARCH_SURFACE_WIDTH))
@@ -1863,75 +1837,5 @@ mod tests {
         // Results arrive for generation 2
         search_state = LauncherSearchState::Ready { generation: 2 };
         assert!(search_state.is_ready_for_generation(2));
-    }
-
-    #[test]
-    fn test_search_surface_descriptor_discovery() {
-        let descriptor = crate::extensions::ContributionDescriptor {
-            id: "org.shilpo.web-search/provider".parse().unwrap(),
-            extension_name: "Web Search".into(),
-            name: "Web Provider".into(),
-            surface: crate::extensions::ContributionSurface::Search,
-            runtime_kind: shilpo_ext_runtime::worker::protocol::ExtensionRuntimeKind::Wasm,
-            settings_schema: None,
-            default_size: None,
-            minimum_size: None,
-            bar_widget: None,
-            action: None,
-            default_binding: None,
-            wallpaper_modes: None,
-            wallpaper_targets: None,
-        };
-        assert_eq!(
-            descriptor.surface,
-            crate::extensions::ContributionSurface::Search
-        );
-        assert_eq!(descriptor.extension_name, "Web Search");
-        assert_eq!(descriptor.name, "Web Provider");
-    }
-
-    #[test]
-    fn search_provider_queries_dispatch_once_per_provider_and_generation() {
-        let search_a = crate::extensions::ContributionDescriptor {
-            id: "org.shilpo.web-search/provider-a".parse().unwrap(),
-            extension_name: "Web Search".into(),
-            name: "Web Provider A".into(),
-            surface: crate::extensions::ContributionSurface::Search,
-            runtime_kind: shilpo_ext_runtime::worker::protocol::ExtensionRuntimeKind::Wasm,
-            settings_schema: None,
-            default_size: None,
-            minimum_size: None,
-            bar_widget: None,
-            action: None,
-            default_binding: None,
-            wallpaper_modes: None,
-            wallpaper_targets: None,
-        };
-        let search_b = crate::extensions::ContributionDescriptor {
-            id: "org.shilpo.docs-search/provider-b".parse().unwrap(),
-            extension_name: "Docs Search".into(),
-            name: "Docs Provider B".into(),
-            surface: crate::extensions::ContributionSurface::Search,
-            runtime_kind: shilpo_ext_runtime::worker::protocol::ExtensionRuntimeKind::Wasm,
-            settings_schema: None,
-            default_size: None,
-            minimum_size: None,
-            bar_widget: None,
-            action: None,
-            default_binding: None,
-            wallpaper_modes: None,
-            wallpaper_targets: None,
-        };
-        let non_search = crate::extensions::ContributionDescriptor {
-            surface: crate::extensions::ContributionSurface::Action,
-            ..search_a.clone()
-        };
-        let descriptors = vec![search_a, search_b, non_search];
-
-        let queries = search_provider_queries(&descriptors, 7);
-        assert_eq!(queries.len(), 2);
-        assert_eq!(queries[0].0, descriptors[0].id);
-        assert_eq!(queries[1].0, descriptors[1].id);
-        assert!(queries.iter().all(|(_, generation)| *generation == 7));
     }
 }

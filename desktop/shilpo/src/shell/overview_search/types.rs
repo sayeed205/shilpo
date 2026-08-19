@@ -106,6 +106,10 @@ pub enum SearchResultIcon {
     AppIcon(Option<PathBuf>),
     Named(IconName),
     Initial(char),
+    ExtensionAsset {
+        extension_id: shilpo_ext_api::ExtensionId,
+        relative_path: PathBuf,
+    },
 }
 
 /// Immutable request carrying monotonic query generation and parsed query text.
@@ -159,7 +163,13 @@ pub enum ActionResult {
     OpenPath(PathBuf),
     OpenUri(String),
     CopyKeybinding(String),
-    Handled { close_overview: bool },
+    Handled {
+        close_overview: bool,
+    },
+    InvokeExtension {
+        canonical: shilpo_ext_api::CanonicalId,
+        payload: String,
+    },
 }
 
 /// Error type returned during search query execution or item activation.
@@ -244,8 +254,8 @@ pub trait SearchProvider: Send + Sync {
     ///
     /// The coordinator inspects declared modes before dispatching a query and
     /// only spawns search workers for providers declaring support for `request.mode`.
-    fn declared_modes(&self) -> &'static [SearchMode] {
-        &[SearchMode::Default]
+    fn declared_modes(&self) -> Cow<'static, [SearchMode]> {
+        Cow::Borrowed(&[SearchMode::Default])
     }
 
     /// Returns the prefix icon for a specific search mode, if declared.

@@ -20,6 +20,10 @@ declare module "shilpo:extension/extension@0.1.0" {
   export type DeactivateReason =
     import("shilpo:extension/types@0.1.0").DeactivateReason;
   export type Error = import("shilpo:extension/types@0.1.0").Error;
+  export type SearchCandidate =
+    import("shilpo:extension/types@0.1.0").SearchCandidate;
+  export type SearchRequest =
+    import("shilpo:extension/types@0.1.0").SearchRequest;
   export type ExtensionEvent =
     import("shilpo:extension/events@0.1.0").ExtensionEvent;
   export type ViewTree = import("shilpo:extension/view@0.1.0").ViewTree;
@@ -40,5 +44,9 @@ declare module "shilpo:extension/extension@0.1.0" {
   export function deactivate(reason: DeactivateReason): void;
   export function onEvent(event: ExtensionEvent): void;
   export function view(contributionId: string): ViewTree | undefined;
+  export function search(
+    contributionId: string,
+    request: SearchRequest,
+  ): Array<SearchCandidate>;
   export type Result<T, E> = { tag: "ok"; val: T } | { tag: "err"; val: E };
 }

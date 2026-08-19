@@ -1,33 +1,58 @@
-export interface SearchCommand {
-  id: string;
-  title: string;
-  description: string;
-}
+import type { SearchCandidate, SearchRequest } from "@shilpo/ext-sdk";
 
-export function searchCommands(query: string): SearchCommand[] {
-  const commands: SearchCommand[] = [
+export function handleSearch(
+  contributionId: string,
+  request: SearchRequest,
+): SearchCandidate[] {
+  if (contributionId !== "search-commands") {
+    return [];
+  }
+
+  const allCandidates: SearchCandidate[] = [
     {
       id: "toggle-power",
       title: "Showcase: Toggle Mode",
-      description: "Toggle between active and idle showcase modes",
+      subtitle: "Toggle between active and idle showcase modes",
+      aliases: ["power", "mode", "toggle"],
+      keywords: ["showcase", "state"],
+      category: "action",
+      icon: { tag: "named", val: "settings" },
+      activationVerb: "Toggle",
+      activationPayload: "toggle-power",
     },
     {
       id: "increment-counter",
       title: "Showcase: Increment Clicks",
-      description: "Increment showcase click counter",
+      subtitle: "Increment showcase click counter",
+      aliases: ["click", "counter", "add"],
+      keywords: ["showcase", "counter"],
+      category: "action",
+      icon: { tag: "named", val: "star" },
+      activationVerb: "Increment",
+      activationPayload: "increment-counter",
     },
     {
       id: "open-settings",
       title: "Showcase: Preferences",
-      description: "Configure showcase extension settings",
+      subtitle: "Configure showcase extension settings",
+      aliases: ["settings", "preferences", "config"],
+      keywords: ["showcase", "options"],
+      category: "action",
+      icon: { tag: "named", val: "settings" },
+      activationVerb: "Open",
+      activationPayload: "open-settings",
     },
   ];
 
-  const q = query.toLowerCase().trim();
+  const q = request.query.toLowerCase().trim();
   if (q.length === 0) {
-    return commands;
+    return allCandidates;
   }
-  return commands.filter(
-    (cmd) => cmd.title.toLowerCase().includes(q) || cmd.description.toLowerCase().includes(q),
+  return allCandidates.filter(
+    (cand) =>
+      cand.title.toLowerCase().includes(q) ||
+      (cand.subtitle && cand.subtitle.toLowerCase().includes(q)) ||
+      cand.aliases.some((a) => a.toLowerCase().includes(q)) ||
+      cand.keywords.some((k) => k.toLowerCase().includes(q)),
   );
 }

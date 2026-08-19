@@ -91,7 +91,7 @@ mod tests {
         id = "io.github.alice.world-clock"
         name = "World Clock"
         version = "1.0.0"
-        schema_version = 1
+        schema_version = 2
         api_version = "0.1.0"
 
         [[contributions.bar_widgets]]
@@ -198,6 +198,8 @@ mod tests {
           (func (export "on-event") (param {on_event}) (result i32)
             {on_event_body})
           (func (export "view") (param i32 i32) (result i32)
+            i32.const 0)
+          (func (export "search") (param i32 i32 i32 i32 i32 i32 i32 i64) (result i32)
             i32.const 0))
         "#
         )
@@ -845,6 +847,19 @@ mod tests {
         ) -> Result<Option<ViewTree>, RuntimeError> {
             Ok(None)
         }
+
+        fn search(
+            &mut self,
+            _extension_id: &ExtensionId,
+            _contribution_id: &str,
+            _request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+            _budget: RuntimeBudget,
+        ) -> Result<
+            Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>,
+            RuntimeError,
+        > {
+            Ok(Vec::new())
+        }
     }
 
     #[test]
@@ -892,7 +907,7 @@ mod tests {
             id = "io.github.test.cli-sample"
             name = "CLI Sample"
             version = "1.0.0"
-            schema_version = 1
+            schema_version = 2
             api_version = "0.1.0"
 
             [library]
@@ -1111,7 +1126,7 @@ mod tests {
 
         fs::create_dir_all(receipt_path.parent().unwrap()).unwrap();
         fs::create_dir_all(&ext_dir).unwrap();
-        fs::write(&receipt_path, format!("id = \"{ext_id}\"\nschema_version = 1\n[active]\nversion = \"1.0.0\"\npackage_hash = \"hash\"\ninstalled_at = \"2026-08-13T00:00:00Z\"\n")).unwrap();
+        fs::write(&receipt_path, format!("id = \"{ext_id}\"\nschema_version = 2\n[active]\nversion = \"1.0.0\"\npackage_hash = \"hash\"\ninstalled_at = \"2026-08-13T00:00:00Z\"\n")).unwrap();
 
         let broker = FakeSecretBroker::new();
         let purpose = SecretPurpose::parse("auth-token").unwrap();
@@ -1144,7 +1159,7 @@ mod tests {
         )));
         fs::create_dir_all(receipt_path.parent().unwrap()).unwrap();
         fs::create_dir_all(&ext_dir).unwrap();
-        fs::write(&receipt_path, format!("id = \"{ext_id}\"\nschema_version = 1\n[active]\nversion = \"1.0.0\"\npackage_hash = \"hash\"\ninstalled_at = \"2026-08-13T00:00:00Z\"\n")).unwrap();
+        fs::write(&receipt_path, format!("id = \"{ext_id}\"\nschema_version = 2\n[active]\nversion = \"1.0.0\"\npackage_hash = \"hash\"\ninstalled_at = \"2026-08-13T00:00:00Z\"\n")).unwrap();
         let failed =
             catalog.uninstall_with_secrets_policy(&ext_id, SecretPolicy::Delete, Some(&broker));
         assert!(failed.is_err());
@@ -1154,7 +1169,7 @@ mod tests {
         // Re-create receipt for Delete test
         fs::create_dir_all(receipt_path.parent().unwrap()).unwrap();
         fs::create_dir_all(&ext_dir).unwrap();
-        fs::write(&receipt_path, format!("id = \"{ext_id}\"\nschema_version = 1\n[active]\nversion = \"1.0.0\"\npackage_hash = \"hash\"\ninstalled_at = \"2026-08-13T00:00:00Z\"\n")).unwrap();
+        fs::write(&receipt_path, format!("id = \"{ext_id}\"\nschema_version = 2\n[active]\nversion = \"1.0.0\"\npackage_hash = \"hash\"\ninstalled_at = \"2026-08-13T00:00:00Z\"\n")).unwrap();
 
         // 2. Uninstall with Delete policy
         catalog

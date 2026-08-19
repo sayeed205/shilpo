@@ -17,6 +17,14 @@ use std::time::Duration;
 pub trait GuestExtension: Send + Sync {
     fn on_event(&mut self, event: &ExtensionEvent) -> Vec<HostOperation>;
     fn view(&self, contribution_id: &str) -> Option<ViewTree>;
+    fn search(
+        &self,
+        contribution_id: &str,
+        request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+    ) -> Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate> {
+        let _ = (contribution_id, request);
+        Vec::new()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,6 +173,16 @@ pub trait ExtensionRuntime {
         contribution_id: &str,
         budget: RuntimeBudget,
     ) -> Result<Option<ViewTree>, RuntimeError>;
+    fn search(
+        &mut self,
+        extension_id: &ExtensionId,
+        contribution_id: &str,
+        request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+        budget: RuntimeBudget,
+    ) -> Result<
+        Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>,
+        RuntimeError,
+    >;
     fn compile_module(&self, bytes: &[u8]) -> Result<Self::Module, String>;
 }
 
@@ -261,6 +279,22 @@ impl ExtensionRuntime for InMemoryRuntime {
         self.guests
             .get(extension_id)
             .map(|guest| guest.view(contribution_id))
+            .ok_or_else(|| RuntimeError::new(format!("extension '{extension_id}' is not loaded")))
+    }
+
+    fn search(
+        &mut self,
+        extension_id: &ExtensionId,
+        contribution_id: &str,
+        request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+        _budget: RuntimeBudget,
+    ) -> Result<
+        Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>,
+        RuntimeError,
+    > {
+        self.guests
+            .get(extension_id)
+            .map(|guest| guest.search(contribution_id, request))
             .ok_or_else(|| RuntimeError::new(format!("extension '{extension_id}' is not loaded")))
     }
 }
@@ -640,6 +674,49 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
         Ok(view)
     }
 
+    pub fn search(
+        &mut self,
+        canonical: &CanonicalId,
+        request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+        budget: RuntimeBudget,
+    ) -> Result<Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>, HostError>
+    {
+        let _permit = self
+            .circuit_breaker
+            .acquire_permit(&canonical.extension_id)?;
+        let registration = match self.registrations.get(&canonical.extension_id) {
+            Some(r) => r,
+            None => {
+                self.circuit_breaker.release_probe(&canonical.extension_id);
+                return Err(HostError::NotRegistered(canonical.extension_id.clone()));
+            }
+        };
+        if !registration
+            .manifest
+            .contributions
+            .search_providers
+            .iter()
+            .any(|sp| sp.id == canonical.contribution_id)
+        {
+            self.circuit_breaker.release_probe(&canonical.extension_id);
+            return Err(HostError::UnknownContribution(canonical.clone()));
+        }
+        let candidates = match self.runtime.search(
+            &canonical.extension_id,
+            canonical.contribution_id.as_str(),
+            request,
+            budget,
+        ) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                self.record_runtime_failure(&canonical.extension_id, &error);
+                return Err(error.into());
+            }
+        };
+        self.circuit_breaker.record_success(&canonical.extension_id);
+        Ok(candidates)
+    }
+
     pub fn manifest(&self, id: &ExtensionId) -> Option<&ExtensionManifest> {
         self.registrations
             .get(id)
@@ -813,6 +890,22 @@ mod tests {
                 return Err(RuntimeError::with_kind(kind, "simulated view failure"));
             }
             Ok(None)
+        }
+
+        fn search(
+            &mut self,
+            _id: &ExtensionId,
+            _cid: &str,
+            _req: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+            _b: RuntimeBudget,
+        ) -> Result<
+            Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>,
+            RuntimeError,
+        > {
+            if let Some(kind) = self.failure_kind {
+                return Err(RuntimeError::with_kind(kind, "simulated search failure"));
+            }
+            Ok(Vec::new())
         }
     }
 

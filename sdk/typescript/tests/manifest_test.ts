@@ -28,6 +28,7 @@ describe("Extension Manifest", () => {
           {
             id: "search",
             name: "Search Provider",
+            modes: ["default"],
           },
         ],
       },
@@ -35,6 +36,7 @@ describe("Extension Manifest", () => {
         { kind: "clipboard:read" },
         { kind: "clipboard:write" },
         { kind: "notifications:show" },
+        { kind: "search:provide" },
       ],
       subscriptions: [
         { event: "theme_changed" },
@@ -43,14 +45,14 @@ describe("Extension Manifest", () => {
       ],
     });
 
-    assertEquals(manifest.schema_version, 1);
+    assertEquals(manifest.schema_version, 2);
     assertEquals(manifest.api_version, "0.1.0");
     assertEquals(manifest.min_shilpo_version, "0.1.0");
     assertEquals(manifest.id, "org.shilpo.demo");
     assertEquals(manifest.contributions?.bar_widgets?.length, 1);
     assertEquals(manifest.contributions?.wallpaper_providers?.length, 1);
     assertEquals(manifest.contributions?.search_providers?.length, 1);
-    assertEquals(manifest.capabilities?.length, 3);
+    assertEquals(manifest.capabilities?.length, 4);
     assertEquals(manifest.subscriptions?.length, 3);
   });
 });

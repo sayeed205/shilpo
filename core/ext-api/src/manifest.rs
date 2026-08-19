@@ -10,7 +10,7 @@ use crate::effects::WallpaperSource;
 use crate::events::EventKind;
 use crate::id::{ContributionId, ExtensionId, IdError};
 
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 2;
 pub const SUPPORTED_API_VERSION: &str = "0.1.0";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -137,7 +137,32 @@ named_contribution!(DesktopWidgetContribution {
 });
 named_contribution!(SettingsPageContribution { schema: String });
 named_contribution!(SidePanelContribution {});
-named_contribution!(SearchProviderContribution {});
+
+#[derive(
+    Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchProviderMode {
+    Default,
+    Apps,
+    Actions,
+    Clipboard,
+    Calculator,
+    Command,
+    WebSearch,
+    Keybindings,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SearchProviderContribution {
+    pub id: ContributionId,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub modes: Vec<SearchProviderMode>,
+}
+
 named_contribution!(ActionContribution {});
 named_contribution!(BackgroundTaskContribution {});
 
@@ -218,6 +243,8 @@ pub enum CapabilityKind {
     LocationRead,
     #[serde(rename = "secrets")]
     Secrets,
+    #[serde(rename = "search:provide")]
+    SearchProvide,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -255,6 +282,8 @@ pub enum Capability {
     LocationRead,
     #[serde(rename = "secrets")]
     Secrets { purposes: Vec<SecretPurpose> },
+    #[serde(rename = "search:provide")]
+    SearchProvide,
 }
 
 impl Capability {
@@ -274,6 +303,7 @@ impl Capability {
             Self::FilesystemWrite { .. } => CapabilityKind::FilesystemWrite,
             Self::LocationRead => CapabilityKind::LocationRead,
             Self::Secrets { .. } => CapabilityKind::Secrets,
+            Self::SearchProvide => CapabilityKind::SearchProvide,
         }
     }
 
@@ -595,6 +625,33 @@ impl ExtensionManifest {
                 }
             }
         }
+        for provider in &self.contributions.search_providers {
+            if provider.modes.is_empty() {
+                return Err(ManifestError::Validation(format!(
+                    "search provider '{}' must declare at least one mode",
+                    provider.id
+                )));
+            }
+            let mut seen_modes = HashSet::new();
+            for mode in &provider.modes {
+                if !seen_modes.insert(*mode) {
+                    return Err(ManifestError::Validation(format!(
+                        "search provider '{}' has duplicate mode '{mode:?}'",
+                        provider.id
+                    )));
+                }
+            }
+        }
+        if !self.contributions.search_providers.is_empty()
+            && !self
+                .capabilities
+                .iter()
+                .any(|c| matches!(c, Capability::SearchProvide))
+        {
+            return Err(ManifestError::Validation(
+                "search_providers contribution requires the 'search:provide' capability".into(),
+            ));
+        }
 
         let mut subscriptions = HashSet::new();
         for subscription in &self.subscriptions {
@@ -656,7 +713,8 @@ fn validate_capabilities(capabilities: &[Capability]) -> Result<(), ManifestErro
             | Capability::NotificationsShow
             | Capability::ClipboardRead
             | Capability::ClipboardWrite
-            | Capability::LocationRead => true,
+            | Capability::LocationRead
+            | Capability::SearchProvide => true,
             Capability::ActionsInvoke { actions } => {
                 !actions.is_empty() && actions.iter().all(|action| !action.trim().is_empty())
             }
@@ -1046,14 +1104,20 @@ mod tests {
             id = "org.shilpo.search"
             name = "Search Extension"
             version = "1.0.0"
+            schema_version = 2
 
             [[contributions.search_providers]]
             id = "web-search"
             name = "Web Search"
+            modes = ["web_search", "default"]
 
             [[contributions.search_providers]]
             id = "docs-search"
             name = "Documentation Search"
+            modes = ["default"]
+
+            [[capabilities]]
+            kind = "search:provide"
         "#;
         let manifest =
             ExtensionManifest::from_toml(toml).expect("search_providers manifest should parse");
@@ -1067,12 +1131,86 @@ mod tests {
             "Web Search"
         );
         assert_eq!(
+            manifest.contributions.search_providers[0].modes,
+            vec![SearchProviderMode::WebSearch, SearchProviderMode::Default]
+        );
+        assert_eq!(
             manifest.contributions.search_providers[1].id.as_str(),
             "docs-search"
         );
         assert_eq!(
             manifest.contributions.search_providers[1].name,
             "Documentation Search"
+        );
+    }
+
+    #[test]
+    fn test_search_provider_missing_modes_fails() {
+        let toml = r#"
+            id = "org.shilpo.search"
+            name = "Search Extension"
+            version = "1.0.0"
+            schema_version = 2
+
+            [[contributions.search_providers]]
+            id = "web-search"
+            name = "Web Search"
+            modes = []
+
+            [[capabilities]]
+            kind = "search:provide"
+        "#;
+        let err = ExtensionManifest::from_toml(toml).unwrap_err();
+        assert!(matches!(err, ManifestError::Validation(_)));
+        assert!(
+            err.to_string().contains("must declare at least one mode"),
+            "Error should reject empty modes: {err}"
+        );
+    }
+
+    #[test]
+    fn test_search_provider_duplicate_modes_fails() {
+        let toml = r#"
+            id = "org.shilpo.search"
+            name = "Search Extension"
+            version = "1.0.0"
+            schema_version = 2
+
+            [[contributions.search_providers]]
+            id = "web-search"
+            name = "Web Search"
+            modes = ["default", "default"]
+
+            [[capabilities]]
+            kind = "search:provide"
+        "#;
+        let err = ExtensionManifest::from_toml(toml).unwrap_err();
+        assert!(matches!(err, ManifestError::Validation(_)));
+        assert!(
+            err.to_string().contains("duplicate mode"),
+            "Error should reject duplicate mode: {err}"
+        );
+    }
+
+    #[test]
+    fn test_search_provider_missing_capability_fails() {
+        let toml = r#"
+            id = "org.shilpo.search"
+            name = "Search Extension"
+            version = "1.0.0"
+            schema_version = 2
+
+            [[contributions.search_providers]]
+            id = "web-search"
+            name = "Web Search"
+            modes = ["default"]
+        "#;
+        let err = ExtensionManifest::from_toml(toml).unwrap_err();
+        assert!(matches!(err, ManifestError::Validation(_)));
+        assert!(
+            err.to_string()
+                .contains("requires the 'search:provide' capability"),
+            "Error should reject missing search:provide capability: {err}"
         );
     }
 
@@ -1084,6 +1222,7 @@ mod tests {
             id = "org.shilpo.search"
             name = "Search Extension"
             version = "1.0.0"
+            schema_version = 2
 
             [[contributions.{legacy_field}]]
             id = "web-search"
@@ -1105,6 +1244,7 @@ mod tests {
             id = "org.shilpo.search"
             name = "Search Extension"
             version = "1.0.0"
+            schema_version = 2
 
             [[contributions.bar_widgets]]
             id = "query-tool"
@@ -1113,6 +1253,10 @@ mod tests {
             [[contributions.search_providers]]
             id = "query-tool"
             name = "Query Tool Search Provider"
+            modes = ["default"]
+
+            [[capabilities]]
+            kind = "search:provide"
         "#;
         let err = ExtensionManifest::from_toml(toml).unwrap_err();
         assert!(matches!(err, ManifestError::Validation(_)));

@@ -350,6 +350,8 @@ impl SearchCoordinator {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::*;
     use crate::shell::overview_search::types::{ResultCategory, SearchCandidate, SearchResultIcon};
 
@@ -664,8 +666,8 @@ mod tests {
             fn id(&self) -> ProviderId {
                 ProviderId::from_static(self.id)
             }
-            fn declared_modes(&self) -> &'static [SearchMode] {
-                self.modes
+            fn declared_modes(&self) -> Cow<'static, [SearchMode]> {
+                Cow::Borrowed(self.modes)
             }
             fn search(&self, request: SearchRequest, sink: SearchSink) {
                 self.dispatches.fetch_add(1, Ordering::SeqCst);
@@ -746,8 +748,8 @@ mod tests {
             fn id(&self) -> ProviderId {
                 ProviderId::from_static("mock-icon")
             }
-            fn declared_modes(&self) -> &'static [SearchMode] {
-                &[SearchMode::Actions]
+            fn declared_modes(&self) -> Cow<'static, [SearchMode]> {
+                Cow::Borrowed(&[SearchMode::Actions])
             }
             fn prefix_icon(&self, mode: SearchMode) -> Option<IconName> {
                 if mode == SearchMode::Actions {

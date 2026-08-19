@@ -1,7 +1,7 @@
 id = "org.shilpo.example"
 name = "Shilpo Showcase Extension"
 version = "0.1.0"
-schema_version = 1
+schema_version = 2
 api_version = "0.1.0"
 min_shilpo_version = "0.1.0"
 authors = ["Shilpo Team <team@shilpo.org>"]
@@ -43,6 +43,7 @@ name = "Showcase Side Panel"
 [[contributions.search_providers]]
 id = "search-commands"
 name = "Showcase Search"
+modes = ["default", "command"]
 
 [[contributions.actions]]
 id = "toggle-power"
@@ -98,3 +99,6 @@ actions = ["toggle-power"]
 kind = "network:http"
 hosts = ["api.example.com"]
 paths = ["/showcase"]
+
+[[capabilities]]
+kind = "search:provide"

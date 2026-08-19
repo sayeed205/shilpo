@@ -240,7 +240,7 @@ mod tests {
         );
         assert_eq!(
             coordinator
-                .descriptors_for(ContributionSurface::Search)
+                .descriptors_for(ContributionSurface::Action)
                 .len(),
             0
         );

@@ -25,7 +25,7 @@ use crate::{
     actions::ActionInvocation,
     bar::{BarSpec, BarView, OutputDescriptor, ReconciliationOp, geometry::BarGeometry},
     error::ShellError,
-    extensions::{ContributionInstance, ContributionSurface},
+    extensions::ContributionInstance,
     overview::{OverviewCloseReason, WorkspaceOverview},
 };
 
@@ -1270,13 +1270,6 @@ impl ShellSurfaces {
 
         if let Some(handle) = handle {
             let handle_id = handle.window_id();
-            ShellRuntime::dispatch_surface_lifecycle(
-                cx,
-                ContributionSurface::Search,
-                false,
-                1280.,
-                720.,
-            );
             if let Err(error) = remove_window_after_frame_drain(handle, cx) {
                 tracing::warn!(
                     ?error,
@@ -1312,13 +1305,6 @@ impl ShellSurfaces {
         };
 
         if had_handle {
-            ShellRuntime::dispatch_surface_lifecycle(
-                cx,
-                ContributionSurface::Search,
-                false,
-                1280.,
-                720.,
-            );
             Self::restore_prior_focus(cx);
         }
 
@@ -1472,13 +1458,6 @@ impl ShellSurfaces {
                 shell_surfaces.overview_lifecycle = OverviewLifecycle::Open {
                     generation: instance_id,
                 };
-                ShellRuntime::dispatch_surface_lifecycle(
-                    cx,
-                    ContributionSurface::Search,
-                    true,
-                    1280.,
-                    720.,
-                );
                 ShellRuntime::publish_status(cx);
             }
             Err(error) => {
