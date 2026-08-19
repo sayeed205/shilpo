@@ -41,9 +41,10 @@ pub use compositor::{
     CompositorCapabilities, CompositorCommand, CompositorCommandBroker, CompositorCommandError,
     CompositorExtras, CompositorKind, CompositorOutput, CompositorRegistry, CompositorSnapshot,
     CompositorTarget, DomainLifecycle, DomainVersion, ExecutorAck, GenericWaylandCompositorBackend,
-    MailboxPolicy, NiriCompositorService, NiriExtras, NullCompositorBackend, RejectionReason,
-    StaleUpdateError, SupervisorState, TestCompositorAdapter, WindowIdentity, WindowInfo,
-    WorkspaceInfo, detect, detect_from, init_compositor, init_compositor_with,
+    HyprlandCompositorBackend, HyprlandExtras, HyprlandSpecialWorkspace, MailboxPolicy,
+    NiriCompositorService, NiriExtras, NullCompositorBackend, RejectionReason, StaleUpdateError,
+    SupervisorState, TestCompositorAdapter, WindowIdentity, WindowInfo, WorkspaceInfo, detect,
+    detect_from, init_compositor, init_compositor_with,
 };
 pub use device_daemon::{
     DeviceAdapter, DeviceDaemonService, DeviceDbusService, InMemoryDeviceAdapter,

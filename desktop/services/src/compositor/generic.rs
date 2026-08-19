@@ -49,6 +49,7 @@ use super::{
     CompositorSnapshot, CompositorTarget, DomainLifecycle, DomainVersion, ExecutorAck,
     RejectionReason, StaleUpdateError, SupervisorState, WindowIdentity, WindowInfo, WorkspaceInfo,
     broker::StreamCancelHandle,
+    supervision::{apply_tick, record_supervisor_failure, sleep_with_stop_flag},
 };
 use crate::domain::{DomainSupervisor, MonotonicTimeSource, TimeSource};
 
@@ -97,6 +98,18 @@ impl BoundProtocols {
     }
 }
 
+impl super::supervision::CapabilityProvider for BoundProtocols {
+    fn capabilities_for(&self, lifecycle: DomainLifecycle) -> CompositorCapabilities {
+        self.capabilities(lifecycle)
+    }
+}
+
+impl super::supervision::CapabilityProvider for Arc<Mutex<BoundProtocols>> {
+    fn capabilities_for(&self, lifecycle: DomainLifecycle) -> CompositorCapabilities {
+        self.lock().unwrap().capabilities(lifecycle)
+    }
+}
+
 /// Shared thread-safe proxy handles used for executing compositor commands.
 #[derive(Default)]
 pub(crate) struct GenericHandles {
@@ -110,12 +123,9 @@ pub(crate) struct GenericHandles {
 
 /// Generic Wayland protocol backend implementing `CompositorAdapter`.
 pub struct GenericWaylandCompositorBackend {
-    tx: watch::Sender<Arc<CompositorSnapshot>>,
-    rx: watch::Receiver<Arc<CompositorSnapshot>>,
-    stop_flag: Arc<AtomicBool>,
-    supervisor: Arc<Mutex<DomainSupervisor>>,
+    supervision: super::supervision::CompositorSupervision<Arc<Mutex<BoundProtocols>>>,
     time_source: Arc<dyn TimeSource>,
-    broker: Arc<CompositorCommandBroker>,
+    stop_flag: Arc<AtomicBool>,
     bound_protocols: Arc<Mutex<BoundProtocols>>,
     _shared_handles: Arc<Mutex<GenericHandles>>,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
@@ -139,10 +149,8 @@ impl GenericWaylandCompositorBackend {
             last_error: None,
         };
 
-        let (tx, rx) = watch::channel(Arc::new(initial));
         let stop_flag = Arc::new(AtomicBool::new(false));
         let time_source: Arc<dyn TimeSource> = Arc::new(MonotonicTimeSource::new());
-        let supervisor = Arc::new(Mutex::new(DomainSupervisor::new()));
         let bound_protocols = Arc::new(Mutex::new(BoundProtocols::default()));
         let shared_handles = Arc::new(Mutex::new(GenericHandles::default()));
 
@@ -154,11 +162,17 @@ impl GenericWaylandCompositorBackend {
             }),
         );
 
-        let tx_clone = tx.clone();
+        let supervision = super::supervision::CompositorSupervision::new(
+            initial,
+            broker,
+            bound_protocols.clone(),
+        );
+
+        let tx_clone = supervision.tx.clone();
         let stop_clone = stop_flag.clone();
-        let supervisor_clone = supervisor.clone();
+        let supervisor_clone = supervision.supervisor.clone();
         let time_source_clone = time_source.clone();
-        let broker_clone = broker.clone();
+        let broker_clone = supervision.broker.clone();
         let bound_protocols_clone = bound_protocols.clone();
         let shared_handles_clone = shared_handles.clone();
 
@@ -175,12 +189,9 @@ impl GenericWaylandCompositorBackend {
         });
 
         Arc::new(Self {
-            tx,
-            rx,
-            stop_flag,
-            supervisor,
+            supervision,
             time_source,
-            broker,
+            stop_flag,
             bound_protocols,
             _shared_handles: shared_handles,
             handle: Mutex::new(Some(handle)),
@@ -194,25 +205,20 @@ impl GenericWaylandCompositorBackend {
         time_source: Arc<dyn TimeSource>,
         broker: Arc<CompositorCommandBroker>,
     ) -> Arc<Self> {
-        let snap_arc = Arc::new(snapshot);
-        let (tx, rx) = watch::channel(snap_arc.clone());
+        let bound_protocols = Arc::new(Mutex::new(bound_protocols));
+        let supervision = super::supervision::CompositorSupervision::new(
+            snapshot,
+            broker,
+            bound_protocols.clone(),
+        );
         let stop_flag = Arc::new(AtomicBool::new(true));
-        let supervisor = Arc::new(Mutex::new(DomainSupervisor::new()));
         let shared_handles = Arc::new(Mutex::new(GenericHandles::default()));
 
-        if snap_arc.version.owner_generation > 0 {
-            broker.set_installed_generation(snap_arc.version.owner_generation);
-        }
-        let _ = broker.observe_snapshot(snap_arc);
-
         Arc::new(Self {
-            tx,
-            rx,
-            stop_flag,
-            supervisor,
+            supervision,
             time_source,
-            broker,
-            bound_protocols: Arc::new(Mutex::new(bound_protocols)),
+            stop_flag,
+            bound_protocols,
             _shared_handles: shared_handles,
             handle: Mutex::new(None),
         })
@@ -237,7 +243,7 @@ impl GenericWaylandCompositorBackend {
     }
 
     pub fn supervisor_state(&self) -> SupervisorState {
-        self.supervisor.lock().unwrap().state()
+        self.supervision.supervisor_state()
     }
 
     pub fn time_source(&self) -> &Arc<dyn TimeSource> {
@@ -249,99 +255,45 @@ impl GenericWaylandCompositorBackend {
     }
 
     pub fn begin_start(&self) {
-        self.supervisor.lock().unwrap().mark_starting();
-
-        let previous = self.rx.borrow().clone();
-        let mut current = (*previous).clone();
-        if current.version != DomainVersion::ZERO {
-            let next_rev = current.version.revision.saturating_add(1);
-            current.version = DomainVersion::new(current.version.owner_generation, next_rev);
-        }
-        current.connection = DomainLifecycle::Connecting;
-        let bounds = self.bound_protocols();
-        current.capabilities = bounds.capabilities(DomainLifecycle::Connecting);
-        current.last_error = None;
-        let snap_arc = Arc::new(current);
-        if self.broker.observe_snapshot(snap_arc.clone()).is_ok() {
-            let _ = self.tx.send(snap_arc);
-        }
-
-        tracing::info!(target: "shilpo_profile", lifecycle = "starting", "generic compositor supervisor transition");
+        self.supervision.begin_start();
     }
 
     pub fn mark_ready(&self, now_ms: u64) {
-        self.supervisor.lock().unwrap().mark_running(now_ms);
-        tracing::info!(target: "shilpo_profile", lifecycle = "ready", "generic compositor supervisor transition");
+        self.supervision.mark_ready(now_ms);
     }
 
     pub fn report_owner_failure(&self, error: String, now_ms: u64) {
-        let version = self.rx.borrow().version;
-        let owner_generation = version.owner_generation;
-        let mut revision = version.revision;
-        let bounds = self.bound_protocols();
-        record_supervisor_failure(
-            &self.supervisor,
-            &self.broker,
-            &self.tx,
-            owner_generation,
-            &mut revision,
-            error,
-            now_ms,
-            bounds,
-        );
+        self.supervision.report_owner_failure(error, now_ms);
     }
 
     pub fn tick(&self, now_ms: u64) {
-        apply_tick(&self.supervisor, now_ms);
+        self.supervision.tick(now_ms);
     }
 
     pub fn update_snapshot(&self, snapshot: CompositorSnapshot) -> Result<(), StaleUpdateError> {
-        let snap_arc = Arc::new(snapshot);
-        self.broker.observe_snapshot(snap_arc.clone())?;
-        let _ = self.tx.send(snap_arc);
-        Ok(())
+        self.supervision.update_snapshot(snapshot)
     }
 
     pub fn set_reconnecting_generation(&self, generation: u64) {
-        let previous = self.rx.borrow().clone();
-        let mut current = (*previous).clone();
-        current.version = DomainVersion::new(generation, 0);
-        current.connection = DomainLifecycle::Reconnecting;
-        let bounds = self.bound_protocols();
-        current.capabilities = bounds.capabilities(DomainLifecycle::Reconnecting);
-        let snap_arc = Arc::new(current);
-        let _ = self.tx.send(snap_arc);
+        self.supervision.set_reconnecting_generation(generation);
     }
 
     pub fn reset_quarantine(&self) {
-        if !self.supervisor.lock().unwrap().reset_quarantine() {
-            return;
-        }
-
-        let previous = self.rx.borrow().clone();
-        let mut current = (*previous).clone();
-        let next_gen = current.version.owner_generation.saturating_add(1);
-        current.version = DomainVersion::new(next_gen, 0);
-        current.connection = DomainLifecycle::Reconnecting;
-        let bounds = self.bound_protocols();
-        current.capabilities = bounds.capabilities(DomainLifecycle::Reconnecting);
-        let snap_arc = Arc::new(current);
-        let _ = self.tx.send(snap_arc);
-        self.broker.set_installed_generation(next_gen);
+        self.supervision.reset_quarantine();
     }
 }
 
 impl CompositorAdapter for GenericWaylandCompositorBackend {
     fn current(&self) -> Arc<CompositorSnapshot> {
-        self.rx.borrow().clone()
+        self.supervision.rx.borrow().clone()
     }
 
     fn subscribe(&self) -> watch::Receiver<Arc<CompositorSnapshot>> {
-        self.rx.clone()
+        self.supervision.rx.clone()
     }
 
     fn command_broker(&self) -> Arc<CompositorCommandBroker> {
-        self.broker.clone()
+        self.supervision.broker.clone()
     }
 }
 
@@ -430,67 +382,6 @@ fn execute_generic_command(
         CompositorCommand::CreateWorkspace
         | CompositorCommand::FocusPreviousWindow
         | CompositorCommand::MoveWindowToWorkspace { .. } => Err(RejectionReason::Unsupported),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn record_supervisor_failure(
-    supervisor: &Arc<Mutex<DomainSupervisor>>,
-    broker: &Arc<CompositorCommandBroker>,
-    tx: &watch::Sender<Arc<CompositorSnapshot>>,
-    owner_generation: u64,
-    revision: &mut u64,
-    error: String,
-    now_ms: u64,
-    bound_protocols: BoundProtocols,
-) {
-    let new_state = supervisor.lock().unwrap().record_failure(now_ms);
-    let (target_lifecycle, error_msg) = match new_state {
-        SupervisorState::Quarantined => {
-            tracing::warn!(target: "shilpo_profile", lifecycle = "quarantined", "generic compositor supervisor transition");
-            (
-                DomainLifecycle::Unavailable,
-                "Quarantined after five failures in 60s".to_string(),
-            )
-        }
-        SupervisorState::Backoff { attempt, .. } => {
-            tracing::info!(target: "shilpo_profile", lifecycle = "backoff", attempt, "generic compositor supervisor transition");
-            (DomainLifecycle::Reconnecting, error)
-        }
-        _ => (DomainLifecycle::Reconnecting, error),
-    };
-
-    if new_state == SupervisorState::Quarantined {
-        broker.record_quarantine_trip();
-    }
-
-    *revision = revision.saturating_add(1);
-    let previous = tx.borrow().clone();
-    let mut current = (*previous).clone();
-    current.version = DomainVersion::new(owner_generation, *revision);
-    current.connection = target_lifecycle;
-    current.capabilities = bound_protocols.capabilities(target_lifecycle);
-    current.last_error = Some(error_msg);
-    let snap_arc = Arc::new(current);
-    if broker.observe_snapshot(snap_arc.clone()).is_ok() {
-        let _ = tx.send(snap_arc);
-    }
-}
-
-fn apply_tick(supervisor: &Arc<Mutex<DomainSupervisor>>, now_ms: u64) {
-    supervisor.lock().unwrap().tick(now_ms);
-}
-
-fn sleep_with_stop_flag(duration: Duration, stop_flag: &AtomicBool) {
-    let interval = Duration::from_millis(50);
-    let mut elapsed = Duration::ZERO;
-    while elapsed < duration {
-        if stop_flag.load(Ordering::Relaxed) {
-            break;
-        }
-        let step = interval.min(duration - elapsed);
-        thread::sleep(step);
-        elapsed += step;
     }
 }
 
@@ -1075,7 +966,7 @@ fn run_generic_listener(
                     &mut revision,
                     err_msg,
                     now_ms,
-                    BoundProtocols::default(),
+                    &BoundProtocols::default(),
                 );
                 continue;
             }
@@ -1107,7 +998,7 @@ fn run_generic_listener(
                 &mut revision,
                 err_msg,
                 now_ms,
-                BoundProtocols::default(),
+                &BoundProtocols::default(),
             );
             continue;
         }
@@ -1124,7 +1015,7 @@ fn run_generic_listener(
                 &mut revision,
                 err_msg,
                 now_ms,
-                BoundProtocols::default(),
+                &BoundProtocols::default(),
             );
             continue;
         }
@@ -1146,7 +1037,7 @@ fn run_generic_listener(
                 &mut revision,
                 err_msg,
                 now_ms,
-                bounds,
+                &bounds,
             );
             continue;
         }
@@ -1181,7 +1072,7 @@ fn run_generic_listener(
                     &mut revision,
                     err_msg,
                     now_ms,
-                    bounds,
+                    &bounds,
                 );
                 break;
             }
