@@ -18,7 +18,10 @@ pub use action_provider::ActionSearchProvider;
 pub use app_provider::AppSearchProvider;
 pub use calculator_provider::CalculatorSearchProvider;
 pub use clipboard_provider::ClipboardSearchProvider;
-pub use coordinator::SearchCoordinator;
+pub use coordinator::{
+    DEFAULT_MAX_IN_FLIGHT_PER_PROVIDER, DEFAULT_PER_QUERY_BUDGET, SearchBudget, SearchCoordinator,
+    SearchSummary,
+};
 pub use learning::{
     DEFAULT_HALF_LIFE_SECS, HeedSearchLearningStore, LearningClock, MAX_INFLUENCE_BOOST,
     MAX_LEARNING_ENTRIES, NoopSearchLearningStore, SearchLearningStore, SystemLearningClock,
