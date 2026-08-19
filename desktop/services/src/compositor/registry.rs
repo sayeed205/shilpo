@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{
-    CompositorAdapter, NiriCompositorService, NullCompositorBackend,
+    CompositorAdapter, GenericWaylandCompositorBackend, NiriCompositorService,
+    NullCompositorBackend,
     detect::{self, CompositorKind},
 };
 
@@ -40,6 +41,25 @@ impl CompositorRegistry {
             "niri",
             Box::new(|| Some(NiriCompositorService::new())),
         );
+        registry.register(
+            CompositorKind::Niri,
+            "generic",
+            Box::new(|| Some(GenericWaylandCompositorBackend::new())),
+        );
+        for kind in [
+            CompositorKind::Sway,
+            CompositorKind::Labwc,
+            CompositorKind::Dwl,
+            CompositorKind::River,
+            CompositorKind::Kde,
+            CompositorKind::Unknown,
+        ] {
+            registry.register(
+                kind,
+                "generic",
+                Box::new(|| Some(GenericWaylandCompositorBackend::new())),
+            );
+        }
         registry
     }
 
@@ -159,5 +179,46 @@ mod tests {
         assert_eq!(kind, CompositorKind::Sway);
         assert_eq!(name, "mock_sway");
         assert_eq!(adapter.current().connection, DomainLifecycle::Ready);
+    }
+
+    #[test]
+    fn test_default_registry_routes_sway_and_generic_kinds_to_generic() {
+        let registry = CompositorRegistry::default_registry();
+        for kind in [
+            CompositorKind::Sway,
+            CompositorKind::Labwc,
+            CompositorKind::Dwl,
+            CompositorKind::River,
+            CompositorKind::Kde,
+            CompositorKind::Unknown,
+        ] {
+            let (_, name) = registry.select_backend(kind);
+            assert_eq!(name, "generic", "failed for {kind:?}");
+        }
+    }
+
+    #[test]
+    fn test_default_registry_routes_niri_to_niri_first() {
+        let registry = CompositorRegistry::default_registry();
+        let (_, name) = registry.select_backend(CompositorKind::Niri);
+        assert_eq!(name, "niri");
+    }
+
+    #[test]
+    fn test_default_registry_has_no_hyprland_candidate() {
+        // Hyprland is reserved for #106; the generic backend must not be wired to it here.
+        let registry = CompositorRegistry::default_registry();
+        let (_, name) = registry.select_backend(CompositorKind::Hyprland);
+        assert_eq!(name, "null");
+    }
+
+    #[test]
+    fn test_sway_falls_back_to_null_when_all_candidates_fail() {
+        let mut registry = CompositorRegistry::empty();
+        registry.register(CompositorKind::Sway, "failing_generic", Box::new(|| None));
+
+        let (adapter, name) = registry.select_backend(CompositorKind::Sway);
+        assert_eq!(name, "null");
+        assert_eq!(adapter.current().connection, DomainLifecycle::Unavailable);
     }
 }

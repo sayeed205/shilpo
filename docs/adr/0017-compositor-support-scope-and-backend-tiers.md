@@ -112,5 +112,5 @@ Direct `niri_ipc` socket access in `settings` is eliminated, and `niri-ipc` is r
 
 ### Negative & Follow-ups
 
-- Tier 1 generic protocol backend (`ext-workspace-v1` / `ext-foreign-toplevel-list-v1`) is tracked in [#246](https://github.com/sayeed205/shilpo/issues/246).
+- Tier 1 generic protocol backend (`ext-workspace-v1` / `ext-foreign-toplevel-list-v1`) is tracked in [#107](https://github.com/sayeed205/shilpo/issues/107).
 - Hyprland backend ([#106](https://github.com/sayeed205/shilpo/issues/106)) is updated to target this registry and exclude shortcut registration per Decision 7.

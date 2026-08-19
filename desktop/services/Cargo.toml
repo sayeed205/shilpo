@@ -34,7 +34,7 @@ libc = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 wayland-client = "0.31"
 wayland-backend.workspace = true
-wayland-protocols.workspace = true
+wayland-protocols = { workspace = true, features = ["client", "staging", "unstable"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 memfd = "0.6"
 rustix = { version = "1", features = ["fs"] }
