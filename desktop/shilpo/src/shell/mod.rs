@@ -8,6 +8,7 @@ pub mod error;
 pub mod extension_http;
 pub mod extension_surface;
 pub mod extensions;
+pub mod idle;
 pub mod keybindings;
 pub mod notification;
 pub mod osd;
@@ -30,6 +31,7 @@ pub use extensions::{
     ContributionDescriptor, ContributionInstance, ContributionSurface, ExtensionCoordinator,
     ExtensionSnapshot,
 };
+pub use idle::IdleGraceOverlayView;
 pub use keybindings::{GlobalShortcutBackend, NiriShortcutBackend};
 pub use notification::NotificationToastView;
 pub use osd::{OsdKind, OsdView};

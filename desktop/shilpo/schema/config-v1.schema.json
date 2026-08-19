@@ -77,6 +77,35 @@
         "history_limit": 100
       }
     },
+    "idle": {
+      "$ref": "#/$defs/IdleConfig",
+      "default": {
+        "grace_seconds": 2.0,
+        "behaviors": {
+          "lock": {
+            "enabled": true,
+            "timeout_seconds": 600.0,
+            "action": "lock",
+            "lock_before_suspend": false,
+            "resume_command": ""
+          },
+          "screen-off": {
+            "enabled": false,
+            "timeout_seconds": 660.0,
+            "action": "screen_off",
+            "lock_before_suspend": false,
+            "resume_command": ""
+          },
+          "suspend": {
+            "enabled": false,
+            "timeout_seconds": 1800.0,
+            "action": "suspend",
+            "lock_before_suspend": true,
+            "resume_command": ""
+          }
+        }
+      }
+    },
     "keybindings": {
       "type": "array",
       "items": {
@@ -540,6 +569,137 @@
         }
       },
       "additionalProperties": false
+    },
+    "IdleConfig": {
+      "type": "object",
+      "properties": {
+        "grace_seconds": {
+          "type": "number",
+          "format": "double",
+          "default": 2.0
+        },
+        "behaviors": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/IdleBehaviorConfig"
+          },
+          "default": {
+            "lock": {
+              "enabled": true,
+              "timeout_seconds": 600.0,
+              "action": "lock",
+              "lock_before_suspend": false,
+              "resume_command": ""
+            },
+            "screen-off": {
+              "enabled": false,
+              "timeout_seconds": 660.0,
+              "action": "screen_off",
+              "lock_before_suspend": false,
+              "resume_command": ""
+            },
+            "suspend": {
+              "enabled": false,
+              "timeout_seconds": 1800.0,
+              "action": "suspend",
+              "lock_before_suspend": true,
+              "resume_command": ""
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "IdleBehaviorConfig": {
+      "description": "Configuration for an individual named idle behavior.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether this behavior is active.",
+          "type": "boolean",
+          "default": true
+        },
+        "timeout_seconds": {
+          "description": "Idle timeout in seconds before this behavior is triggered.",
+          "type": "number",
+          "format": "double"
+        },
+        "action": {
+          "description": "Action to execute upon reaching the timeout.",
+          "$ref": "#/$defs/IdleAction"
+        },
+        "lock_before_suspend": {
+          "description": "Whether to attempt locking the screen before suspending (for Suspend action).",
+          "type": "boolean",
+          "default": false
+        },
+        "resume_command": {
+          "description": "Optional command to execute when the system resumes from idle.",
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "timeout_seconds",
+        "action"
+      ]
+    },
+    "IdleAction": {
+      "description": "All possible actions triggered when an idle timeout is reached.",
+      "oneOf": [
+        {
+          "description": "No action performed.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Lock the session (handled in #135).",
+          "type": "string",
+          "const": "lock"
+        },
+        {
+          "description": "Turn off display outputs (handled in #260).",
+          "type": "string",
+          "const": "screen_off"
+        },
+        {
+          "description": "Turn on display outputs (handled in #260).",
+          "type": "string",
+          "const": "screen_on"
+        },
+        {
+          "description": "Suspend the system via logind.",
+          "type": "string",
+          "const": "suspend"
+        },
+        {
+          "description": "Lock session before suspending via logind.",
+          "type": "string",
+          "const": "lock_and_suspend"
+        },
+        {
+          "description": "Execute a custom shell command.",
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command"
+              ]
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      ]
     },
     "KeybindingConfig": {
       "type": "object",

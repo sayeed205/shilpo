@@ -92,6 +92,8 @@ impl ShellRuntime {
         let (_config_tx, config_rx) = tokio::sync::mpsc::channel(16);
         let (_polkit_tx, polkit_rx) =
             tokio::sync::watch::channel(shilpo_services::PolkitSnapshot::default());
+        let (_idle_tx, idle_rx) =
+            tokio::sync::watch::channel(shilpo_services::IdleSnapshot::default());
         let device_client = shilpo_services::DeviceClient::new();
         cx.set_global(Self {
             dbus_service,
@@ -121,6 +123,7 @@ impl ShellRuntime {
             device_rx,
             notif_rx,
             polkit_rx,
+            idle_rx,
             rx,
             config_rx,
             device_client,
@@ -134,10 +137,19 @@ impl ShellRuntime {
             .as_ref()
             .map(|s| s.polkit().clone())
             .unwrap_or_else(|| {
-                Arc::new(shilpo_services::PolkitService::new_ready_for_test(
-                    Arc::new(shilpo_services::MockPolkitHelper::new(vec![])),
-                ))
+                Arc::new(shilpo_services::PolkitService::new_offline(Arc::new(
+                    shilpo_services::SystemPolkitHelper::new(),
+                )))
             })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn idle(cx: &App) -> Arc<dyn shilpo_services::IdlePort> {
+        cx.global::<Self>()
+            .service_hub
+            .as_ref()
+            .map(|s| s.idle().clone())
+            .unwrap_or_else(|| Arc::new(shilpo_services::IdleService::new_mock()))
     }
 
     #[allow(dead_code)]
@@ -285,6 +297,12 @@ impl ShellRuntime {
             cx.global_mut::<Self>().active_config = config.clone();
             if let Some(ref hub) = cx.global::<Self>().service_hub {
                 let _ = hub.set_clipboard_history_limit(config.clipboard.history_limit);
+                let _ =
+                    hub.idle()
+                        .submit_command(shilpo_services::IdleCommand::ConfigureBehaviors {
+                            behaviors: config.idle.behaviors.clone(),
+                            grace_seconds: config.idle.grace_seconds,
+                        });
             }
             Self::sync_wallpaper_provider(cx);
             let settings_event = {
@@ -372,6 +390,13 @@ impl ShellRuntime {
             wp.set_wallpaper_path(initial_wallpaper_path.clone(), cx);
         });
 
+        let _ = hub
+            .idle()
+            .submit_command(shilpo_services::IdleCommand::ConfigureBehaviors {
+                behaviors: session.active_config.idle.behaviors.clone(),
+                grace_seconds: session.active_config.idle.grace_seconds,
+            });
+
         cx.set_global(Self {
             dbus_service,
             _compositor_broker: compositor_broker,
@@ -419,6 +444,7 @@ impl ShellRuntime {
             streams.device_rx,
             streams.notif_rx,
             streams.polkit_rx,
+            streams.idle_rx,
             mailbox_rx,
             streams.config_rx,
             streams.device_client,
@@ -472,11 +498,13 @@ impl ShellRuntime {
         cx.global_mut::<Self>()._window_closed = Some(subscription);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_event_loop(
         cx: &mut App,
         mut device_rx: tokio::sync::broadcast::Receiver<shilpo_services::DeviceClientUpdate>,
         mut notif_rx: tokio::sync::broadcast::Receiver<shilpo_services::Notification>,
         mut polkit_rx: tokio::sync::watch::Receiver<shilpo_services::PolkitSnapshot>,
+        mut idle_rx: tokio::sync::watch::Receiver<shilpo_services::IdleSnapshot>,
         mut mailbox_rx: tokio::sync::mpsc::Receiver<ShellCommand>,
         mut config_rx: crate::bar::service_worker::ConfigReceiver,
         device_client: shilpo_services::DeviceClient,
@@ -485,11 +513,17 @@ impl ShellRuntime {
             let mut device_closed = false;
             let mut notif_closed = false;
             let mut polkit_closed = false;
+            let mut idle_closed = false;
             let mut mailbox_closed = false;
             let mut config_closed = false;
 
             loop {
-                if device_closed && notif_closed && polkit_closed && mailbox_closed && config_closed
+                if device_closed
+                    && notif_closed
+                    && polkit_closed
+                    && idle_closed
+                    && mailbox_closed
+                    && config_closed
                 {
                     break;
                 }
@@ -497,6 +531,7 @@ impl ShellRuntime {
                 let mut device_updates = Vec::new();
                 let mut notifications = Vec::new();
                 let mut polkit_snapshot = None;
+                let mut idle_snapshot = None;
                 let mut shell_commands = Vec::new();
                 let mut config_updates = Vec::new();
                 let mut resync_device = false;
@@ -529,6 +564,16 @@ impl ShellRuntime {
                             }
                             Err(_) => {
                                 polkit_closed = true;
+                            }
+                        }
+                    }
+                    res = idle_rx.changed(), if !idle_closed => {
+                        match res {
+                            Ok(_) => {
+                                idle_snapshot = Some(idle_rx.borrow_and_update().clone());
+                            }
+                            Err(_) => {
+                                idle_closed = true;
                             }
                         }
                     }
@@ -597,6 +642,7 @@ impl ShellRuntime {
                 if device_updates.is_empty()
                     && notifications.is_empty()
                     && polkit_snapshot.is_none()
+                    && idle_snapshot.is_none()
                     && shell_commands.is_empty()
                     && config_updates.is_empty()
                 {
@@ -612,6 +658,7 @@ impl ShellRuntime {
                         device_updates,
                         notifications,
                         polkit_snapshot,
+                        idle_snapshot,
                         shell_commands,
                         config_updates,
                     );
@@ -651,6 +698,7 @@ impl ShellRuntime {
         device_updates: Vec<shilpo_services::DeviceClientUpdate>,
         notifications: Vec<shilpo_services::Notification>,
         polkit_snapshot: Option<shilpo_services::PolkitSnapshot>,
+        idle_snapshot: Option<shilpo_services::IdleSnapshot>,
         shell_commands: Vec<ShellCommand>,
         config_updates: Vec<crate::bar::service_worker::ConfigUpdate>,
     ) {
@@ -660,6 +708,10 @@ impl ShellRuntime {
 
         if let Some(snap) = polkit_snapshot {
             ShellSurfaces::sync_polkit_dialog(cx, snap.request, snap.prompt_state);
+        }
+
+        if let Some(snap) = idle_snapshot {
+            ShellSurfaces::sync_idle_grace(cx, snap.active_grace);
         }
 
         for notif in notifications {
@@ -1003,6 +1055,9 @@ impl ShellRuntime {
                 if let Some((_, handle, _)) = windows.polkit {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
+                if let Some((_, handle, _)) = windows.idle_grace {
+                    let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
+                }
                 if let Some((_, handle)) = windows.capture {
                     let _ = cx.update_window(*handle, |_, window, _| window.remove_window());
                 }
@@ -1014,6 +1069,15 @@ impl ShellRuntime {
             });
         })
         .detach();
+    }
+
+    pub(crate) fn report_idle_grace_completed(cx: &mut App, grace_generation: u64) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        if let Some(hub) = cx.global::<Self>().service_hub.as_ref() {
+            hub.idle().report_grace_completed(grace_generation);
+        }
     }
 
     #[cfg(test)]
@@ -1044,6 +1108,7 @@ impl ShellRuntime {
         let device_client = shilpo_services::DeviceClient::new();
         let hub = ServiceHub::new_offline_for_test();
         let polkit_rx = hub.polkit().subscribe();
+        let idle_rx = hub.idle().subscribe();
         cx.set_global(Self {
             dbus_service,
             _compositor_broker: compositor_broker,
@@ -1072,6 +1137,7 @@ impl ShellRuntime {
             device_rx,
             notif_rx,
             polkit_rx,
+            idle_rx,
             rx,
             config_rx,
             device_client.clone(),
@@ -1110,6 +1176,7 @@ impl ShellRuntime {
         let device_rx = device_client.subscribe_updates();
         let hub = ServiceHub::new_offline_for_test_with_client(device_client.clone());
         let polkit_rx = hub.polkit().subscribe();
+        let idle_rx = hub.idle().subscribe();
         cx.set_global(Self {
             dbus_service,
             _compositor_broker: compositor_broker,
@@ -1138,6 +1205,7 @@ impl ShellRuntime {
             device_rx,
             notif_rx,
             polkit_rx,
+            idle_rx,
             rx,
             config_rx,
             device_client.clone(),
