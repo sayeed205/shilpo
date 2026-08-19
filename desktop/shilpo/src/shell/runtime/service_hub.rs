@@ -12,6 +12,7 @@ pub struct ServiceHubStreams {
     pub device_rx: tokio::sync::broadcast::Receiver<shilpo_services::DeviceClientUpdate>,
     pub notif_rx: tokio::sync::broadcast::Receiver<Notification>,
     pub polkit_rx: tokio::sync::watch::Receiver<shilpo_services::PolkitSnapshot>,
+    pub idle_rx: tokio::sync::watch::Receiver<shilpo_services::IdleSnapshot>,
     pub config_rx: ConfigReceiver,
     pub device_client: shilpo_services::DeviceClient,
 }
@@ -25,6 +26,7 @@ pub struct ServiceHub {
     compositor: Arc<dyn shilpo_services::CompositorAdapter>,
     notification: Arc<dyn NotificationPort>,
     polkit: Arc<dyn shilpo_services::PolkitPort>,
+    idle: Arc<dyn shilpo_services::IdlePort>,
     clipboard: shilpo_services::ClipboardService,
     app_scanner: shilpo_services::AppScanner,
     device_client: shilpo_services::DeviceClient,
@@ -89,8 +91,12 @@ impl ServiceHub {
             }
         };
 
+        let idle: Arc<dyn shilpo_services::IdlePort> =
+            Arc::new(shilpo_services::IdleService::new());
+
         let notif_rx = notification.subscribe_events();
         let polkit_rx = polkit.subscribe();
+        let idle_rx = idle.subscribe();
         let device_rx = device_client.subscribe_updates();
 
         let (config_tx, config_rx, service_commands, commands_rx) = service_worker::channels();
@@ -106,6 +112,7 @@ impl ServiceHub {
             device_rx,
             notif_rx,
             polkit_rx,
+            idle_rx,
             config_rx,
             device_client: device_client.clone(),
         };
@@ -114,6 +121,7 @@ impl ServiceHub {
             compositor,
             notification,
             polkit,
+            idle,
             clipboard,
             app_scanner,
             device_client,
@@ -136,11 +144,13 @@ impl ServiceHub {
         let polkit = Arc::new(shilpo_services::PolkitService::new_ready_for_test(
             Arc::new(shilpo_services::MockPolkitHelper::new(vec![])),
         ));
+        let idle = Arc::new(shilpo_services::IdleService::new_mock());
         let device_client = shilpo_services::DeviceClient::new();
         Self {
             compositor: Arc::new(shilpo_services::TestCompositorAdapter::new_default()),
             notification: adapter,
             polkit,
+            idle,
             clipboard: shilpo_services::ClipboardService::with_store(None),
             app_scanner: shilpo_services::AppScanner::new_empty(),
             device_client,
@@ -163,10 +173,12 @@ impl ServiceHub {
         let polkit = Arc::new(shilpo_services::PolkitService::new_ready_for_test(
             Arc::new(shilpo_services::MockPolkitHelper::new(vec![])),
         ));
+        let idle = Arc::new(shilpo_services::IdleService::new_mock());
         Self {
             compositor: Arc::new(shilpo_services::TestCompositorAdapter::new_default()),
             notification: adapter,
             polkit,
+            idle,
             clipboard: shilpo_services::ClipboardService::with_store(None),
             app_scanner: shilpo_services::AppScanner::new_empty(),
             device_client,
@@ -229,6 +241,7 @@ impl ServiceHub {
         let comp_snap = self.compositor.current();
         let notification = self.notification.snapshot();
         let polkit = self.polkit.snapshot();
+        let idle = self.idle.snapshot();
         let battery = self.domain_state(shilpo_services::DeviceDomain::Battery);
         let audio = self.domain_state(shilpo_services::DeviceDomain::Audio);
         let network = self.domain_state(shilpo_services::DeviceDomain::Network);
@@ -275,6 +288,13 @@ impl ServiceHub {
             polkit_state: to_service_lifecycle(polkit.lifecycle),
             polkit_last_error: polkit.last_error,
             polkit_helper_path: polkit.helper_path,
+            idle_service_available: idle.lifecycle.is_ready(),
+            idle_state: to_service_lifecycle(idle.lifecycle),
+            idle_last_error: idle.last_error,
+            idle_notifier_available: idle.notifier_available,
+            idle_registered_behaviors: idle.registered_behaviors,
+            idle_inhibit_count: idle.inhibit_count,
+            idle_unsupported_actions: idle.unsupported_actions,
             heed_store_available: self.heed_store_available,
             uptime_seconds: self.started_at.elapsed().as_secs(),
             extension_host: None,
@@ -287,6 +307,10 @@ impl ServiceHub {
 
     pub fn polkit(&self) -> &Arc<dyn shilpo_services::PolkitPort> {
         &self.polkit
+    }
+
+    pub fn idle(&self) -> &Arc<dyn shilpo_services::IdlePort> {
+        &self.idle
     }
 
     #[cfg(test)]

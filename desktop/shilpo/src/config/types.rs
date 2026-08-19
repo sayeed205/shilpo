@@ -38,6 +38,8 @@ pub struct ShellConfig {
     #[serde(default)]
     pub clipboard: ClipboardConfig,
     #[serde(default)]
+    pub idle: IdleConfig,
+    #[serde(default)]
     pub keybindings: Vec<KeybindingConfig>,
 }
 
@@ -154,6 +156,65 @@ impl Default for ClipboardConfig {
 
 pub fn default_clipboard_history_limit() -> usize {
     DEFAULT_CLIPBOARD_HISTORY_LIMIT
+}
+
+pub use shilpo_services::idle::{IdleAction, IdleBehaviorConfig};
+
+pub fn default_grace_seconds() -> f64 {
+    2.0
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IdleConfig {
+    #[serde(default = "default_grace_seconds")]
+    pub grace_seconds: f64,
+    #[serde(default = "default_idle_behaviors")]
+    pub behaviors: std::collections::BTreeMap<String, IdleBehaviorConfig>,
+}
+
+pub fn default_idle_behaviors() -> std::collections::BTreeMap<String, IdleBehaviorConfig> {
+    let mut behaviors = std::collections::BTreeMap::new();
+    behaviors.insert(
+        "lock".to_string(),
+        IdleBehaviorConfig {
+            enabled: true,
+            timeout_seconds: 600.0,
+            action: IdleAction::Lock,
+            lock_before_suspend: false,
+            resume_command: String::new(),
+        },
+    );
+    behaviors.insert(
+        "screen-off".to_string(),
+        IdleBehaviorConfig {
+            enabled: false,
+            timeout_seconds: 660.0,
+            action: IdleAction::ScreenOff,
+            lock_before_suspend: false,
+            resume_command: String::new(),
+        },
+    );
+    behaviors.insert(
+        "suspend".to_string(),
+        IdleBehaviorConfig {
+            enabled: false,
+            timeout_seconds: 1800.0,
+            action: IdleAction::Suspend,
+            lock_before_suspend: true,
+            resume_command: String::new(),
+        },
+    );
+    behaviors
+}
+
+impl Default for IdleConfig {
+    fn default() -> Self {
+        Self {
+            grace_seconds: default_grace_seconds(),
+            behaviors: default_idle_behaviors(),
+        }
+    }
 }
 
 /// Resolve Shilpo XDG configuration directory (`$XDG_CONFIG_HOME/shilpo` or `$HOME/.config/shilpo`).
@@ -620,6 +681,7 @@ impl Default for ShellConfig {
             startup: StartupConfig::default(),
             capture: CaptureConfig::default(),
             clipboard: ClipboardConfig::default(),
+            idle: IdleConfig::default(),
             keybindings: Vec::new(),
         }
     }
@@ -936,6 +998,30 @@ impl ShellConfig {
                 "clipboard.history_limit",
                 "must be greater than zero",
             ));
+        }
+
+        if !self.idle.grace_seconds.is_finite() || self.idle.grace_seconds < 0.0 {
+            d.push(ConfigDiagnostic::new(
+                "idle.grace_seconds",
+                "must be a finite non-negative number",
+            ));
+        }
+
+        for (name, behavior) in &self.idle.behaviors {
+            if !behavior.timeout_seconds.is_finite() || behavior.timeout_seconds < 0.0 {
+                d.push(ConfigDiagnostic::new(
+                    format!("idle.behaviors.\"{name}\".timeout_seconds"),
+                    "must be a finite non-negative number",
+                ));
+            }
+            if let IdleAction::Command { ref command } = behavior.action
+                && command.trim().is_empty()
+            {
+                d.push(ConfigDiagnostic::new(
+                    format!("idle.behaviors.\"{name}\".action.command"),
+                    "command must not be empty",
+                ));
+            }
         }
 
         let mut seen_keybinding_actions = std::collections::HashSet::new();

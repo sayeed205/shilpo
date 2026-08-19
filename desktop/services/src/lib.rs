@@ -10,6 +10,7 @@ pub mod device_daemon;
 pub use shilpo_domain as domain;
 pub use shilpo_domain::*;
 pub mod error;
+pub mod idle;
 pub use shilpo_device as device;
 pub use shilpo_device as device_protocol;
 pub use shilpo_device as device_client;
@@ -52,6 +53,12 @@ pub use device_daemon::{
     SystemDeviceAdapter,
 };
 pub use error::ServiceError;
+pub use idle::{
+    ActionExecutionOutcome, ActiveGraceInfo, IdleAction, IdleActionSink, IdleBehaviorConfig,
+    IdleCommand, IdleCommandOutcome, IdleDomainState, IdleNotifierBackend, IdlePort,
+    IdleRejectionReason, IdleService, IdleSnapshot, InhibitSource, MockIdleActionSink,
+    MockIdleNotifier, SystemIdleActionSink, WaylandIdleNotifier,
+};
 pub use location::{LocationInfo, LocationService};
 pub use media::{MediaCommand, MediaInfo, MediaService, PlaybackState};
 pub use network::{NetworkCommand, NetworkInfo, NetworkService, VpnConnection};

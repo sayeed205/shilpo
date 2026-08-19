@@ -27,6 +27,7 @@ pub fn classify_diagnostic(diagnostic: &ConfigDiagnostic) -> RecoveryScope {
         || path == "bar.margin.vertical"
         || path == "capture.default_selection"
         || path == "clipboard.history_limit"
+        || path == "idle.grace_seconds"
     {
         return RecoveryScope::RejectValue;
     }
@@ -52,6 +53,9 @@ pub fn classify_diagnostic(diagnostic: &ConfigDiagnostic) -> RecoveryScope {
         return RecoveryScope::RetainPreviousComponent;
     }
     if path.starts_with("clipboard.") {
+        return RecoveryScope::RetainPreviousComponent;
+    }
+    if path.starts_with("idle.") {
         return RecoveryScope::RetainPreviousComponent;
     }
     RecoveryScope::RejectCandidate
@@ -113,6 +117,9 @@ pub fn apply_scoped_recovery(
                     "clipboard.history_limit" => {
                         candidate.clipboard.history_limit = fallback_config.clipboard.history_limit;
                     }
+                    "idle.grace_seconds" => {
+                        candidate.idle.grace_seconds = fallback_config.idle.grace_seconds;
+                    }
                     _ => {}
                 }
                 restore_provenance_path(provenance, fallback_provenance, path);
@@ -143,6 +150,9 @@ pub fn apply_scoped_recovery(
                     }
                     "clipboard" => {
                         candidate.clipboard = fallback_config.clipboard.clone();
+                    }
+                    "idle" => {
+                        candidate.idle = fallback_config.idle.clone();
                     }
                     _ => {}
                 }

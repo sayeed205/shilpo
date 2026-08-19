@@ -131,7 +131,11 @@ async fn test_introspection_exact_contract() {
             ("GetStatus", &[(None, "(bsussb)", Some("out"))]),
             (
                 "GetTelemetry",
-                &[(None, "(bsttusbssbssbssbssbssbssbsssbts)", Some("out"))],
+                &[(
+                    None,
+                    "(bsttusbssbssbssbssbssbssbsssbssbuuasbts)",
+                    Some("out"),
+                )],
             ),
             ("Capture", &[(Some("intent"), "s", Some("in"))]),
             (

@@ -51,6 +51,7 @@ impl DoctorChecker {
             self.check_xdg_user_dirs(auto_fix),
             self.check_capture(),
             self.check_polkit_agent(),
+            self.check_idle_management(),
         ]
     }
 
@@ -838,6 +839,70 @@ impl DoctorChecker {
                     "Polkit helper binary found at {helper_display}, but the running shilpo daemon could not be reached to confirm agent registration"
                 ),
                 repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            },
+        }
+    }
+
+    pub fn check_idle_management(&self) -> DiagnosticItem {
+        match crate::cli::adapters::ipc::IpcAdapter::new().telemetry() {
+            Ok(telemetry) if telemetry.idle_service_available => {
+                let status = if !telemetry.idle_unsupported_actions.is_empty() {
+                    DiagnosticStatus::Warn
+                } else {
+                    DiagnosticStatus::Pass
+                };
+                let unsupported_note = if !telemetry.idle_unsupported_actions.is_empty() {
+                    format!(
+                        " (unsupported actions configured: {})",
+                        telemetry.idle_unsupported_actions.join(", ")
+                    )
+                } else {
+                    String::new()
+                };
+                DiagnosticItem {
+                    category: "Power & Idle".into(),
+                    name: "Idle Management Service".into(),
+                    status,
+                    message: format!(
+                        "ext-idle-notify-v1 ready, {} behaviors registered, {} active inhibits{}",
+                        telemetry.idle_registered_behaviors,
+                        telemetry.idle_inhibit_count,
+                        unsupported_note
+                    ),
+                    repair_command: None,
+                    unit_identifier: None,
+                    fix_applied: false,
+                }
+            }
+            Ok(telemetry) => {
+                let state_str = if telemetry.idle_state.is_empty() {
+                    "unavailable"
+                } else {
+                    telemetry.idle_state.as_str()
+                };
+                let err_str = if telemetry.idle_last_error.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", telemetry.idle_last_error)
+                };
+                DiagnosticItem {
+                    category: "Power & Idle".into(),
+                    name: "Idle Management Service".into(),
+                    status: DiagnosticStatus::Warn,
+                    message: format!("Idle management service state: {state_str}{err_str}"),
+                    repair_command: None,
+                    unit_identifier: None,
+                    fix_applied: false,
+                }
+            }
+            Err(_) => DiagnosticItem {
+                category: "Power & Idle".into(),
+                name: "Idle Management Service".into(),
+                status: DiagnosticStatus::Warn,
+                message: "Shell daemon is not running; idle status cannot be verified".into(),
+                repair_command: Some("shilpo daemon".into()),
                 unit_identifier: None,
                 fix_applied: false,
             },

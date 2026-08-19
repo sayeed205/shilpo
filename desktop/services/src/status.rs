@@ -124,6 +124,20 @@ pub struct ServiceHealth {
     pub polkit_last_error: Option<String>,
     #[serde(default)]
     pub polkit_helper_path: Option<String>,
+    #[serde(default)]
+    pub idle_service_available: bool,
+    #[serde(default)]
+    pub idle_state: ServiceLifecycle,
+    #[serde(default)]
+    pub idle_last_error: Option<String>,
+    #[serde(default)]
+    pub idle_notifier_available: bool,
+    #[serde(default)]
+    pub idle_registered_behaviors: u32,
+    #[serde(default)]
+    pub idle_inhibit_count: u32,
+    #[serde(default)]
+    pub idle_unsupported_actions: Vec<String>,
     pub heed_store_available: bool,
     pub uptime_seconds: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

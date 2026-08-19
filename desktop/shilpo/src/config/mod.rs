@@ -616,6 +616,10 @@ start = ["builtin:workspaces"]
     #[test]
     fn schema_fixture_matches_generated_schema() {
         // Keep the checked-in schema fixture aligned with the generated contract.
+        if std::env::var("UPDATE_CONFIG_SCHEMA").is_ok() {
+            let schema_path = concat!(env!("CARGO_MANIFEST_DIR"), "/schema/config-v1.schema.json");
+            let _ = std::fs::write(schema_path, ShellConfig::schema_json());
+        }
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../schema/config-v1.schema.json")).unwrap();
         let generated: serde_json::Value =

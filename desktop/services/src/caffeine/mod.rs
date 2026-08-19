@@ -1,8 +1,9 @@
 use std::path::PathBuf;
-use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::watch;
+
+use crate::idle::LogindInhibitHolder;
 
 pub fn caffeine_state_path() -> PathBuf {
     std::env::var_os("XDG_STATE_HOME")
@@ -18,9 +19,11 @@ pub struct CaffeineInfo {
     pub active: bool,
 }
 
+/// Facade over the Idle domain and in-process logind inhibit file descriptor.
 pub struct CaffeineService {
     tx: watch::Sender<CaffeineInfo>,
-    process: Arc<Mutex<Option<Child>>>,
+    holder: Arc<LogindInhibitHolder>,
+    _active_lock: Arc<Mutex<()>>,
 }
 
 impl Default for CaffeineService {
@@ -31,10 +34,15 @@ impl Default for CaffeineService {
 
 impl CaffeineService {
     pub fn new() -> Self {
+        Self::with_holder(Arc::new(LogindInhibitHolder::default()))
+    }
+
+    pub fn with_holder(holder: Arc<LogindInhibitHolder>) -> Self {
         let (tx, _) = watch::channel(CaffeineInfo { active: false });
         let service = Self {
             tx,
-            process: Arc::new(Mutex::new(None)),
+            holder,
+            _active_lock: Arc::new(Mutex::new(())),
         };
 
         let state_path = caffeine_state_path();
@@ -60,63 +68,35 @@ impl CaffeineService {
     }
 
     pub fn set_active(&self, active: bool) -> bool {
+        let _guard = self._active_lock.lock().unwrap();
         let current_active = self.tx.borrow().active;
-        let mut proc_lock = self.process.lock().unwrap();
 
         if active == current_active {
             return current_active;
         }
 
-        let new_active = if active {
-            if let Ok(child) = Command::new("systemd-inhibit")
-                .args([
-                    "--what=idle:sleep:handle-lid-switch",
-                    "--who=Shilpo",
-                    "--why=Caffeine active",
-                    "sleep",
-                    "infinity",
-                ])
-                .spawn()
-            {
-                *proc_lock = Some(child);
-                true
-            } else {
-                tracing::warn!("systemd-inhibit unavailable, caffeine active state fallback");
-                true
-            }
-        } else {
-            if let Some(mut child) = proc_lock.take() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-            false
-        };
+        let holder = self.holder.clone();
+        // In-process logind inhibit management
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = holder.set_active(active).await;
+            });
+        }
 
-        let _ = self.tx.send_replace(CaffeineInfo { active: new_active });
+        let _ = self.tx.send_replace(CaffeineInfo { active });
 
         let state_path = caffeine_state_path();
         if let Some(parent) = state_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(&state_path, if new_active { "true" } else { "false" });
+        let _ = std::fs::write(&state_path, if active { "true" } else { "false" });
 
-        new_active
+        active
     }
 
     pub fn toggle(&self) -> bool {
         let current = self.is_active();
         self.set_active(!current)
-    }
-}
-
-impl Drop for CaffeineService {
-    fn drop(&mut self) {
-        if let Ok(mut proc_lock) = self.process.lock()
-            && let Some(mut child) = proc_lock.take()
-        {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
     }
 }
 

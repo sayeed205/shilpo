@@ -336,6 +336,7 @@ pub struct SurfaceSnapshot {
     pub notification_lifecycle: SurfaceLifecycle,
     pub osd_lifecycle: SurfaceLifecycle,
     pub polkit_lifecycle: SurfaceLifecycle,
+    pub idle_grace_lifecycle: SurfaceLifecycle,
     pub extension_surface_count: usize,
     pub extension_lifecycle: SurfaceLifecycle,
     pub capture_lifecycle: SurfaceLifecycle,
@@ -362,6 +363,11 @@ pub(crate) struct ShutdownWindows {
         u64,
         WindowHandle<shilpo_ui::Root>,
         Entity<crate::polkit::PolkitDialogView>,
+    )>,
+    pub(crate) idle_grace: Option<(
+        u64,
+        WindowHandle<shilpo_ui::Root>,
+        Entity<crate::shell::idle::IdleGraceOverlayView>,
     )>,
     pub(crate) capture: Option<(u64, WindowHandle<shilpo_ui::Root>)>,
 }
@@ -415,6 +421,13 @@ pub struct ShellSurfaces {
     )>,
     polkit_generation: u64,
     polkit_lifecycle: SurfaceLifecycle,
+    idle_grace: Option<(
+        u64,
+        WindowHandle<shilpo_ui::Root>,
+        Entity<crate::shell::idle::IdleGraceOverlayView>,
+    )>,
+    idle_grace_generation: u64,
+    idle_grace_lifecycle: SurfaceLifecycle,
     extension_lifecycle: SurfaceLifecycle,
     capture: Option<(u64, WindowHandle<shilpo_ui::Root>)>,
     capture_generation: u64,
@@ -675,6 +688,7 @@ impl ShellSurfaces {
                 notification_lifecycle: surfaces.notification_lifecycle,
                 osd_lifecycle: surfaces.osd_lifecycle,
                 polkit_lifecycle: surfaces.polkit_lifecycle,
+                idle_grace_lifecycle: surfaces.idle_grace_lifecycle,
                 extension_surface_count: surfaces.extension_surfaces.len(),
                 extension_lifecycle: surfaces.extension_lifecycle,
                 capture_lifecycle: surfaces.capture_lifecycle,
@@ -710,6 +724,9 @@ impl ShellSurfaces {
             polkit: None,
             polkit_generation: 0,
             polkit_lifecycle: SurfaceLifecycle::Closed,
+            idle_grace: None,
+            idle_grace_generation: 0,
+            idle_grace_lifecycle: SurfaceLifecycle::Closed,
             extension_lifecycle: SurfaceLifecycle::Closed,
             capture: None,
             capture_generation: 0,
@@ -950,6 +967,7 @@ impl ShellSurfaces {
         self.notification_lifecycle = SurfaceLifecycle::Closed;
         self.osd_lifecycle = SurfaceLifecycle::Closed;
         self.polkit_lifecycle = SurfaceLifecycle::Closed;
+        self.idle_grace_lifecycle = SurfaceLifecycle::Closed;
         self.capture_lifecycle = SurfaceLifecycle::Closed;
         ShutdownWindows {
             bars: std::mem::take(&mut self.bars),
@@ -957,6 +975,7 @@ impl ShellSurfaces {
             extension_panel: self.extension_panel.take(),
             notification: self.notification.take(),
             polkit: self.polkit.take(),
+            idle_grace: self.idle_grace.take(),
             capture: self.capture.take(),
         }
     }
@@ -1829,6 +1848,113 @@ impl ShellSurfaces {
                 cx.global_mut::<ShellRuntime>()
                     .shell_surfaces_mut()
                     .polkit_lifecycle = SurfaceLifecycle::Closed;
+            }
+        }
+    }
+
+    pub(crate) fn forget_idle_grace(cx: &mut App) {
+        if cx.has_global::<ShellRuntime>() {
+            let runtime = cx.global_mut::<ShellRuntime>();
+            runtime.shell_surfaces_mut().idle_grace = None;
+            runtime.shell_surfaces_mut().idle_grace_lifecycle = SurfaceLifecycle::Closed;
+        }
+    }
+
+    pub(crate) fn sync_idle_grace(
+        cx: &mut App,
+        active_grace: Option<shilpo_services::ActiveGraceInfo>,
+    ) {
+        if let Some(grace) = active_grace {
+            let existing = cx
+                .global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .idle_grace
+                .take();
+
+            if let Some((generation, window_handle, view_handle)) = existing {
+                if generation == grace.grace_generation {
+                    cx.global_mut::<ShellRuntime>()
+                        .shell_surfaces_mut()
+                        .idle_grace = Some((generation, window_handle, view_handle));
+                    return;
+                } else {
+                    let _ = window_handle.update(cx, |_, window, _| window.remove_window());
+                }
+            }
+
+            let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
+                (display.bounds(), Some(display.id()))
+            } else {
+                (
+                    Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
+                    None,
+                )
+            };
+
+            let options = WindowOptions {
+                titlebar: None,
+                window_bounds: Some(WindowBounds::Windowed(display_bounds)),
+                display_id,
+                app_id: Some("shilpo-idle-grace".into()),
+                window_background: WindowBackgroundAppearance::Transparent,
+                kind: WindowKind::LayerShell(LayerShellOptions {
+                    namespace: "idle-grace".into(),
+                    layer: Layer::Overlay,
+                    anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+                    keyboard_interactivity: KeyboardInteractivity::None,
+                    ..Default::default()
+                }),
+                focus: false,
+                show: true,
+                ..Default::default()
+            };
+
+            let grace_gen = grace.grace_generation;
+            let fade_ms = grace.fade_ms;
+            let spawned_view: std::sync::Arc<
+                std::sync::Mutex<Option<Entity<crate::shell::idle::IdleGraceOverlayView>>>,
+            > = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let view_cell = spawned_view.clone();
+
+            let window_result = cx.open_window(options, move |window, cx| {
+                window.on_window_should_close(cx, |_, cx| {
+                    ShellSurfaces::forget_idle_grace(cx);
+                    true
+                });
+                let view = cx.new(|cx| {
+                    crate::shell::idle::IdleGraceOverlayView::new(grace_gen, fade_ms, window, cx)
+                });
+                *view_cell.lock().unwrap() = Some(view.clone());
+                cx.new(|cx| shilpo_ui::Root::new(view, window, cx).bordered(false))
+            });
+
+            if let Ok(window_handle) = window_result
+                && let Some(view_handle) = spawned_view.lock().unwrap().take()
+            {
+                cx.global_mut::<ShellRuntime>()
+                    .shell_surfaces_mut()
+                    .idle_grace = Some((grace_gen, window_handle, view_handle));
+                cx.global_mut::<ShellRuntime>()
+                    .shell_surfaces_mut()
+                    .idle_grace_generation = grace_gen;
+                cx.global_mut::<ShellRuntime>()
+                    .shell_surfaces_mut()
+                    .idle_grace_lifecycle = SurfaceLifecycle::Open {
+                    generation: grace_gen,
+                };
+            }
+        } else {
+            // Close idle grace window if open
+            if let Some((_, window_handle, _)) = cx
+                .global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .idle_grace
+                .take()
+            {
+                let _ = window_handle.update(cx, |_, window, _| window.remove_window());
+                cx.global_mut::<ShellRuntime>()
+                    .shell_surfaces_mut()
+                    .idle_grace_lifecycle = SurfaceLifecycle::Closed;
             }
         }
     }
