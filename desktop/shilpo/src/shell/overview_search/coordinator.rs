@@ -1,4 +1,11 @@
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, RecvTimeoutError},
+    },
+    time::{Duration, Instant},
+};
 
 use shilpo_ui::IconName;
 
@@ -11,6 +18,62 @@ use super::{
         ActionResult, ProviderId, SearchActivation, SearchError, SearchProvider, SearchRequest,
     },
 };
+
+/// Default per-query search budget before deadline expiry and ranking fallback.
+pub const DEFAULT_PER_QUERY_BUDGET: Duration = Duration::from_millis(250);
+
+/// Default limit on concurrent in-flight searches per provider.
+pub const DEFAULT_MAX_IN_FLIGHT_PER_PROVIDER: usize = 1;
+
+/// Execution time budget for search queries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchBudget {
+    /// Maximum wall time the coordinator will wait for provider completion
+    /// before ranking whatever has arrived.
+    pub per_query: Duration,
+}
+
+impl Default for SearchBudget {
+    fn default() -> Self {
+        Self {
+            per_query: DEFAULT_PER_QUERY_BUDGET,
+        }
+    }
+}
+
+impl SearchBudget {
+    /// Creates a new search budget with the specified per-query duration.
+    pub const fn new(per_query: Duration) -> Self {
+        Self { per_query }
+    }
+}
+
+/// Execution summary returned by [`SearchCoordinator::search`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[must_use = "a query summary reports timed-out and skipped providers; \
+              discarding it silently hides degraded search behavior"]
+pub struct SearchSummary {
+    /// Providers that timed out and were cancelled at the query deadline.
+    pub timed_out_providers: Vec<ProviderId>,
+    /// Providers that were skipped because their in-flight run limit was reached.
+    pub skipped_providers: Vec<ProviderId>,
+    /// Total number of candidates gathered across all scratch sinks before ranking.
+    pub raw_candidate_count: usize,
+    /// Total number of candidates pushed into the destination sink after ranking.
+    pub ranked_candidate_count: usize,
+}
+
+impl SearchSummary {
+    /// Returns `true` if any provider timed out during the query.
+    pub fn has_timed_out(&self) -> bool {
+        !self.timed_out_providers.is_empty()
+    }
+
+    /// Returns `true` if any provider was skipped due to in-flight bounds.
+    pub fn has_skipped(&self) -> bool {
+        !self.skipped_providers.is_empty()
+    }
+}
 
 /// Bound on candidates collected from a single provider before ranking.
 ///
@@ -29,6 +92,9 @@ pub struct SearchCoordinator {
     providers: Vec<Arc<dyn SearchProvider>>,
     learning_store: Arc<dyn SearchLearningStore>,
     ranker_config: RankerConfig,
+    budget: SearchBudget,
+    max_in_flight_per_provider: usize,
+    in_flight_counts: Arc<Mutex<HashMap<ProviderId, usize>>>,
 }
 
 impl Default for SearchCoordinator {
@@ -37,6 +103,9 @@ impl Default for SearchCoordinator {
             providers: Vec::new(),
             learning_store: Arc::new(NoopSearchLearningStore),
             ranker_config: RankerConfig::default(),
+            budget: SearchBudget::default(),
+            max_in_flight_per_provider: DEFAULT_MAX_IN_FLIGHT_PER_PROVIDER,
+            in_flight_counts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -48,6 +117,9 @@ impl SearchCoordinator {
             providers,
             learning_store: Arc::new(NoopSearchLearningStore),
             ranker_config: RankerConfig::default(),
+            budget: SearchBudget::default(),
+            max_in_flight_per_provider: DEFAULT_MAX_IN_FLIGHT_PER_PROVIDER,
+            in_flight_counts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -63,6 +135,34 @@ impl SearchCoordinator {
         self
     }
 
+    /// Builder helper to set search budget.
+    pub fn with_budget(mut self, budget: SearchBudget) -> Self {
+        self.budget = budget;
+        self
+    }
+
+    /// Builder helper to set search per-query duration budget.
+    pub fn with_per_query_budget(mut self, budget: Duration) -> Self {
+        self.budget = SearchBudget::new(budget);
+        self
+    }
+
+    /// Builder helper to set max in-flight queries per provider.
+    pub fn with_max_in_flight_per_provider(mut self, limit: usize) -> Self {
+        self.max_in_flight_per_provider = limit.max(1);
+        self
+    }
+
+    /// Returns the active search budget.
+    pub fn budget(&self) -> &SearchBudget {
+        &self.budget
+    }
+
+    /// Returns the configured in-flight limit per provider.
+    pub fn max_in_flight_per_provider(&self) -> usize {
+        self.max_in_flight_per_provider
+    }
+
     /// Registers an additional provider.
     pub fn register(&mut self, provider: Arc<dyn SearchProvider>) {
         self.providers.push(provider);
@@ -71,15 +171,12 @@ impl SearchCoordinator {
     /// Fans out a search query to registered providers supporting the parsed query mode
     /// and ranks the merged results into the provided sink.
     ///
-    /// Each eligible provider's `search` call runs concurrently on its own thread so a slow or
-    /// stalled provider cannot delay another provider's candidates from being collected.
-    /// Providers whose declared modes do not include `request.mode` are not spawned at all.
-    /// Each provider writes into a private scratch sink sized well above any realistic
-    /// single-provider output (see [`SCRATCH_SINK_CAPACITY`]), so a provider that returns
-    /// many legitimate candidates cannot have any of them silently dropped before ranking.
-    /// Collected candidates are merged across all scratch sinks, scored, ordered by the
-    /// host ranker, and truncated to top-k once into the caller's sink.
-    pub fn search(&self, raw_query: &str, generation: u64, sink: &SearchSink) {
+    /// Each eligible provider's `search` call runs concurrently on a detached worker thread.
+    /// Providers are bounded by a per-query deadline budget: if any provider fails to complete
+    /// within budget, its scratch sink is cancelled and the coordinator proceeds to rank all
+    /// candidates that arrived in time. Furthermore, concurrent in-flight queries per provider
+    /// are bounded to prevent thread accumulation across repeated keystrokes.
+    pub fn search(&self, raw_query: &str, generation: u64, sink: &SearchSink) -> SearchSummary {
         let (mode, query) = parser::parse_query(raw_query);
         let request = SearchRequest::new(raw_query, mode, query, generation);
 
@@ -93,34 +190,125 @@ impl SearchCoordinator {
             max_per_provider: SCRATCH_SINK_CAPACITY,
             max_total: SCRATCH_SINK_CAPACITY,
         };
-        let scratch_sinks: Vec<SearchSink> = eligible_providers
-            .iter()
-            .map(|_| SearchSink::new(generation, scratch_config.clone()))
-            .collect();
 
-        std::thread::scope(|scope| {
-            for (provider, scratch) in eligible_providers.iter().zip(&scratch_sinks) {
-                let request = request.clone();
-                let scratch = scratch.clone();
-                let provider = (*provider).clone();
-                scope.spawn(move || provider.search(request, scratch));
+        let mut spawned_providers = Vec::new();
+        let mut skipped_providers = Vec::new();
+        let (tx, rx) = mpsc::channel();
+
+        // 1. Filter out providers exceeding in-flight capacity and allocate scratch sinks.
+        {
+            let mut in_flight = self
+                .in_flight_counts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            for provider in eligible_providers {
+                let id = provider.id();
+                let count = in_flight.entry(id.clone()).or_insert(0);
+                if *count >= self.max_in_flight_per_provider {
+                    skipped_providers.push(id);
+                } else {
+                    *count += 1;
+                    let scratch = SearchSink::new(generation, scratch_config.clone());
+                    spawned_providers.push(((*provider).clone(), scratch));
+                }
             }
-        });
-
-        let mut all_candidates = Vec::new();
-        for scratch in &scratch_sinks {
-            all_candidates.extend(scratch.snapshot());
         }
 
+        // 2. Spawn detached threads for each active provider.
+        let mut outstanding: HashSet<ProviderId> = HashSet::new();
+        for (provider, scratch) in &spawned_providers {
+            let id = provider.id();
+            outstanding.insert(id.clone());
+
+            let request = request.clone();
+            let scratch = scratch.clone();
+            let provider = provider.clone();
+            let tx = tx.clone();
+            let tracker = self.in_flight_counts.clone();
+
+            std::thread::spawn(move || {
+                struct InFlightGuard {
+                    tracker: Arc<Mutex<HashMap<ProviderId, usize>>>,
+                    provider_id: ProviderId,
+                }
+                impl Drop for InFlightGuard {
+                    fn drop(&mut self) {
+                        let mut in_flight = self.tracker.lock().unwrap_or_else(|e| e.into_inner());
+                        if let Some(count) = in_flight.get_mut(&self.provider_id) {
+                            *count = count.saturating_sub(1);
+                        }
+                    }
+                }
+
+                let guard = InFlightGuard {
+                    tracker,
+                    provider_id: id.clone(),
+                };
+
+                provider.search(request, scratch);
+                drop(guard);
+                let _ = tx.send(id);
+            });
+        }
+
+        // Explicitly drop our clone of tx so rx can detect disconnect if all threads finish.
+        drop(tx);
+
+        // 3. Wait on completions until all eligible providers finish or budget expires.
+        let start = Instant::now();
+        let budget = self.budget.per_query;
+
+        while !outstanding.is_empty() {
+            let elapsed = start.elapsed();
+            if elapsed >= budget {
+                break;
+            }
+            let remaining = budget - elapsed;
+            match rx.recv_timeout(remaining) {
+                Ok(completed_id) => {
+                    outstanding.remove(&completed_id);
+                }
+                Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {
+                    break;
+                }
+            }
+        }
+
+        // 4. Cancel scratch sinks for any providers that did not finish within budget.
+        let mut timed_out_providers = Vec::new();
+        for (provider, scratch) in &spawned_providers {
+            let id = provider.id();
+            if outstanding.contains(&id) {
+                scratch.cancel();
+                timed_out_providers.push(id);
+            }
+        }
+
+        // 5. Gather candidates across scratch sinks in registration order.
+        let mut all_candidates = Vec::new();
+        for (_provider, scratch) in &spawned_providers {
+            all_candidates.extend(scratch.snapshot());
+        }
+        let raw_candidate_count = all_candidates.len();
+
+        // 6. Rank candidates.
         let ranked = ranker::rank(
             all_candidates,
             query,
             self.learning_store.as_ref(),
             &self.ranker_config,
         );
+        let ranked_candidate_count = ranked.len();
 
         for candidate in ranked {
             sink.push(candidate);
+        }
+
+        SearchSummary {
+            timed_out_providers,
+            skipped_providers,
+            raw_candidate_count,
+            ranked_candidate_count,
         }
     }
 
@@ -214,7 +402,7 @@ mod tests {
         let coordinator = SearchCoordinator::new(vec![p1, p2]);
         let sink = SearchSink::for_test(1);
 
-        coordinator.search("hello", 1, &sink);
+        let _ = coordinator.search("hello", 1, &sink);
 
         let results = sink.snapshot();
         assert_eq!(results.len(), 2);
@@ -278,7 +466,7 @@ mod tests {
         let sink = SearchSink::for_test(1);
 
         // Searching generates impressions but records 0 activations in learning store
-        coordinator.search("query", 1, &sink);
+        let _ = coordinator.search("query", 1, &sink);
         let results = sink.snapshot();
         assert_eq!(results.len(), 1);
         assert_eq!(learning.score_boost(&results[0].canonical_id), 0);
@@ -347,7 +535,7 @@ mod tests {
         let sink = SearchSink::for_test(1);
 
         let start = std::time::Instant::now();
-        coordinator.search("Result", 1, &sink);
+        let _ = coordinator.search("Result", 1, &sink);
         let elapsed = start.elapsed();
 
         let results = sink.snapshot();
@@ -395,7 +583,7 @@ mod tests {
 
         let coordinator = SearchCoordinator::new(vec![slow, fast]);
         let sink = SearchSink::for_test(1);
-        coordinator.search("Result", 1, &sink);
+        let _ = coordinator.search("Result", 1, &sink);
 
         let results = sink.snapshot();
         assert!(results.iter().any(|c| c.title == "Fast Result"));
@@ -453,7 +641,7 @@ mod tests {
 
         let coordinator = SearchCoordinator::new(vec![Arc::new(ManyCandidatesProvider)]);
         let sink = SearchSink::for_test(1);
-        coordinator.search("Zzzedge", 1, &sink);
+        let _ = coordinator.search("Zzzedge", 1, &sink);
 
         let results = sink.snapshot();
         assert!(
@@ -524,28 +712,28 @@ mod tests {
 
         // 1. Query with '>' scopes to Apps mode: only app_prov dispatched
         let sink1 = SearchSink::for_test(1);
-        coordinator.search(">term", 1, &sink1);
+        let _ = coordinator.search(">term", 1, &sink1);
         assert_eq!(app_dispatches.load(Ordering::SeqCst), 1);
         assert_eq!(calc_dispatches.load(Ordering::SeqCst), 0);
         assert_eq!(clip_dispatches.load(Ordering::SeqCst), 0);
 
         // 2. Query with '=' scopes to Calculator mode: only calc_prov dispatched
         let sink2 = SearchSink::for_test(2);
-        coordinator.search("=2+2", 2, &sink2);
+        let _ = coordinator.search("=2+2", 2, &sink2);
         assert_eq!(app_dispatches.load(Ordering::SeqCst), 1);
         assert_eq!(calc_dispatches.load(Ordering::SeqCst), 1);
         assert_eq!(clip_dispatches.load(Ordering::SeqCst), 0);
 
         // 3. Query with ';' scopes to Clipboard mode: only clip_prov dispatched
         let sink3 = SearchSink::for_test(3);
-        coordinator.search(";note", 3, &sink3);
+        let _ = coordinator.search(";note", 3, &sink3);
         assert_eq!(app_dispatches.load(Ordering::SeqCst), 1);
         assert_eq!(calc_dispatches.load(Ordering::SeqCst), 1);
         assert_eq!(clip_dispatches.load(Ordering::SeqCst), 1);
 
         // 4. Default query: only app_prov dispatched (declared Default)
         let sink4 = SearchSink::for_test(4);
-        coordinator.search("firefox", 4, &sink4);
+        let _ = coordinator.search("firefox", 4, &sink4);
         assert_eq!(app_dispatches.load(Ordering::SeqCst), 2);
         assert_eq!(calc_dispatches.load(Ordering::SeqCst), 1);
         assert_eq!(clip_dispatches.load(Ordering::SeqCst), 1);
@@ -616,21 +804,21 @@ mod tests {
 
         // 1. '/' scopes to actions
         let sink = SearchSink::for_test(1);
-        coordinator.search("/toggle", 1, &sink);
+        let _ = coordinator.search("/toggle", 1, &sink);
         let res = sink.snapshot();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].category, ResultCategory::Action);
 
         // 2. ';' scopes to clipboard
         let sink = SearchSink::for_test(2);
-        coordinator.search(";copied", 2, &sink);
+        let _ = coordinator.search(";copied", 2, &sink);
         let res = sink.snapshot();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].category, ResultCategory::Clipboard);
 
         // 3. '=' scopes to calculator
         let sink = SearchSink::for_test(3);
-        coordinator.search("=5 * 5", 3, &sink);
+        let _ = coordinator.search("=5 * 5", 3, &sink);
         let res = sink.snapshot();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].title, "25");
@@ -638,14 +826,14 @@ mod tests {
 
         // 4. '?' scopes to web search
         let sink = SearchSink::for_test(4);
-        coordinator.search("?rust documentation", 4, &sink);
+        let _ = coordinator.search("?rust documentation", 4, &sink);
         let res = sink.snapshot();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].category, ResultCategory::WebSearch);
 
         // 5. '<' scopes to keybindings
         let sink = SearchSink::for_test(5);
-        coordinator.search("<Super", 5, &sink);
+        let _ = coordinator.search("<Super", 5, &sink);
         let res = sink.snapshot();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].category, ResultCategory::Keybinding);
@@ -660,21 +848,21 @@ mod tests {
 
         // Bare implicit arithmetic
         let sink1 = SearchSink::for_test(1);
-        coordinator.search("2 + 2", 1, &sink1);
+        let _ = coordinator.search("2 + 2", 1, &sink1);
         let res1 = sink1.snapshot();
         assert_eq!(res1.len(), 1);
         assert_eq!(res1[0].title, "4");
 
         // Complex implicit expression with parenthesis
         let sink2 = SearchSink::for_test(2);
-        coordinator.search("10 * (5 - 3)", 2, &sink2);
+        let _ = coordinator.search("10 * (5 - 3)", 2, &sink2);
         let res2 = sink2.snapshot();
         assert_eq!(res2.len(), 1);
         assert_eq!(res2[0].title, "20");
 
         // Non-arithmetic query "hello 2" parses as Default and is NOT dispatched to Calculator
         let sink3 = SearchSink::for_test(3);
-        coordinator.search("hello 2", 3, &sink3);
+        let _ = coordinator.search("hello 2", 3, &sink3);
         let res3 = sink3.snapshot();
         assert_eq!(res3.len(), 0);
     }
@@ -719,7 +907,7 @@ mod tests {
         let coordinator = SearchCoordinator::new(vec![app_prov, action_prov, quick_prov]);
 
         let sink = SearchSink::for_test(1);
-        coordinator.search("terminal", 1, &sink);
+        let _ = coordinator.search("terminal", 1, &sink);
         let results = sink.snapshot();
 
         // Must contain results from AppSearchProvider, ActionSearchProvider, and QuicklinksSearchProvider
@@ -843,7 +1031,7 @@ mod tests {
 
         // 1. LaunchApp
         let sink = SearchSink::for_test(1);
-        coordinator.search(">Calc", 1, &sink);
+        let _ = coordinator.search(">Calc", 1, &sink);
         let cand = &sink.snapshot()[0];
         let res = coordinator
             .activate(
@@ -856,7 +1044,7 @@ mod tests {
 
         // 2. Handled (Window)
         let sink = SearchSink::for_test(2);
-        coordinator.search("Terminal", 2, &sink);
+        let _ = coordinator.search("Terminal", 2, &sink);
         let win_cand = sink
             .snapshot()
             .into_iter()
@@ -878,7 +1066,7 @@ mod tests {
 
         // 3. InvokeAction
         let sink = SearchSink::for_test(3);
-        coordinator.search("/quit", 3, &sink);
+        let _ = coordinator.search("/quit", 3, &sink);
         let act_cand = &sink.snapshot()[0];
         let res = coordinator
             .activate(
@@ -891,7 +1079,7 @@ mod tests {
 
         // 4. CopyClipboard
         let sink = SearchSink::for_test(4);
-        coordinator.search(";saved", 4, &sink);
+        let _ = coordinator.search(";saved", 4, &sink);
         let clip_cand = &sink.snapshot()[0];
         let res = coordinator
             .activate(
@@ -904,7 +1092,7 @@ mod tests {
 
         // 5. CopyCalculation
         let sink = SearchSink::for_test(5);
-        coordinator.search("=100 + 200", 5, &sink);
+        let _ = coordinator.search("=100 + 200", 5, &sink);
         let calc_cand = &sink.snapshot()[0];
         let res = coordinator
             .activate(
@@ -917,7 +1105,7 @@ mod tests {
 
         // 6. OpenPath
         let sink = SearchSink::for_test(6);
-        coordinator.search("~/", 6, &sink);
+        let _ = coordinator.search("~/", 6, &sink);
         let path_cand = sink
             .snapshot()
             .into_iter()
@@ -935,7 +1123,7 @@ mod tests {
 
         // 7. OpenUri
         let sink = SearchSink::for_test(7);
-        coordinator.search("https://example.com/test", 7, &sink);
+        let _ = coordinator.search("https://example.com/test", 7, &sink);
         let uri_cand = sink
             .snapshot()
             .into_iter()
@@ -955,7 +1143,7 @@ mod tests {
 
         // 8. ExecuteCommand
         let sink = SearchSink::for_test(8);
-        coordinator.search("$echo hi", 8, &sink);
+        let _ = coordinator.search("$echo hi", 8, &sink);
         if let Some(cmd_cand) = sink
             .snapshot()
             .into_iter()
@@ -973,7 +1161,7 @@ mod tests {
 
         // 9. OpenWeb
         let sink = SearchSink::for_test(9);
-        coordinator.search("?rust lang", 9, &sink);
+        let _ = coordinator.search("?rust lang", 9, &sink);
         let web_cand = sink
             .snapshot()
             .into_iter()
@@ -993,7 +1181,7 @@ mod tests {
 
         // 10. CopyKeybinding
         let sink = SearchSink::for_test(10);
-        coordinator.search("<Super", 10, &sink);
+        let _ = coordinator.search("<Super", 10, &sink);
         let key_cand = sink
             .snapshot()
             .into_iter()
@@ -1007,5 +1195,415 @@ mod tests {
             )
             .unwrap();
         assert_eq!(res, ActionResult::CopyKeybinding("Super+L".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Deadline, Cancellation, and In-Flight Bounding Tests (#254)
+    // -----------------------------------------------------------------------
+
+    struct ControllableBlockingProvider {
+        id: &'static str,
+        unblock_rx: Arc<Mutex<mpsc::Receiver<()>>>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl SearchProvider for ControllableBlockingProvider {
+        fn id(&self) -> ProviderId {
+            ProviderId::from_static(self.id)
+        }
+
+        fn search(&self, request: SearchRequest, sink: SearchSink) {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let rx = self.unblock_rx.lock().unwrap();
+            let _ = rx.recv();
+            sink.push(SearchCandidate::new(
+                self.id(),
+                format!("{}:{}", self.id, request.query),
+                request.generation,
+                "Blocked Result",
+                None,
+                ResultCategory::Custom,
+                SearchResultIcon::Initial('B'),
+                "Open",
+                SearchActivation::new("payload-blocked"),
+            ));
+        }
+
+        fn activate(&self, _activation: SearchActivation) -> Result<ActionResult, SearchError> {
+            Ok(ActionResult::Handled {
+                close_overview: true,
+            })
+        }
+    }
+
+    #[test]
+    fn test_hung_provider_does_not_prevent_search_from_returning_and_fast_candidates_ranked() {
+        let (unblock_tx, unblock_rx) = mpsc::channel();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hung = Arc::new(ControllableBlockingProvider {
+            id: "hung",
+            unblock_rx: Arc::new(Mutex::new(unblock_rx)),
+            calls,
+        });
+
+        let fast = Arc::new(TestProvider {
+            id: "fast",
+            prefix: "Fast",
+        });
+
+        let coordinator =
+            SearchCoordinator::new(vec![hung, fast]).with_per_query_budget(Duration::ZERO);
+        let sink = SearchSink::for_test(1);
+
+        let summary = coordinator.search("hello", 1, &sink);
+
+        // Fast provider was ranked (or if budget was ZERO before thread ran, fast may or may not finish)
+        // With ZERO budget, hung provider is definitely timed out
+        assert!(summary.has_timed_out());
+        assert!(
+            summary
+                .timed_out_providers
+                .contains(&ProviderId::from_static("hung"))
+        );
+
+        // Unblock hung provider thread so it can exit cleanly
+        let _ = unblock_tx.send(());
+    }
+
+    #[test]
+    fn test_fast_provider_completes_and_delivers_when_another_provider_is_hung() {
+        let (unblock_tx, unblock_rx) = mpsc::channel();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hung = Arc::new(ControllableBlockingProvider {
+            id: "hung",
+            unblock_rx: Arc::new(Mutex::new(unblock_rx)),
+            calls,
+        });
+
+        let fast = Arc::new(TestProvider {
+            id: "fast",
+            prefix: "Fast",
+        });
+
+        // A generous budget lets the instant `fast` provider finish well within it,
+        // while `hung` — blocked on a test-controlled channel we never release until
+        // after assertions — is *guaranteed* still outstanding when the budget expires.
+        // Only the budget's lower bound matters for determinism; using the same generous
+        // value as the "everything completes" path keeps this from depending on how much
+        // real time thread scheduling happens to take under CI load (see #254 Determinism).
+        let coordinator = SearchCoordinator::new(vec![fast, hung])
+            .with_per_query_budget(Duration::from_millis(500));
+        let sink = SearchSink::for_test(1);
+
+        let summary = coordinator.search("hello", 1, &sink);
+
+        assert_eq!(
+            summary.timed_out_providers,
+            vec![ProviderId::from_static("hung")]
+        );
+        assert!(summary.skipped_providers.is_empty());
+
+        let results = sink.snapshot();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].canonical_id, "fast:hello");
+        assert_eq!(results[0].title, "Fast - hello");
+
+        let _ = unblock_tx.send(());
+    }
+
+    #[test]
+    fn test_zero_budget_ranks_only_what_was_already_collected_without_panicking() {
+        let p1 = Arc::new(TestProvider {
+            id: "p1",
+            prefix: "One",
+        });
+        let p2 = Arc::new(TestProvider {
+            id: "p2",
+            prefix: "Two",
+        });
+
+        let coordinator =
+            SearchCoordinator::new(vec![p1, p2]).with_per_query_budget(Duration::ZERO);
+        let sink = SearchSink::for_test(1);
+
+        let summary = coordinator.search("test", 1, &sink);
+        // Does not panic and returns summary
+        assert_eq!(summary.timed_out_providers.len(), 2);
+    }
+
+    #[test]
+    fn test_all_providers_complete_within_budget_produces_identical_results() {
+        let p1 = Arc::new(TestProvider {
+            id: "p1",
+            prefix: "One",
+        });
+        let p2 = Arc::new(TestProvider {
+            id: "p2",
+            prefix: "Two",
+        });
+
+        let coordinator =
+            SearchCoordinator::new(vec![p1, p2]).with_per_query_budget(Duration::from_millis(500));
+        let sink = SearchSink::for_test(1);
+
+        let summary = coordinator.search("query", 1, &sink);
+
+        assert_eq!(summary.timed_out_providers, Vec::<ProviderId>::new());
+        assert_eq!(summary.skipped_providers, Vec::<ProviderId>::new());
+        assert_eq!(summary.raw_candidate_count, 2);
+        assert_eq!(summary.ranked_candidate_count, 2);
+
+        let results = sink.snapshot();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "One - query");
+        assert_eq!(results[1].title, "Two - query");
+    }
+
+    struct LatePushProvider {
+        id: &'static str,
+        gate_rx: Arc<Mutex<mpsc::Receiver<()>>>,
+        push_accepted: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl SearchProvider for LatePushProvider {
+        fn id(&self) -> ProviderId {
+            ProviderId::from_static(self.id)
+        }
+
+        fn search(&self, request: SearchRequest, sink: SearchSink) {
+            let rx = self.gate_rx.lock().unwrap();
+            let _ = rx.recv();
+            let accepted = sink.push(SearchCandidate::new(
+                self.id(),
+                format!("{}:late", self.id),
+                request.generation,
+                "Late Candidate",
+                None,
+                ResultCategory::Custom,
+                SearchResultIcon::Initial('L'),
+                "Open",
+                SearchActivation::new("payload-late"),
+            ));
+            self.push_accepted
+                .store(accepted, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn activate(&self, _activation: SearchActivation) -> Result<ActionResult, SearchError> {
+            Ok(ActionResult::Handled {
+                close_overview: true,
+            })
+        }
+    }
+
+    #[test]
+    fn test_late_push_after_deadline_is_rejected_and_does_not_leak_to_future_queries() {
+        let (gate_tx, gate_rx) = mpsc::channel();
+        let push_accepted = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+        let late_provider = Arc::new(LatePushProvider {
+            id: "late",
+            gate_rx: Arc::new(Mutex::new(gate_rx)),
+            push_accepted: push_accepted.clone(),
+        });
+
+        let coordinator = SearchCoordinator::new(vec![late_provider.clone()])
+            .with_per_query_budget(Duration::ZERO);
+        let sink1 = SearchSink::for_test(1);
+
+        // Query 1: Times out immediately due to ZERO budget, cancelling sink1's scratch sink
+        let summary1 = coordinator.search("first", 1, &sink1);
+        assert_eq!(
+            summary1.timed_out_providers,
+            vec![ProviderId::from_static("late")]
+        );
+        assert_eq!(sink1.len(), 0);
+
+        // Now signal the late provider to push to its cancelled scratch sink
+        let _ = gate_tx.send(());
+
+        // Wait a brief moment for the thread to perform push
+        for _ in 0..10_000 {
+            if !push_accepted.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            std::thread::yield_now();
+        }
+
+        assert!(
+            !push_accepted.load(std::sync::atomic::Ordering::SeqCst),
+            "push() into cancelled scratch sink must return false"
+        );
+        assert_eq!(sink1.len(), 0, "no candidates must appear in query 1 sink");
+
+        // Wait for thread to exit and in-flight count to reset
+        for _ in 0..10_000 {
+            let in_flight = coordinator.in_flight_counts.lock().unwrap();
+            if in_flight
+                .get(&ProviderId::from_static("late"))
+                .copied()
+                .unwrap_or(0)
+                == 0
+            {
+                break;
+            }
+            drop(in_flight);
+            std::thread::yield_now();
+        }
+
+        // Query 2: New query with fast provider
+        let fast = Arc::new(TestProvider {
+            id: "fast",
+            prefix: "Fast",
+        });
+        let coordinator2 =
+            SearchCoordinator::new(vec![fast]).with_per_query_budget(Duration::from_millis(500));
+        let sink2 = SearchSink::for_test(2);
+        let _ = coordinator2.search("second", 2, &sink2);
+
+        let results2 = sink2.snapshot();
+        assert_eq!(results2.len(), 1);
+        assert_eq!(results2[0].canonical_id, "fast:second");
+    }
+
+    #[test]
+    fn test_permanently_hung_provider_does_not_accumulate_unbounded_in_flight_threads() {
+        let (unblock_tx, unblock_rx) = mpsc::channel();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hung = Arc::new(ControllableBlockingProvider {
+            id: "hung",
+            unblock_rx: Arc::new(Mutex::new(unblock_rx)),
+            calls: calls.clone(),
+        });
+
+        let coordinator = SearchCoordinator::new(vec![hung])
+            .with_per_query_budget(Duration::ZERO)
+            .with_max_in_flight_per_provider(1);
+
+        // Query 1: Spawns the hung provider (in-flight count becomes 1)
+        let sink1 = SearchSink::for_test(1);
+        let summary1 = coordinator.search("q1", 1, &sink1);
+        assert_eq!(
+            summary1.timed_out_providers,
+            vec![ProviderId::from_static("hung")]
+        );
+        assert_eq!(summary1.skipped_providers, Vec::<ProviderId>::new());
+
+        // With a ZERO budget, `search()` returns before the spawned provider thread is
+        // guaranteed to have started running — the deadline check fires on the coordinator's
+        // first loop iteration, without waiting on anything. Wait for the thread to actually
+        // record its call before asserting on it, rather than racing its scheduling.
+        for _ in 0..10_000 {
+            if calls.load(std::sync::atomic::Ordering::SeqCst) == 1 {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // Query 2: Hung provider is still in-flight, so it is skipped
+        let sink2 = SearchSink::for_test(2);
+        let summary2 = coordinator.search("q2", 2, &sink2);
+        assert_eq!(summary2.timed_out_providers, Vec::<ProviderId>::new());
+        assert_eq!(
+            summary2.skipped_providers,
+            vec![ProviderId::from_static("hung")]
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // Query 3: Hung provider is still skipped
+        let sink3 = SearchSink::for_test(3);
+        let summary3 = coordinator.search("q3", 3, &sink3);
+        assert_eq!(
+            summary3.skipped_providers,
+            vec![ProviderId::from_static("hung")]
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // Query 4: Hung provider is still skipped
+        let sink4 = SearchSink::for_test(4);
+        let summary4 = coordinator.search("q4", 4, &sink4);
+        assert_eq!(
+            summary4.skipped_providers,
+            vec![ProviderId::from_static("hung")]
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // Release the hung provider
+        let _ = unblock_tx.send(());
+
+        // Wait until in-flight count drops back to 0
+        for _ in 0..10_000 {
+            let in_flight = coordinator.in_flight_counts.lock().unwrap();
+            if in_flight
+                .get(&ProviderId::from_static("hung"))
+                .copied()
+                .unwrap_or(0)
+                == 0
+            {
+                break;
+            }
+            drop(in_flight);
+            std::thread::yield_now();
+        }
+
+        // Query 5: Now hung provider is unblocked and can be scheduled again
+        let (unblock_tx2, unblock_rx2) = mpsc::channel();
+        let hung2 = Arc::new(ControllableBlockingProvider {
+            id: "hung",
+            unblock_rx: Arc::new(Mutex::new(unblock_rx2)),
+            calls: calls.clone(),
+        });
+        let coordinator2 = SearchCoordinator::new(vec![hung2])
+            .with_per_query_budget(Duration::ZERO)
+            .with_max_in_flight_per_provider(1);
+        let sink5 = SearchSink::for_test(5);
+        let summary5 = coordinator2.search("q5", 5, &sink5);
+
+        assert_eq!(summary5.skipped_providers, Vec::<ProviderId>::new());
+
+        // Wait for thread to start and record the call
+        for _ in 0..10_000 {
+            if calls.load(std::sync::atomic::Ordering::SeqCst) == 2 {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let _ = unblock_tx2.send(());
+    }
+
+    #[test]
+    fn test_timed_out_providers_reported_in_summary() {
+        let (unblock_tx, unblock_rx) = mpsc::channel();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hung = Arc::new(ControllableBlockingProvider {
+            id: "hung-prov",
+            unblock_rx: Arc::new(Mutex::new(unblock_rx)),
+            calls,
+        });
+
+        let fast = Arc::new(TestProvider {
+            id: "fast-prov",
+            prefix: "Fast",
+        });
+
+        // See test_fast_provider_completes_and_delivers_when_another_provider_is_hung for
+        // why a generous, non-racy budget is used instead of a short one: `hung-prov` stays
+        // blocked on a channel this test controls, so it is guaranteed to still be
+        // outstanding when any budget expires, regardless of its length.
+        let coordinator = SearchCoordinator::new(vec![hung, fast])
+            .with_per_query_budget(Duration::from_millis(500));
+        let sink = SearchSink::for_test(1);
+
+        let summary = coordinator.search("test", 1, &sink);
+
+        assert!(summary.has_timed_out());
+        assert_eq!(
+            summary.timed_out_providers,
+            vec![ProviderId::from_static("hung-prov")]
+        );
+        assert_eq!(summary.skipped_providers, Vec::<ProviderId>::new());
+
+        let _ = unblock_tx.send(());
     }
 }
