@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use shilpo_ext_api::{
     CanonicalId, Capability, ContributionId, ExtensionEvent, ExtensionId, ExtensionManifest,
     HostOperation, IdError, ManifestError, TextNode, ViewLimits, ViewNode, ViewTree,
@@ -73,7 +75,7 @@ impl fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeBudget {
     pub max_memory_bytes: usize,
     pub fuel: u64,
@@ -717,6 +719,21 @@ impl<R: ExtensionRuntime> ExtensionHost<R> {
         Ok(candidates)
     }
 
+    /// Records a failure against this extension's circuit breaker for a timeout the
+    /// worker never itself observed — the caller (the shell's coordinator) gave up
+    /// waiting for a reply before this process could produce one. This keeps a single
+    /// authoritative circuit breaker per extension: the shell has no safe way to mutate
+    /// breaker state directly since it lives in this out-of-process worker, so it must
+    /// route "I gave up waiting" back through a command instead of maintaining its own
+    /// parallel copy.
+    pub fn record_coordinator_timeout(&mut self, id: &ExtensionId) {
+        self.circuit_breaker.record_failure(
+            id,
+            DiagnosticCode::RuntimeTimeout,
+            "coordinator timed out waiting for a reply before this worker responded",
+        );
+    }
+
     pub fn manifest(&self, id: &ExtensionId) -> Option<&ExtensionManifest> {
         self.registrations
             .get(id)
@@ -1038,6 +1055,57 @@ mod tests {
         assert_eq!(
             host.circuit_breaker().status(&id).consecutive_failures,
             Some(0)
+        );
+    }
+
+    #[test]
+    fn test_record_coordinator_timeout_trips_circuit_breaker() {
+        // #256: the shell's coordinator has no safe way to mutate this breaker directly
+        // (it lives in the out-of-process worker), so a coordinator-side timeout is
+        // routed back through `ExtensionCommand::RecordSearchTimeout`, which the worker
+        // handles by calling this method. Proven here at the layer that actually owns
+        // the breaker; the supervisor-level test only proves the command gets dispatched.
+        let clock = Arc::new(FakeMonotonicClock::new(Instant::now()));
+        let mut host = ExtensionHost::new(ConfigurableFailureRuntime { failure_kind: None })
+            .with_failure_threshold(3)
+            .with_clock(clock);
+
+        let manifest = ExtensionManifest::from_toml(
+            r#"
+            id = "io.github.test.search-timeout"
+            name = "Search Timeout"
+            version = "1.0.0"
+            "#,
+        )
+        .unwrap();
+        let id = manifest.id.clone();
+        host.register(manifest, (), vec![]).unwrap();
+
+        host.record_coordinator_timeout(&id);
+        assert_eq!(
+            host.circuit_breaker().status(&id).consecutive_failures,
+            Some(1)
+        );
+
+        host.record_coordinator_timeout(&id);
+        assert_eq!(
+            host.circuit_breaker().status(&id).consecutive_failures,
+            Some(2)
+        );
+
+        host.record_coordinator_timeout(&id);
+        assert_eq!(
+            host.circuit_breaker().status(&id).state,
+            CircuitStateKind::Open
+        );
+        assert_eq!(
+            host.diagnostics().last().unwrap().code,
+            DiagnosticCode::CircuitOpen
+        );
+        assert!(
+            host.diagnostics()
+                .iter()
+                .any(|d| d.code == DiagnosticCode::RuntimeTimeout)
         );
     }
 }

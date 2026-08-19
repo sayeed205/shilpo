@@ -17,6 +17,8 @@ pub enum ContributionSurface {
     Shortcut,
     #[serde(rename = "wallpaper")]
     Wallpaper,
+    #[serde(rename = "search_provider")]
+    SearchProvider,
 }
 
 #[derive(
@@ -61,6 +63,8 @@ pub struct ContributionDescriptor {
     pub wallpaper_modes: Option<Vec<shilpo_ext_api::WallpaperMode>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallpaper_targets: Option<Vec<shilpo_ext_api::WallpaperTargetKind>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_modes: Option<Vec<shilpo_ext_api::SearchProviderMode>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -174,7 +178,30 @@ pub enum ExtensionCommand {
         session_id: String,
         extension_id: ExtensionId,
     },
+    Search {
+        expected_host_gen: super::process::HostGeneration,
+        canonical: CanonicalId,
+        request: shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+        budget: crate::RuntimeBudget,
+    },
+    /// Fire-and-forget: the shell's coordinator gave up waiting for a `Search` reply
+    /// before this worker produced one. Records the failure against this extension's
+    /// authoritative circuit breaker, which lives here, not in the shell process.
+    RecordSearchTimeout {
+        extension_id: ExtensionId,
+    },
     Shutdown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorkerSearchError {
+    NotRegistered(ExtensionId),
+    UnknownContribution(CanonicalId),
+    CircuitOpen(ExtensionId),
+    Disabled(ExtensionId),
+    Timeout,
+    Guest(String),
+    Other(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

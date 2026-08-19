@@ -64,9 +64,9 @@ pub use worker::{
     DevReloadOutcome, ExtensionChanges, ExtensionCommand, ExtensionEngine, ExtensionGeneration,
     ExtensionSession, ExtensionSnapshot, ExtensionUpdate, FrameReader, HostGeneration, HostMessage,
     MAX_FRAME_SIZE, MAX_QUEUE_BOUND, PROTOCOL_VERSION, ProcessCodecError, ReplaceableEvent,
-    ScriptExtensionStatus, WorkerMessage, WorkerPayload, read_frame, recv_host_message,
-    recv_worker_message, recv_worker_message_nonblocking, run_extension_host, send_host_message,
-    send_worker_message, write_frame,
+    ScriptExtensionStatus, WorkerMessage, WorkerPayload, WorkerSearchError, read_frame,
+    recv_host_message, recv_worker_message, recv_worker_message_nonblocking, run_extension_host,
+    send_host_message, send_worker_message, write_frame,
 };
 
 #[cfg(test)]

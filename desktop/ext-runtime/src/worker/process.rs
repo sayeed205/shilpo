@@ -37,6 +37,12 @@ pub struct HostMessage {
 pub enum WorkerPayload {
     Update(ExtensionUpdate),
     DevReload(super::protocol::DevReloadOutcome),
+    Search(
+        Result<
+            Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>,
+            super::protocol::WorkerSearchError,
+        >,
+    ),
     ShutdownAck,
     FatalError(String),
 }
@@ -380,6 +386,28 @@ pub fn run_extension_host() {
             };
             if let Err(error) = send_worker_message(&mut writer, &reply) {
                 eprintln!("extension-host error sending dev reload reply: {error}");
+                break;
+            }
+            continue;
+        }
+
+        if let ExtensionCommand::Search {
+            canonical,
+            request,
+            budget,
+            ..
+        } = msg.command
+        {
+            let result = engine.handle_search(&canonical, &request, budget);
+            let reply = WorkerMessage {
+                protocol_version: PROTOCOL_VERSION,
+                host_generation,
+                engine_generation: engine.generation(),
+                request_id: msg.request_id,
+                payload: WorkerPayload::Search(result),
+            };
+            if let Err(error) = send_worker_message(&mut writer, &reply) {
+                eprintln!("extension-host error sending search reply: {error}");
                 break;
             }
             continue;

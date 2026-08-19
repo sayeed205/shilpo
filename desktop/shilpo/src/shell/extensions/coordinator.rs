@@ -108,6 +108,18 @@ impl ExtensionCoordinator {
         self.snapshot().views.get(id).cloned()
     }
 
+    pub fn search(
+        &self,
+        canonical: &CanonicalId,
+        request: &shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
+        budget: shilpo_ext_runtime::RuntimeBudget,
+    ) -> Result<
+        Vec<shilpo_ext_api::bindings::shilpo::extension::types::SearchCandidate>,
+        super::supervisor::SearchDispatchError,
+    > {
+        self.supervisor.search(canonical, request, budget)
+    }
+
     pub fn settings_schema(&self, id: &CanonicalId) -> Result<Option<serde_json::Value>, String> {
         Ok(self.snapshot().settings_schemas.get(id).cloned())
     }

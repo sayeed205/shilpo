@@ -77,6 +77,10 @@ impl ExtensionHost {
         self.extensions.is_some()
     }
 
+    pub(crate) fn coordinator(&self) -> Option<Arc<crate::extensions::ExtensionCoordinator>> {
+        self.extensions.clone()
+    }
+
     pub(crate) fn generation(&self) -> Option<ExtensionGeneration> {
         self.extensions.as_ref().map(|ext| ext.generation())
     }

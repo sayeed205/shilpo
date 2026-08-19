@@ -167,6 +167,29 @@ impl ShellRuntime {
         &mut self.extension_host
     }
 
+    pub(crate) fn extension_coordinator(
+        cx: &App,
+    ) -> Option<Arc<crate::extensions::ExtensionCoordinator>> {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>().extension_host().coordinator()
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn extension_descriptors_for(
+        cx: &App,
+        surface: crate::extensions::ContributionSurface,
+    ) -> Vec<crate::extensions::ContributionDescriptor> {
+        if cx.has_global::<Self>() {
+            cx.global::<Self>()
+                .extension_host()
+                .descriptors_for(surface)
+        } else {
+            Vec::new()
+        }
+    }
+
     pub(crate) fn wallpaper_coordinator(&self) -> &WallpaperCoordinator {
         &self.wallpaper_coordinator
     }
