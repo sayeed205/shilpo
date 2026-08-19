@@ -19,6 +19,7 @@ pub mod media;
 pub mod network;
 pub mod night_light;
 pub mod notifications;
+pub mod polkit;
 pub mod power_profile;
 pub(crate) mod runtime;
 pub mod session_store;
@@ -60,6 +61,13 @@ pub use notifications::{
     NotificationCommandOutcome, NotificationDomainState, NotificationPort,
     NotificationRejectionReason, NotificationService, NotificationSnapshot, NotificationUrgency,
     TimeSource,
+};
+pub use polkit::{
+    AuthorityClient, HelperEvent, MockPolkitHelper, POLKIT_AGENT_OBJECT_PATH,
+    POLKIT_AUTHORITY_DESTINATION, POLKIT_AUTHORITY_INTERFACE, POLKIT_AUTHORITY_PATH,
+    PolkitAgentServer, PolkitCommand, PolkitCommandOutcome, PolkitDomainState, PolkitHelper,
+    PolkitHelperSession, PolkitIdentity, PolkitPort, PolkitPromptState, PolkitRejectionReason,
+    PolkitRequest, PolkitService, PolkitSnapshot, SystemPolkitHelper,
 };
 pub use power_profile::{PowerProfile, PowerProfileInfo, PowerProfileService};
 pub use session_store::*;

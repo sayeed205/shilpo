@@ -13,6 +13,7 @@ pub mod notification;
 pub mod osd;
 pub mod overview;
 pub mod overview_search;
+pub mod polkit;
 pub mod runtime;
 pub mod widgets;
 pub mod workspace_miniature;
@@ -33,6 +34,7 @@ pub use keybindings::{GlobalShortcutBackend, NiriShortcutBackend};
 pub use notification::NotificationToastView;
 pub use osd::{OsdKind, OsdView};
 pub use overview::WorkspaceOverview;
+pub use polkit::PolkitDialogView;
 pub use runtime::ShellRuntime;
 
 pub fn run_daemon() {

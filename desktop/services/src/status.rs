@@ -116,6 +116,14 @@ pub struct ServiceHealth {
     pub brightness_state: ServiceLifecycle,
     #[serde(default)]
     pub brightness_last_error: Option<String>,
+    #[serde(default)]
+    pub polkit_service_available: bool,
+    #[serde(default)]
+    pub polkit_state: ServiceLifecycle,
+    #[serde(default)]
+    pub polkit_last_error: Option<String>,
+    #[serde(default)]
+    pub polkit_helper_path: Option<String>,
     pub heed_store_available: bool,
     pub uptime_seconds: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

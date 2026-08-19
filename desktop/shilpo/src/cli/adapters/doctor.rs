@@ -50,6 +50,7 @@ impl DoctorChecker {
             self.check_i2c_permissions(),
             self.check_xdg_user_dirs(auto_fix),
             self.check_capture(),
+            self.check_polkit_agent(),
         ]
     }
 
@@ -775,6 +776,71 @@ impl DoctorChecker {
                 unit_identifier: None,
                 fix_applied: false,
             }
+        }
+    }
+
+    pub fn check_polkit_agent(&self) -> DiagnosticItem {
+        let helper_path = shilpo_services::polkit::probe_system_helper_path();
+        if helper_path.is_none() {
+            return DiagnosticItem {
+                category: "Authentication".into(),
+                name: "Polkit Agent & Helper".into(),
+                status: DiagnosticStatus::Fail,
+                message: "polkit-agent-helper-1 not found in standard system locations (/usr/lib/polkit-1, /usr/libexec, /usr/lib)".into(),
+                repair_command: Some(
+                    "sudo apt install polkitd || sudo pacman -S polkit || sudo dnf install polkit".into(),
+                ),
+                unit_identifier: None,
+                fix_applied: false,
+            };
+        }
+        let helper_display = helper_path.as_ref().unwrap().display().to_string();
+
+        // The helper binary check above is static; whether *our* agent is
+        // actually registered can only be answered by the running shell
+        // daemon, queried the same way `shilpo status` does.
+        match crate::cli::adapters::ipc::IpcAdapter::new().telemetry() {
+            Ok(telemetry) if telemetry.polkit_service_available => DiagnosticItem {
+                category: "Authentication".into(),
+                name: "Polkit Agent & Helper".into(),
+                status: DiagnosticStatus::Pass,
+                message: format!("Polkit agent registered and ready (helper: {helper_display})"),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            },
+            Ok(telemetry) => DiagnosticItem {
+                category: "Authentication".into(),
+                name: "Polkit Agent & Helper".into(),
+                status: DiagnosticStatus::Warn,
+                message: format!(
+                    "Polkit agent state: {}{} (helper: {helper_display})",
+                    if telemetry.polkit_state.is_empty() {
+                        "unavailable"
+                    } else {
+                        telemetry.polkit_state.as_str()
+                    },
+                    if telemetry.polkit_last_error.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {}", telemetry.polkit_last_error)
+                    }
+                ),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            },
+            Err(_) => DiagnosticItem {
+                category: "Authentication".into(),
+                name: "Polkit Agent & Helper".into(),
+                status: DiagnosticStatus::Warn,
+                message: format!(
+                    "Polkit helper binary found at {helper_display}, but the running shilpo daemon could not be reached to confirm agent registration"
+                ),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            },
         }
     }
 

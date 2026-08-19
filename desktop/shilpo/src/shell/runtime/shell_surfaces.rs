@@ -335,6 +335,7 @@ pub struct SurfaceSnapshot {
     pub readiness: shilpo_services::ReadinessState,
     pub notification_lifecycle: SurfaceLifecycle,
     pub osd_lifecycle: SurfaceLifecycle,
+    pub polkit_lifecycle: SurfaceLifecycle,
     pub extension_surface_count: usize,
     pub extension_lifecycle: SurfaceLifecycle,
     pub capture_lifecycle: SurfaceLifecycle,
@@ -357,6 +358,11 @@ pub(crate) struct ShutdownWindows {
         u32,
         WindowHandle<crate::notification::NotificationToastView>,
     )>,
+    pub(crate) polkit: Option<(
+        u64,
+        WindowHandle<shilpo_ui::Root>,
+        Entity<crate::polkit::PolkitDialogView>,
+    )>,
     pub(crate) capture: Option<(u64, WindowHandle<shilpo_ui::Root>)>,
 }
 
@@ -368,10 +374,12 @@ pub(crate) enum WindowClosedOutcome {
 }
 
 /// Owns every shell window: the per-display bars, the overview, the
-/// workspace overview, notification toasts, the OSD, and the extension surfaces.
+/// notification toast, the on-screen display (OSD), and any open extension
+/// views.
 ///
-/// Window handles and surface state are private; the shell interacts with the
-/// manager exclusively through the method surface below.
+/// `ShellSurfaces` is the exclusive authority on window creation, geometry,
+/// anchor, and destruction. All changes flow through the typed `SurfaceRequest`
+/// interface.
 pub struct ShellSurfaces {
     /// Two-channel card coordinator (hover + persistent).
     pub(crate) card_coordinator: CardCoordinator,
@@ -400,6 +408,13 @@ pub struct ShellSurfaces {
     )>,
     osd_generation: u64,
     osd_lifecycle: SurfaceLifecycle,
+    polkit: Option<(
+        u64,
+        WindowHandle<shilpo_ui::Root>,
+        Entity<crate::polkit::PolkitDialogView>,
+    )>,
+    polkit_generation: u64,
+    polkit_lifecycle: SurfaceLifecycle,
     extension_lifecycle: SurfaceLifecycle,
     capture: Option<(u64, WindowHandle<shilpo_ui::Root>)>,
     capture_generation: u64,
@@ -659,6 +674,7 @@ impl ShellSurfaces {
                 readiness: surfaces.readiness(),
                 notification_lifecycle: surfaces.notification_lifecycle,
                 osd_lifecycle: surfaces.osd_lifecycle,
+                polkit_lifecycle: surfaces.polkit_lifecycle,
                 extension_surface_count: surfaces.extension_surfaces.len(),
                 extension_lifecycle: surfaces.extension_lifecycle,
                 capture_lifecycle: surfaces.capture_lifecycle,
@@ -691,6 +707,9 @@ impl ShellSurfaces {
             osd: None,
             osd_generation: 0,
             osd_lifecycle: SurfaceLifecycle::Closed,
+            polkit: None,
+            polkit_generation: 0,
+            polkit_lifecycle: SurfaceLifecycle::Closed,
             extension_lifecycle: SurfaceLifecycle::Closed,
             capture: None,
             capture_generation: 0,
@@ -930,12 +949,14 @@ impl ShellSurfaces {
         self.bar_state = BarState::Hidden;
         self.notification_lifecycle = SurfaceLifecycle::Closed;
         self.osd_lifecycle = SurfaceLifecycle::Closed;
+        self.polkit_lifecycle = SurfaceLifecycle::Closed;
         self.capture_lifecycle = SurfaceLifecycle::Closed;
         ShutdownWindows {
             bars: std::mem::take(&mut self.bars),
             extension_surfaces: std::mem::take(&mut self.extension_surfaces),
             extension_panel: self.extension_panel.take(),
             notification: self.notification.take(),
+            polkit: self.polkit.take(),
             capture: self.capture.take(),
         }
     }
@@ -1695,6 +1716,120 @@ impl ShellSurfaces {
             surfaces.osd_generation = 1;
             surfaces.osd_lifecycle = SurfaceLifecycle::Open { generation: 1 };
             Self::schedule_osd_dismiss(cx, 1);
+        }
+    }
+
+    pub(crate) fn forget_polkit(cx: &mut App) {
+        if cx.has_global::<ShellRuntime>() {
+            let runtime = cx.global_mut::<ShellRuntime>();
+            runtime.shell_surfaces_mut().polkit = None;
+            runtime.shell_surfaces_mut().polkit_lifecycle = SurfaceLifecycle::Closed;
+        }
+    }
+
+    pub(crate) fn sync_polkit_dialog(
+        cx: &mut App,
+        request: Option<shilpo_services::PolkitRequest>,
+        prompt_state: Option<shilpo_services::PolkitPromptState>,
+    ) {
+        if let Some(req) = request {
+            let existing = cx
+                .global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .polkit
+                .take();
+
+            if let Some((generation, window_handle, view_handle)) = existing
+                && window_handle
+                    .update(cx, |_, window, window_cx| {
+                        view_handle.update(window_cx, |view, view_cx| {
+                            view.update_state(req.clone(), prompt_state.clone(), window, view_cx);
+                        });
+                    })
+                    .is_ok()
+            {
+                cx.global_mut::<ShellRuntime>().shell_surfaces_mut().polkit =
+                    Some((generation, window_handle, view_handle));
+                return;
+            }
+
+            // Open new modal overlay window
+            let (display_bounds, display_id) = if let Some(display) = cx.primary_display() {
+                (display.bounds(), Some(display.id()))
+            } else {
+                (
+                    Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
+                    None,
+                )
+            };
+
+            let options = WindowOptions {
+                titlebar: None,
+                window_bounds: Some(WindowBounds::Windowed(display_bounds)),
+                display_id,
+                app_id: Some("shilpo-polkit-agent".into()),
+                window_background: WindowBackgroundAppearance::Transparent,
+                kind: WindowKind::LayerShell(LayerShellOptions {
+                    namespace: "polkit-agent".into(),
+                    layer: Layer::Overlay,
+                    anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+                    keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                    ..Default::default()
+                }),
+                focus: true,
+                show: true,
+                ..Default::default()
+            };
+
+            let req_clone = req.clone();
+            let prompt_clone = prompt_state.clone();
+            let spawned_view: std::sync::Arc<
+                std::sync::Mutex<Option<Entity<crate::polkit::PolkitDialogView>>>,
+            > = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let view_cell = spawned_view.clone();
+
+            let window_result = cx.open_window(options, move |window, cx| {
+                window.on_window_should_close(cx, |_, cx| {
+                    ShellSurfaces::forget_polkit(cx);
+                    true
+                });
+                let view = cx.new(|cx| {
+                    crate::polkit::PolkitDialogView::new(req_clone, prompt_clone, window, cx)
+                });
+                *view_cell.lock().unwrap() = Some(view.clone());
+                cx.new(|cx| shilpo_ui::Root::new(view, window, cx).bordered(false))
+            });
+
+            if let Ok(window_handle) = window_result
+                && let Some(view_handle) = spawned_view.lock().unwrap().take()
+            {
+                let generation = cx
+                    .global_mut::<ShellRuntime>()
+                    .shell_surfaces_mut()
+                    .polkit_generation
+                    + 1;
+                cx.global_mut::<ShellRuntime>().shell_surfaces_mut().polkit =
+                    Some((generation, window_handle, view_handle));
+                cx.global_mut::<ShellRuntime>()
+                    .shell_surfaces_mut()
+                    .polkit_generation = generation;
+                cx.global_mut::<ShellRuntime>()
+                    .shell_surfaces_mut()
+                    .polkit_lifecycle = SurfaceLifecycle::Open { generation };
+            }
+        } else {
+            // Close polkit window if open
+            if let Some((_, window_handle, _)) = cx
+                .global_mut::<ShellRuntime>()
+                .shell_surfaces_mut()
+                .polkit
+                .take()
+            {
+                let _ = window_handle.update(cx, |_, window, _| window.remove_window());
+                cx.global_mut::<ShellRuntime>()
+                    .shell_surfaces_mut()
+                    .polkit_lifecycle = SurfaceLifecycle::Closed;
+            }
         }
     }
 
