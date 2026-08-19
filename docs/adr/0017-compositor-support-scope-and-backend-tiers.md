@@ -34,6 +34,8 @@ We ratify the existing `CompositorAdapter` trait and single `CompositorSnapshot`
 
 **Rationale**: ADR-0006 establishes that each service domain maintains one authoritative owner and publishes one atomically revisioned snapshot (`DomainVersion { owner_generation, revision }`). Slicing the domain port into multiple independent traits would require independent revision tracking per sub-port, breaking the atomic snapshot invariants validated by the conformance test harness. Unsupported operations are represented cleanly via the declarative capability matrix and rejected with `RejectionReason::Unsupported` at the command broker boundary.
 
+`CompositorAdapter` is scoped to IPC observation and typed commands. Image- or pixel-producing methods (workspace/window thumbnails) are deliberately **excluded** and belong to the capture domain under ADR-0003 — they carry frame ownership, memory-budget, and invalidation concerns the snapshot model does not express (see [#134](https://github.com/sayeed205/shilpo/issues/134), [#67](https://github.com/sayeed205/shilpo/issues/67)).
+
 ### 3. Backend-Derived Capability Matrix and Window Identity Degradation
 
 `CompositorCapabilities::default()` is inverted to **all-false** (`can_create_workspace: false`, `can_move_window: false`, `can_focus_window: false`, `can_focus_workspace: false`, `can_close_window: false`). The system degrades closed: a backend that does not explicitly report capability cannot execute commands.
