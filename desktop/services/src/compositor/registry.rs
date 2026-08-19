@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{
-    CompositorAdapter, GenericWaylandCompositorBackend, NiriCompositorService,
-    NullCompositorBackend,
+    CompositorAdapter, GenericWaylandCompositorBackend, HyprlandCompositorBackend,
+    NiriCompositorService, NullCompositorBackend,
     detect::{self, CompositorKind},
 };
 
@@ -43,6 +43,16 @@ impl CompositorRegistry {
         );
         registry.register(
             CompositorKind::Niri,
+            "generic",
+            Box::new(|| Some(GenericWaylandCompositorBackend::new())),
+        );
+        registry.register(
+            CompositorKind::Hyprland,
+            "hyprland",
+            Box::new(|| Some(HyprlandCompositorBackend::new())),
+        );
+        registry.register(
+            CompositorKind::Hyprland,
             "generic",
             Box::new(|| Some(GenericWaylandCompositorBackend::new())),
         );
@@ -205,11 +215,10 @@ mod tests {
     }
 
     #[test]
-    fn test_default_registry_has_no_hyprland_candidate() {
-        // Hyprland is reserved for #106; the generic backend must not be wired to it here.
+    fn test_default_registry_routes_hyprland_to_hyprland_first() {
         let registry = CompositorRegistry::default_registry();
         let (_, name) = registry.select_backend(CompositorKind::Hyprland);
-        assert_eq!(name, "null");
+        assert_eq!(name, "hyprland");
     }
 
     #[test]

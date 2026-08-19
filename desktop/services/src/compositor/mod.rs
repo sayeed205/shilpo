@@ -1,9 +1,11 @@
 pub mod broker;
 pub mod detect;
 pub mod generic;
+pub mod hyprland;
 pub mod niri;
 pub mod null;
 pub mod registry;
+pub mod supervision;
 pub mod test_adapter;
 
 use std::sync::Arc;
@@ -15,6 +17,7 @@ pub use broker::{
 };
 pub use detect::{CompositorKind, detect, detect_from};
 pub use generic::{BoundProtocols, GenericWaylandCompositorBackend};
+pub use hyprland::HyprlandCompositorBackend;
 pub use niri::NiriCompositorService;
 pub use null::NullCompositorBackend;
 pub use registry::{
@@ -166,12 +169,27 @@ pub struct NiriExtras {
     pub window_positions: std::collections::HashMap<u64, (usize, usize)>,
 }
 
+/// Hyprland-specific special workspace (scratchpad) information.
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct HyprlandSpecialWorkspace {
+    pub id: i64,
+    pub name: String,
+    pub monitor: Option<String>,
+}
+
+/// Hyprland-specific extras attached to a compositor snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct HyprlandExtras {
+    pub special_workspaces: Vec<HyprlandSpecialWorkspace>,
+}
+
 /// Backend-specific extra data attached to a compositor snapshot.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub enum CompositorExtras {
     #[default]
     None,
     Niri(NiriExtras),
+    Hyprland(HyprlandExtras),
 }
 
 /// Revisioned atomic snapshot of the compositor state.
