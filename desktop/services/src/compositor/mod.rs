@@ -1,5 +1,6 @@
 pub mod broker;
 pub mod detect;
+pub mod generic;
 pub mod niri;
 pub mod null;
 pub mod registry;
@@ -13,6 +14,7 @@ pub use broker::{
     CompositorBrokerTelemetry, CompositorCommandBroker, CompositorTarget,
 };
 pub use detect::{CompositorKind, detect, detect_from};
+pub use generic::{BoundProtocols, GenericWaylandCompositorBackend};
 pub use niri::NiriCompositorService;
 pub use null::NullCompositorBackend;
 pub use registry::{

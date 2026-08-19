@@ -7,9 +7,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use shilpo_services::compositor::{
-    BrokerOptions, CommandExecutorFn, CompositorAdapter, CompositorCapabilities, CompositorCommand,
-    CompositorCommandBroker, CompositorSnapshot, ExecutorAck, NiriCompositorService,
-    WindowIdentity, WindowInfo, WorkspaceInfo,
+    BoundProtocols, BrokerOptions, CommandExecutorFn, CompositorAdapter, CompositorCapabilities,
+    CompositorCommand, CompositorCommandBroker, CompositorSnapshot, ExecutorAck,
+    GenericWaylandCompositorBackend, NiriCompositorService, WindowIdentity, WindowInfo,
+    WorkspaceInfo,
 };
 use shilpo_services::{
     CancellationReason, DomainLifecycle, DomainPortTelemetry, DomainVersion, MailboxPolicy,
@@ -941,4 +942,627 @@ fn test_null_compositor_backend_conformance() {
         telemetry_after.current_queue_depth,
         telemetry_before.current_queue_depth
     );
+}
+
+// ---------------------------------------------------------------------------
+// GenericWaylandCompositorBackend Conformance Contract Tests
+// ---------------------------------------------------------------------------
+
+fn make_generic_service(
+    capacity: usize,
+    clock: &ManualClock,
+    active_workspace: Arc<Mutex<Option<u64>>>,
+    timeout_gate_rx_slot: Arc<Mutex<Option<std_mpsc::Receiver<()>>>>,
+) -> Arc<GenericWaylandCompositorBackend> {
+    let initial_snapshot = CompositorSnapshot {
+        workspaces: default_workspaces(),
+        ..Default::default()
+    };
+    let executor = make_executor(active_workspace, timeout_gate_rx_slot);
+    let max_queue_len = capacity.saturating_sub(1).max(1);
+    let broker = CompositorCommandBroker::new(
+        BrokerOptions {
+            timeout: Duration::from_millis(1500),
+            max_queue_len,
+        },
+        executor,
+    );
+    let time_source: Arc<dyn TimeSource> = Arc::new(ManualTimeSource(clock.clone()));
+    GenericWaylandCompositorBackend::new_offline_with(
+        initial_snapshot,
+        BoundProtocols {
+            ext_workspace: true,
+            ext_foreign_toplevel: true,
+            wlr_foreign_toplevel: false,
+        },
+        time_source,
+        broker,
+    )
+}
+
+pub struct GenericCompositorDomainPortDriver {
+    capacity: usize,
+    service: Mutex<Arc<GenericWaylandCompositorBackend>>,
+    clock: ManualClock,
+    pending: Arc<Mutex<VecDeque<DriverPendingItem>>>,
+    driver_supersessions: AtomicU64,
+    active_workspace: Arc<Mutex<Option<u64>>>,
+    timeout_gate: Arc<Mutex<Option<std_mpsc::Sender<()>>>>,
+    timeout_gate_rx_slot: Arc<Mutex<Option<std_mpsc::Receiver<()>>>>,
+}
+
+impl GenericCompositorDomainPortDriver {
+    pub fn new(capacity: usize) -> Self {
+        let active_workspace = Arc::new(Mutex::new(None));
+        let timeout_gate_rx_slot = Arc::new(Mutex::new(None));
+        let clock = ManualClock::new();
+        let service = make_generic_service(
+            capacity,
+            &clock,
+            active_workspace.clone(),
+            timeout_gate_rx_slot.clone(),
+        );
+        Self {
+            capacity,
+            service: Mutex::new(service),
+            clock,
+            pending: Arc::new(Mutex::new(VecDeque::new())),
+            driver_supersessions: AtomicU64::new(0),
+            active_workspace,
+            timeout_gate: Arc::new(Mutex::new(None)),
+            timeout_gate_rx_slot,
+        }
+    }
+
+    fn current_service(&self) -> Arc<GenericWaylandCompositorBackend> {
+        self.service.lock().unwrap().clone()
+    }
+
+    fn current_broker(&self) -> Arc<CompositorCommandBroker> {
+        self.current_service().command_broker()
+    }
+}
+
+impl DomainPortDriver for GenericCompositorDomainPortDriver {
+    type Payload = CompositorPayload;
+    type Command = CompositorDriverCommand;
+
+    fn default_payload(&self) -> Self::Payload {
+        CompositorPayload {
+            workspaces: default_workspaces(),
+            windows: Vec::new(),
+            focused_workspace_id: None,
+            focused_window_id: None,
+        }
+    }
+
+    fn sample_payload(&self, seed: u64) -> Self::Payload {
+        CompositorPayload {
+            workspaces: vec![WorkspaceInfo {
+                id: seed,
+                name: Some(format!("ws-{seed}")),
+                idx: (seed % 10) as u32,
+                is_active: true,
+                is_focused: true,
+                is_urgent: false,
+                output_name: None,
+                active_window_id: None,
+            }],
+            windows: Vec::new(),
+            focused_workspace_id: Some(seed),
+            focused_window_id: None,
+        }
+    }
+
+    fn lossless_command(&self, id: &str, seed: u64) -> Self::Command {
+        CompositorDriverCommand {
+            id: CommandId(id.to_string()),
+            command: CompositorCommand::FocusWorkspace(seed),
+            policy: MailboxPolicy::Lossless,
+        }
+    }
+
+    fn replace_latest_command(&self, id: &str, key: &str, seed: u64) -> Self::Command {
+        CompositorDriverCommand {
+            id: CommandId(id.to_string()),
+            command: CompositorCommand::FocusWorkspace(seed),
+            policy: MailboxPolicy::ReplaceLatest {
+                key: key.to_string(),
+            },
+        }
+    }
+
+    fn snapshot(&self) -> DomainSnapshot<Self::Payload> {
+        let snap = self.current_service().current();
+        DomainSnapshot {
+            version: snap.version,
+            lifecycle: snap.connection,
+            payload: CompositorPayload {
+                workspaces: snap.workspaces.clone(),
+                windows: snap.windows.clone(),
+                focused_workspace_id: snap.focused_workspace_id,
+                focused_window_id: snap.focused_window_id,
+            },
+            last_error: snap.last_error.clone(),
+        }
+    }
+
+    fn subscribe(&self) -> SnapshotSubscription<Self::Payload> {
+        let service = self.current_service();
+        SnapshotSubscription::from_fn(move || {
+            let snap = service.current();
+            DomainSnapshot {
+                version: snap.version,
+                lifecycle: snap.connection,
+                payload: CompositorPayload {
+                    workspaces: snap.workspaces.clone(),
+                    windows: snap.windows.clone(),
+                    focused_workspace_id: snap.focused_workspace_id,
+                    focused_window_id: snap.focused_window_id,
+                },
+                last_error: snap.last_error.clone(),
+            }
+        })
+    }
+
+    fn supervisor_state(&self) -> SupervisorState {
+        self.current_service().supervisor_state()
+    }
+
+    fn telemetry(&self) -> DomainPortTelemetry {
+        let b = self.current_broker();
+        let t = b.telemetry();
+        let in_flight_count = usize::from(t.in_flight);
+        let supersessions = t
+            .supersessions
+            .max(self.driver_supersessions.load(Ordering::Relaxed));
+        let last_error = self.current_service().current().last_error.clone();
+        DomainPortTelemetry {
+            owner_generation: t.owner_generation,
+            current_queue_depth: t.current_queue_depth + in_flight_count,
+            queue_capacity: self.capacity,
+            overloads: t.overloads,
+            supersessions,
+            restarts: t.restarts,
+            stale_updates: t.stale_updates,
+            last_error,
+        }
+    }
+
+    fn clock(&self) -> &ManualClock {
+        &self.clock
+    }
+
+    fn advance_clock_ms(&self, ms: u64) {
+        self.clock.advance_ms(ms);
+        self.tick();
+        let state = self.current_service().supervisor_state();
+        let snap = self.current_service().current();
+        if state == SupervisorState::Starting && snap.connection == DomainLifecycle::Reconnecting {
+            let next_gen = snap.version.owner_generation + 1;
+            let broker = self.current_broker();
+            broker.set_installed_generation(next_gen);
+            broker.record_restart();
+            self.current_service().set_reconnecting_generation(next_gen);
+
+            let drained: Vec<DriverPendingItem> = self.pending.lock().unwrap().drain(..).collect();
+            *self.active_workspace.lock().unwrap() = None;
+
+            for item in &drained {
+                for _ in 0..100_000 {
+                    if item.ticket.is_completed() {
+                        break;
+                    }
+                    std::thread::yield_now();
+                }
+            }
+        }
+    }
+
+    fn advance_clock_secs(&self, secs: u64) {
+        self.advance_clock_ms(secs * 1000);
+    }
+
+    fn begin_start(&self) {
+        self.current_service().begin_start();
+    }
+
+    fn mark_ready(&self) {
+        let now_ms = self.clock.now_ms();
+        self.current_service().mark_ready(now_ms);
+        let snap = self.current_service().current();
+        let current_gen = snap.version.owner_generation;
+        let installed_gen = self.current_broker().telemetry().owner_generation;
+        let next_gen = if current_gen == 0 {
+            1
+        } else {
+            current_gen.max(installed_gen)
+        };
+        self.current_broker().set_installed_generation(next_gen);
+        let mut new_snap = (*snap).clone();
+        let next_rev = if snap.version.revision == 0 {
+            0
+        } else {
+            snap.version.revision.saturating_add(1)
+        };
+        new_snap.version = DomainVersion::new(next_gen, next_rev);
+        new_snap.connection = DomainLifecycle::Ready;
+        new_snap.capabilities = BoundProtocols {
+            ext_workspace: true,
+            ext_foreign_toplevel: true,
+            wlr_foreign_toplevel: false,
+        }
+        .capabilities(DomainLifecycle::Ready);
+        new_snap.last_error = None;
+        let _ = self.current_service().update_snapshot(new_snap);
+    }
+
+    fn report_owner_failure(&self, error: String) {
+        let now_ms = self.clock.now_ms();
+        self.current_service().report_owner_failure(error, now_ms);
+    }
+
+    fn publish_update(
+        &self,
+        revision: u64,
+        payload: Self::Payload,
+    ) -> Result<(), StaleUpdateError> {
+        let current_gen = self.current_service().current().version.owner_generation;
+        self.publish_raw_update(
+            DomainVersion::new(current_gen, revision),
+            DomainLifecycle::Ready,
+            payload,
+            None,
+        )
+    }
+
+    fn publish_raw_update(
+        &self,
+        version: DomainVersion,
+        lifecycle: DomainLifecycle,
+        payload: Self::Payload,
+        error: Option<String>,
+    ) -> Result<(), StaleUpdateError> {
+        let new_snap = CompositorSnapshot {
+            version,
+            connection: lifecycle,
+            workspaces: payload.workspaces,
+            windows: payload.windows,
+            focused_workspace_id: payload.focused_workspace_id,
+            focused_window_id: payload.focused_window_id,
+            capabilities: if lifecycle == DomainLifecycle::Ready {
+                BoundProtocols {
+                    ext_workspace: true,
+                    ext_foreign_toplevel: true,
+                    wlr_foreign_toplevel: false,
+                }
+                .capabilities(DomainLifecycle::Ready)
+            } else {
+                CompositorCapabilities::default()
+            },
+            last_error: error,
+            ..Default::default()
+        };
+        self.current_service().update_snapshot(new_snap)
+    }
+
+    fn submit_command(&self, command: Self::Command) -> Result<CommandTicket, CommandOutcome> {
+        let workspace_id = match command.command {
+            CompositorCommand::FocusWorkspace(id) => id,
+            _ => 1,
+        };
+
+        if command.id.0 == TIMEOUT_GATE_COMMAND_ID {
+            let (tx, rx) = std_mpsc::channel::<()>();
+            *self.timeout_gate.lock().unwrap() = Some(tx);
+            *self.timeout_gate_rx_slot.lock().unwrap() = Some(rx);
+        }
+
+        let broker = self.current_broker();
+        let broker_ticket = broker
+            .submit_with_policy(command.command, command.policy.clone())
+            .map_err(map_outcome)?;
+
+        let (driver_ticket, resolver) = CommandTicket::new();
+
+        let mut pending = self.pending.lock().unwrap();
+
+        if let MailboxPolicy::ReplaceLatest { ref key } = command.policy {
+            for prev in pending.iter_mut() {
+                if prev.replace_key.as_ref() == Some(key) {
+                    prev.task_handle.abort();
+                    if prev.resolver.resolve(CommandOutcome::Cancelled {
+                        reason: CancellationReason::Superseded,
+                    }) {
+                        self.driver_supersessions.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+
+        let replace_key = match command.policy {
+            MailboxPolicy::ReplaceLatest { key } => Some(key),
+            _ => None,
+        };
+
+        let resolver_task = resolver.clone();
+        let task_handle = tokio::spawn(async move {
+            let outcome = broker_ticket.await;
+            resolver_task.resolve(map_outcome(outcome));
+        });
+
+        pending.push_back(DriverPendingItem {
+            id: command.id,
+            workspace_id,
+            replace_key,
+            ticket: driver_ticket.clone(),
+            resolver: resolver.clone(),
+            task_handle,
+        });
+
+        for _ in 0..100_000 {
+            if broker.telemetry().in_flight {
+                break;
+            }
+            std::thread::yield_now();
+        }
+
+        Ok(driver_ticket)
+    }
+
+    fn ack_command_without_snapshot(&self) -> Option<CommandId> {
+        let pending = self.pending.lock().unwrap();
+        pending.front().map(|item| item.id.clone())
+    }
+
+    fn process_pending_commands_and_converge(&self) {
+        let mut items_to_converge = Vec::new();
+        {
+            let mut pending = self.pending.lock().unwrap();
+            while let Some(item) = pending.pop_front() {
+                items_to_converge.push(item);
+            }
+        }
+
+        for item in items_to_converge {
+            if item.ticket.is_completed() {
+                continue;
+            }
+
+            for _ in 0..100_000 {
+                if *self.active_workspace.lock().unwrap() == Some(item.workspace_id) {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+
+            let current = self.current_service().current();
+            let next_rev = current.version.revision + 1;
+            let mut new_payload = CompositorPayload {
+                workspaces: current.workspaces.clone(),
+                windows: current.windows.clone(),
+                focused_workspace_id: Some(item.workspace_id),
+                focused_window_id: current.focused_window_id,
+            };
+
+            if !new_payload
+                .workspaces
+                .iter()
+                .any(|w| w.id == item.workspace_id)
+            {
+                new_payload.workspaces.push(WorkspaceInfo {
+                    id: item.workspace_id,
+                    name: Some(format!("ws-{}", item.workspace_id)),
+                    idx: (item.workspace_id % 10) as u32,
+                    is_active: true,
+                    is_focused: true,
+                    is_urgent: false,
+                    output_name: None,
+                    active_window_id: None,
+                });
+            }
+            let _ = self.publish_update(next_rev, new_payload);
+
+            for _ in 0..100_000 {
+                if item.ticket.is_completed() {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+        }
+    }
+
+    fn reconcile_front_command(&self) {
+        let mut pending = self.pending.lock().unwrap();
+        if let Some(item) = pending.pop_front() {
+            item.task_handle.abort();
+            let snap = self.snapshot();
+            item.resolver.resolve(CommandOutcome::ReconciledApplied {
+                version: snap.version,
+            });
+        }
+    }
+
+    fn timeout_front_command(&self) {
+        if let Some(tx) = self.timeout_gate.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
+        let item = self.pending.lock().unwrap().pop_front();
+        if let Some(item) = item {
+            for _ in 0..100_000 {
+                if item.ticket.is_completed() {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+        }
+    }
+
+    fn reset_quarantine(&self) {
+        self.current_service().reset_quarantine();
+    }
+
+    fn restart_containing_process(&self) {
+        let active_workspace = self.active_workspace.clone();
+        *active_workspace.lock().unwrap() = None;
+        *self.timeout_gate.lock().unwrap() = None;
+        *self.timeout_gate_rx_slot.lock().unwrap() = None;
+        let new_service = make_generic_service(
+            self.capacity,
+            &self.clock,
+            active_workspace,
+            self.timeout_gate_rx_slot.clone(),
+        );
+        *self.service.lock().unwrap() = new_service;
+        self.pending.lock().unwrap().clear();
+    }
+
+    fn backoff_delay_ms(&self, attempt: u32) -> u64 {
+        shilpo_domain::reconnect_backoff_ms(attempt)
+    }
+
+    fn tick(&self) {
+        let now_ms = self.clock.now_ms();
+        self.current_service().tick(now_ms);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic Backend Conformance Suite Scenarios
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_01_initial_projection_is_deterministic_and_unavailable() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_01_initial_projection_is_deterministic_and_unavailable(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_02_initial_start_follows_unavailable_connecting_ready() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_02_initial_start_follows_unavailable_connecting_ready(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_03_reconnect_retains_safe_payload_and_records_last_error() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_03_reconnect_retains_safe_payload_and_records_last_error(
+        &driver,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_04_strictly_newer_revision_in_same_generation_is_accepted() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_04_strictly_newer_revision_in_same_generation_is_accepted(
+        &driver,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_05_stale_generation_is_rejected() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_05_stale_generation_is_rejected(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_06_stale_revision_is_rejected() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_06_stale_revision_is_rejected(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_07_conflicting_payload_at_same_version_is_rejected_and_diagnosed() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_07_conflicting_payload_at_same_version_is_rejected_and_diagnosed(
+        &driver,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_08_new_owner_generation_permits_revision_reset() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_08_new_owner_generation_permits_revision_reset(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_09_slow_subscriber_converges_to_latest_atomic_snapshot() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_09_slow_subscriber_converges_to_latest_atomic_snapshot(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_10_accepted_command_receives_exactly_one_terminal_outcome() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_10_accepted_command_receives_exactly_one_terminal_outcome(
+        &driver,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_11_backend_acknowledgement_alone_does_not_complete_convergence_command() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_11_backend_acknowledgement_alone_does_not_complete_convergence_command(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_12_lossless_mailbox_rejects_overflow_without_dropping_accepted_commands()
+{
+    let driver = GenericCompositorDomainPortDriver::new(2);
+    domain_port_contract::scenario_12_lossless_mailbox_rejects_overflow_without_dropping_accepted_commands(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_13_replace_latest_supersedes_pending_command_with_same_key_and_emits_terminal_cancellation()
+ {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_13_replace_latest_supersedes_pending_command_with_same_key_and_emits_terminal_cancellation(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_14_different_replace_latest_keys_do_not_replace_each_other() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_14_different_replace_latest_keys_do_not_replace_each_other(
+        &driver,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_16_backoff_is_exponential_from_250_ms_and_capped_at_30_seconds(
+        &driver,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_17_five_failures_inside_60_seconds_enter_quarantine() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_17_five_failures_inside_60_seconds_enter_quarantine(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_18_five_minutes_stable_clears_rolling_failure_window_but_preserves_session_restart_telemetry()
+ {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_18_five_minutes_stable_clears_rolling_failure_window_but_preserves_session_restart_telemetry(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_19_quarantine_requires_explicit_reset_or_containing_process_restart() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_19_quarantine_requires_explicit_reset_or_containing_process_restart(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_20_telemetry_reports_generation_queue_depth_capacity_overloads_supersessions_restarts_stale_updates_and_last_error()
+ {
+    let driver = GenericCompositorDomainPortDriver::new(2);
+    domain_port_contract::scenario_20_telemetry_reports_generation_queue_depth_capacity_overloads_supersessions_restarts_stale_updates_and_last_error(&driver);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_scenario_21_reconciled_and_timed_out_commands_have_typed_terminal_outcomes() {
+    let driver = GenericCompositorDomainPortDriver::new(10);
+    domain_port_contract::scenario_21_reconciled_and_timed_out_commands_have_typed_terminal_outcomes(&driver);
 }

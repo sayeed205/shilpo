@@ -36,14 +36,14 @@ pub use brightness::{BrightnessInfo, BrightnessService};
 pub use caffeine::{CaffeineInfo, CaffeineService};
 pub use clipboard::{ClipboardPersistenceError, ClipboardService};
 pub use compositor::{
-    BackendFactory, BrokerOptions, CancellationReason, CandidateBackend, CommandCancellation,
-    CommandExecutorFn, CommandOutcome, CommandTicket, CompositorAdapter, CompositorCapabilities,
-    CompositorCommand, CompositorCommandBroker, CompositorCommandError, CompositorExtras,
-    CompositorKind, CompositorOutput, CompositorRegistry, CompositorSnapshot, CompositorTarget,
-    DomainLifecycle, DomainVersion, ExecutorAck, MailboxPolicy, NiriCompositorService, NiriExtras,
-    NullCompositorBackend, RejectionReason, StaleUpdateError, SupervisorState,
-    TestCompositorAdapter, WindowIdentity, WindowInfo, WorkspaceInfo, detect, detect_from,
-    init_compositor, init_compositor_with,
+    BackendFactory, BoundProtocols, BrokerOptions, CancellationReason, CandidateBackend,
+    CommandCancellation, CommandExecutorFn, CommandOutcome, CommandTicket, CompositorAdapter,
+    CompositorCapabilities, CompositorCommand, CompositorCommandBroker, CompositorCommandError,
+    CompositorExtras, CompositorKind, CompositorOutput, CompositorRegistry, CompositorSnapshot,
+    CompositorTarget, DomainLifecycle, DomainVersion, ExecutorAck, GenericWaylandCompositorBackend,
+    MailboxPolicy, NiriCompositorService, NiriExtras, NullCompositorBackend, RejectionReason,
+    StaleUpdateError, SupervisorState, TestCompositorAdapter, WindowIdentity, WindowInfo,
+    WorkspaceInfo, detect, detect_from, init_compositor, init_compositor_with,
 };
 pub use device_daemon::{
     DeviceAdapter, DeviceDaemonService, DeviceDbusService, InMemoryDeviceAdapter,
