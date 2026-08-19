@@ -184,6 +184,12 @@ pub enum ExtensionCommand {
         request: shilpo_ext_api::bindings::shilpo::extension::types::SearchRequest,
         budget: crate::RuntimeBudget,
     },
+    /// Fire-and-forget: the shell's coordinator gave up waiting for a `Search` reply
+    /// before this worker produced one. Records the failure against this extension's
+    /// authoritative circuit breaker, which lives here, not in the shell process.
+    RecordSearchTimeout {
+        extension_id: ExtensionId,
+    },
     Shutdown,
 }
 

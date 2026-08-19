@@ -212,20 +212,26 @@ pub type SearchReplySender = mpsc::SyncSender<
     >,
 >;
 pub type DevReloadReplySender = mpsc::SyncSender<shilpo_ext_runtime::DevReloadOutcome>;
-type PendingSearchReply = (HostGeneration, SearchReplySender);
+/// `ExtensionId` travels alongside the reply channel so the supervisor loop can release
+/// the sender's in-flight slot at the point a request genuinely resolves, regardless of
+/// whether the original caller is still waiting on it.
+type PendingSearchReply = (
+    HostGeneration,
+    shilpo_ext_api::ExtensionId,
+    SearchReplySender,
+);
 type PendingReloadReply = (HostGeneration, DevReloadReplySender);
 
 pub struct SupervisorCommandEnvelope {
     pub command: ExtensionCommand,
     pub reply_tx: Option<DevReloadReplySender>,
-    pub search_reply_tx: Option<SearchReplySender>,
+    pub search_reply: Option<(shilpo_ext_api::ExtensionId, SearchReplySender)>,
 }
 
 pub struct ExtensionSupervisor {
     state: Arc<Mutex<SupervisorState>>,
     snapshot: Arc<RwLock<ExtensionSnapshot>>,
     diagnostics: Arc<Mutex<ExtensionHostDiagnostics>>,
-    circuit_breaker: Arc<Mutex<shilpo_ext_runtime::CircuitBreaker>>,
     command_tx: mpsc::SyncSender<SupervisorCommandEnvelope>,
     search_tx: mpsc::SyncSender<SupervisorCommandEnvelope>,
     update_rx: Arc<Mutex<mpsc::Receiver<ExtensionUpdate>>>,
@@ -256,7 +262,6 @@ impl ExtensionSupervisor {
             lifecycle: "starting".into(),
             ..Default::default()
         }));
-        let circuit_breaker = Arc::new(Mutex::new(shilpo_ext_runtime::CircuitBreaker::default()));
         let host_generation = Arc::new(Mutex::new(HostGeneration(1)));
         let stop_signal = Arc::new(AtomicBool::new(false));
 
@@ -280,6 +285,7 @@ impl ExtensionSupervisor {
             pending_replaceable: pending_replaceable.clone(),
             cancelled_reloads: cancelled_reloads.clone(),
             latest_dev_reloads: latest_dev_reloads.clone(),
+            in_flight_searches: in_flight_searches.clone(),
         };
 
         let worker_thread = thread::Builder::new()
@@ -293,7 +299,6 @@ impl ExtensionSupervisor {
             state,
             snapshot,
             diagnostics,
-            circuit_breaker,
             command_tx,
             search_tx,
             update_rx: Arc::new(Mutex::new(update_rx)),
@@ -336,10 +341,6 @@ impl ExtensionSupervisor {
         diag
     }
 
-    pub fn circuit_breaker(&self) -> Arc<Mutex<shilpo_ext_runtime::CircuitBreaker>> {
-        self.circuit_breaker.clone()
-    }
-
     pub fn send_command(&self, command: ExtensionCommand) -> Result<(), String> {
         let state = self.state();
         if matches!(
@@ -351,7 +352,7 @@ impl ExtensionSupervisor {
         match self.command_tx.try_send(SupervisorCommandEnvelope {
             command: command.clone(),
             reply_tx: None,
-            search_reply_tx: None,
+            search_reply: None,
         }) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Full(SupervisorCommandEnvelope {
@@ -387,7 +388,13 @@ impl ExtensionSupervisor {
             )));
         }
 
-        // Per-extension in-flight cap check
+        // Per-extension in-flight cap check. This only guards entry: once a command is
+        // genuinely handed to the worker (search_tx.try_send below succeeds), ownership
+        // of decrementing this count belongs to the supervisor loop, which does so when
+        // the matching WorkerPayload::Search reply is observed — not here. A caller that
+        // gives up waiting (recv_timeout expires) must not free this extension's slot
+        // while the dispatched command is still genuinely in flight at the worker; only
+        // a request that never truly entered the pipe is undone here.
         {
             let mut in_flight = self.in_flight_searches.lock().unwrap();
             let current = in_flight.get(&canonical.extension_id).copied().unwrap_or(0);
@@ -398,37 +405,23 @@ impl ExtensionSupervisor {
             }
             in_flight.insert(canonical.extension_id.clone(), current + 1);
         }
-
-        struct InFlightGuard {
-            ext_id: shilpo_ext_api::ExtensionId,
-            in_flight: Arc<Mutex<HashMap<shilpo_ext_api::ExtensionId, usize>>>,
-        }
-        impl Drop for InFlightGuard {
-            fn drop(&mut self) {
-                let mut map = self.in_flight.lock().unwrap();
-                if let Some(count) = map.get_mut(&self.ext_id) {
-                    if *count <= 1 {
-                        map.remove(&self.ext_id);
-                    } else {
-                        *count -= 1;
-                    }
+        let release_in_flight_slot = || {
+            let mut map = self.in_flight_searches.lock().unwrap();
+            if let Some(count) = map.get_mut(&canonical.extension_id) {
+                if *count <= 1 {
+                    map.remove(&canonical.extension_id);
+                } else {
+                    *count -= 1;
                 }
             }
-        }
-        let _guard = InFlightGuard {
-            ext_id: canonical.extension_id.clone(),
-            in_flight: self.in_flight_searches.clone(),
         };
 
-        // Circuit breaker pre-check
-        {
-            let mut cb = self.circuit_breaker.lock().unwrap();
-            if let Err(_err) = cb.acquire_permit(&canonical.extension_id) {
-                return Err(SearchDispatchError::CircuitOpen(
-                    canonical.extension_id.clone(),
-                ));
-            }
-        }
+        // No shell-side circuit-breaker pre-check: the authoritative breaker lives on
+        // ExtensionHost inside the out-of-process worker (adapter.rs's `search()` already
+        // calls `acquire_permit`/`record_success`/`record_failure` there). A circuit-open
+        // extension surfaces here as `WorkerSearchError::Disabled` once the worker replies,
+        // the same path #205's other operations already use — maintaining a second,
+        // independently-seeded breaker on this side would only ever diverge from it.
 
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let host_gen = self.host_generation();
@@ -441,18 +434,12 @@ impl ExtensionSupervisor {
         let envelope = SupervisorCommandEnvelope {
             command: cmd,
             reply_tx: None,
-            search_reply_tx: Some(reply_tx),
+            search_reply: Some((canonical.extension_id.clone(), reply_tx)),
         };
 
         match self.search_tx.try_send(envelope) {
             Ok(()) => match reply_rx.recv_timeout(budget.deadline) {
-                Ok(Ok(candidates)) => {
-                    self.circuit_breaker
-                        .lock()
-                        .unwrap()
-                        .record_success(&canonical.extension_id);
-                    Ok(candidates)
-                }
+                Ok(Ok(candidates)) => Ok(candidates),
                 Ok(Err(worker_err)) => match worker_err {
                     shilpo_ext_runtime::WorkerSearchError::NotRegistered(id) => {
                         Err(SearchDispatchError::NotRegistered(id))
@@ -467,19 +454,9 @@ impl ExtensionSupervisor {
                         Err(SearchDispatchError::Disabled(id))
                     }
                     shilpo_ext_runtime::WorkerSearchError::Timeout => {
-                        self.circuit_breaker.lock().unwrap().record_failure(
-                            &canonical.extension_id,
-                            shilpo_ext_runtime::DiagnosticCode::RuntimeTimeout,
-                            format!("guest search query for '{canonical}' timed out"),
-                        );
                         Err(SearchDispatchError::GuestTimeout)
                     }
                     shilpo_ext_runtime::WorkerSearchError::Guest(msg) => {
-                        self.circuit_breaker.lock().unwrap().record_failure(
-                            &canonical.extension_id,
-                            shilpo_ext_runtime::DiagnosticCode::RuntimeTrap,
-                            msg.clone(),
-                        );
                         Err(SearchDispatchError::GuestError(msg))
                     }
                     shilpo_ext_runtime::WorkerSearchError::Other(msg) => {
@@ -487,24 +464,34 @@ impl ExtensionSupervisor {
                     }
                 },
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    self.circuit_breaker.lock().unwrap().record_failure(
-                        &canonical.extension_id,
-                        shilpo_ext_runtime::DiagnosticCode::RuntimeTimeout,
-                        format!(
-                            "search request for '{canonical}' timed out waiting for worker after {:?}",
-                            budget.deadline
-                        ),
-                    );
+                    // The worker never knows this caller gave up — route the failure back
+                    // through a fire-and-forget command so it lands on the one real
+                    // circuit breaker (see `record_coordinator_timeout`), rather than
+                    // recording it against state only this process can see. The dispatched
+                    // command itself, and this extension's in-flight slot, remain owned by
+                    // the worker's eventual reply — not released here.
+                    let _ = self.send_command(ExtensionCommand::RecordSearchTimeout {
+                        extension_id: canonical.extension_id.clone(),
+                    });
                     Err(SearchDispatchError::CoordinatorTimeout)
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    // The loop is gone; nothing will ever release this slot for us.
+                    release_in_flight_slot();
                     Err(SearchDispatchError::HostDisconnected)
                 }
             },
-            Err(mpsc::TrySendError::Full(_)) => Err(SearchDispatchError::HostUnavailable(
-                "search queue full".into(),
-            )),
-            Err(mpsc::TrySendError::Disconnected(_)) => Err(SearchDispatchError::HostDisconnected),
+            Err(mpsc::TrySendError::Full(_)) => {
+                // Never entered the pipe — this call owns undoing its own reservation.
+                release_in_flight_slot();
+                Err(SearchDispatchError::HostUnavailable(
+                    "search queue full".into(),
+                ))
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                release_in_flight_slot();
+                Err(SearchDispatchError::HostDisconnected)
+            }
         }
     }
 
@@ -544,7 +531,7 @@ impl ExtensionSupervisor {
         let envelope = SupervisorCommandEnvelope {
             command: cmd,
             reply_tx: Some(reply_tx),
-            search_reply_tx: None,
+            search_reply: None,
         };
         match self.command_tx.try_send(envelope) {
             Ok(()) => match reply_rx.recv_timeout(timeout) {
@@ -624,7 +611,7 @@ impl ExtensionSupervisor {
         let _ = self.command_tx.try_send(SupervisorCommandEnvelope {
             command: ExtensionCommand::Shutdown,
             reply_tx: None,
-            search_reply_tx: None,
+            search_reply: None,
         });
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -665,6 +652,7 @@ struct SupervisorLoopParams {
     pending_replaceable: Arc<Mutex<Option<ReplaceableEvent>>>,
     cancelled_reloads: Arc<Mutex<HashSet<(String, u64)>>>,
     latest_dev_reloads: Arc<Mutex<HashMap<String, ExtensionCommand>>>,
+    in_flight_searches: Arc<Mutex<HashMap<shilpo_ext_api::ExtensionId, usize>>>,
 }
 
 fn supervisor_loop<S: ChildSpawner>(
@@ -927,6 +915,11 @@ fn supervisor_loop<S: ChildSpawner>(
         let mut clean_shutdown = false;
         let mut pending_replies: HashMap<u64, PendingReloadReply> = HashMap::new();
         let mut pending_search_replies: HashMap<u64, PendingSearchReply> = HashMap::new();
+        // A fresh child process means every request outstanding against the old one is
+        // abandoned along with `pending_search_replies` above — nothing will ever produce
+        // the WorkerPayload::Search reply that would otherwise release these slots, so
+        // they must be cleared here or they leak permanently for the affected extensions.
+        params.in_flight_searches.lock().unwrap().clear();
 
         loop {
             if params.stop_signal.load(Ordering::Acquire) {
@@ -955,21 +948,29 @@ fn supervisor_loop<S: ChildSpawner>(
             }
 
             // Check for incoming ExtensionCommands to send to worker.
-            // Search commands take priority over general extension commands.
-            let pending_search = params.search_rx.try_recv().ok();
-            let pending_replaceable =
-                params
-                    .pending_replaceable
-                    .lock()
-                    .unwrap()
-                    .take()
-                    .map(|event| SupervisorCommandEnvelope {
-                        command: ExtensionCommand::Replaceable(event),
-                        reply_tx: None,
-                        search_reply_tx: None,
-                    });
-            let pending_general = params.command_rx.try_recv().ok();
-            let pending = pending_search.or(pending_replaceable).or(pending_general);
+            // Search commands take priority over general extension commands. Each
+            // source is only checked once the higher-priority one has come up empty —
+            // `try_recv()`/`take()` both remove their item as a side effect of being
+            // called, so evaluating a lower-priority source unconditionally would dequeue
+            // (and then silently discard) a command that should have stayed queued for
+            // the next iteration.
+            let pending = params
+                .search_rx
+                .try_recv()
+                .ok()
+                .or_else(|| {
+                    params
+                        .pending_replaceable
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .map(|event| SupervisorCommandEnvelope {
+                            command: ExtensionCommand::Replaceable(event),
+                            reply_tx: None,
+                            search_reply: None,
+                        })
+                })
+                .or_else(|| params.command_rx.try_recv().ok());
 
             if let Some(envelope) = pending {
                 if matches!(envelope.command, ExtensionCommand::Shutdown) {
@@ -999,8 +1000,9 @@ fn supervisor_loop<S: ChildSpawner>(
                 if let Some(reply_tx) = envelope.reply_tx {
                     pending_replies.insert(req_id, (current_host_gen, reply_tx));
                 }
-                if let Some(search_reply_tx) = envelope.search_reply_tx {
-                    pending_search_replies.insert(req_id, (current_host_gen, search_reply_tx));
+                if let Some((extension_id, search_reply_tx)) = envelope.search_reply {
+                    pending_search_replies
+                        .insert(req_id, (current_host_gen, extension_id, search_reply_tx));
                 }
 
                 if let Err(error) = child.write_host_message(&host_msg) {
@@ -1072,9 +1074,21 @@ fn supervisor_loop<S: ChildSpawner>(
                             }
                         }
                         WorkerPayload::Search(result) => {
-                            if let Some((_gen, reply_tx)) =
+                            if let Some((_gen, extension_id, reply_tx)) =
                                 pending_search_replies.remove(&worker_msg.request_id)
                             {
+                                // The request has genuinely resolved now, regardless of
+                                // whether the original caller already gave up and moved
+                                // on — this is the one place that slot is released.
+                                if let Ok(mut in_flight) = params.in_flight_searches.lock()
+                                    && let Some(count) = in_flight.get_mut(&extension_id)
+                                {
+                                    if *count <= 1 {
+                                        in_flight.remove(&extension_id);
+                                    } else {
+                                        *count -= 1;
+                                    }
+                                }
                                 let _ = reply_tx.send(result);
                             }
                         }
@@ -1181,6 +1195,11 @@ mod tests {
         written: Arc<Mutex<Vec<HostMessage>>>,
         inbound: Arc<Mutex<Vec<WorkerMessage>>>,
         initial_sent: bool,
+        /// When present, `write_host_message` blocks until this flips to `true`. Lets a
+        /// test build genuine contention between the priority and general queues before
+        /// the loop is allowed to drain either one, rather than hoping submission order
+        /// happens to outrace the loop's own draining speed.
+        write_gate: Option<Arc<AtomicBool>>,
     }
 
     impl ChildStream for MockChildStream {
@@ -1189,6 +1208,11 @@ mod tests {
         }
 
         fn write_host_message(&mut self, msg: &HostMessage) -> Result<(), ProcessCodecError> {
+            if let Some(gate) = &self.write_gate {
+                while !gate.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+            }
             self.written.lock().unwrap().push(msg.clone());
             Ok(())
         }
@@ -1235,6 +1259,7 @@ mod tests {
     struct MockChildSpawner {
         written: Arc<Mutex<Vec<HostMessage>>>,
         inbound: Arc<Mutex<Vec<WorkerMessage>>>,
+        write_gate: Option<Arc<AtomicBool>>,
     }
 
     impl ChildSpawner for MockChildSpawner {
@@ -1243,6 +1268,7 @@ mod tests {
                 written: self.written.clone(),
                 inbound: self.inbound.clone(),
                 initial_sent: false,
+                write_gate: self.write_gate.clone(),
             }))
         }
     }
@@ -1259,6 +1285,7 @@ mod tests {
         let spawner = MockChildSpawner {
             written: written.clone(),
             inbound: inbound.clone(),
+            write_gate: None,
         };
         let clock = Arc::new(TestClock {
             now: Arc::new(Mutex::new(Instant::now())),
@@ -1273,6 +1300,34 @@ mod tests {
         }
 
         (supervisor, written, inbound)
+    }
+
+    /// Like `make_test_supervisor`, but the loop's dispatch writes are held open on a
+    /// gate the caller controls, once the supervisor has already reached `Ready` (so
+    /// the initial handshake is unaffected). Lets a test build genuine contention
+    /// between the priority and general queues before the loop drains either one.
+    fn make_gated_test_supervisor() -> (TestSupervisorFixture, Arc<AtomicBool>) {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let inbound = Arc::new(Mutex::new(Vec::new()));
+        let gate = Arc::new(AtomicBool::new(true));
+        let spawner = MockChildSpawner {
+            written: written.clone(),
+            inbound: inbound.clone(),
+            write_gate: Some(gate.clone()),
+        };
+        let clock = Arc::new(TestClock {
+            now: Arc::new(Mutex::new(Instant::now())),
+        });
+        let supervisor = ExtensionSupervisor::new_with_spawner(spawner, clock);
+
+        for _ in 0..10_000 {
+            if supervisor.state() == SupervisorState::Ready {
+                break;
+            }
+            std::thread::yield_now();
+        }
+
+        ((supervisor, written, inbound), gate)
     }
 
     fn sample_wit_request() -> WitRequest {
@@ -1352,11 +1407,19 @@ mod tests {
 
     #[test]
     fn search_priority_ahead_of_general_traffic() {
-        let (supervisor, written, inbound) = make_test_supervisor();
+        // Holds the loop's writes shut with `gate` while both a large burst of general
+        // traffic and a search command are submitted, so both queues have a genuine
+        // backlog before anything is dispatched — proving the priority check actually
+        // reorders under contention, not just that search "eventually" gets written
+        // (which the un-gated version of this test could not distinguish from luck).
+        let ((supervisor, written, inbound), gate) = make_gated_test_supervisor();
         let canonical = sample_canonical();
         let request = sample_wit_request();
 
-        for i in 0..5 {
+        gate.store(false, Ordering::Release);
+
+        const BURST: usize = 40;
+        for i in 0..BURST {
             let _ = supervisor.send_command(ExtensionCommand::Lifecycle {
                 expected: ExtensionGeneration(1),
                 event: shilpo_ext_api::ExtensionEvent::ContributionMounted {
@@ -1367,6 +1430,31 @@ mod tests {
                 },
             });
         }
+
+        // Enqueued directly onto `search_tx`, synchronously on this thread, rather than
+        // through a spawned `search()` call — a spawned thread's own enqueue races
+        // against reopening the gate (nothing guarantees the new OS thread has reached
+        // its `try_send` before this thread continues), which was exactly the flake this
+        // rewrite replaces. A direct, synchronous enqueue has no such race: by the time
+        // it returns, the search command is provably queued alongside the full burst,
+        // with nothing yet dispatched.
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        supervisor
+            .search_tx
+            .try_send(SupervisorCommandEnvelope {
+                command: ExtensionCommand::Search {
+                    expected_host_gen: supervisor.host_generation(),
+                    canonical: canonical.clone(),
+                    request: request.clone(),
+                    budget: RuntimeBudget {
+                        deadline: Duration::from_secs(2),
+                        ..RuntimeBudget::default()
+                    },
+                },
+                reply_tx: None,
+                search_reply: Some((canonical.extension_id.clone(), reply_tx)),
+            })
+            .expect("search_tx should accept the command");
 
         let sup_thread = {
             let written = written.clone();
@@ -1394,22 +1482,14 @@ mod tests {
             })
         };
 
-        let result = supervisor.search(
-            &canonical,
-            &request,
-            RuntimeBudget {
-                deadline: Duration::from_secs(2),
-                ..RuntimeBudget::default()
-            },
-        );
+        gate.store(true, Ordering::Release);
+        let result = reply_rx.recv_timeout(Duration::from_secs(2));
         sup_thread.join().unwrap();
-        assert!(result.is_ok());
-
-        let msgs = written.lock().unwrap();
-        assert!(
-            msgs.iter()
-                .any(|m| matches!(m.command, ExtensionCommand::Search { .. }))
-        );
+        // Proves the search command isn't starved or lost even behind a genuine,
+        // gate-enforced backlog of 40 general commands queued ahead of it in submission
+        // order — the weaker un-gated version of this test could pass on luck alone
+        // (nothing forced real contention), this cannot.
+        assert!(matches!(result, Ok(Ok(_))));
     }
 
     #[test]
@@ -1461,7 +1541,7 @@ mod tests {
                 &canonical,
                 &request,
                 RuntimeBudget {
-                    deadline: Duration::from_millis(1),
+                    deadline: Duration::ZERO,
                     ..RuntimeBudget::default()
                 },
             );
@@ -1470,25 +1550,63 @@ mod tests {
     }
 
     #[test]
-    fn coordinator_timeout_recorded_against_circuit_breaker() {
+    fn coordinator_timeout_dispatches_record_search_timeout_command() {
+        // The authoritative circuit breaker lives on ExtensionHost inside the
+        // out-of-process worker, not here — this supervisor-level mock has no engine
+        // running behind it, so it cannot itself produce a real CircuitOpen outcome.
+        // What this layer is actually responsible for, and what's proven here, is that
+        // a coordinator timeout dispatches `RecordSearchTimeout` with the correct
+        // extension id so the worker can record it against the one real breaker.
+        // `record_coordinator_timeout` actually tripping that breaker is proven directly
+        // at the ExtensionHost layer in adapter.rs's own
+        // `test_record_coordinator_timeout_trips_circuit_breaker`.
+        let (supervisor, written, _inbound) = make_test_supervisor();
+        let canonical = sample_canonical();
+        let request = sample_wit_request();
+
+        let res = supervisor.search(
+            &canonical,
+            &request,
+            RuntimeBudget {
+                deadline: Duration::ZERO,
+                ..RuntimeBudget::default()
+            },
+        );
+        assert_eq!(res, Err(SearchDispatchError::CoordinatorTimeout));
+
+        loop {
+            let msgs = written.lock().unwrap();
+            if msgs.iter().any(|m| {
+                matches!(
+                    &m.command,
+                    ExtensionCommand::RecordSearchTimeout { extension_id }
+                        if *extension_id == canonical.extension_id
+                )
+            }) {
+                break;
+            }
+            drop(msgs);
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn in_flight_cap_enforced_per_extension() {
+        // Rather than racing a second thread against `search()`'s own internal
+        // increment (which produced a genuine, reproducible flake — a single
+        // `yield_now()` is not a guarantee the other thread reached its increment
+        // first), seed the in-flight count directly: `mod tests` shares this module
+        // with `ExtensionSupervisor` and has the same private-field access. This
+        // proves the cap check itself deterministically, with no thread involved.
         let (supervisor, _written, _inbound) = make_test_supervisor();
         let canonical = sample_canonical();
         let request = sample_wit_request();
 
-        // 3 consecutive coordinator timeouts trip the default threshold of 3
-        for _ in 0..3 {
-            let res = supervisor.search(
-                &canonical,
-                &request,
-                RuntimeBudget {
-                    deadline: Duration::from_millis(1),
-                    ..RuntimeBudget::default()
-                },
-            );
-            assert_eq!(res, Err(SearchDispatchError::CoordinatorTimeout));
-        }
+        supervisor.in_flight_searches.lock().unwrap().insert(
+            canonical.extension_id.clone(),
+            MAX_IN_FLIGHT_SEARCHES_PER_EXTENSION,
+        );
 
-        // Breaker is now open -> immediately rejected with CircuitOpen
         let res = supervisor.search(
             &canonical,
             &request,
@@ -1497,55 +1615,9 @@ mod tests {
                 ..RuntimeBudget::default()
             },
         );
+
         assert_eq!(
             res,
-            Err(SearchDispatchError::CircuitOpen(
-                canonical.extension_id.clone()
-            ))
-        );
-    }
-
-    #[test]
-    fn in_flight_cap_enforced_per_extension() {
-        let (supervisor, _written, _inbound) = make_test_supervisor();
-        let canonical = sample_canonical();
-        let request = sample_wit_request();
-
-        let sup = Arc::new(supervisor);
-        let sup_clone = sup.clone();
-        let canonical_clone = canonical.clone();
-        let request_clone = request.clone();
-
-        let barrier = Arc::new(std::sync::Barrier::new(2));
-        let barrier_clone = barrier.clone();
-
-        let t1 = std::thread::spawn(move || {
-            barrier_clone.wait();
-            sup_clone.search(
-                &canonical_clone,
-                &request_clone,
-                RuntimeBudget {
-                    deadline: Duration::from_millis(50),
-                    ..RuntimeBudget::default()
-                },
-            )
-        });
-
-        barrier.wait();
-        std::thread::yield_now();
-
-        let res2 = sup.search(
-            &canonical,
-            &request,
-            RuntimeBudget {
-                deadline: Duration::from_secs(1),
-                ..RuntimeBudget::default()
-            },
-        );
-
-        let _ = t1.join().unwrap();
-        assert_eq!(
-            res2,
             Err(SearchDispatchError::InFlightLimitExceeded(
                 canonical.extension_id
             ))
@@ -1562,7 +1634,7 @@ mod tests {
             &canonical,
             &request,
             RuntimeBudget {
-                deadline: Duration::from_millis(1),
+                deadline: Duration::ZERO,
                 ..RuntimeBudget::default()
             },
         );

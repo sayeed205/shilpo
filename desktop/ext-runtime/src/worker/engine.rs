@@ -523,7 +523,16 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                 extension_id,
                 ..
             } => self.handle_dev_unload(&session_id, &extension_id),
+            // Unreachable via the real dispatch path: `run_extension_host` in
+            // `worker/process.rs` intercepts `Search` before ever calling
+            // `handle_command`, since its reply shape (`WorkerPayload::Search`) doesn't
+            // fit the `Option<ExtensionUpdate>` every other command returns here. Kept
+            // only because the match must stay exhaustive over `ExtensionCommand`.
             ExtensionCommand::Search { .. } => None,
+            ExtensionCommand::RecordSearchTimeout { extension_id } => {
+                self.session.host.record_coordinator_timeout(&extension_id);
+                None
+            }
             ExtensionCommand::Shutdown => {
                 self.script_runtime.shutdown();
                 None

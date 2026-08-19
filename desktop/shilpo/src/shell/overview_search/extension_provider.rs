@@ -43,6 +43,8 @@ const _: () = assert!(
 /// deadline even though it does not shrink as the query's actual elapsed time grows.
 pub const ASSUMED_QUERY_BUDGET: Duration = Duration::from_millis(250);
 
+/// Abstraction allowing `ExtensionSearchProvider` to query the extension host, whether
+/// through the real `ExtensionSupervisor::search` (#256) or a test mock.
 pub trait ExtensionSearchRunner: Send + Sync {
     fn search(
         &self,
