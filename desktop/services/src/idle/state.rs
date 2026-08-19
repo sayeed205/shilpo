@@ -728,10 +728,12 @@ impl IdleDomainState {
                     .execute_action(&name, &cfg.action, cfg.lock_before_suspend);
 
             if matches!(outcome, ActionExecutionOutcome::Unsupported) {
-                tracing::warn!(
+                // The user-facing warning is emitted once per behavior by
+                // `recompute_unsupported_actions_locked`; avoid repeating it on every firing.
+                tracing::debug!(
                     behavior = %name,
                     action = cfg.action.name(),
-                    "executed action resolved as unsupported"
+                    "unsupported action fired; no handler registered"
                 );
             }
         }

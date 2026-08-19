@@ -14,8 +14,8 @@ use super::backend::{
 use super::inhibits::ScreenSaverServer;
 use super::state::IdleDomainState;
 use super::types::{
-    CommandTicket, DomainPortTelemetry, IdleCommand, IdleCommandOutcome, IdlePort, IdleSnapshot,
-    InhibitSource, SupervisorState, TimeSource,
+    CommandTicket, DomainLifecycle, DomainPortTelemetry, IdleCommand, IdleCommandOutcome, IdlePort,
+    IdleSnapshot, InhibitSource, SupervisorState, TimeSource,
 };
 
 #[proxy(
@@ -174,7 +174,7 @@ impl IdleService {
                         tracing::info!(?reply, "registered org.freedesktop.ScreenSaver");
                     }
                     Err(err) => {
-                        tracing::warn!(%err, "could not acquire org.freedesktop.ScreenSaver name");
+                        tracing::debug!(%err, "could not acquire org.freedesktop.ScreenSaver name; continuing degraded");
                     }
                 }
 
@@ -231,17 +231,149 @@ impl IdleService {
             loop {
                 tokio::select! {
                     _ = tick_interval.tick() => {
-                        adapter.tick(time_source.now_ms());
+                        let now = time_source.now_ms();
+
+                        // Mirror the dedicated Wayland thread's live availability into the
+                        // ADR-0006 supervisor so a lost connection actually enters
+                        // Backoff/Quarantined, and a recovered connection re-registers
+                        // behaviors instead of sitting in Reconnecting forever.
+                        let backend_available = adapter.backend().is_available();
+                        let lifecycle = adapter.snapshot().lifecycle;
+                        let supervisor_state = adapter.supervisor_state();
+                        match reconcile_backend_availability(backend_available, lifecycle, supervisor_state) {
+                            BackendReconcileAction::ReportFailure => {
+                                adapter.report_owner_failure(
+                                    "wayland idle notifier connection lost".to_string(),
+                                    now,
+                                );
+                            }
+                            BackendReconcileAction::AttemptRecovery => {
+                                adapter.begin_start();
+                                adapter.mark_ready(now);
+                            }
+                            BackendReconcileAction::None => {}
+                        }
+
+                        adapter.tick(now);
                     }
                     Some(event) = event_rx.recv() => {
                         adapter.handle_backend_event(event);
                     }
                     Some(cmd) = cmd_rx.recv() => {
                         let _ = adapter.submit_command(cmd);
+                        adapter.process_pending_commands();
                     }
                 }
             }
         });
+    }
+}
+
+/// Decision produced by [`reconcile_backend_availability`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackendReconcileAction {
+    /// The backend died while the domain believed it was operational; record an ADR-0006
+    /// owner failure so the supervisor enters Backoff/Quarantined.
+    ReportFailure,
+    /// The backend is available again and the supervisor is ready for a new attempt;
+    /// re-run start-up so behaviors are re-registered and the domain returns to Ready.
+    AttemptRecovery,
+    /// No action needed this tick.
+    None,
+}
+
+/// Pure decision function mirroring `IdleNotifierBackend::is_available()` into the domain's
+/// ADR-0006 supervisor/lifecycle state. Kept side-effect-free so it can be unit tested without
+/// a Tokio runtime or wall-clock timing.
+fn reconcile_backend_availability(
+    backend_available: bool,
+    lifecycle: DomainLifecycle,
+    supervisor_state: SupervisorState,
+) -> BackendReconcileAction {
+    if !backend_available && lifecycle == DomainLifecycle::Ready {
+        BackendReconcileAction::ReportFailure
+    } else if backend_available
+        && matches!(
+            lifecycle,
+            DomainLifecycle::Unavailable
+                | DomainLifecycle::Reconnecting
+                | DomainLifecycle::Connecting
+        )
+        && matches!(supervisor_state, SupervisorState::Starting)
+    {
+        BackendReconcileAction::AttemptRecovery
+    } else {
+        BackendReconcileAction::None
+    }
+}
+
+#[cfg(test)]
+mod reconcile_tests {
+    use super::*;
+
+    #[test]
+    fn ready_and_available_takes_no_action() {
+        let action =
+            reconcile_backend_availability(true, DomainLifecycle::Ready, SupervisorState::Running);
+        assert_eq!(action, BackendReconcileAction::None);
+    }
+
+    #[test]
+    fn backend_dying_while_ready_reports_failure() {
+        let action =
+            reconcile_backend_availability(false, DomainLifecycle::Ready, SupervisorState::Running);
+        assert_eq!(action, BackendReconcileAction::ReportFailure);
+    }
+
+    #[test]
+    fn backend_unavailable_while_already_reconnecting_takes_no_action() {
+        // Already reflected as failed; avoid re-reporting every tick.
+        let action = reconcile_backend_availability(
+            false,
+            DomainLifecycle::Reconnecting,
+            SupervisorState::Backoff {
+                attempt: 1,
+                retry_at_ms: 1_000,
+            },
+        );
+        assert_eq!(action, BackendReconcileAction::None);
+    }
+
+    #[test]
+    fn recovered_backend_with_supervisor_starting_attempts_recovery() {
+        let action = reconcile_backend_availability(
+            true,
+            DomainLifecycle::Reconnecting,
+            SupervisorState::Starting,
+        );
+        assert_eq!(action, BackendReconcileAction::AttemptRecovery);
+    }
+
+    #[test]
+    fn recovered_backend_without_supervisor_starting_takes_no_action() {
+        // Backend flickered available before the supervisor's own backoff elapsed; wait for
+        // the supervisor rather than racing it.
+        let action = reconcile_backend_availability(
+            true,
+            DomainLifecycle::Reconnecting,
+            SupervisorState::Backoff {
+                attempt: 1,
+                retry_at_ms: 1_000,
+            },
+        );
+        assert_eq!(action, BackendReconcileAction::None);
+    }
+
+    #[test]
+    fn unavailable_during_initial_connect_takes_no_action() {
+        // Startup: backend hasn't connected yet, lifecycle is Connecting, not Ready. Must not
+        // be treated as a failure of a previously-working connection.
+        let action = reconcile_backend_availability(
+            false,
+            DomainLifecycle::Connecting,
+            SupervisorState::Starting,
+        );
+        assert_eq!(action, BackendReconcileAction::None);
     }
 }
 
@@ -255,7 +387,14 @@ impl IdlePort for IdleService {
     }
 
     fn submit_command(&self, command: IdleCommand) -> Result<CommandTicket, IdleCommandOutcome> {
-        self.adapter.submit_command(command)
+        // `IdleDomainState::submit_command` only enqueues (kept split from
+        // `process_pending_commands` so the ADR-0006 conformance harness can drive the two
+        // steps independently). This is the production entry point external callers use
+        // (config reload, the grace overlay's completion signal), so it must drain the
+        // mailbox itself rather than leaving the command queued indefinitely.
+        let ticket = self.adapter.submit_command(command)?;
+        self.adapter.process_pending_commands();
+        Ok(ticket)
     }
 
     fn supervisor_state(&self) -> SupervisorState {
@@ -268,5 +407,78 @@ impl IdlePort for IdleService {
 
     fn reset_quarantine(&self) {
         self.adapter.reset_quarantine();
+    }
+}
+
+#[cfg(test)]
+mod submit_command_tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+    use crate::idle::actions::MockIdleActionSink;
+    use crate::idle::backend::MockIdleNotifier;
+    use crate::idle::types::{IdleAction, IdleBehaviorConfig};
+
+    /// Regression test for a production bug: `IdleDomainState::submit_command` only enqueues
+    /// (by design, so the ADR-0006 conformance harness can drive enqueue/apply separately),
+    /// but `IdleService`'s `IdlePort::submit_command` is the entry point every real caller
+    /// (config reload, the grace overlay) uses, and previously called the adapter directly
+    /// without ever draining the queue — so submitted commands were silently never applied.
+    #[test]
+    fn submit_command_applies_immediately_without_a_running_supervisor_task() {
+        let service = IdleService::new_ready_for_test(
+            Arc::new(MockIdleNotifier::new()),
+            Arc::new(MockIdleActionSink::new()),
+        );
+
+        // The domain constructor registers one enabled default behavior ("lock"); replacing
+        // the behavior map with two distinctly-named, enabled entries makes the post-apply
+        // count unambiguous regardless of what the defaults happen to be.
+        let before = service.snapshot();
+        assert_eq!(before.registered_behaviors, 1);
+
+        let mut behaviors = BTreeMap::new();
+        behaviors.insert(
+            "custom-one".to_string(),
+            IdleBehaviorConfig {
+                enabled: true,
+                timeout_seconds: 120.0,
+                action: IdleAction::Command {
+                    command: "true".to_string(),
+                },
+                lock_before_suspend: false,
+                resume_command: String::new(),
+            },
+        );
+        behaviors.insert(
+            "custom-two".to_string(),
+            IdleBehaviorConfig {
+                enabled: true,
+                timeout_seconds: 240.0,
+                action: IdleAction::Suspend,
+                lock_before_suspend: false,
+                resume_command: String::new(),
+            },
+        );
+
+        let ticket = service
+            .submit_command(IdleCommand::ConfigureBehaviors {
+                behaviors,
+                grace_seconds: 5.0,
+            })
+            .expect("command accepted");
+
+        // No supervisor task is running in this test constructor (`_cmd_rx` is dropped), so
+        // if `submit_command` only enqueued, this would stay `None` forever.
+        assert!(
+            ticket.outcome().is_some(),
+            "command must resolve synchronously via submit_command, not require a background drain loop"
+        );
+
+        let after = service.snapshot();
+        assert_eq!(
+            after.registered_behaviors, 2,
+            "configured behaviors must be registered with the backend immediately"
+        );
     }
 }

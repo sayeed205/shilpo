@@ -148,23 +148,30 @@ pub struct WaylandIdleNotifier {
     _thread: Mutex<Option<JoinHandle<()>>>,
 }
 
+/// Interval the dedicated thread blocks on its command channel between Wayland dispatch
+/// passes. Idle timeouts are minutes-scale, so this bounds command/event latency generously
+/// without busy-polling.
+const DISPATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Delay between reconnect attempts after the Wayland connection is lost or never came up.
+const RECONNECT_BACKOFF: Duration = Duration::from_secs(3);
+
 impl WaylandIdleNotifier {
     pub fn new(event_tx: mpsc::UnboundedSender<IdleBackendEvent>) -> Result<Self, String> {
         let available = Arc::new(AtomicBool::new(false));
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
 
         let available_clone = available.clone();
         let handle = thread::Builder::new()
             .name("shilpo-idle-wayland".into())
             .spawn(move || {
-                Self::wayland_thread_main(cmd_rx, event_tx, available_clone, ready_tx);
+                Self::wayland_thread_main(cmd_rx, event_tx, available_clone);
             })
             .map_err(|e| format!("failed to spawn wayland idle thread: {e}"))?;
 
-        // Wait for initial connection & global discovery
-        let _ = ready_rx.recv_timeout(Duration::from_secs(2));
-
+        // Non-blocking: the thread publishes `available` once it has connected and
+        // discovered globals. Callers observe `Unavailable` until then, matching the
+        // dedicated-thread backend precedent in `compositor/generic.rs`.
         Ok(Self {
             available,
             cmd_tx,
@@ -172,96 +179,145 @@ impl WaylandIdleNotifier {
         })
     }
 
+    /// Applies one command to the live Wayland state. Returns `false` on `Shutdown`.
+    fn apply_command(
+        cmd: WaylandThreadCommand,
+        state: &mut WaylandIdleState,
+        qh: &QueueHandle<WaylandIdleState>,
+    ) -> bool {
+        match cmd {
+            WaylandThreadCommand::Register { id, timeout_ms } => {
+                if let Some(ref notifier) = state.notifier
+                    && let Some(ref seat) = state.seat
+                {
+                    if let Some(old) = state.notifications.remove(&id) {
+                        old.destroy();
+                    }
+                    let notif = notifier.get_idle_notification(
+                        timeout_ms,
+                        seat,
+                        qh,
+                        NotificationUserData { id },
+                    );
+                    state.notifications.insert(id, notif);
+                }
+                true
+            }
+            WaylandThreadCommand::Unregister { id } => {
+                if let Some(notif) = state.notifications.remove(&id) {
+                    notif.destroy();
+                }
+                true
+            }
+            WaylandThreadCommand::UnregisterAll => {
+                for (_, notif) in state.notifications.split_off(&0) {
+                    notif.destroy();
+                }
+                true
+            }
+            WaylandThreadCommand::Shutdown => {
+                for (_, notif) in state.notifications.split_off(&0) {
+                    notif.destroy();
+                }
+                false
+            }
+        }
+    }
+
+    /// Drains any commands buffered while disconnected. Returns `true` if a shutdown was seen.
+    fn drain_shutdown(cmd_rx: &std::sync::mpsc::Receiver<WaylandThreadCommand>) -> bool {
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            if matches!(cmd, WaylandThreadCommand::Shutdown) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn wayland_thread_main(
         cmd_rx: std::sync::mpsc::Receiver<WaylandThreadCommand>,
         event_tx: mpsc::UnboundedSender<IdleBackendEvent>,
         available: Arc<AtomicBool>,
-        ready_tx: std::sync::mpsc::Sender<()>,
     ) {
-        let conn = match Connection::connect_to_env() {
-            Ok(conn) => conn,
-            Err(err) => {
-                tracing::debug!(%err, "wayland connection unavailable for idle notifier");
-                let _ = ready_tx.send(());
-                return;
-            }
-        };
-
-        let mut event_queue: EventQueue<WaylandIdleState> = conn.new_event_queue();
-        let qh = event_queue.handle();
-
-        let display = conn.display();
-        let _registry = display.get_registry(&qh, ());
-
-        let mut state = WaylandIdleState {
-            notifier: None,
-            seat: None,
-            notifications: BTreeMap::new(),
-            event_tx,
-        };
-
-        // Roundtrip to bind globals
-        let _ = event_queue.roundtrip(&mut state);
-        let _ = event_queue.roundtrip(&mut state);
-
-        let is_ready = state.notifier.is_some() && state.seat.is_some();
-        available.store(is_ready, Ordering::SeqCst);
-        let _ = ready_tx.send(());
-
         loop {
-            // Process commands from caller
-            while let Ok(cmd) = cmd_rx.try_recv() {
-                match cmd {
-                    WaylandThreadCommand::Register { id, timeout_ms } => {
-                        if let Some(ref notifier) = state.notifier
-                            && let Some(ref seat) = state.seat
-                        {
-                            if let Some(old) = state.notifications.remove(&id) {
-                                old.destroy();
-                            }
-                            let notif = notifier.get_idle_notification(
-                                timeout_ms,
-                                seat,
-                                &qh,
-                                NotificationUserData { id },
-                            );
-                            state.notifications.insert(id, notif);
+            let conn = match Connection::connect_to_env() {
+                Ok(conn) => conn,
+                Err(err) => {
+                    tracing::debug!(%err, "wayland connection unavailable for idle notifier");
+                    available.store(false, Ordering::SeqCst);
+                    match cmd_rx.recv_timeout(RECONNECT_BACKOFF) {
+                        Ok(WaylandThreadCommand::Shutdown) => return,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                        _ => continue,
+                    }
+                }
+            };
+
+            let mut event_queue: EventQueue<WaylandIdleState> = conn.new_event_queue();
+            let qh = event_queue.handle();
+
+            let display = conn.display();
+            let _registry = display.get_registry(&qh, ());
+
+            let mut state = WaylandIdleState {
+                notifier: None,
+                seat: None,
+                notifications: BTreeMap::new(),
+                event_tx: event_tx.clone(),
+            };
+
+            // Roundtrip to bind globals
+            let _ = event_queue.roundtrip(&mut state);
+            let _ = event_queue.roundtrip(&mut state);
+
+            let is_ready = state.notifier.is_some() && state.seat.is_some();
+            available.store(is_ready, Ordering::SeqCst);
+
+            let mut lost_connection = true;
+            'dispatch: loop {
+                // Block on the command channel rather than busy-polling; idle timeouts are
+                // minutes-scale so bounded command/event latency here is not user-visible.
+                match cmd_rx.recv_timeout(DISPATCH_POLL_INTERVAL) {
+                    Ok(cmd) => {
+                        if !Self::apply_command(cmd, &mut state, &qh) {
+                            lost_connection = false;
+                            break 'dispatch;
                         }
                     }
-                    WaylandThreadCommand::Unregister { id } => {
-                        if let Some(notif) = state.notifications.remove(&id) {
-                            notif.destroy();
-                        }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        lost_connection = false;
+                        break 'dispatch;
                     }
-                    WaylandThreadCommand::UnregisterAll => {
-                        for (_, notif) in state.notifications.split_off(&0) {
-                            notif.destroy();
-                        }
+                }
+                // Drain any remaining buffered commands without waiting again.
+                while let Ok(cmd) = cmd_rx.try_recv() {
+                    if !Self::apply_command(cmd, &mut state, &qh) {
+                        lost_connection = false;
+                        break 'dispatch;
                     }
-                    WaylandThreadCommand::Shutdown => {
-                        for (_, notif) in state.notifications.split_off(&0) {
-                            notif.destroy();
-                        }
-                        return;
-                    }
+                }
+
+                // Dispatch Wayland events
+                if let Err(e) = event_queue.dispatch_pending(&mut state) {
+                    tracing::warn!(%e, "idle wayland event dispatch error; reconnecting");
+                    break 'dispatch;
+                }
+                if let Err(e) = conn.flush() {
+                    tracing::debug!(%e, "idle wayland connection flush error; reconnecting");
+                    break 'dispatch;
                 }
             }
 
-            // Dispatch Wayland events
-            if let Err(e) = event_queue.dispatch_pending(&mut state) {
-                tracing::warn!(%e, "idle wayland event dispatch error");
-                break;
+            available.store(false, Ordering::SeqCst);
+            if !lost_connection {
+                return;
             }
-            if let Err(e) = conn.flush() {
-                tracing::debug!(%e, "idle wayland connection flush error");
-                break;
+            if Self::drain_shutdown(&cmd_rx) {
+                return;
             }
-
-            // Short sleep between event poll iterations
-            thread::sleep(Duration::from_millis(16));
+            thread::sleep(RECONNECT_BACKOFF);
         }
-
-        available.store(false, Ordering::SeqCst);
     }
 }
 

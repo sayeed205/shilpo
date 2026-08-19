@@ -1,7 +1,7 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use crate::idle::LogindInhibitHolder;
 
@@ -24,6 +24,9 @@ pub struct CaffeineService {
     tx: watch::Sender<CaffeineInfo>,
     holder: Arc<LogindInhibitHolder>,
     _active_lock: Arc<Mutex<()>>,
+    /// Single-consumer worker channel so rapid toggles apply to the logind fd in the order
+    /// they were requested, rather than racing across independently spawned tasks.
+    op_tx: OnceLock<mpsc::UnboundedSender<bool>>,
 }
 
 impl Default for CaffeineService {
@@ -43,6 +46,7 @@ impl CaffeineService {
             tx,
             holder,
             _active_lock: Arc::new(Mutex::new(())),
+            op_tx: OnceLock::new(),
         };
 
         let state_path = caffeine_state_path();
@@ -75,12 +79,10 @@ impl CaffeineService {
             return current_active;
         }
 
-        let holder = self.holder.clone();
-        // In-process logind inhibit management
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                let _ = holder.set_active(active).await;
-            });
+        // In-process logind inhibit management, serialized through a single worker so
+        // rapid toggles apply in request order rather than racing on D-Bus latency.
+        if let Some(op_tx) = self.ensure_worker() {
+            let _ = op_tx.send(active);
         }
 
         let _ = self.tx.send_replace(CaffeineInfo { active });
@@ -97,6 +99,25 @@ impl CaffeineService {
     pub fn toggle(&self) -> bool {
         let current = self.is_active();
         self.set_active(!current)
+    }
+
+    /// Lazily starts the single worker task that applies logind inhibit changes in order.
+    /// Returns `None` if no Tokio runtime is available yet (e.g. constructed outside an
+    /// async context); a later call from within a runtime will still succeed.
+    fn ensure_worker(&self) -> Option<&mpsc::UnboundedSender<bool>> {
+        if let Some(tx) = self.op_tx.get() {
+            return Some(tx);
+        }
+        let handle = tokio::runtime::Handle::try_current().ok()?;
+        let (op_tx, mut op_rx) = mpsc::unbounded_channel::<bool>();
+        let holder = self.holder.clone();
+        handle.spawn(async move {
+            while let Some(active) = op_rx.recv().await {
+                let _ = holder.set_active(active).await;
+            }
+        });
+        let _ = self.op_tx.set(op_tx);
+        self.op_tx.get()
     }
 }
 
