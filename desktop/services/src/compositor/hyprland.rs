@@ -357,6 +357,25 @@ pub fn encode_hyprland_command(cmd: &CompositorCommand) -> Result<String, Reject
     }
 }
 
+/// Updates urgency tracking state in response to a parsed event. Hyprland raises `urgent`
+/// when a window demands attention, and clears implicitly once that window is focused or closed.
+pub fn apply_urgent_event(urgent_windows: &mut HashSet<u64>, event: &HyprlandEvent) {
+    match event {
+        HyprlandEvent::Urgent { address } => {
+            urgent_windows.insert(*address);
+        }
+        HyprlandEvent::ActiveWindowV2 {
+            address: Some(addr),
+        } => {
+            urgent_windows.remove(addr);
+        }
+        HyprlandEvent::CloseWindow { address } => {
+            urgent_windows.remove(address);
+        }
+        _ => {}
+    }
+}
+
 /// Assembles a deterministic `CompositorSnapshot` from parsed Hyprland structures.
 #[allow(clippy::too_many_arguments)]
 pub fn build_hyprland_snapshot(
@@ -987,7 +1006,7 @@ fn run_hyprland_listener(
             tracing::info!(target: "shilpo_profile", lifecycle = "ready", "hyprland supervisor transition");
         }
 
-        let urgent_windows: HashSet<u64> = HashSet::new();
+        let mut urgent_windows: HashSet<u64> = HashSet::new();
 
         // Publish initial ready snapshot
         revision = revision.saturating_add(1);
@@ -1031,6 +1050,8 @@ fn run_hyprland_listener(
                     let Some(event) = parse_event_line(&line) else {
                         continue;
                     };
+
+                    apply_urgent_event(&mut urgent_windows, &event);
 
                     // Check if event requires refreshing snapshot state
                     let needs_refresh = matches!(
@@ -1328,6 +1349,74 @@ mod tests {
             .unwrap(),
             "dispatch movetoworkspacesilent 4,address:0x55f8abcd"
         );
+    }
+
+    #[test]
+    fn test_apply_urgent_event_tracks_and_clears() {
+        let mut urgent: HashSet<u64> = HashSet::new();
+
+        apply_urgent_event(&mut urgent, &HyprlandEvent::Urgent { address: 0x1 });
+        assert!(urgent.contains(&0x1));
+
+        // Focusing the urgent window clears it.
+        apply_urgent_event(
+            &mut urgent,
+            &HyprlandEvent::ActiveWindowV2 { address: Some(0x1) },
+        );
+        assert!(!urgent.contains(&0x1));
+
+        apply_urgent_event(&mut urgent, &HyprlandEvent::Urgent { address: 0x2 });
+        assert!(urgent.contains(&0x2));
+
+        // Closing an urgent window clears it too.
+        apply_urgent_event(&mut urgent, &HyprlandEvent::CloseWindow { address: 0x2 });
+        assert!(!urgent.contains(&0x2));
+
+        // Unrelated events leave urgency untouched.
+        apply_urgent_event(&mut urgent, &HyprlandEvent::Urgent { address: 0x3 });
+        apply_urgent_event(
+            &mut urgent,
+            &HyprlandEvent::ActiveWindowV2 { address: None },
+        );
+        assert!(urgent.contains(&0x3));
+    }
+
+    #[test]
+    fn test_build_hyprland_snapshot_marks_urgent_windows() {
+        let json = r#"[
+            {
+                "address": "0x1",
+                "title": "a",
+                "class": "a",
+                "workspace": { "id": 1, "name": "1" }
+            },
+            {
+                "address": "0x2",
+                "title": "b",
+                "class": "b",
+                "workspace": { "id": 1, "name": "1" }
+            }
+        ]"#;
+        let clients = parse_clients_json(json).expect("valid clients json");
+
+        let mut urgent_windows = HashSet::new();
+        urgent_windows.insert(0x1u64);
+
+        let snap = build_hyprland_snapshot(
+            DomainVersion::new(1, 0),
+            DomainLifecycle::Ready,
+            &clients,
+            &[],
+            &[],
+            None,
+            &urgent_windows,
+            None,
+        );
+
+        let urgent_window = snap.windows.iter().find(|w| w.id == 0x1).unwrap();
+        let calm_window = snap.windows.iter().find(|w| w.id == 0x2).unwrap();
+        assert!(urgent_window.is_urgent);
+        assert!(!calm_window.is_urgent);
     }
 
     #[test]
