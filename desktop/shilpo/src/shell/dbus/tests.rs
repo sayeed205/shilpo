@@ -671,7 +671,7 @@ async fn test_dev_session_start_reload_end_flow() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().to_path_buf();
     let manifest_toml = r#"
-        schema_version = 2
+        schema_version = 1
         id = "org.shilpo.dev-dbus"
         name = "Dev DBus"
         version = "0.1.0"
@@ -761,7 +761,7 @@ async fn test_dev_session_security_and_manifest_validation() {
     std::fs::write(
         root.join("extension.toml"),
         r#"
-        schema_version = 2
+        schema_version = 1
         id = "org.shilpo.actual-id"
         name = "Actual"
         version = "0.1.0"
@@ -790,7 +790,7 @@ async fn test_dev_session_disconnect_cleanup() {
     std::fs::write(
         root.join("extension.toml"),
         r#"
-        schema_version = 2
+        schema_version = 1
         id = "org.shilpo.cleanup-test"
         name = "Cleanup Test"
         version = "0.1.0"

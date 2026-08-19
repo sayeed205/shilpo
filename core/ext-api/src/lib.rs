@@ -42,7 +42,7 @@ mod contract_tests {
         id = "io.github.alice.world-clock"
         name = "World Clock"
         version = "1.0.0"
-        schema_version = 2
+        schema_version = 1
         api_version = "0.1.0"
 
         [[contributions.bar_widgets]]
@@ -195,7 +195,7 @@ mod contract_tests {
             id = "io.github.test.secrets"
             name = "Secrets Test"
             version = "1.0.0"
-            schema_version = 2
+            schema_version = 1
             api_version = "0.1.0"
 
             [[capabilities]]
@@ -217,7 +217,7 @@ mod contract_tests {
             id = "io.github.test.secrets"
             name = "Secrets Test"
             version = "1.0.0"
-            schema_version = 2
+            schema_version = 1
             api_version = "0.1.0"
 
             [[capabilities]]
@@ -258,7 +258,7 @@ mod contract_tests {
             id = "org.shilpo.wallpaper"
             name = "Wallpaper"
             version = "0.1.0"
-            schema_version = 2
+            schema_version = 1
             api_version = "0.1.0"
 
             [[contributions.wallpaper_providers]]

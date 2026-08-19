@@ -10,7 +10,7 @@ use crate::effects::WallpaperSource;
 use crate::events::EventKind;
 use crate::id::{ContributionId, ExtensionId, IdError};
 
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 2;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 pub const SUPPORTED_API_VERSION: &str = "0.1.0";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1104,7 +1104,7 @@ mod tests {
             id = "org.shilpo.search"
             name = "Search Extension"
             version = "1.0.0"
-            schema_version = 2
+            schema_version = 1
 
             [[contributions.search_providers]]
             id = "web-search"
@@ -1150,7 +1150,7 @@ mod tests {
             id = "org.shilpo.search"
             name = "Search Extension"
             version = "1.0.0"
-            schema_version = 2
+            schema_version = 1
 
             [[contributions.search_providers]]
             id = "web-search"
@@ -1174,7 +1174,7 @@ mod tests {
             id = "org.shilpo.search"
             name = "Search Extension"
             version = "1.0.0"
-            schema_version = 2
+            schema_version = 1
 
             [[contributions.search_providers]]
             id = "web-search"
@@ -1198,7 +1198,7 @@ mod tests {
             id = "org.shilpo.search"
             name = "Search Extension"
             version = "1.0.0"
-            schema_version = 2
+            schema_version = 1
 
             [[contributions.search_providers]]
             id = "web-search"
@@ -1222,7 +1222,7 @@ mod tests {
             id = "org.shilpo.search"
             name = "Search Extension"
             version = "1.0.0"
-            schema_version = 2
+            schema_version = 1
 
             [[contributions.{legacy_field}]]
             id = "web-search"
@@ -1244,7 +1244,7 @@ mod tests {
             id = "org.shilpo.search"
             name = "Search Extension"
             version = "1.0.0"
-            schema_version = 2
+            schema_version = 1
 
             [[contributions.bar_widgets]]
             id = "query-tool"

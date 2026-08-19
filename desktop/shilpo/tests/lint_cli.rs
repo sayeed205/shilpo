@@ -10,7 +10,7 @@ fn test_cli_ext_lint_valid_extension() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test Extension"
 version = "0.1.0"
@@ -35,7 +35,7 @@ fn test_cli_ext_lint_warnings_and_deny_warnings() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test Extension"
 version = "0.1.0"
@@ -77,7 +77,7 @@ fn test_cli_ext_lint_json_output() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test Extension"
 version = "0.1.0"
@@ -110,7 +110,7 @@ fn test_cli_ext_lint_quiet_mode() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test Extension"
 version = "0.1.0"
@@ -196,7 +196,7 @@ fn test_cli_ext_lint_passes_timeout_to_wasm_validation() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test Extension"
 version = "0.1.0"

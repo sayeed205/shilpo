@@ -45,7 +45,7 @@ describe("Extension Manifest", () => {
       ],
     });
 
-    assertEquals(manifest.schema_version, 2);
+    assertEquals(manifest.schema_version, 1);
     assertEquals(manifest.api_version, "0.1.0");
     assertEquals(manifest.min_shilpo_version, "0.1.0");
     assertEquals(manifest.id, "org.shilpo.demo");

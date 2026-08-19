@@ -1573,7 +1573,7 @@ mod tests {
             id = "io.github.test.sample"
             name = "Sample"
             version = "1.0.0"
-            schema_version = 2
+            schema_version = 1
             api_version = "0.1.0"
             min_shilpo_version = "0.1.0"
 
@@ -1625,7 +1625,7 @@ mod tests {
             id = "{id}"
             name = "Weather"
             version = "0.1.0"
-            schema_version = 2
+            schema_version = 1
             api_version = "0.1.0"
             min_shilpo_version = "0.1.0"
 
@@ -1650,7 +1650,7 @@ mod tests {
             id = "io.github.test.weather"
             name = "Weather"
             version = "1.0.0"
-            schema_version = 2
+            schema_version = 1
             api_version = "0.1.0"
             min_shilpo_version = "0.1.0"
 
@@ -1982,7 +1982,7 @@ mod tests {
             id = "io.github.search.web"
             name = "Web Search Engine"
             version = "1.0.0"
-            schema_version = 2
+            schema_version = 1
 
             [[contributions.actions]]
             id = "web-provider"
@@ -2105,7 +2105,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().to_path_buf();
         let manifest_content = r#"
-            schema_version = 2
+            schema_version = 1
             id = "org.shilpo.dev-test"
             name = "Dev Test"
             version = "0.1.0"
@@ -2161,7 +2161,7 @@ mod tests {
         fs::write(
             root.join("extension.toml"),
             r#"
-            schema_version = 2
+            schema_version = 1
             id = "org.shilpo.fence-test"
             name = "Fence Test"
             version = "0.1.0"
@@ -2222,7 +2222,7 @@ mod tests {
         fs::write(
             root.join("extension.toml"),
             r#"
-            schema_version = 2
+            schema_version = 1
             id = "org.shilpo.sec-test"
             name = "Sec Test"
             version = "0.1.0"

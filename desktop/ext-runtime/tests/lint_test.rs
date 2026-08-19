@@ -30,7 +30,7 @@ fn test_invalid_toml_syntax_with_line_and_col() {
     let dir = tempdir().unwrap();
     fs::write(
         dir.path().join("extension.toml"),
-        "schema_version = 2\nid = \"foo\"\n[invalid toml here\n",
+        "schema_version = 1\nid = \"foo\"\n[invalid toml here\n",
     )
     .unwrap();
 
@@ -92,7 +92,7 @@ fn test_incompatible_shilpo_version() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 api_version = "0.1.0"
 id = "org.shilpo.test"
 name = "Test"
@@ -123,7 +123,7 @@ fn test_duplicate_contribution_ids() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 api_version = "0.1.0"
 id = "org.shilpo.test"
 name = "Test"
@@ -162,7 +162,7 @@ fn test_invalid_contribution_references() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test"
 version = "0.1.0"
@@ -201,7 +201,7 @@ fn test_invalid_desktop_widget_bounds() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test"
 version = "0.1.0"
@@ -236,7 +236,7 @@ fn test_capabilities_and_subscriptions_rules() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test"
 version = "0.1.0"
@@ -300,7 +300,7 @@ fn test_deny_warnings_flag() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test"
 version = "0.1.0"
@@ -339,7 +339,7 @@ fn test_project_config_validation() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test"
 version = "0.1.0"
@@ -380,7 +380,7 @@ fn test_project_config_rejects_path_escape() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test"
 version = "0.1.0"
@@ -410,7 +410,7 @@ fn test_settings_schema_validation() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test"
 version = "0.1.0"
@@ -487,7 +487,7 @@ fn test_wasm_artifact_lint_vs_check() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 api_version = "0.1.0"
 id = "org.shilpo.test"
 name = "Test"
@@ -534,7 +534,7 @@ fn test_read_only_guarantee() {
     fs::write(
         dir.path().join("extension.toml"),
         r#"
-schema_version = 2
+schema_version = 1
 id = "org.shilpo.test"
 name = "Test"
 version = "0.1.0"

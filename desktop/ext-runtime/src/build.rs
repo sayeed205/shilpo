@@ -1310,7 +1310,7 @@ mod tests {
     fn write_manifest(dir: &Path, id: &str, library_path: &str) {
         let manifest = format!(
             r#"
-            schema_version = 2
+            schema_version = 1
             id = "{id}"
             name = "Test Extension"
             version = "0.1.0"

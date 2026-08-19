@@ -21,6 +21,28 @@ use super::{
 pub const EXTENSION_MAX_CANDIDATES: usize = 64;
 pub const DEFAULT_EXTENSION_SEARCH_BUDGET: Duration = Duration::from_millis(50);
 
+/// Scratch-sink bound for extension-backed providers — far below the built-in
+/// [`DEFAULT_SCRATCH_CAPACITY`](super::types::DEFAULT_SCRATCH_CAPACITY), so a hostile or
+/// buggy extension cannot force the ranker to score thousands of candidates per keystroke.
+/// Comfortably above [`EXTENSION_MAX_CANDIDATES`] so the post-guest-call truncation below
+/// is always the binding limit, not this one.
+pub const EXTENSION_SCRATCH_CAPACITY: usize = 256;
+
+const _: () = assert!(
+    EXTENSION_SCRATCH_CAPACITY < super::types::DEFAULT_SCRATCH_CAPACITY,
+    "extension scratch capacity must stay well below the built-in default"
+);
+
+/// Conservative stand-in for "remaining coordinator per-query budget" used to derive the
+/// guest deadline below. The `SearchProvider` trait has no channel for a provider to learn
+/// how much of the coordinator's actual per-query budget remains when it starts running —
+/// doing that properly means threading a deadline through every provider's `search` call,
+/// built-in and extension alike, which is out of scope for this fix (see #205 STOP
+/// conditions: do not touch #254's coordinator discipline). This constant matches
+/// `coordinator::DEFAULT_PER_QUERY_BUDGET` and is a correct upper bound on the guest's
+/// deadline even though it does not shrink as the query's actual elapsed time grows.
+pub const ASSUMED_QUERY_BUDGET: Duration = Duration::from_millis(250);
+
 /// Abstraction allowing `ExtensionSearchProvider` to query the extension host adapter or mocks.
 pub trait ExtensionSearchRunner: Send + Sync {
     fn search(
@@ -209,6 +231,10 @@ impl SearchProvider for ExtensionSearchProvider {
         Cow::Owned(self.modes.clone())
     }
 
+    fn scratch_capacity(&self) -> usize {
+        EXTENSION_SCRATCH_CAPACITY
+    }
+
     fn search(&self, request: SearchRequest, sink: SearchSink) {
         use shilpo_ext_api::bindings::shilpo::extension::types as api_types;
 
@@ -230,7 +256,11 @@ impl SearchProvider for ExtensionSearchProvider {
             generation: request.generation,
         };
 
-        let budget = RuntimeBudget::default();
+        let deadline = derive_guest_deadline(self.runtime_budget, ASSUMED_QUERY_BUDGET);
+        let budget = RuntimeBudget {
+            deadline,
+            ..RuntimeBudget::default()
+        };
 
         let candidates = match self.runner.search(&self.canonical_id, &api_request, budget) {
             Ok(candidates) => candidates,
@@ -293,6 +323,19 @@ mod tests {
         candidates: Vec<api_types::SearchCandidate>,
         should_fail: bool,
         call_count: Arc<AtomicUsize>,
+        #[allow(clippy::type_complexity)]
+        last_budget: Arc<std::sync::Mutex<Option<RuntimeBudget>>>,
+    }
+
+    impl MockRunner {
+        fn new(candidates: Vec<api_types::SearchCandidate>) -> Self {
+            Self {
+                candidates,
+                should_fail: false,
+                call_count: Arc::new(AtomicUsize::new(0)),
+                last_budget: Arc::new(std::sync::Mutex::new(None)),
+            }
+        }
     }
 
     impl ExtensionSearchRunner for MockRunner {
@@ -300,9 +343,10 @@ mod tests {
             &self,
             _canonical: &CanonicalId,
             _request: &api_types::SearchRequest,
-            _budget: RuntimeBudget,
+            budget: RuntimeBudget,
         ) -> Result<Vec<api_types::SearchCandidate>, HostError> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
+            *self.last_budget.lock().unwrap() = Some(budget);
             if self.should_fail {
                 Err(HostError::Runtime(shilpo_ext_runtime::RuntimeError::new(
                     "guest failed",
@@ -361,6 +405,7 @@ mod tests {
             }],
             should_fail: false,
             call_count: call_count.clone(),
+            last_budget: Arc::new(std::sync::Mutex::new(None)),
         });
 
         let provider = ExtensionSearchProvider::new(
@@ -415,6 +460,7 @@ mod tests {
             candidates: vec![],
             should_fail: true,
             call_count: call_count.clone(),
+            last_budget: Arc::new(std::sync::Mutex::new(None)),
         });
 
         let provider =
@@ -452,6 +498,7 @@ mod tests {
             candidates,
             should_fail: false,
             call_count: Arc::new(AtomicUsize::new(0)),
+            last_budget: Arc::new(std::sync::Mutex::new(None)),
         });
 
         let provider =
@@ -465,5 +512,49 @@ mod tests {
 
         let results = sink.snapshot();
         assert_eq!(results.len(), EXTENSION_MAX_CANDIDATES);
+    }
+
+    #[test]
+    fn test_extension_search_provider_has_reduced_scratch_capacity() {
+        let ext_id = ExtensionId::new("org.shilpo.quota").unwrap();
+        let runner = Arc::new(MockRunner::new(vec![]));
+        let provider =
+            ExtensionSearchProvider::new(ext_id, "search-prov", vec![SearchMode::Default], runner);
+
+        assert_eq!(provider.scratch_capacity(), EXTENSION_SCRATCH_CAPACITY);
+    }
+
+    #[test]
+    fn test_extension_search_provider_derives_deadline_from_configured_budget() {
+        // The guest call must actually receive a derived deadline rather than a hardcoded
+        // `RuntimeBudget::default()` — this is the wiring regression #205's cross-check
+        // caught: `derive_guest_deadline` existed and was tested in isolation, but was
+        // never called from `search()`.
+        let ext_id = ExtensionId::new("org.shilpo.deadline").unwrap();
+        let runner = Arc::new(MockRunner::new(vec![]));
+        let provider = ExtensionSearchProvider::new(
+            ext_id,
+            "search-prov",
+            vec![SearchMode::Default],
+            runner.clone(),
+        )
+        .with_budget(Duration::from_millis(30));
+
+        let sink = SearchSink::for_test(1);
+        provider.search(
+            SearchRequest::new("q", SearchMode::Default, "q", 1),
+            sink.clone(),
+        );
+
+        let observed = runner
+            .last_budget
+            .lock()
+            .unwrap()
+            .expect("runner should have observed a budget");
+        assert_eq!(
+            observed.deadline,
+            derive_guest_deadline(Duration::from_millis(30), ASSUMED_QUERY_BUDGET),
+        );
+        assert_eq!(observed.deadline, Duration::from_millis(30));
     }
 }

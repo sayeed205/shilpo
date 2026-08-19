@@ -798,7 +798,7 @@ fn test_cli_ext_build_adapter_success_and_json_envelope() {
     fs::write(
         project_dir.join("extension.toml"),
         r#"
-        schema_version = 2
+        schema_version = 1
         id = "org.shilpo.test-build"
         name = "Test Build"
         version = "0.1.0"

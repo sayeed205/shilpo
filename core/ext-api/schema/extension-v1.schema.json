@@ -81,7 +81,7 @@
     "schema_version": {
       "type": "integer",
       "format": "uint32",
-      "default": 2,
+      "default": 1,
       "minimum": 0
     },
     "subscriptions": {

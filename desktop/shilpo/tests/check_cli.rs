@@ -49,7 +49,7 @@ fn copy_component_fixture() -> PathBuf {
     let path = dir.keep();
     std::fs::write(
         path.join("extension.toml"),
-        "schema_version = 2\nid = \"org.shilpo.check-fixture\"\nname = \"Check Fixture\"\nversion = \"0.1.0\"\n\n[library]\npath = \"extension.wasm\"\n",
+        "schema_version = 1\nid = \"org.shilpo.check-fixture\"\nname = \"Check Fixture\"\nversion = \"0.1.0\"\n\n[library]\npath = \"extension.wasm\"\n",
     )
     .expect("fixture manifest should be writable");
     std::fs::copy(

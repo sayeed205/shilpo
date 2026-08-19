@@ -75,17 +75,6 @@ impl SearchSummary {
     }
 }
 
-/// Bound on candidates collected from a single provider before ranking.
-///
-/// Each scratch sink below is written to by exactly one provider, so
-/// `max_per_provider` has no cross-provider-fairness role there — only
-/// `max_total` matters, as a safety net against a runaway or hostile
-/// provider. This value must comfortably exceed any realistic single
-/// provider's output (hundreds of installed applications, dozens of
-/// actions, clipboard history, keybindings) so a real candidate is never
-/// dropped before the ranker gets to see it.
-const SCRATCH_SINK_CAPACITY: usize = 4096;
-
 /// Host search coordinator that manages registered providers and fans out requests.
 #[derive(Clone)]
 pub struct SearchCoordinator {
@@ -186,16 +175,12 @@ impl SearchCoordinator {
             .filter(|p| p.declared_modes().contains(&mode))
             .collect();
 
-        let scratch_config = SinkConfig {
-            max_per_provider: SCRATCH_SINK_CAPACITY,
-            max_total: SCRATCH_SINK_CAPACITY,
-        };
-
         let mut spawned_providers = Vec::new();
         let mut skipped_providers = Vec::new();
         let (tx, rx) = mpsc::channel();
 
-        // 1. Filter out providers exceeding in-flight capacity and allocate scratch sinks.
+        // 1. Filter out providers exceeding in-flight capacity and allocate scratch sinks,
+        //    each sized to that provider's own declared capacity (see `scratch_capacity`).
         {
             let mut in_flight = self
                 .in_flight_counts
@@ -208,7 +193,12 @@ impl SearchCoordinator {
                     skipped_providers.push(id);
                 } else {
                     *count += 1;
-                    let scratch = SearchSink::new(generation, scratch_config.clone());
+                    let capacity = provider.scratch_capacity();
+                    let scratch_config = SinkConfig {
+                        max_per_provider: capacity,
+                        max_total: capacity,
+                    };
+                    let scratch = SearchSink::new(generation, scratch_config);
                     spawned_providers.push(((*provider).clone(), scratch));
                 }
             }
@@ -353,7 +343,9 @@ mod tests {
     use std::borrow::Cow;
 
     use super::*;
-    use crate::shell::overview_search::types::{ResultCategory, SearchCandidate, SearchResultIcon};
+    use crate::shell::overview_search::types::{
+        DEFAULT_SCRATCH_CAPACITY, ResultCategory, SearchCandidate, SearchResultIcon,
+    };
 
     struct TestProvider {
         id: &'static str,
@@ -598,7 +590,7 @@ mod tests {
         // quota must still have every one of its candidates reach the
         // ranker. Regression test for the intra-provider starvation bug:
         // sink.push()'s return value was discarded, so a provider emitting
-        // more than SCRATCH_SINK_CAPACITY candidates used to lose the tail
+        // more than DEFAULT_SCRATCH_CAPACITY candidates used to lose the tail
         // silently before ranking ever saw them.
         struct ManyCandidatesProvider;
         impl SearchProvider for ManyCandidatesProvider {
@@ -607,8 +599,8 @@ mod tests {
             }
             fn search(&self, request: SearchRequest, sink: SearchSink) {
                 // One order of magnitude past the old 64-candidate cap, and
-                // still comfortably under SCRATCH_SINK_CAPACITY.
-                for i in 0..(SCRATCH_SINK_CAPACITY / 4) {
+                // still comfortably under DEFAULT_SCRATCH_CAPACITY.
+                for i in 0..(DEFAULT_SCRATCH_CAPACITY / 4) {
                     sink.push(SearchCandidate::new(
                         self.id(),
                         format!("many:{i}"),
