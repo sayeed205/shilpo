@@ -610,6 +610,11 @@ struct BrokerInner {
     convergence: Mutex<Option<ActiveCommand>>,
     shutdown: AtomicBool,
     cv: Arc<std::sync::Condvar>,
+    /// Test-only barrier invoked by the worker while it still holds the `state` lock, in the
+    /// gap between its `shutdown` check and its `cv.wait`. Lets a test hold the worker inside
+    /// that window deterministically; the race is only a few instructions wide otherwise.
+    #[cfg(test)]
+    pre_wait_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     accepted: AtomicU64,
     succeeded: AtomicU64,
     backend_failed: AtomicU64,
@@ -699,6 +704,8 @@ impl CompositorCommandBroker {
             convergence: Mutex::new(None),
             shutdown: AtomicBool::new(false),
             cv: Arc::new(std::sync::Condvar::new()),
+            #[cfg(test)]
+            pre_wait_hook: Mutex::new(None),
             accepted: AtomicU64::new(0),
             succeeded: AtomicU64::new(0),
             backend_failed: AtomicU64::new(0),
@@ -889,6 +896,12 @@ impl CompositorCommandBroker {
         }
         self.inner.cv.notify_all();
         Ok(())
+    }
+
+    /// Test-only: installs a barrier run by the worker inside the pre-`cv.wait` window.
+    #[cfg(test)]
+    fn set_pre_wait_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        *self.inner.pre_wait_hook.lock().unwrap() = Some(hook);
     }
 
     /// Submits a command to the broker FIFO queue with Lossless policy.
@@ -1111,6 +1124,13 @@ impl CompositorCommandBroker {
                         break None;
                     }
                     if !state.snapshot.connection.is_ready() {
+                        #[cfg(test)]
+                        {
+                            let hook = broker.pre_wait_hook.lock().unwrap().clone();
+                            if let Some(hook) = hook {
+                                hook();
+                            }
+                        }
                         state = broker.cv.wait(state).unwrap();
                         continue;
                     }
@@ -1124,6 +1144,9 @@ impl CompositorCommandBroker {
                 break;
             };
 
+            // Interleaving-only guard, not dead code: reachable when the worker pops an item
+            // before a generation/epoch change lands. Without it a stale-generation command
+            // would execute against a new owner. See #235.
             let installed_gen = broker.installed_generation.load(Ordering::Acquire);
             if (installed_gen > 0 && item.generation != installed_gen)
                 || item.epoch != broker.epoch.load(Ordering::Acquire)
@@ -1267,10 +1290,12 @@ impl CompositorCommandBroker {
 
 impl Drop for CompositorCommandBroker {
     fn drop(&mut self) {
-        self.inner.shutdown.store(true, Ordering::Release);
-        self.inner.cv.notify_all();
-
+        // `shutdown` must be published under the same lock the worker holds while deciding to
+        // wait, and the wakeup issued only after releasing it. Storing it outside the lock lets
+        // the worker miss both the flag and the notification, parking on `cv` forever and
+        // hanging this `join()` (#245).
         if let Ok(mut state) = self.inner.state.lock() {
+            self.inner.shutdown.store(true, Ordering::Release);
             for item in state.queue.drain(..) {
                 let outcome = CommandOutcome::Cancelled {
                     reason: CancellationReason::Shutdown,
@@ -1280,6 +1305,7 @@ impl Drop for CompositorCommandBroker {
                 let _ = item.tx.send(outcome);
             }
         }
+        self.inner.cv.notify_all();
 
         if let Some(control) = self.inner.active.lock().unwrap().take() {
             control.cancel(CancellationReason::Shutdown);
@@ -1364,7 +1390,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "hangs indefinitely on CI runners; see #245"]
     fn test_reconnect_cancels_pending() {
         let _guard = serial_guard();
         let executor: CommandExecutorFn = Box::new(|_cmd, _timeout, _cancel, _register| {
@@ -1426,6 +1451,76 @@ mod tests {
             }
         );
         let _ = t1.wait_timeout(Duration::from_secs(1));
+    }
+
+    /// Regression guard for #245: dropping a broker whose worker is parked on a non-ready
+    /// snapshot must terminate. The worker waits on `cv` while holding the `state` lock, so a
+    /// `shutdown` store published outside that lock can be missed entirely, leaving `Drop`'s
+    /// `join()` blocked forever. Each iteration races construction against drop to land in the
+    /// window between the worker's `shutdown` check and its `cv.wait`.
+    #[test]
+    fn test_drop_while_not_ready_terminates() {
+        let _guard = serial_guard();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+        let executor: CommandExecutorFn =
+            Box::new(|_cmd, _timeout, _cancel, _register| Ok(ExecutorAck::Success));
+        let broker = CompositorCommandBroker::new(BrokerOptions::default(), executor);
+        broker.set_installed_generation(1);
+
+        // Signalled once the worker is parked inside the pre-wait window, still holding `state`.
+        // The broker starts `Unavailable`, so the worker passes through this window during
+        // startup too; arm the barrier only once it has settled, so it fires on a re-entry we
+        // control relative to the drop.
+        let (in_window_tx, in_window_rx) = std::sync::mpsc::channel();
+        let armed = Arc::new(AtomicBool::new(false));
+        let armed_hook = armed.clone();
+        broker.set_pre_wait_hook(Arc::new(move || {
+            // Fire exactly once, and only after arming; later entries must not stall shutdown.
+            if armed_hook.swap(false, Ordering::SeqCst) {
+                let _ = in_window_tx.send(());
+                thread::sleep(Duration::from_millis(300));
+            }
+        }));
+
+        // Settle the worker on the non-ready branch, which waits without a timeout.
+        broker
+            .observe_snapshot(Arc::new(CompositorSnapshot {
+                version: DomainVersion::new(1, 1),
+                connection: DomainLifecycle::Reconnecting,
+                ..Default::default()
+            }))
+            .unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // Arm, then wake the worker with another non-ready snapshot so it re-enters the window.
+        armed.store(true, Ordering::SeqCst);
+        broker
+            .observe_snapshot(Arc::new(CompositorSnapshot {
+                version: DomainVersion::new(1, 2),
+                connection: DomainLifecycle::Reconnecting,
+                last_error: Some("wake".to_string()),
+                ..Default::default()
+            }))
+            .unwrap();
+
+        in_window_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("worker never reached the pre-wait window");
+
+        // The worker has read `shutdown` as false and has not yet called `cv.wait`. Publishing
+        // shutdown outside the `state` lock here loses the wakeup and `join()` never returns.
+        let dropper = thread::spawn(move || {
+            drop(broker);
+            let _ = done_tx.send(());
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "broker drop hung: shutdown wakeup was lost while the worker was parked \
+             on a not-ready snapshot (#245)"
+        );
+        dropper.join().unwrap();
     }
 
     #[test]

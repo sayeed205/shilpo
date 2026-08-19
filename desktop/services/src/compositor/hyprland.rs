@@ -698,8 +698,8 @@ pub fn execute_hyprland_command_on_socket(
 pub struct HyprlandCompositorBackend {
     supervision: CompositorSupervision<HyprlandCapabilityProvider>,
     time_source: Arc<dyn TimeSource>,
-    _stop_flag: Arc<AtomicBool>,
-    _handle: Mutex<Option<thread::JoinHandle<()>>>,
+    stop_flag: Arc<AtomicBool>,
+    handle: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl HyprlandCompositorBackend {
@@ -756,8 +756,8 @@ impl HyprlandCompositorBackend {
         Arc::new(Self {
             supervision,
             time_source,
-            _stop_flag: stop_flag,
-            _handle: Mutex::new(Some(handle)),
+            stop_flag,
+            handle: Mutex::new(Some(handle)),
         })
     }
 
@@ -773,8 +773,8 @@ impl HyprlandCompositorBackend {
         Arc::new(Self {
             supervision,
             time_source,
-            _stop_flag: stop_flag,
-            _handle: Mutex::new(None),
+            stop_flag,
+            handle: Mutex::new(None),
         })
     }
 
@@ -835,6 +835,17 @@ impl CompositorAdapter for HyprlandCompositorBackend {
 
     fn command_broker(&self) -> Arc<CompositorCommandBroker> {
         self.supervision.broker.clone()
+    }
+}
+
+impl Drop for HyprlandCompositorBackend {
+    fn drop(&mut self) {
+        self.stop_flag.store(true, Ordering::Relaxed);
+        if let Ok(mut guard) = self.handle.lock()
+            && let Some(handle) = guard.take()
+        {
+            let _ = handle.join();
+        }
     }
 }
 
