@@ -11,6 +11,7 @@ use crate::bar::service_worker::{
 pub struct ServiceHubStreams {
     pub device_rx: tokio::sync::broadcast::Receiver<shilpo_services::DeviceClientUpdate>,
     pub notif_rx: tokio::sync::broadcast::Receiver<Notification>,
+    pub polkit_rx: tokio::sync::watch::Receiver<shilpo_services::PolkitSnapshot>,
     pub config_rx: ConfigReceiver,
     pub device_client: shilpo_services::DeviceClient,
 }
@@ -23,6 +24,7 @@ pub struct ServiceHubStreams {
 pub struct ServiceHub {
     compositor: Arc<dyn shilpo_services::CompositorAdapter>,
     notification: Arc<dyn NotificationPort>,
+    polkit: Arc<dyn shilpo_services::PolkitPort>,
     clipboard: shilpo_services::ClipboardService,
     app_scanner: shilpo_services::AppScanner,
     device_client: shilpo_services::DeviceClient,
@@ -76,7 +78,19 @@ impl ServiceHub {
                 }
             };
 
+        let polkit: Arc<dyn shilpo_services::PolkitPort> = match shilpo_services::PolkitService::new(
+        ) {
+            Ok(service) => Arc::new(service),
+            Err(error) => {
+                tracing::warn!(error = %error, "polkit agent unavailable; using offline fallback");
+                Arc::new(shilpo_services::PolkitService::new_offline(Arc::new(
+                    shilpo_services::SystemPolkitHelper::new(),
+                )))
+            }
+        };
+
         let notif_rx = notification.subscribe_events();
+        let polkit_rx = polkit.subscribe();
         let device_rx = device_client.subscribe_updates();
 
         let (config_tx, config_rx, service_commands, commands_rx) = service_worker::channels();
@@ -91,6 +105,7 @@ impl ServiceHub {
         let streams = ServiceHubStreams {
             device_rx,
             notif_rx,
+            polkit_rx,
             config_rx,
             device_client: device_client.clone(),
         };
@@ -98,6 +113,7 @@ impl ServiceHub {
         let hub = Self {
             compositor,
             notification,
+            polkit,
             clipboard,
             app_scanner,
             device_client,
@@ -117,10 +133,14 @@ impl ServiceHub {
     pub(crate) fn new_offline_for_test() -> Self {
         let (_config_tx, _config_rx, service_commands, _commands_rx) = service_worker::channels();
         let adapter = Arc::new(shilpo_services::NotificationDomainState::new_ready(32));
+        let polkit = Arc::new(shilpo_services::PolkitService::new_ready_for_test(
+            Arc::new(shilpo_services::MockPolkitHelper::new(vec![])),
+        ));
         let device_client = shilpo_services::DeviceClient::new();
         Self {
             compositor: Arc::new(shilpo_services::TestCompositorAdapter::new_default()),
             notification: adapter,
+            polkit,
             clipboard: shilpo_services::ClipboardService::with_store(None),
             app_scanner: shilpo_services::AppScanner::new_empty(),
             device_client,
@@ -140,9 +160,13 @@ impl ServiceHub {
     ) -> Self {
         let (_config_tx, _config_rx, service_commands, _commands_rx) = service_worker::channels();
         let adapter = Arc::new(shilpo_services::NotificationDomainState::new_ready(32));
+        let polkit = Arc::new(shilpo_services::PolkitService::new_ready_for_test(
+            Arc::new(shilpo_services::MockPolkitHelper::new(vec![])),
+        ));
         Self {
             compositor: Arc::new(shilpo_services::TestCompositorAdapter::new_default()),
             notification: adapter,
+            polkit,
             clipboard: shilpo_services::ClipboardService::with_store(None),
             app_scanner: shilpo_services::AppScanner::new_empty(),
             device_client,
@@ -204,6 +228,7 @@ impl ServiceHub {
     pub(crate) fn health(&self) -> shilpo_services::ServiceHealth {
         let comp_snap = self.compositor.current();
         let notification = self.notification.snapshot();
+        let polkit = self.polkit.snapshot();
         let battery = self.domain_state(shilpo_services::DeviceDomain::Battery);
         let audio = self.domain_state(shilpo_services::DeviceDomain::Audio);
         let network = self.domain_state(shilpo_services::DeviceDomain::Network);
@@ -246,6 +271,10 @@ impl ServiceHub {
             brightness_service_available: brightness.lifecycle.is_ready(),
             brightness_state: to_service_lifecycle(brightness.lifecycle),
             brightness_last_error: brightness.error,
+            polkit_service_available: polkit.lifecycle.is_ready(),
+            polkit_state: to_service_lifecycle(polkit.lifecycle),
+            polkit_last_error: polkit.last_error,
+            polkit_helper_path: polkit.helper_path,
             heed_store_available: self.heed_store_available,
             uptime_seconds: self.started_at.elapsed().as_secs(),
             extension_host: None,
@@ -254,6 +283,10 @@ impl ServiceHub {
 
     pub(crate) fn is_dnd_enabled(&self) -> bool {
         self.notification.snapshot().dnd_enabled
+    }
+
+    pub fn polkit(&self) -> &Arc<dyn shilpo_services::PolkitPort> {
+        &self.polkit
     }
 
     #[cfg(test)]
