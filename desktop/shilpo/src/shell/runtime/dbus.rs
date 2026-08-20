@@ -187,6 +187,20 @@ impl ShellRuntime {
                     tracing::warn!("service hub unavailable for device quarantine reset");
                 }
             }
+            ShellCommand::Lock => {
+                // The locker is a dedicated process (ADR-0005, #135): a client that dies
+                // while the session is locked may leave it locked permanently, so nothing
+                // that can crash for unrelated reasons (this shell process included)
+                // owns ext-session-lock-v1 directly. Goes through the shared
+                // LockSupervisor so telemetry/doctor see the same state idle-triggered
+                // and suspend-triggered locks do.
+                if let Some(hub) = cx.global::<Self>().service_hub() {
+                    hub.lock_supervisor()
+                        .spawn("org.shilpo.Shell.Lock() D-Bus call");
+                } else {
+                    tracing::warn!("service hub unavailable for lock");
+                }
+            }
         }
         Self::publish_status(cx);
     }
@@ -262,6 +276,12 @@ impl ShellRuntime {
             idle_registered_behaviors: service_health.idle_registered_behaviors,
             idle_inhibit_count: service_health.idle_inhibit_count,
             idle_unsupported_actions: service_health.idle_unsupported_actions,
+            lock_service_available: service_health.lock_service_available,
+            lock_state: service_health.lock_state,
+            lock_session_active: service_health.lock_session_active,
+            lock_last_error: service_health.lock_last_error.unwrap_or_default(),
+            lock_last_spawn_reason: service_health.lock_last_spawn_reason.unwrap_or_default(),
+            lock_pam_service: service_health.lock_pam_service,
             heed_store_available: service_health.heed_store_available,
             uptime_seconds: service_health.uptime_seconds,
             extension_host_diagnostics_json: ext_diagnostics_json,

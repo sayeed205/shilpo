@@ -138,6 +138,18 @@ pub struct ServiceHealth {
     pub idle_inhibit_count: u32,
     #[serde(default)]
     pub idle_unsupported_actions: Vec<String>,
+    #[serde(default)]
+    pub lock_service_available: bool,
+    #[serde(default)]
+    pub lock_state: String,
+    #[serde(default)]
+    pub lock_session_active: bool,
+    #[serde(default)]
+    pub lock_last_error: Option<String>,
+    #[serde(default)]
+    pub lock_last_spawn_reason: Option<String>,
+    #[serde(default)]
+    pub lock_pam_service: String,
     pub heed_store_available: bool,
     pub uptime_seconds: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

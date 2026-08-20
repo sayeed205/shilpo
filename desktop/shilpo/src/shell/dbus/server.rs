@@ -37,6 +37,7 @@ pub enum ShellCommand {
     ClearSearchLearning,
     ResetNotificationQuarantine,
     ResetDeviceQuarantine,
+    Lock,
 }
 
 /// Active dev session record.
@@ -568,6 +569,18 @@ impl ShellDbusService {
         );
         let _enter = _span.enter();
         self.send_command(ShellCommand::NextWallpaper)
+    }
+
+    async fn lock(&self) -> zbus::fdo::Result<()> {
+        let _span = tracing::info_span!(
+            target: "shilpo_profile",
+            "dbus_call",
+            destination = "org.shilpo.Shell",
+            operation = "lock",
+            outcome = tracing::field::Empty
+        );
+        let _enter = _span.enter();
+        self.send_command(ShellCommand::Lock)
     }
 
     async fn start_dev_session(

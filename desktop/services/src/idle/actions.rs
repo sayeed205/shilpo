@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use zbus::Connection;
 
 use super::types::IdleAction;
+use crate::lock_supervisor::LockSupervisor;
 
 /// Outcome of executing an idle action through an action sink.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,11 +121,15 @@ impl IdleActionSink for MockIdleActionSink {
 /// Production action sink that interfaces with systemd-logind via D-Bus and shells out custom commands.
 pub struct SystemIdleActionSink {
     system_conn: Option<Connection>,
+    lock_supervisor: Arc<LockSupervisor>,
 }
 
 impl SystemIdleActionSink {
-    pub fn new(system_conn: Option<Connection>) -> Self {
-        Self { system_conn }
+    pub fn new(system_conn: Option<Connection>, lock_supervisor: Arc<LockSupervisor>) -> Self {
+        Self {
+            system_conn,
+            lock_supervisor,
+        }
     }
 }
 
@@ -132,10 +137,11 @@ impl IdleActionSink for SystemIdleActionSink {
     fn has_handler_for(&self, action: &IdleAction) -> bool {
         match action {
             IdleAction::None
+            | IdleAction::Lock
             | IdleAction::Suspend
             | IdleAction::LockAndSuspend
             | IdleAction::Command { .. } => true,
-            IdleAction::Lock | IdleAction::ScreenOff | IdleAction::ScreenOn => false,
+            IdleAction::ScreenOff | IdleAction::ScreenOn => false,
         }
     }
 
@@ -147,7 +153,11 @@ impl IdleActionSink for SystemIdleActionSink {
     ) -> ActionExecutionOutcome {
         match action {
             IdleAction::None => ActionExecutionOutcome::Executed,
-            IdleAction::Lock => ActionExecutionOutcome::Unsupported,
+            IdleAction::Lock => {
+                self.lock_supervisor
+                    .spawn(&format!("idle behavior '{behavior_name}'"));
+                ActionExecutionOutcome::Executed
+            }
             IdleAction::ScreenOff => ActionExecutionOutcome::Unsupported,
             IdleAction::ScreenOn => ActionExecutionOutcome::Unsupported,
             IdleAction::Command { command } => {
@@ -157,21 +167,28 @@ impl IdleActionSink for SystemIdleActionSink {
                 ActionExecutionOutcome::Executed
             }
             IdleAction::Suspend | IdleAction::LockAndSuspend => {
-                if lock_before_suspend || matches!(action, IdleAction::LockAndSuspend) {
-                    if self.has_handler_for(&IdleAction::Lock) {
-                        // In future #135, execute lock handler
-                    } else {
-                        tracing::warn!(
-                            behavior = %behavior_name,
-                            "lock handler not registered; proceeding with suspend without prior lock"
-                        );
-                    }
+                let should_lock =
+                    lock_before_suspend || matches!(action, IdleAction::LockAndSuspend);
+                if should_lock {
+                    self.lock_supervisor.spawn(&format!(
+                        "suspend triggered by idle behavior '{behavior_name}'"
+                    ));
                 }
 
                 // Call systemd-logind Suspend(false)
                 let conn = self.system_conn.clone();
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     handle.spawn(async move {
+                        if should_lock {
+                            // Give the locker a moment to acquire the session lock and
+                            // render before suspend freezes the process. This is a
+                            // best-effort head start, not a guarantee: the authoritative
+                            // "wait for locked before suspend" path is the
+                            // PrepareForSleep + delay-inhibitor watch, which covers
+                            // suspend triggered from any source, not just this action.
+                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        }
+
                         let system_conn = match conn {
                             Some(c) => c,
                             None => match Connection::system().await {

@@ -26,6 +26,12 @@ async fn main() {
         }
         std::process::exit(EXIT_SUCCESS);
     }
+    if let Ok(service) = std::env::var(shilpo_services::auth::PAM_HELPER_ENV_VAR) {
+        // Runs the PAM conversation for the lock screen's auth domain and never returns.
+        // See `shilpo_services::auth::pam_child` for why this must be a freshly `exec`'d
+        // process rather than a raw `fork()` from the (multi-threaded) domain owner.
+        shilpo_services::auth::pam_child::run(&service);
+    }
     let raw_args: Vec<String> = std::env::args().collect();
     if raw_args.len() <= 1 {
         let mut cmd = Cli::command();
@@ -118,6 +124,16 @@ async fn main() {
             .map_err(|e| eprintln!("observability warning: {e}"))
             .ok();
             shilpo::settings::run_settings().await;
+            std::process::exit(EXIT_SUCCESS);
+        }
+        Commands::Lock => {
+            let _obs_guard = shilpo_observability::init(
+                shilpo_observability::ProcessRole::Lock,
+                "warn,shilpo=info",
+            )
+            .map_err(|e| eprintln!("observability warning: {e}"))
+            .ok();
+            shilpo::lock::run_lock().await;
             std::process::exit(EXIT_SUCCESS);
         }
         Commands::ExtensionHost => {

@@ -11,6 +11,7 @@ pub enum ProcessRole {
     ExtensionHost,
     DeviceDaemon,
     ThemeDaemon,
+    Lock,
 }
 
 impl ProcessRole {
@@ -21,6 +22,7 @@ impl ProcessRole {
             Self::ExtensionHost => "extension-host",
             Self::DeviceDaemon => "device-daemon",
             Self::ThemeDaemon => "theme-daemon",
+            Self::Lock => "lock",
         }
     }
 
@@ -31,6 +33,7 @@ impl ProcessRole {
             "extension-host" => Some(Self::ExtensionHost),
             "device-daemon" => Some(Self::DeviceDaemon),
             "theme-daemon" => Some(Self::ThemeDaemon),
+            "lock" => Some(Self::Lock),
             _ => None,
         }
     }

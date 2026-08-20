@@ -38,6 +38,7 @@ pub struct ServiceHub {
     _app_watcher: Option<notify::RecommendedWatcher>,
     started_at: std::time::Instant,
     heed_store_available: bool,
+    lock_supervisor: Arc<shilpo_services::lock_supervisor::LockSupervisor>,
 }
 
 impl ServiceHub {
@@ -91,8 +92,10 @@ impl ServiceHub {
             }
         };
 
-        let idle: Arc<dyn shilpo_services::IdlePort> =
-            Arc::new(shilpo_services::IdleService::new());
+        let lock_supervisor = shilpo_services::lock_supervisor::LockSupervisor::new();
+        let idle: Arc<dyn shilpo_services::IdlePort> = Arc::new(
+            shilpo_services::IdleService::new_with_lock_supervisor(lock_supervisor.clone()),
+        );
 
         let notif_rx = notification.subscribe_events();
         let polkit_rx = polkit.subscribe();
@@ -132,6 +135,7 @@ impl ServiceHub {
             _app_watcher: app_watcher,
             started_at: std::time::Instant::now(),
             heed_store_available,
+            lock_supervisor,
         };
 
         (hub, streams)
@@ -161,6 +165,7 @@ impl ServiceHub {
             _app_watcher: None,
             started_at: std::time::Instant::now(),
             heed_store_available: false,
+            lock_supervisor: shilpo_services::lock_supervisor::LockSupervisor::new(),
         }
     }
 
@@ -189,6 +194,7 @@ impl ServiceHub {
             _app_watcher: None,
             started_at: std::time::Instant::now(),
             heed_store_available: false,
+            lock_supervisor: shilpo_services::lock_supervisor::LockSupervisor::new(),
         }
     }
 
@@ -248,6 +254,12 @@ impl ServiceHub {
         let media = self.domain_state(shilpo_services::DeviceDomain::Media);
         let brightness = self.domain_state(shilpo_services::DeviceDomain::Brightness);
 
+        let lock_pam_service =
+            crate::config::ShellConfig::load_or_create(crate::config::default_config_path())
+                .map(|c| c.lock.pam_service)
+                .unwrap_or_else(|_| "login".to_string());
+        let lock_pam_service_path = std::path::PathBuf::from("/etc/pam.d").join(&lock_pam_service);
+
         shilpo_services::ServiceHealth {
             compositor_connected: matches!(
                 comp_snap.connection,
@@ -295,6 +307,18 @@ impl ServiceHub {
             idle_registered_behaviors: idle.registered_behaviors,
             idle_inhibit_count: idle.inhibit_count,
             idle_unsupported_actions: idle.unsupported_actions,
+            lock_service_available: lock_pam_service_path.exists(),
+            lock_state: if self.lock_supervisor.is_active() {
+                "active".to_string()
+            } else if self.lock_supervisor.last_error().is_some() {
+                "error".to_string()
+            } else {
+                "idle".to_string()
+            },
+            lock_session_active: self.lock_supervisor.is_active(),
+            lock_last_error: self.lock_supervisor.last_error(),
+            lock_last_spawn_reason: self.lock_supervisor.last_spawn_reason(),
+            lock_pam_service,
             heed_store_available: self.heed_store_available,
             uptime_seconds: self.started_at.elapsed().as_secs(),
             extension_host: None,
@@ -311,6 +335,10 @@ impl ServiceHub {
 
     pub fn idle(&self) -> &Arc<dyn shilpo_services::IdlePort> {
         &self.idle
+    }
+
+    pub fn lock_supervisor(&self) -> &Arc<shilpo_services::lock_supervisor::LockSupervisor> {
+        &self.lock_supervisor
     }
 
     #[cfg(test)]

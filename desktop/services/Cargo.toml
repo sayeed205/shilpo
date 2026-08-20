@@ -51,6 +51,7 @@ ddc-i2c.workspace = true
 sha2.workspace = true
 hex.workspace = true
 url.workspace = true
+pam-sys = "1.0.0-alpha5"
 
 [dev-dependencies]
 tempfile = "3"
