@@ -6,7 +6,7 @@ api_version = "0.1.0"
 min_shilpo_version = "0.1.0"
 authors = ["Shilpo Team <team@shilpo.org>"]
 description = "Canonical TypeScript showcase extension demonstrating all Shilpo contribution families, least-privilege capabilities, and hermetic testing."
-repository = "https://github.com/sayeed205/shilpo"
+repository = "https://github.com/shilpo-rs/shilpo"
 license = "MIT"
 
 [library]

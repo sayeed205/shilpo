@@ -129,7 +129,7 @@ impl Render for AppTitleBar {
                                 .icon(IconName::Globe)
                                 .small()
                                 .on_click(|_, _, cx| {
-                                    cx.open_url("https://github.com/sayeed205/shilpo")
+                                    cx.open_url("https://github.com/shilpo-rs/shilpo")
                                 }),
                         )
                         .child(

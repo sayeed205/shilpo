@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-08-12
 - **Author**: Shilpo Core Team
-- **Issue**: [#125](https://github.com/sayeed205/shilpo/issues/125)
+- **Issue**: [#125](https://github.com/shilpo-rs/shilpo/issues/125)
 
 ---
 

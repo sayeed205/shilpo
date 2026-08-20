@@ -5,7 +5,7 @@
 Bar widgets expose supplementary content through cards rendered on dedicated layer-shell surfaces rather than inside the
 bar window. This ADR records the structural decisions that span all widgets; widget-specific content and behavior details
 live in the [design record](../archive/bar-widget-cards-grill.md). Parent delivery
-tracker: [#50](https://github.com/sayeed205/shilpo/issues/50).
+tracker: [#50](https://github.com/shilpo-rs/shilpo/issues/50).
 
 ## Dedicated per-monitor surfaces
 

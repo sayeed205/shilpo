@@ -316,7 +316,7 @@ impl Render for Gallery {
                             .icon(IconName::Globe)
                             .tooltip("GPUI Component GitHub repository")
                             .on_click(|_, _, cx| {
-                                cx.open_url("https://github.com/sayeed205/shilpo")
+                                cx.open_url("https://github.com/shilpo-rs/shilpo")
                             }),
                     ),
             )

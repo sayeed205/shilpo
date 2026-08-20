@@ -136,7 +136,7 @@ impl Render for MenuStory {
                             .label("Edit")
                             .dropdown_menu(move |this, window, cx| {
                                 this.min_w(250.)
-                                    .link("About", "https://github.com/sayeed205/shilpo")
+                                    .link("About", "https://github.com/shilpo-rs/shilpo")
                                     .check_side(check_side.unwrap_or(Side::Left))
                                     .separator()
                                     .item(PopupMenuItem::new("Handle Click").on_click(
@@ -207,7 +207,7 @@ impl Render for MenuStory {
                                         menu.link_with_icon(
                                             "GPUI Component",
                                             IconName::Globe,
-                                            "https://github.com/sayeed205/shilpo",
+                                            "https://github.com/shilpo-rs/shilpo",
                                         )
                                         .separator()
                                         .link("GPUI", "https://gpui.rs")
@@ -242,7 +242,7 @@ impl Render for MenuStory {
                                 move |this, window, cx| {
                                     this.check_side(check_side.unwrap_or(Side::Left))
                                         .external_link_icon(false)
-                                        .link("About", "https://github.com/sayeed205/shilpo")
+                                        .link("About", "https://github.com/shilpo-rs/shilpo")
                                         .separator()
                                         .menu("Cut", Box::new(Cut))
                                         .menu("Copy", Box::new(Copy))
@@ -292,7 +292,7 @@ impl Render for MenuStory {
                             .child("Here is another area with context menu.")
                             .context_menu({
                                 move |this, _, _| {
-                                    this.link("About", "https://github.com/sayeed205/shilpo")
+                                    this.link("About", "https://github.com/shilpo-rs/shilpo")
                                         .separator()
                                         .menu("Item 1", Box::new(Info(1)))
                                 }
@@ -314,7 +314,7 @@ impl Render for MenuStory {
                             .child("ContextMenu area 1")
                             .context_menu({
                                 move |this, _, _| {
-                                    this.link("About", "https://github.com/sayeed205/shilpo")
+                                    this.link("About", "https://github.com/shilpo-rs/shilpo")
                                         .separator()
                                         .menu("Item 1", Box::new(Info(1)))
                                 }

@@ -47,7 +47,7 @@ impl DescriptionListStory {
             ("--", "--", 1),
             (
                 "Repository",
-                "https://github.com/sayeed205/shilpo",
+                "https://github.com/shilpo-rs/shilpo",
                 2,
             ),
             (

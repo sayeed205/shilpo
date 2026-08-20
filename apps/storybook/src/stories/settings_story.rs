@@ -143,7 +143,7 @@ impl SettingsStory {
                         .icon(IconName::Info)
                         .text()
                         .xsmall()
-                        .on_click(|_, _, cx| cx.open_url("https://github.com/sayeed205/shilpo/"))
+                        .on_click(|_, _, cx| cx.open_url("https://github.com/shilpo-rs/shilpo/"))
                 })
                 .groups(vec![
                     SettingGroup::new().title("Appearance").items(vec![
@@ -352,7 +352,7 @@ impl SettingsStory {
                                         .with_size(options.size)
                                         .disabled(options.disabled)
                                         .on_click(|_, _, cx| {
-                                            cx.open_url("https://github.com/sayeed205/shilpo");
+                                            cx.open_url("https://github.com/shilpo-rs/shilpo");
                                         }),
                                 )
                                 .into_any_element()
@@ -477,7 +477,7 @@ impl SettingsStory {
                         "GitHub Repository",
                         SettingField::element(OpenURLSettingField::new(
                             "Repository...",
-                            "https://github.com/sayeed205/shilpo",
+                            "https://github.com/shilpo-rs/shilpo",
                         )),
                     )
                         .description("Open the GitHub repository in your default browser."),
@@ -499,7 +499,7 @@ impl SettingsStory {
                                 .label("Website...")
                                 .with_size(options.size)
                                 .on_click(|_, _window, cx| {
-                                    cx.open_url("https://github.com/sayeed205/shilpo/");
+                                    cx.open_url("https://github.com/shilpo-rs/shilpo/");
                                 })
                         }),
                     )

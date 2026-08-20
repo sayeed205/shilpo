@@ -18,7 +18,7 @@ const NOTIFICATION_MARKDOWN: &str = r#"
 This is a custom notification.
 - List item 1
 - List item 2
-- [Click here](https://github.com/sayeed205/shilpo)
+- [Click here](https://github.com/shilpo-rs/shilpo)
 "#;
 
 pub struct NotificationStory {

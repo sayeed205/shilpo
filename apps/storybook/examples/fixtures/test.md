@@ -1,6 +1,6 @@
 # Hello, **World**!
 
-Build Status of [Shilpo UI](https://github.com/sayeed205/shilpo).
+Build Status of [Shilpo UI](https://github.com/shilpo-rs/shilpo).
 
 Inline image mix: larger PNG avatars <img src="https://avatars.githubusercontent.com/u/5518" alt="Jason Lee avatar" width="32" height="32" /> and <img src="https://avatars.githubusercontent.com/u/28998859" alt="GitHub avatar" width="32" height="32" /> stay inside the same text flow, and another SVG badge ![Rust](https://rust-lang.org/static/images/rust-logo-blk.svg) should wrap with nearby text when the window is resized.
 

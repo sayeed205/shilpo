@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn test_window_found_by_title_and_app_id() {
         let snapshot = ready_snapshot(vec![
-            make_window(101, "Pull Request #202 - sayeed205/shilpo", "firefox"),
+            make_window(101, "Pull Request #202 - shilpo-rs/shilpo", "firefox"),
             make_window(102, "Alacritty Terminal", "Alacritty"),
         ]);
 

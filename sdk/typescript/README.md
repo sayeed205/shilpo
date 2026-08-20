@@ -205,7 +205,7 @@ when generating a builder-based project; JSX is the default.
 
 The TypeScript SDK is published to JSR by GitHub Actions. The one-time setup is:
 
-1. Create or claim `@shilpo/ext-sdk` on [JSR](https://jsr.io) and link it to the `sayeed205/shilpo`
+1. Create or claim `@shilpo/ext-sdk` on [JSR](https://jsr.io) and link it to the `shilpo-rs/shilpo`
    GitHub repository.
 2. Ensure the JSR package is configured to allow this repository's GitHub Actions workflow to
    publish.
