@@ -5,7 +5,8 @@ use std::time::Duration;
 use gpui::{
     App, AppContext, Bounds, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeyDownEvent, ParentElement, Render, Styled, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowKind, WindowOptions, div, point, px, session_lock::SessionLockOptions,
+    WindowBounds, WindowKind, WindowOptions, div, point, prelude::FluentBuilder as _, px,
+    session_lock::SessionLockOptions,
 };
 use shilpo_services::auth::{AuthCommand, AuthOutcome, AuthPort, AuthService, AuthSnapshot};
 use shilpo_ui::{
@@ -90,6 +91,10 @@ pub async fn run_lock() {
 
         lock.on_locked(Box::new(|| {
             tracing::info!("session locked: every output's surface is committed");
+            // Tells a waiting PrepareForSleep watch (if this was a suspend-triggered
+            // spawn) that it's now safe to release its delay inhibitor. No-op if
+            // SHILPO_LOCK_READY_FIFO wasn't set (every other trigger).
+            shilpo_services::lock_supervisor::signal_lock_ready();
         }));
         lock.on_finished(Box::new(|| {
             // Per protocol this means the lock was denied or lost, never that the
@@ -114,6 +119,7 @@ struct LockView {
     clear_input_after_ms: u64,
     _poll_task: gpui::Task<()>,
     _clear_timer: Option<gpui::Task<()>>,
+    _refocus_task: gpui::Task<()>,
 }
 
 impl LockView {
@@ -161,6 +167,31 @@ impl LockView {
             })
         };
 
+        // Some compositors (Hyprland, per field reports on similar wlroots-based lockers)
+        // drop keyboard focus off the lock surface after resume from suspend for reasons
+        // that are hard to detect generically from the client side. Rather than trying to
+        // subscribe to a compositor-specific signal, periodically re-assert focus: cheap,
+        // self-healing regardless of the cause, and a no-op when focus was never lost.
+        let refocus_task = {
+            let this = cx.weak_entity();
+            window.spawn(cx, async move |cx| {
+                loop {
+                    cx.background_executor().timer(Duration::from_secs(2)).await;
+                    let Some(this) = this.upgrade() else { return };
+                    let result = cx.update(|window, cx| {
+                        this.update(cx, |view, cx| {
+                            if !view.focus_handle.is_focused(window) {
+                                view.focus_handle.focus(window, cx);
+                            }
+                        })
+                    });
+                    if result.is_err() {
+                        return;
+                    }
+                }
+            })
+        };
+
         Self {
             auth,
             lock,
@@ -173,6 +204,7 @@ impl LockView {
             clear_input_after_ms,
             _poll_task: poll_task,
             _clear_timer: None,
+            _refocus_task: refocus_task,
         }
     }
 
@@ -257,11 +289,12 @@ impl Focusable for LockView {
 }
 
 impl Render for LockView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = chrono::Local::now();
         let time_text = now.format("%H:%M").to_string();
         let date_text = now.format("%A, %B %-d").to_string();
         let username = whoami();
+        let caps_lock_on = window.capslock().on;
 
         div()
             .track_focus(&self.focus_handle)
@@ -304,6 +337,18 @@ impl Render for LockView {
                             .child(div().text_base().child(username)),
                     )
                     .child(Input::new(&self.input_state).w_full())
+                    .when(caps_lock_on, |this| {
+                        this.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .text_xs()
+                                .text_color(cx.theme().on_surface_variant)
+                                .child(Icon::new(IconName::KeyboardArrowUp).size(px(14.)))
+                                .child("Caps Lock is on"),
+                        )
+                    })
                     .children(self.status.as_ref().map(|(message, is_error)| {
                         div()
                             .text_xs()

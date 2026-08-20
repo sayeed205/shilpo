@@ -133,7 +133,7 @@ async fn test_introspection_exact_contract() {
                 "GetTelemetry",
                 &[(
                     None,
-                    "(bsttusbssbssbssbssbssbssbsssbssbuuasbts)",
+                    "(bsttusbssbssbssbssbssbssbsssbssbuuasbssbts)",
                     Some("out"),
                 )],
             ),

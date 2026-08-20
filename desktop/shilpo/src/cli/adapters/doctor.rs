@@ -52,6 +52,7 @@ impl DoctorChecker {
             self.check_capture(),
             self.check_polkit_agent(),
             self.check_idle_management(),
+            self.check_lock_screen(),
         ]
     }
 
@@ -902,6 +903,68 @@ impl DoctorChecker {
                 name: "Idle Management Service".into(),
                 status: DiagnosticStatus::Warn,
                 message: "Shell daemon is not running; idle status cannot be verified".into(),
+                repair_command: Some("shilpo daemon".into()),
+                unit_identifier: None,
+                fix_applied: false,
+            },
+        }
+    }
+
+    pub fn check_lock_screen(&self) -> DiagnosticItem {
+        let config_path = crate::config::default_config_path();
+        let pam_service = crate::config::ShellConfig::load_or_create(&config_path)
+            .map(|c| c.lock.pam_service)
+            .unwrap_or_else(|_| "login".to_string());
+
+        let pam_service_path = std::path::PathBuf::from("/etc/pam.d").join(&pam_service);
+        if !pam_service_path.exists() {
+            return DiagnosticItem {
+                category: "Authentication".into(),
+                name: "Lock Screen".into(),
+                status: DiagnosticStatus::Fail,
+                message: format!(
+                    "configured PAM service '{pam_service}' has no /etc/pam.d/{pam_service} file; \
+                     the lock screen will be unable to authenticate anyone"
+                ),
+                repair_command: None,
+                unit_identifier: None,
+                fix_applied: false,
+            };
+        }
+
+        match crate::cli::adapters::ipc::IpcAdapter::new().telemetry() {
+            Ok(telemetry) => {
+                let status = if telemetry.lock_last_error.is_empty() {
+                    DiagnosticStatus::Pass
+                } else {
+                    DiagnosticStatus::Warn
+                };
+                let active_note = if telemetry.lock_session_active {
+                    " (a lock is currently active)"
+                } else {
+                    ""
+                };
+                let err_note = if telemetry.lock_last_error.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — last error: {}", telemetry.lock_last_error)
+                };
+                DiagnosticItem {
+                    category: "Authentication".into(),
+                    name: "Lock Screen".into(),
+                    status,
+                    message: format!("PAM service '{pam_service}' present{active_note}{err_note}"),
+                    repair_command: None,
+                    unit_identifier: None,
+                    fix_applied: false,
+                }
+            }
+            Err(_) => DiagnosticItem {
+                category: "Authentication".into(),
+                name: "Lock Screen".into(),
+                status: DiagnosticStatus::Warn,
+                message: "Shell daemon is not running; lock trigger status cannot be verified"
+                    .into(),
                 repair_command: Some("shilpo daemon".into()),
                 unit_identifier: None,
                 fix_applied: false,

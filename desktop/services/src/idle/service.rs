@@ -17,6 +17,7 @@ use super::types::{
     CommandTicket, DomainLifecycle, DomainPortTelemetry, IdleCommand, IdleCommandOutcome, IdlePort,
     IdleSnapshot, InhibitSource, SupervisorState, TimeSource,
 };
+use crate::lock_supervisor::LockSupervisor;
 
 #[proxy(
     interface = "org.freedesktop.login1.Manager",
@@ -42,8 +43,18 @@ impl Default for IdleService {
 }
 
 impl IdleService {
-    /// Creates and starts a production `IdleService` with real Wayland and D-Bus backends.
+    /// Creates and starts a production `IdleService` with real Wayland and D-Bus backends,
+    /// and its own private `LockSupervisor`. Prefer [`Self::new_with_lock_supervisor`] in
+    /// production so idle-triggered locks and telemetry/doctor share one supervisor
+    /// instance with every other lock trigger.
     pub fn new() -> Self {
+        Self::new_with_lock_supervisor(LockSupervisor::new())
+    }
+
+    /// Creates and starts a production `IdleService`, sharing `lock_supervisor` with the
+    /// rest of the daemon (D-Bus `Lock`, `PrepareForSleep` watch) so telemetry reflects a
+    /// single consistent view of the lock subsystem.
+    pub fn new_with_lock_supervisor(lock_supervisor: Arc<LockSupervisor>) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let backend: Arc<dyn IdleNotifierBackend> = match WaylandIdleNotifier::new(event_tx) {
             Ok(wayland) => Arc::new(wayland),
@@ -53,7 +64,8 @@ impl IdleService {
             }
         };
 
-        let action_sink: Arc<dyn IdleActionSink> = Arc::new(SystemIdleActionSink::new(None));
+        let action_sink: Arc<dyn IdleActionSink> =
+            Arc::new(SystemIdleActionSink::new(None, lock_supervisor));
         let time_source: Arc<dyn TimeSource> = Arc::new(shilpo_domain::MonotonicTimeSource::new());
 
         Self::with_components(backend, action_sink, time_source, event_rx)

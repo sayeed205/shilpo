@@ -398,7 +398,7 @@ impl ShellRuntime {
             });
 
         if session.active_config.lock.lock_on_suspend {
-            spawn_prepare_for_sleep_lock_watch();
+            spawn_prepare_for_sleep_lock_watch(hub.lock_supervisor().clone());
         }
 
         cx.set_global(Self {
@@ -1228,13 +1228,51 @@ trait LoginManagerSleepSignal {
     fn prepare_for_sleep(&self, start: bool) -> zbus::Result<()>;
 }
 
-/// Watches logind's `PrepareForSleep` signal and spawns the `shilpo lock` process before
-/// the system suspends. This is a best-effort head start, not a hard guarantee the
-/// session is locked before suspend completes: it does not hold a logind delay inhibitor,
-/// since that requires the locker to report back that its surfaces are committed (no such
-/// channel exists yet). Suspend triggered by `IdleAction::LockAndSuspend` gets a similar
-/// head start independently, in `shilpo-services`' idle action sink.
-fn spawn_prepare_for_sleep_lock_watch() {
+/// How long the watch will hold suspend for the locker to report readiness before giving
+/// up and releasing the inhibitor anyway. Suspend is not blocked indefinitely by a locker
+/// that never starts or never locks.
+const LOCK_ON_SUSPEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Acquires a logind "delay" sleep inhibitor, returning the held fd. Held fds are what
+/// keep the inhibitor active; dropping (closing) the fd releases it and lets suspend
+/// proceed. See `logind`'s `Inhibit` documentation: a "delay" lock postpones sleep for a
+/// bounded time (systemd's own `InhibitDelayMaxSec`, typically a few seconds) rather than
+/// blocking it outright.
+async fn acquire_sleep_delay_inhibitor(conn: &zbus::Connection) -> Option<std::os::fd::OwnedFd> {
+    let result: Result<zbus::zvariant::OwnedFd, zbus::Error> = conn
+        .call_method(
+            Some("org.freedesktop.login1"),
+            "/org/freedesktop/login1",
+            Some("org.freedesktop.login1.Manager"),
+            "Inhibit",
+            &(
+                "sleep",
+                "Shilpo",
+                "Ensure the session is locked before suspend",
+                "delay",
+            ),
+        )
+        .await
+        .and_then(|reply| reply.body().deserialize());
+
+    match result {
+        Ok(fd) => Some(fd.into()),
+        Err(err) => {
+            tracing::warn!(%err, "failed to acquire logind sleep delay inhibitor; lock-on-suspend will not block suspend");
+            None
+        }
+    }
+}
+
+/// Watches logind's `PrepareForSleep` signal and locks the session before the system
+/// suspends, holding a logind delay inhibitor so suspend actually waits (up to
+/// [`LOCK_ON_SUSPEND_TIMEOUT`]) for the locker to report every output's surface is
+/// committed before releasing it. Suspend triggered by `IdleAction::LockAndSuspend` gets a
+/// similar (best-effort, non-blocking) head start independently, in `shilpo-services`'
+/// idle action sink.
+fn spawn_prepare_for_sleep_lock_watch(
+    lock_supervisor: Arc<shilpo_services::lock_supervisor::LockSupervisor>,
+) {
     tokio::spawn(async move {
         let Ok(conn) = zbus::Connection::system().await else {
             tracing::warn!("system D-Bus unavailable; lock-on-suspend watch disabled");
@@ -1249,19 +1287,38 @@ fn spawn_prepare_for_sleep_lock_watch() {
             return;
         };
 
+        let mut held_inhibitor = acquire_sleep_delay_inhibitor(&conn).await;
+
         use futures_lite::StreamExt;
         while let Some(signal) = stream.next().await {
             let Ok(args) = signal.args() else { continue };
-            if !args.start {
-                continue;
-            }
-            let Ok(exe) = std::env::current_exe() else {
-                continue;
-            };
-            if let Err(error) = std::process::Command::new(exe).arg("lock").spawn() {
-                tracing::warn!(%error, "failed to spawn shilpo lock before suspend");
+
+            if args.start {
+                // Block the locker's readiness wait on a thread: this is real blocking
+                // I/O (a FIFO open), not something with an async equivalent here.
+                let supervisor = lock_supervisor.clone();
+                let locked = tokio::task::spawn_blocking(move || {
+                    supervisor
+                        .spawn_and_wait_until_locked("PrepareForSleep", LOCK_ON_SUSPEND_TIMEOUT)
+                })
+                .await
+                .unwrap_or(false);
+
+                if !locked {
+                    tracing::warn!(
+                        "lock-on-suspend timed out waiting for the session to lock; suspending anyway"
+                    );
+                }
+
+                // Release the inhibitor: this is what actually allows suspend to proceed.
+                held_inhibitor = None;
+            } else {
+                // Resumed: re-acquire a fresh inhibitor for the next sleep cycle.
+                held_inhibitor = acquire_sleep_delay_inhibitor(&conn).await;
             }
         }
+
+        drop(held_inhibitor);
     });
 }
 

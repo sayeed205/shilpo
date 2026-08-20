@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use zbus::Connection;
 
 use super::types::IdleAction;
+use crate::lock_supervisor::LockSupervisor;
 
 /// Outcome of executing an idle action through an action sink.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,22 +121,16 @@ impl IdleActionSink for MockIdleActionSink {
 /// Production action sink that interfaces with systemd-logind via D-Bus and shells out custom commands.
 pub struct SystemIdleActionSink {
     system_conn: Option<Connection>,
+    lock_supervisor: Arc<LockSupervisor>,
 }
 
 impl SystemIdleActionSink {
-    pub fn new(system_conn: Option<Connection>) -> Self {
-        Self { system_conn }
+    pub fn new(system_conn: Option<Connection>, lock_supervisor: Arc<LockSupervisor>) -> Self {
+        Self {
+            system_conn,
+            lock_supervisor,
+        }
     }
-}
-
-/// Spawns the dedicated `shilpo lock` process role. See ADR-0005 and issue #135 for why
-/// locking is a separate process rather than something this in-process action sink can do
-/// itself: a client that dies while the session is locked may leave it locked
-/// permanently, so nothing this crate does directly touches `ext-session-lock-v1`.
-fn spawn_lock_process() -> std::io::Result<()> {
-    let exe = std::env::current_exe()?;
-    Command::new(exe).arg("lock").spawn()?;
-    Ok(())
 }
 
 impl IdleActionSink for SystemIdleActionSink {
@@ -158,12 +153,11 @@ impl IdleActionSink for SystemIdleActionSink {
     ) -> ActionExecutionOutcome {
         match action {
             IdleAction::None => ActionExecutionOutcome::Executed,
-            IdleAction::Lock => match spawn_lock_process() {
-                Ok(()) => ActionExecutionOutcome::Executed,
-                Err(err) => {
-                    ActionExecutionOutcome::Failed(format!("failed to spawn shilpo lock: {err}"))
-                }
-            },
+            IdleAction::Lock => {
+                self.lock_supervisor
+                    .spawn(&format!("idle behavior '{behavior_name}'"));
+                ActionExecutionOutcome::Executed
+            }
             IdleAction::ScreenOff => ActionExecutionOutcome::Unsupported,
             IdleAction::ScreenOn => ActionExecutionOutcome::Unsupported,
             IdleAction::Command { command } => {
@@ -175,12 +169,10 @@ impl IdleActionSink for SystemIdleActionSink {
             IdleAction::Suspend | IdleAction::LockAndSuspend => {
                 let should_lock =
                     lock_before_suspend || matches!(action, IdleAction::LockAndSuspend);
-                if should_lock && let Err(err) = spawn_lock_process() {
-                    tracing::warn!(
-                        behavior = %behavior_name,
-                        %err,
-                        "failed to spawn lock process before suspend; proceeding without prior lock"
-                    );
+                if should_lock {
+                    self.lock_supervisor.spawn(&format!(
+                        "suspend triggered by idle behavior '{behavior_name}'"
+                    ));
                 }
 
                 // Call systemd-logind Suspend(false)

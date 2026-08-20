@@ -12,6 +12,7 @@ pub use shilpo_domain as domain;
 pub use shilpo_domain::*;
 pub mod error;
 pub mod idle;
+pub mod lock_supervisor;
 pub use shilpo_device as device;
 pub use shilpo_device as device_protocol;
 pub use shilpo_device as device_client;
