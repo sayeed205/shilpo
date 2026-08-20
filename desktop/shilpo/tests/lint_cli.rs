@@ -130,12 +130,11 @@ version = "0.1.0"
 
 #[test]
 fn test_cli_ext_lint_example_extension() {
-    let example_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("extensions/example");
+    // The extension itself now lives in shilpo-rs/shilpo-extensions; this vendors the
+    // manifest + referenced settings schema (see examples_verification.rs) so `ext lint`'s
+    // structural checks still run against a real, non-synthetic manifest.
+    let example_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/extensions/example");
 
     let output = Command::new(env!("CARGO_BIN_EXE_shilpo"))
         .args(["ext", "lint", example_path.to_str().unwrap()])

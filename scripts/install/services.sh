@@ -1,22 +1,6 @@
 #!/usr/bin/env bash
 # Service activation, SDDM setup, login shell, and session wiring module
 
-reinstall_bundled_extension() {
-  local shilpo_binary=$1
-  local extension_id=$2
-  local package=$3
-  local uninstall_output
-
-  if uninstall_output=$("$shilpo_binary" ext uninstall "$extension_id" 2>&1); then
-    [[ -z $uninstall_output ]] || printf '%s\n' "$uninstall_output"
-  elif [[ $uninstall_output != *"error[uninstall.failed]: not found: $extension_id"* ]]; then
-    printf '%s\n' "$uninstall_output" >&2
-    return 1
-  fi
-
-  run "$shilpo_binary" ext install "$package"
-}
-
 activate_services_and_shell() {
   log "Wiring systemd user services for Niri session"
 
@@ -109,27 +93,6 @@ activate_services_and_shell() {
     run xdg-user-dirs-update
   fi
   run mkdir -p "$HOME/Pictures/Screenshots" "$HOME/Pictures/Wallpapers"
-
-  # Weather extension registration
-  local package_dir="${SHILPO_PACKAGE_DIR:-$REPO_ROOT/extensions/target/packages}"
-  local package="$package_dir/org.shilpo.weather-1.0.0.shilpo-ext"
-  if [[ "${DRY_RUN:-false}" == "true" ]]; then
-    log "Dry run: skipping weather extension pack/install/approval"
-  elif [[ -x "$HOME/.local/bin/shilpo" && -d "$REPO_ROOT/extensions/weather" ]]; then
-    log "Registering bundled weather extension"
-    run mkdir -p "$package_dir"
-    run "$HOME/.local/bin/shilpo" ext pack "$REPO_ROOT/extensions/weather" --output "$package_dir"
-    if [[ "${DRY_RUN:-false}" == "false" && ! -f "$package" ]]; then
-      error "Weather extension package was not produced at $package"
-      exit 1
-    fi
-    reinstall_bundled_extension "$HOME/.local/bin/shilpo" org.shilpo.weather "$package"
-    run "$HOME/.local/bin/shilpo" ext approve org.shilpo.weather --grant-all
-    run "$HOME/.local/bin/shilpo" ext enable org.shilpo.weather
-  else
-    error "Bundled weather extension source or Shilpo CLI is missing"
-    exit 1
-  fi
 
   if $active_niri && command -v systemctl >/dev/null 2>&1; then
     run systemctl --user start shilpo-first-login.service || warn "Could not start first-login diagnostics"
