@@ -1,6 +1,6 @@
 use std::path::Path;
 
-// Extension content itself moved to shilpo-rs/shilpo-extensions when extensions/ was
+// Extension content itself moved to shilpo-rs/extensions when extensions/ was
 // extracted out of this repository. These tests exercise this repo's own manifest and
 // script-manifest parsers/validators (shilpo_ext_api, shilpo_ext_runtime) against real,
 // non-synthetic manifests, so a small copy is vendored here rather than dropping the

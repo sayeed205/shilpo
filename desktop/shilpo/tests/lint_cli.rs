@@ -130,7 +130,7 @@ version = "0.1.0"
 
 #[test]
 fn test_cli_ext_lint_example_extension() {
-    // The extension itself now lives in shilpo-rs/shilpo-extensions; this vendors the
+    // The extension itself now lives in shilpo-rs/extensions; this vendors the
     // manifest + referenced settings schema (see examples_verification.rs) so `ext lint`'s
     // structural checks still run against a real, non-synthetic manifest.
     let example_path =
