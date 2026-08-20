@@ -31,6 +31,16 @@ impl AuthService {
     /// Creates an offline `AuthService` for tests without a real PAM subprocess.
     pub fn with_helper(helper: Arc<dyn AuthHelper>) -> Self {
         let adapter = Arc::new(AuthDomainState::new(32, helper));
+        // Unlike the other revisioned domains (compositor, idle, ...), auth has no
+        // persistent owner connection to wait for -- the PAM helper is spawned fresh per
+        // authentication attempt, not held open by the supervisor. So the domain can (and
+        // must) become ready synchronously here: `tokio::spawn` only schedules the
+        // supervisor task, it does not run it, and callers like `run_lock()` call
+        // `begin_authentication` immediately afterward with no `.await` in between, so a
+        // deferred `mark_ready` would never win that race and every first command would be
+        // rejected as `Unavailable`.
+        adapter.begin_start();
+        adapter.mark_ready(adapter.time_source().now_ms());
         Self::spawn_supervisor(adapter.clone());
         Self { adapter }
     }
@@ -51,9 +61,6 @@ impl AuthService {
     fn spawn_supervisor(adapter: Arc<AuthDomainState>) {
         tokio::spawn(async move {
             let time_source = adapter.time_source();
-            adapter.begin_start();
-            adapter.mark_ready(time_source.now_ms());
-
             let mut tick_interval = tokio::time::interval(Duration::from_millis(100));
 
             loop {

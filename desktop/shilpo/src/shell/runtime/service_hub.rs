@@ -255,7 +255,7 @@ impl ServiceHub {
         let brightness = self.domain_state(shilpo_services::DeviceDomain::Brightness);
 
         let lock_pam_service =
-            crate::config::ShellConfig::load_or_create(&crate::config::default_config_path())
+            crate::config::ShellConfig::load_or_create(crate::config::default_config_path())
                 .map(|c| c.lock.pam_service)
                 .unwrap_or_else(|_| "login".to_string());
         let lock_pam_service_path = std::path::PathBuf::from("/etc/pam.d").join(&lock_pam_service);
