@@ -8161,13 +8161,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shilpo-ext-sdk"
-version = "0.1.0"
-dependencies = [
- "wit-bindgen 0.60.0",
-]
-
-[[package]]
 name = "shilpo-macros"
 version = "0.1.0"
 dependencies = [

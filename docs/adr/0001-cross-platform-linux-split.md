@@ -25,15 +25,17 @@ The workspace is split into two tiers by platform:
 
 ### 2. Publication boundary
 
-Only `core/` crates and official extension SDKs under `sdk/` are intended for publication:
+Only `core/` crates and the official extension SDKs are intended for publication:
 
 - **Core Tier** (`core/` → crates.io): `shilpo-ui`, `shilpo-theme`, `shilpo-macros`, `shilpo-ext-api`.
-- **SDK Tier** (`sdk/`): `shilpo-ext-sdk` (`sdk/rust`, crates.io) and `@shilpo/ext-sdk` (`sdk/typescript`, JSR).
+- **SDK Tier**: `shilpo-ext-sdk` (crates.io) and `@shilpo/ext-sdk` (JSR), maintained in a separate repository,
+  [shilpo-rs/sdks](https://github.com/shilpo-rs/sdks), rather than under `sdk/` in this one. They target `core/ext-api`'s
+  WIT contract at a pinned revision instead of a live path dependency.
 
 Icon assets are plain data in `core/assets/icons/`; applications bring their own asset-source implementation. All
 `desktop/` crates are internal to the Shilpo desktop environment and are never published.
 
-This boundary constrains API design: `core/` and `sdk/` public APIs require semver discipline, documentation, and must
+This boundary constrains API design: `core/` and SDK Tier public APIs require semver discipline, documentation, and must
 not leak `desktop/` types. `desktop/` crates have no external API stability guarantees.
 
 ### 3. Where future cross-platform apps live
@@ -54,4 +56,5 @@ belongs here; if it only depends on `core/` crates, it gets its own repo.
   any Linux-only dependency.
 - `desktop/` crates are free to take on Linux-specific dependencies and internal API churn without a semver contract.
 - A new crate's home is decided by two questions: does it need to run outside Linux, and does it need to be
-  independently published? The answers place it in `core/`, `desktop/`, its own repo, or `sdk/`.
+  independently published? The answers place it in `core/`, `desktop/`, its own repo, or the SDK Tier repo
+  ([shilpo-rs/sdks](https://github.com/shilpo-rs/sdks)).

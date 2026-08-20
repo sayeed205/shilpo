@@ -3,12 +3,12 @@ set -euo pipefail
 
 METADATA=$(rtk cargo metadata --no-deps --format-version 1)
 
-# 1. Exact 10 package names in workspace metadata
+# 1. Exact 12 package names in workspace metadata
 PACKAGES=$(echo "$METADATA" | jq -r '.packages[].name' | sort | uniq)
 PACKAGE_COUNT=$(echo "$PACKAGES" | wc -l)
 
-if [ "$PACKAGE_COUNT" -ne 10 ]; then
-  echo "ERROR: Expected 10 workspace packages, found $PACKAGE_COUNT:"
+if [ "$PACKAGE_COUNT" -ne 12 ]; then
+  echo "ERROR: Expected 12 workspace packages, found $PACKAGE_COUNT:"
   echo "$PACKAGES"
   exit 1
 fi
@@ -16,9 +16,13 @@ fi
 EXPECTED_PACKAGES=(
   "shilpo"
   "shilpo-device"
+  "shilpo-domain"
   "shilpo-ext-api"
   "shilpo-ext-runtime"
+  "shilpo-macros"
+  "shilpo-observability"
   "shilpo-services"
+  "shilpo-theme"
   "shilpo-theme-daemon"
   "shilpo-ui"
   "storybook"

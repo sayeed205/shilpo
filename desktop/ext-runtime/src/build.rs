@@ -2268,44 +2268,14 @@ mod tests {
 
     #[test]
     fn test_integration_typescript_fixture_build() {
-        let fixture_dir =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../sdk/typescript/tests/fixture");
-        if !fixture_dir.exists() {
-            eprintln!(
-                "SKIPPED: TypeScript fixture directory not found at {}",
-                fixture_dir.display()
-            );
-            return;
-        }
-
-        let runner = OsProcessRunner;
-        if runner.which("node").is_none() {
-            eprintln!(
-                "SKIPPED: TypeScript build fixture integration test skipped: node not found in PATH"
-            );
-            return;
-        }
-        if find_local_tsc(&fixture_dir).is_none() || find_local_jco(&fixture_dir).is_none() {
-            eprintln!(
-                "SKIPPED: TypeScript build fixture integration test skipped: local TSC or JCO not found (run npm install in sdk/typescript/tests/fixture)"
-            );
-            return;
-        }
-
-        let res = build_extension(&fixture_dir, false, &runner);
-        if !res.success {
-            panic!(
-                "TypeScript fixture build failed:\n{}",
-                res.diagnostics.join("\n")
-            );
-        }
-        assert!(res.success);
-        assert_eq!(res.extension_id.as_deref(), Some("org.shilpo.ts-fixture"));
-        let wasm_path = fixture_dir.join("extension.wasm");
-        assert!(wasm_path.is_file());
-        let bytes = fs::read(&wasm_path).unwrap();
-        assert!(bytes.len() > 1000);
-        assert_eq!(&bytes[0..4], b"\x00asm");
+        // The TypeScript SDK's own conformance fixture (formerly sdk/typescript/tests/fixture
+        // in this repo) moved to shilpo-rs/sdks along with the SDK. It imports directly from
+        // the SDK's own ../../src/index.ts, so it can't be vendored here as a standalone copy
+        // without either depending on the published package or rewriting it to use raw WIT
+        // bindings (weaker coverage of what shilpo_ext_sdk-authored extensions actually look
+        // like). This test is a permanent no-op until a real, portable fixture replaces it;
+        // the SDK repo's own CI covers the equivalent build against its live source.
+        eprintln!("SKIPPED: no portable TypeScript build fixture in this repo (see comment above)");
     }
 
     #[test]

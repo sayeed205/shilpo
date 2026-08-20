@@ -950,10 +950,10 @@ mod tests {
     use crate::compositor::{CancellationReason, CommandOutcome};
 
     fn fake_niri_root() -> PathBuf {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("target")
-            .join("fake-niri");
+        // AF_UNIX socket paths are limited to roughly 108 bytes (SUN_LEN), so this must not be
+        // nested under the crate's own (potentially long) checkout path -- std::env::temp_dir()
+        // is short and independent of how deep the source tree happens to be checked out.
+        let root = std::env::temp_dir().join("shilpo-fake-niri");
         std::fs::create_dir_all(&root).expect("failed to create fake Niri fixture root");
         root
     }

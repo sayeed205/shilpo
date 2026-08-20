@@ -48,14 +48,14 @@ library at its core.
 - **Storybook** (`apps/storybook`) — Interactive desktop gallery for exploring and testing core UI components.
   Cross-platform. Demos the generic M3 component library only, not shell-specific widgets.
 
-### SDKs (`sdk/`)
+### SDKs
 
-- **TypeScript SDK** (`sdk/typescript`) — Official TypeScript SDK (`@shilpo/ext-sdk@0.1.0`) for developing sandboxed
-  WebAssembly extensions. Provides declarative ViewTree builders, typed `DataValue` helpers, `defineExtension` lifecycle
-  adapter, host import facade, and in-memory test host. Published exclusively to JSR.
-- **Rust SDK** (`sdk/rust`) — Official Rust SDK (`shilpo-ext-sdk@0.1.0`) for developing sandboxed WebAssembly
-  extensions. Provides declarative ViewTree builders, `view!` macro, typed `DataValue` conversions, `Extension`
-  lifecycle trait, `State` helper, and re-exported canonical WIT bindings. Published to crates.io.
+The official extension SDKs (TypeScript's `@shilpo/ext-sdk`, Rust's `shilpo-ext-sdk`, and future
+languages) live in a separate repository,
+[shilpo-rs/sdks](https://github.com/shilpo-rs/sdks), not in this one. Both SDKs target the
+`shilpo:extension` WIT contract defined here in `core/ext-api`, pinned to an exact revision of this
+repository (see that repo's `WIT_REV`) rather than a live path dependency, since neither SDK depends
+on the extension runtime that also consumes `core/ext-api` — see "Relationships" below.
 
 ## Relationships
 
@@ -77,8 +77,9 @@ library at its core.
 - **Services → LMDB Session Store**: Services owns operational/session persistence (clipboard history, output state)
   independently of Shilpo declarative config.
 - **Theme Daemon → Theme**: Daemon uses core theme types and color generation.
-- **TypeScript SDK → Ext API**: TypeScript SDK generates typed interfaces from `core/ext-api/wit/extension.wit` and
-  manifest schema from `core/ext-api/schema/extension-v1.schema.json`.
+- **SDKs → Ext API**: Both official SDKs, in [shilpo-rs/sdks](https://github.com/shilpo-rs/sdks), generate typed
+  interfaces from `core/ext-api/wit/extension.wit` and manifest schema from
+  `core/ext-api/schema/extension-v1.schema.json`, fetched at a pinned revision rather than a live path dependency.
 - **Storybook → UI, Theme**: Demos the core component library.
 - **Services Domain Ports**: Long-lived service domains use domain-specific ports with the shared ADR-0006 operational
   semantics; process-owned ports use typed DBus clients and in-process ports use narrow handles.

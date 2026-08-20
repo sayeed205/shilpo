@@ -8,6 +8,6 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-shilpo-ext-sdk = { path = "../../../../../sdk/rust" }
+shilpo-ext-sdk = { git = "https://github.com/shilpo-rs/sdks", rev = "c48c0f0c8736d7398d0b091d1f23f63963d9f897" }
 
 [workspace]

@@ -7,7 +7,6 @@ fn main() {
     println!("cargo:rerun-if-changed=tests/fixtures/sdk-component/Cargo.toml");
     println!("cargo:rerun-if-changed=tests/fixtures/sdk-component/Cargo.lock");
     println!("cargo:rerun-if-changed=tests/fixtures/sdk-component/src");
-    println!("cargo:rerun-if-changed=../../sdk/rust");
     println!("cargo:rerun-if-changed=../../core/ext-api/wit");
 
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
