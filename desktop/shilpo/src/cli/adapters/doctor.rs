@@ -932,9 +932,19 @@ impl DoctorChecker {
             };
         }
 
+        let protocol_available =
+            shilpo_services::lock_supervisor::probe_session_lock_protocol_available();
+        let protocol_note = if protocol_available {
+            ""
+        } else {
+            " (ext-session-lock-v1 not advertised by the compositor or no Wayland session found)"
+        };
+
         match crate::cli::adapters::ipc::IpcAdapter::new().telemetry() {
             Ok(telemetry) => {
-                let status = if telemetry.lock_last_error.is_empty() {
+                let status = if !protocol_available {
+                    DiagnosticStatus::Fail
+                } else if telemetry.lock_last_error.is_empty() {
                     DiagnosticStatus::Pass
                 } else {
                     DiagnosticStatus::Warn
@@ -953,7 +963,9 @@ impl DoctorChecker {
                     category: "Authentication".into(),
                     name: "Lock Screen".into(),
                     status,
-                    message: format!("PAM service '{pam_service}' present{active_note}{err_note}"),
+                    message: format!(
+                        "PAM service '{pam_service}' present{active_note}{err_note}{protocol_note}"
+                    ),
                     repair_command: None,
                     unit_identifier: None,
                     fix_applied: false,

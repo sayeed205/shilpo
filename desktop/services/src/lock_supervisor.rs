@@ -116,7 +116,29 @@ impl LockSupervisor {
         self.spawn_with_env(reason, Some(&fifo_path));
 
         let result = wait_for_fifo_signal(&fifo_path, timeout);
-        let _ = std::fs::remove_file(&fifo_path);
+
+        // Do NOT delete the fifo here on a timeout: `wait_for_fifo_signal`'s reader thread
+        // is blocked inside a plain `File::open()` on this exact path with no cancellation
+        // mechanism (opening a FIFO for reading blocks until a writer connects, and there
+        // is no non-blocking/pollable equivalent in std). If we unlink the path immediately,
+        // a locker that is merely slow — rather than crashed or denied — can never open it
+        // to write, and the reader thread leaks forever with zero chance of completing.
+        // Deferring the unlink lets a late writer still connect and let that thread exit
+        // normally; only a locker that never signals at all (crashed, or `finished` fired
+        // instead of `locked`) leaves a leaked thread, bounded and rare enough to accept
+        // rather than adding non-blocking FIFO I/O under time pressure.
+        if result {
+            let _ = std::fs::remove_file(&fifo_path);
+        } else {
+            std::thread::Builder::new()
+                .name("shilpo-lock-ready-cleanup".into())
+                .spawn(move || {
+                    std::thread::sleep(Duration::from_secs(60));
+                    let _ = std::fs::remove_file(&fifo_path);
+                })
+                .ok();
+        }
+
         result
     }
 }
@@ -153,6 +175,63 @@ fn wait_for_fifo_signal(path: &std::path::Path, timeout: Duration) -> bool {
         return false;
     }
     rx.recv_timeout(timeout).unwrap_or(false)
+}
+
+/// Probes whether the compositor advertises `ext_session_lock_manager_v1`, for `shilpo
+/// doctor`. A one-shot connect + registry roundtrip on a bounded thread (so a compositor
+/// that never responds can't hang `doctor`), independent of the daemon and the locker
+/// process — neither of which holds this connection themselves (the daemon never touches
+/// session-lock at all, and the locker only exists transiently while a lock is active).
+pub fn probe_session_lock_protocol_available() -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("shilpo-doctor-session-lock-probe".into())
+        .spawn(move || {
+            let available = probe_session_lock_protocol_blocking();
+            let _ = tx.send(available);
+        });
+    if spawned.is_err() {
+        return false;
+    }
+    rx.recv_timeout(Duration::from_secs(2)).unwrap_or(false)
+}
+
+fn probe_session_lock_protocol_blocking() -> bool {
+    use wayland_client::protocol::wl_registry::{self, WlRegistry};
+    use wayland_client::{Connection, Dispatch, QueueHandle};
+
+    struct State {
+        found: bool,
+    }
+
+    impl Dispatch<WlRegistry, ()> for State {
+        fn event(
+            state: &mut Self,
+            _registry: &WlRegistry,
+            event: wl_registry::Event,
+            _data: &(),
+            _conn: &Connection,
+            _qh: &QueueHandle<Self>,
+        ) {
+            if let wl_registry::Event::Global { interface, .. } = event
+                && interface == "ext_session_lock_manager_v1"
+            {
+                state.found = true;
+            }
+        }
+    }
+
+    let Ok(conn) = Connection::connect_to_env() else {
+        return false;
+    };
+    let mut event_queue = conn.new_event_queue::<State>();
+    let qh = event_queue.handle();
+    let display = conn.display();
+    let _registry = display.get_registry(&qh, ());
+
+    let mut state = State { found: false };
+    let _ = event_queue.roundtrip(&mut state);
+    state.found
 }
 
 /// Signals readiness to a `LockSupervisor` waiting on `LOCK_READY_FIFO_ENV_VAR`, if set.

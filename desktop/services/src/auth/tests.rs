@@ -1,3 +1,17 @@
+//! Deliberately no separate `tests/auth_domain_port_contract.rs` using the shared
+//! `support::domain_port_contract::DomainPortDriver` harness (unlike idle/notification/
+//! device/compositor). That harness assumes a domain that receives free-form externally
+//! *published* payload updates (`publish_update`/`publish_raw_update`) alongside typed
+//! commands — the shape every other domain in this codebase has, because each reacts to
+//! push-based events from an external source (Wayland, D-Bus, a compositor). The auth
+//! domain has no such external payload stream: every state change here originates from a
+//! typed command or from the helper's own conversation events, both already exercised
+//! below. Forcing the generic harness on would mean adding a `publish_update` no one calls
+//! for real, for a property the harness exists to test that doesn't apply here. The same
+//! ADR-0006 properties it would check — snapshot version monotonicity, stale-generation
+//! rejection, mailbox overflow, `ReplaceLatest` supersession, exactly-one-terminal-outcome,
+//! and supervisor backoff/quarantine — are covered directly below instead.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 

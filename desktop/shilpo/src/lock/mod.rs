@@ -244,8 +244,13 @@ impl LockView {
         if let Some(prompt) = &snapshot.prompt_state {
             if let Some(label) = &prompt.input_prompt
                 && !label.is_empty()
+                && *label != self.prompt_label
             {
                 self.prompt_label = label.clone();
+                let placeholder = self.prompt_label.clone();
+                self.input_state.update(cx, |state, cx| {
+                    state.set_placeholder(placeholder, window, cx);
+                });
             }
             self.input_state.update(cx, |state, cx| {
                 state.set_masked(!prompt.response_visible, window, cx);
@@ -295,6 +300,7 @@ impl Render for LockView {
         let date_text = now.format("%A, %B %-d").to_string();
         let username = whoami();
         let caps_lock_on = window.capslock().on;
+        let keyboard_layout_name = cx.keyboard_layout().name().to_string();
 
         div()
             .track_focus(&self.focus_handle)
@@ -337,18 +343,26 @@ impl Render for LockView {
                             .child(div().text_base().child(username)),
                     )
                     .child(Input::new(&self.input_state).w_full())
-                    .when(caps_lock_on, |this| {
-                        this.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .text_xs()
-                                .text_color(cx.theme().on_surface_variant)
-                                .child(Icon::new(IconName::KeyboardArrowUp).size(px(14.)))
-                                .child("Caps Lock is on"),
-                        )
-                    })
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(cx.theme().on_surface_variant)
+                            .child(keyboard_layout_name)
+                            .when(caps_lock_on, |this| {
+                                this.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .text_color(cx.theme().error)
+                                        .child(Icon::new(IconName::KeyboardArrowUp).size(px(14.)))
+                                        .child("Caps Lock is on"),
+                                )
+                            }),
+                    )
                     .children(self.status.as_ref().map(|(message, is_error)| {
                         div()
                             .text_xs()

@@ -1,16 +1,18 @@
 //! The PAM conversation, run only inside a freshly `fork`+`exec`'d child process
-//! (triggered by the `SHILPO_PAM_HELPER` environment variable — see
-//! `main.rs`'s dispatch at process startup, before any Tokio runtime exists).
+//! (triggered by the `SHILPO_PAM_HELPER` environment variable, checked at the top of
+//! `main()`'s async body — the *child's* freshly `exec`'d process image, not before Tokio
+//! itself starts: `#[tokio::main]` constructs its runtime before that body ever runs).
 //!
 //! PAM modules are third-party C code (`pam_exec` can run arbitrary scripts) that can
 //! crash or call `exit()`. A locker process where that happens can leave the session
 //! permanently locked per the `ext-session-lock-v1` protocol, so PAM never runs
 //! in-process. It is also never reached via a raw `libc::fork()` from the (multi-threaded,
-//! Tokio-based) domain owner: `fork()` without an immediate `exec()` only clones the
-//! calling thread, leaving any locks held by other threads at fork time locked forever in
-//! the child. Re-executing ourselves via `std::process::Command` (fork+exec) is what makes
-//! this safe, and mirrors the existing `SHILPO_WASM_VALIDATOR` self-reexec pattern already
-//! used by this binary.
+//! Tokio-based) domain owner that spawns this helper: `fork()` without an immediate
+//! `exec()` only clones the calling thread, leaving any locks held by other threads at
+//! fork time locked forever in the child. Re-executing ourselves via `std::process::Command`
+//! (fork+exec, which replaces the child's entire process image) is what makes this safe
+//! regardless of how many threads the parent has, and mirrors the existing
+//! `SHILPO_WASM_VALIDATOR` self-reexec pattern already used by this binary.
 //!
 //! Protocol on stdout (one line per event, matching the shape already established for
 //! `polkit-agent-helper-1` in `polkit/helper.rs`):
@@ -127,11 +129,23 @@ unsafe extern "C" fn conversation_callback(
                 emit_line(&format!("PAM_PROMPT_ECHO_OFF {text}"));
                 let response = read_response_line();
                 reply.resp = strdup_response(&response);
+                if reply.resp.is_null() {
+                    // Embedded NUL byte in the response, or strdup ran out of memory.
+                    // Returning PAM_SUCCESS with a null resp for a message that required
+                    // one would violate the pam_conv contract; fail the conversation
+                    // instead of proceeding as if an empty response were given.
+                    unsafe { free_partial_replies(replies, i + 1) };
+                    return PAM_CONV_ERR;
+                }
             }
             s if s == PAM_PROMPT_ECHO_ON => {
                 emit_line(&format!("PAM_PROMPT_ECHO_ON {text}"));
                 let response = read_response_line();
                 reply.resp = strdup_response(&response);
+                if reply.resp.is_null() {
+                    unsafe { free_partial_replies(replies, i + 1) };
+                    return PAM_CONV_ERR;
+                }
             }
             s if s == PAM_ERROR_MSG => {
                 emit_line(&format!("PAM_ERROR_MSG {text}"));
