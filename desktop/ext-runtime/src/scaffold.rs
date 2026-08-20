@@ -1164,7 +1164,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-shilpo-ext-sdk = {{ git = "https://github.com/sayeed205/shilpo.git" }}
+shilpo-ext-sdk = {{ git = "https://github.com/shilpo-rs/shilpo.git" }}
 "#
     )
 }
@@ -1382,7 +1382,7 @@ shilpo ext build
 shilpo ext dev
 ```
 
-See [Shilpo Extension Documentation](https://github.com/sayeed205/shilpo/blob/main/docs/extensions/index.md) for authoring guides, API references, and testing practices.
+See [Shilpo Extension Documentation](https://github.com/shilpo-rs/shilpo/blob/main/docs/extensions/index.md) for authoring guides, API references, and testing practices.
 
 > **Note**: `shilpo-ext-sdk` currently references the GitHub repository while the crate is prepared for release.
 "#
@@ -1853,7 +1853,7 @@ shilpo ext build
 shilpo ext dev
 ```
 
-See [Shilpo Extension Documentation](https://github.com/sayeed205/shilpo/blob/main/docs/extensions/index.md) for authoring guides, API references, and testing practices.
+See [Shilpo Extension Documentation](https://github.com/shilpo-rs/shilpo/blob/main/docs/extensions/index.md) for authoring guides, API references, and testing practices.
 "#
     )
 }

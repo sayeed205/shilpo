@@ -128,7 +128,7 @@ with `rtk`**.
 
 ### Issue tracker
 
-Issues and specs live as GitHub Issues on `sayeed205/shilpo`. Use the `gh` CLI for all operations.
+Issues and specs live as GitHub Issues on `shilpo-rs/shilpo`. Use the `gh` CLI for all operations.
 
 #### Conventions
 

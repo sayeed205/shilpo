@@ -7,7 +7,7 @@
 
 Status: **accepted design baseline**. Architectural decisions are recorded in
 [ADR-0004](../adr/0004-bar-widget-card-surfaces.md). Parent delivery tracker:
-[#50](https://github.com/sayeed205/shilpo/issues/50). This document records settled design decisions and widget-specific
+[#50](https://github.com/shilpo-rs/shilpo/issues/50). This document records settled design decisions and widget-specific
 behavior; it is not an implementation plan or authorization to change product code.
 
 ## Goal
@@ -207,19 +207,19 @@ resource does not belong in the pure `shilpo-theme` crate.
 
 ## Delivery and issue structure
 
-The work is tracked by parent issue [#50](https://github.com/sayeed205/shilpo/issues/50) and its linked child issues.
+The work is tracked by parent issue [#50](https://github.com/shilpo-rs/shilpo/issues/50) and its linked child issues.
 GitHub sub-issues and native dependency edges encode this task order:
 
-1. [#51](https://github.com/sayeed205/shilpo/issues/51) records the architecture in this ADR.
-2. [#52](https://github.com/sayeed205/shilpo/issues/52) extracts and tests the shared wallpaper-preview resource.
-3. [#53](https://github.com/sayeed205/shilpo/issues/53) extracts the presentation-neutral workspace miniature.
-4. [#54](https://github.com/sayeed205/shilpo/issues/54) builds and tests the coordinator state machine and placement
+1. [#51](https://github.com/shilpo-rs/shilpo/issues/51) records the architecture in this ADR.
+2. [#52](https://github.com/shilpo-rs/shilpo/issues/52) extracts and tests the shared wallpaper-preview resource.
+3. [#53](https://github.com/shilpo-rs/shilpo/issues/53) extracts the presentation-neutral workspace miniature.
+4. [#54](https://github.com/shilpo-rs/shilpo/issues/54) builds and tests the coordinator state machine and placement
    engine.
-5. [#55](https://github.com/sayeed205/shilpo/issues/55) integrates Workspace hover.
-6. [#56](https://github.com/sayeed205/shilpo/issues/56) expands the Battery domain through DBus/client.
-7. [#57](https://github.com/sayeed205/shilpo/issues/57) builds and integrates the Battery card.
-8. [#58](https://github.com/sayeed205/shilpo/issues/58) verifies cross-feature behavior and multi-monitor scenarios.
-9. [#59](https://github.com/sayeed205/shilpo/issues/59) reconciles documentation and closes the delivery slice.
+5. [#55](https://github.com/shilpo-rs/shilpo/issues/55) integrates Workspace hover.
+6. [#56](https://github.com/shilpo-rs/shilpo/issues/56) expands the Battery domain through DBus/client.
+7. [#57](https://github.com/shilpo-rs/shilpo/issues/57) builds and integrates the Battery card.
+8. [#58](https://github.com/shilpo-rs/shilpo/issues/58) verifies cross-feature behavior and multi-monitor scenarios.
+9. [#59](https://github.com/shilpo-rs/shilpo/issues/59) reconciles documentation and closes the delivery slice.
 
 No permanent user-facing feature flag is planned. Any temporary internal gate used during development is removed before
 completion.
@@ -257,5 +257,5 @@ rendering, and architectural consequences. Widget-specific content remains in th
 
 ## Open decisions
 
-- Running Apps pixel previews are deferred to [#67](https://github.com/sayeed205/shilpo/issues/67). Grill privacy,
+- Running Apps pixel previews are deferred to [#67](https://github.com/shilpo-rs/shilpo/issues/67). Grill privacy,
   protected-content, memory lifetime, cleanup, backpressure, and refresh policies before enabling them.

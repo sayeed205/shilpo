@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/shilpo-ext-sdk/badge.svg)](https://docs.rs/shilpo-ext-sdk)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Official Rust SDK for developing sandboxed WebAssembly extensions for the [Shilpo](https://github.com/sayeed205/shilpo) desktop environment.
+Official Rust SDK for developing sandboxed WebAssembly extensions for the [Shilpo](https://github.com/shilpo-rs/shilpo) desktop environment.
 
 ---
 

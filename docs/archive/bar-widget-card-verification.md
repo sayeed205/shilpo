@@ -4,8 +4,8 @@
 > `shell` moved into `desktop/shilpo/src/shell/`. Not living documentation.
 
 Verification date: 2026-08-09  
-Delivery issues: [#58](https://github.com/sayeed205/shilpo/issues/58) and
-[#59](https://github.com/sayeed205/shilpo/issues/59)
+Delivery issues: [#58](https://github.com/shilpo-rs/shilpo/issues/58) and
+[#59](https://github.com/shilpo-rs/shilpo/issues/59)
 
 ## Automated coverage
 
@@ -37,7 +37,7 @@ The full-workspace Nextest run initially exposed a device-client connection race
 immediately after connection. The connection seam now confirms listener readiness before loading its initial projection
 and returning. The regression path passed 20 consecutive stress runs, the device-client suite passed, and full workspace
 Nextest completed with 981 passed and 3 skipped tests. The finding is tracked
-by [#68](https://github.com/sayeed205/shilpo/issues/68).
+by [#68](https://github.com/shilpo-rs/shilpo/issues/68).
 
 ## Live verification performed
 
@@ -83,7 +83,7 @@ confirmed working cleanly. Issue #70 resolved.
 - The device-client listener-readiness race was fixed and stress-tested under #68.
 - Repeated `gpui::window: window not found` journal errors were observed without a crash. Attribution and idempotent
   cleanup are tracked by
-  [#69](https://github.com/sayeed205/shilpo/issues/69).
+  [#69](https://github.com/shilpo-rs/shilpo/issues/69).
 
 The stale-window diagnostic #69 and manual verification #70 are resolved. The bar widget cards initiative (#50, #59)
 delivery criteria are satisfied.
@@ -93,5 +93,5 @@ delivery criteria are satisfied.
 Running Apps remains unchanged. Pixel previews require a separately accepted capture architecture covering privacy,
 protected content, memory lifetime, cleanup, refresh policy, backpressure, and degraded/denied states. That future
 design effort is tracked by
-[#67](https://github.com/sayeed205/shilpo/issues/67); one-shot screenshot files are not an acceptable streaming
+[#67](https://github.com/shilpo-rs/shilpo/issues/67); one-shot screenshot files are not an acceptable streaming
 implementation.

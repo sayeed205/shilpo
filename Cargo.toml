@@ -196,7 +196,7 @@ ignored = ["log", "anyhow", "serde"]
 psm = { git = "https://github.com/rust-lang/stacker", branch = "master" }
 
 # Fork of gpui adding ext-session-lock-v1 support (WindowKind::SessionLock), used to implement
-# shilpo's lock screen (#135). Tracks https://github.com/sayeed205/shilpo/issues/262. Pinned by
+# shilpo's lock screen (#135). Tracks https://github.com/shilpo-rs/shilpo/issues/262. Pinned by
 # exact rev, never by branch, so this build is reproducible regardless of later fork commits.
 # Also fixes gpui previously being an unpinned git dependency.
 [patch."https://github.com/zed-industries/zed"]

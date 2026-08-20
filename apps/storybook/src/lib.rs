@@ -272,7 +272,7 @@ pub fn init(cx: &mut App) {
                                 alert.title("About").description(markdown(
                                     "GPUI Component Storybook\n\n\
                                     Version 0.1.0\n\n\
-                                    https://github.com/sayeed205/shilpo",
+                                    https://github.com/shilpo-rs/shilpo",
                                 ))
                             });
                         });

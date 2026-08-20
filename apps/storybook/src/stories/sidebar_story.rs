@@ -420,7 +420,7 @@ impl Render for SidebarStory {
                                             move |this, _, _| {
                                                 this.link(
                                                     "About",
-                                                    "https://github.com/sayeed205/shilpo",
+                                                    "https://github.com/shilpo-rs/shilpo",
                                                 )
                                             }
                                         })

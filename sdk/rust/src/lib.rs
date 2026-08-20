@@ -1,7 +1,7 @@
 //! # Shilpo Extension Rust SDK (`shilpo-ext-sdk`)
 //!
 //! Official Rust SDK for developing sandboxed WebAssembly extensions for the
-//! [Shilpo](https://github.com/sayeed205/shilpo) Linux desktop environment.
+//! [Shilpo](https://github.com/shilpo-rs/shilpo) Linux desktop environment.
 //!
 //! ## Overview
 //!

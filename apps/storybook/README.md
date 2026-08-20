@@ -29,7 +29,7 @@ cargo run -p storybook -- switch
 ```toml
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed" }
-shilpo-ui = { git = "https://github.com/sayeed205/shilpo" }
+shilpo-ui = { git = "https://github.com/shilpo-rs/shilpo" }
 rust-embed = "8"
 ```
 
