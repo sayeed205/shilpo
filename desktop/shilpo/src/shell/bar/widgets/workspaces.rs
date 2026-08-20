@@ -2,10 +2,10 @@ use gpui::{
     App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, RenderOnce, Role,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
 };
-use shilpo_services::{DomainLifecycle, WorkspaceInfo};
 use shilpo_m3e::{
     ActiveTheme, ElementExt as _, Icon, IconName, StyledExt, h_flex, tooltip::Tooltip, v_flex,
 };
+use shilpo_services::{DomainLifecycle, WorkspaceInfo};
 
 use crate::actions::ActionInvocation;
 use crate::bar::cards::{

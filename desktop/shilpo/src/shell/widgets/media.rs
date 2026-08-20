@@ -386,8 +386,9 @@ impl RenderOnce for MediaControl {
                                     0.0
                                 } else {
                                     let p = (delta - 0.25) / 0.75;
-                                    let ease =
-                                        shilpo_m3e::animation::cubic_bezier(0.25, 0.1, 0.25, 1.0)(p);
+                                    let ease = shilpo_m3e::animation::cubic_bezier(
+                                        0.25, 0.1, 0.25, 1.0,
+                                    )(p);
                                     ease * scroll_dist
                                 };
                                 this.ml(px(-shift))

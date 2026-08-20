@@ -2,11 +2,6 @@ use gpui::{
     App, ImageSource, IntoElement, ObjectFit, ParentElement, SharedString, Styled, StyledImage,
     Window, div, img, prelude::FluentBuilder as _, px,
 };
-use shilpo_services::{
-    AudioAction, DeviceClient, DeviceCommand, DeviceDomain, DomainPayload, DomainState,
-    NetworkAction,
-};
-use shilpo_theme_daemon::ThemeClient;
 use shilpo_m3e::scroll::ScrollableElement;
 use shilpo_m3e::theme::{SchemeVariant, ThemeMode};
 use shilpo_m3e::{
@@ -14,6 +9,11 @@ use shilpo_m3e::{
     button::{Button, ButtonGroup, ButtonGroupMode, ButtonVariants},
     h_flex, v_flex,
 };
+use shilpo_services::{
+    AudioAction, DeviceClient, DeviceCommand, DeviceDomain, DomainPayload, DomainState,
+    NetworkAction,
+};
+use shilpo_theme_daemon::ThemeClient;
 
 /// Material 3 scheme variant labels.
 const SCHEME_VARIANTS: &[&str] = &[

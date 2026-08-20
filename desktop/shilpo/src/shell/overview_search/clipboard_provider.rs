@@ -3,8 +3,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use shilpo_services::ClipboardItem;
 use shilpo_m3e::IconName;
+use shilpo_services::ClipboardItem;
 use tokio::sync::watch;
 
 use super::{

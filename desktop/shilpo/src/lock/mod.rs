@@ -8,12 +8,12 @@ use gpui::{
     WindowBounds, WindowKind, WindowOptions, div, point, prelude::FluentBuilder as _, px,
     session_lock::SessionLockOptions,
 };
-use shilpo_services::auth::{AuthCommand, AuthOutcome, AuthPort, AuthService, AuthSnapshot};
 use shilpo_m3e::{
     ActiveTheme, Icon, IconName, StyledExt,
     input::{Input, InputState},
     v_flex,
 };
+use shilpo_services::auth::{AuthCommand, AuthOutcome, AuthPort, AuthService, AuthSnapshot};
 
 /// Entry point for the `shilpo lock` process role. Owns the session lock and the PAM
 /// authentication domain; nothing else. See ADR-0005 and issue #135 for why this is a

@@ -5,8 +5,8 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, StyledImage as _, Window, div, img,
     prelude::FluentBuilder as _, px,
 };
-use shilpo_services::{WindowInfo, WorkspaceInfo};
 use shilpo_m3e::{ActiveTheme, StyledExt};
+use shilpo_services::{WindowInfo, WorkspaceInfo};
 
 use crate::app_icons::{app_icon, resolve_app_icon_path};
 

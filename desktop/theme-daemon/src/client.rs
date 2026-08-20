@@ -247,7 +247,10 @@ impl ThemeClient {
         }
     }
 
-    pub async fn set_scheme_variant(&self, variant: shilpo_m3e::theme::SchemeVariant) -> Result<()> {
+    pub async fn set_scheme_variant(
+        &self,
+        variant: shilpo_m3e::theme::SchemeVariant,
+    ) -> Result<()> {
         let proxy = self.proxy().await?;
         match proxy.set_scheme_variant(variant.as_str()).await {
             Ok(raw) => self.apply_response(raw),

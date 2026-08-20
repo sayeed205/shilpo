@@ -2,7 +2,6 @@ use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
     KeyDownEvent, ParentElement, Render, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
-use shilpo_services::{PolkitPromptState, PolkitRequest};
 use shilpo_m3e::{
     ActiveTheme, FocusTrapElement as _, Icon, IconName, StyledExt,
     button::{Button, ButtonVariants as _},
@@ -10,6 +9,7 @@ use shilpo_m3e::{
     input::{Input, InputState},
     v_flex,
 };
+use shilpo_services::{PolkitPromptState, PolkitRequest};
 
 use crate::runtime::ShellRuntime;
 

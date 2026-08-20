@@ -5,11 +5,11 @@ use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Path, PathBuilder, Pixels, Point,
     Render, Styled, Window, div, prelude::*, px,
 };
+use shilpo_m3e::ElementExt;
+use shilpo_m3e::{ActiveTheme, h_flex, v_flex};
 use shilpo_services::{
     AudioInfo, BatteryInfo, BluetoothInfo, MediaInfo, NetworkInfo, Notification,
 };
-use shilpo_m3e::ElementExt;
-use shilpo_m3e::{ActiveTheme, h_flex, v_flex};
 
 use super::geometry::HUG_CORNER_RADIUS;
 use crate::bar::cards::{

@@ -2,8 +2,8 @@ use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
 };
-use shilpo_services::{AudioInfo, NetworkInfo};
 use shilpo_m3e::{ActiveTheme, Colorize, Icon, IconName, h_flex};
+use shilpo_services::{AudioInfo, NetworkInfo};
 
 pub type ClickHandler = Box<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static>;
 

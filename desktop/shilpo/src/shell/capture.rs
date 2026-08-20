@@ -7,8 +7,8 @@ use gpui::{
     MouseUpEvent, ObjectFit, ParentElement, Render, Styled, StyledImage, Window, div, img, px,
 };
 use image::RgbaImage;
-use shilpo_services::capture::{CaptureIntent, Region, copy_image_to_clipboard, crop_image};
 use shilpo_m3e::ActiveTheme;
+use shilpo_services::capture::{CaptureIntent, Region, copy_image_to_clipboard, crop_image};
 
 use crate::config::CaptureConfig;
 

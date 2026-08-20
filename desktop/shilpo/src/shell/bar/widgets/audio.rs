@@ -2,8 +2,8 @@ use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
     Styled, Window, div, px,
 };
-use shilpo_services::AudioInfo;
 use shilpo_m3e::{ActiveTheme, Icon, IconName, StyledExt, h_flex};
+use shilpo_services::AudioInfo;
 
 /// Audio volume widget for Shilpo status bar.
 #[derive(IntoElement)]

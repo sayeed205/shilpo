@@ -2,8 +2,8 @@ use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px, relative,
 };
-use shilpo_services::BatteryInfo;
 use shilpo_m3e::{ActiveTheme, Icon, IconName, StyledExt, black, green_500, h_flex};
+use shilpo_services::BatteryInfo;
 
 use crate::bar::cards::{
     adapter::CardCoordinator,

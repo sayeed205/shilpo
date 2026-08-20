@@ -4,12 +4,12 @@ use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ParentElement, Pixels, Size,
     StatefulInteractiveElement, Styled, Window, div, px,
 };
+use shilpo_m3e::{ActiveTheme, Icon, IconName, h_flex, v_flex};
 use shilpo_services::DomainLifecycle;
 use shilpo_services::{
     BatteryChargeState, BatteryDevicePayload, BatteryPayload, BatteryTechnology,
     BatteryWarningLevel,
 };
-use shilpo_m3e::{ActiveTheme, Icon, IconName, h_flex, v_flex};
 
 use super::{
     model::{CardCapabilities, CardChannel, CardOwnerId, CardSourceId},

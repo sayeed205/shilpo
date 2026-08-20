@@ -3,8 +3,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use shilpo_services::{AppScanner, Application};
 use shilpo_m3e::IconName;
+use shilpo_services::{AppScanner, Application};
 
 use super::{
     parser::SearchMode,

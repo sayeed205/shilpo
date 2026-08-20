@@ -7,7 +7,6 @@ use gpui::{
     ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, StyledText, Window, div,
     prelude::FluentBuilder, px,
 };
-use shilpo_services::{CompositorSnapshot, WindowInfo, WorkspaceInfo};
 use shilpo_m3e::{
     ActiveTheme, Colorize, FocusTrapElement, Icon, IconName, StyledExt,
     animation::cubic_bezier,
@@ -15,6 +14,7 @@ use shilpo_m3e::{
     input::{Input, InputEvent, InputState, InputVariant},
     v_flex,
 };
+use shilpo_services::{CompositorSnapshot, WindowInfo, WorkspaceInfo};
 
 use crate::{
     app_icons::{app_icon, build_app_icon_index, resolve_app_icon_path},
