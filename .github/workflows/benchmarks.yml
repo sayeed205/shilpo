@@ -43,8 +43,9 @@ jobs:
           timeout 5m sudo apt-get update
           timeout 5m sudo apt-get install --yes \
             clang cmake libasound2-dev libdrm-dev libfontconfig1-dev libglib2.0-dev \
-            libpipewire-0.3-dev libpulse-dev libsqlite3-dev libssl-dev libudev-dev libva-dev \
-            libvulkan-dev libwayland-dev libxcb1-dev libxkbcommon-x11-dev libzstd-dev pkg-config
+            libpam0g-dev libpipewire-0.3-dev libpulse-dev libsqlite3-dev libssl-dev libudev-dev \
+            libva-dev libvulkan-dev libwayland-dev libxcb1-dev libxkbcommon-x11-dev libzstd-dev \
+            pkg-config
 
       - name: Collect Environment Metadata
         run: |
