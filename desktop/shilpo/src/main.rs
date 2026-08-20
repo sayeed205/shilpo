@@ -166,7 +166,7 @@ async fn main() {
                         .theme
                         .scheme_variant
                         .as_deref()
-                        .map(shilpo_ui::theme::SchemeVariant::from_str),
+                        .map(shilpo_m3e::theme::SchemeVariant::from_str),
                     config_path: Some(config_path),
                     state_path: Some(shilpo::config::state_dir().join("colors.json")),
                 },
@@ -517,9 +517,9 @@ async fn main() {
                 },
                 ThemeModeAction::Set { mode } => {
                     let theme_mode = match mode {
-                        ModeValue::Light => shilpo_ui::theme::ThemeMode::Light,
-                        ModeValue::Dark => shilpo_ui::theme::ThemeMode::Dark,
-                        ModeValue::System => shilpo_ui::theme::ThemeMode::System,
+                        ModeValue::Light => shilpo_m3e::theme::ThemeMode::Light,
+                        ModeValue::Dark => shilpo_m3e::theme::ThemeMode::Dark,
+                        ModeValue::System => shilpo_m3e::theme::ThemeMode::System,
                     };
                     match ThemeAdapter::set_mode(theme_mode).await {
                         Ok(msg) => output.success(

@@ -7,9 +7,9 @@ use shilpo_services::{
     NetworkAction,
 };
 use shilpo_theme_daemon::ThemeClient;
-use shilpo_ui::scroll::ScrollableElement;
-use shilpo_ui::theme::{SchemeVariant, ThemeMode};
-use shilpo_ui::{
+use shilpo_m3e::scroll::ScrollableElement;
+use shilpo_m3e::theme::{SchemeVariant, ThemeMode};
+use shilpo_m3e::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt,
     button::{Button, ButtonGroup, ButtonGroupMode, ButtonVariants},
     h_flex, v_flex,
@@ -348,12 +348,12 @@ impl QuickPage {
         variant: SchemeVariant,
     ) -> impl IntoElement {
         let seed = state.theme.source_argb;
-        let (light, _dark) = shilpo_ui::theme::generate_m3_palettes(seed, variant);
+        let (light, _dark) = shilpo_m3e::theme::generate_m3_palettes(seed, variant);
         let chips = ["primary", "secondary", "tertiary"]
             .into_iter()
             .filter_map(|token| light.get(token))
             .map(|hex| {
-                let color = shilpo_ui::theme::argb_to_hsla(
+                let color = shilpo_m3e::theme::argb_to_hsla(
                     u32::from_str_radix(&hex[1..], 16).unwrap_or(0) | 0xff000000,
                 );
                 div().size(px(10.)).rounded_full().bg(color)

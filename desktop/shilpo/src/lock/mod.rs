@@ -9,7 +9,7 @@ use gpui::{
     session_lock::SessionLockOptions,
 };
 use shilpo_services::auth::{AuthCommand, AuthOutcome, AuthPort, AuthService, AuthSnapshot};
-use shilpo_ui::{
+use shilpo_m3e::{
     ActiveTheme, Icon, IconName, StyledExt,
     input::{Input, InputState},
     v_flex,
@@ -34,7 +34,7 @@ pub async fn run_lock() {
     let app = gpui_platform::application().with_assets(crate::Assets);
 
     app.run(move |cx: &mut App| {
-        shilpo_ui::init(cx);
+        shilpo_m3e::init(cx);
 
         let lock = match cx.lock_session() {
             Ok(lock) => lock,

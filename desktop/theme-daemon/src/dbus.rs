@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use shilpo_ui::theme::{ColorSource, SchemeVariant, ThemeMode};
+use shilpo_m3e::theme::{ColorSource, SchemeVariant, ThemeMode};
 use tokio::sync::mpsc;
 use zbus::object_server::SignalEmitter;
 

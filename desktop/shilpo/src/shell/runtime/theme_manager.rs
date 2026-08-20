@@ -72,8 +72,8 @@ pub struct ThemeTransition {
     pub generation: u64,
     pub from_revision: u64,
     pub to_revision: u64,
-    pub start_colors: shilpo_ui::ThemeColor,
-    pub target_colors: shilpo_ui::ThemeColor,
+    pub start_colors: shilpo_m3e::ThemeColor,
+    pub target_colors: shilpo_m3e::ThemeColor,
     pub target_state: DaemonState,
     pub duration_ms: u64,
 }
@@ -83,8 +83,8 @@ impl ThemeTransition {
         generation: u64,
         from_revision: u64,
         to_revision: u64,
-        start_colors: shilpo_ui::ThemeColor,
-        target_colors: shilpo_ui::ThemeColor,
+        start_colors: shilpo_m3e::ThemeColor,
+        target_colors: shilpo_m3e::ThemeColor,
         target_state: DaemonState,
         duration_ms: u64,
     ) -> Self {
@@ -99,7 +99,7 @@ impl ThemeTransition {
         }
     }
 
-    pub fn progress_at(&self, elapsed_ms: u64) -> (f32, shilpo_ui::ThemeColor, bool) {
+    pub fn progress_at(&self, elapsed_ms: u64) -> (f32, shilpo_m3e::ThemeColor, bool) {
         if self.duration_ms == 0 || elapsed_ms >= self.duration_ms {
             (1.0, self.target_colors, true)
         } else {
@@ -118,7 +118,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
         .wallpaper_path
         .clone()
         .filter(|path| path.is_file());
-    shilpo_ui::Theme::global_mut(cx).apply_state(&initial_theme_state);
+    shilpo_m3e::Theme::global_mut(cx).apply_state(&initial_theme_state);
     TRANSITION_GATE.initialize_revision(initial_theme_state.revision);
 
     let mut rx = theme_client.subscribe();
@@ -144,16 +144,16 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
                     (false, 300)
                 };
 
-                let target_colors = shilpo_ui::material_theme_with_variant(
+                let target_colors = shilpo_m3e::material_theme_with_variant(
                     state.source_argb,
                     state.scheme_variant,
                     state.resolved_mode.is_dark(),
                 );
-                let start_colors = shilpo_ui::Theme::global(cx).colors;
+                let start_colors = shilpo_m3e::Theme::global(cx).colors;
 
                 if reduced_motion || duration_ms == 0 {
                     TRANSITION_GATE.supersede();
-                    shilpo_ui::Theme::global_mut(cx).apply_state(&state);
+                    shilpo_m3e::Theme::global_mut(cx).apply_state(&state);
                     ShellSurfaces::apply_theme_state(cx, &state);
                     super::ShellRuntime::emit_theme_signal(
                         cx,
@@ -166,7 +166,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
 
                 if target_colors == start_colors {
                     TRANSITION_GATE.supersede();
-                    shilpo_ui::Theme::global_mut(cx).apply_state(&state);
+                    shilpo_m3e::Theme::global_mut(cx).apply_state(&state);
                     TRANSITION_GATE.commit_revision(state.revision);
                     return None;
                 }
@@ -219,7 +219,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
                             if !TRANSITION_GATE.is_current(generation) {
                                 return false;
                             }
-                            shilpo_ui::Theme::global_mut(cx).colors = current_colors;
+                            shilpo_m3e::Theme::global_mut(cx).colors = current_colors;
                             cx.refresh_windows();
                             true
                         });
@@ -236,7 +236,7 @@ pub fn init(cx: &mut App) -> Option<PathBuf> {
                             if !TRANSITION_GATE.is_current(generation) {
                                 return false;
                             }
-                            shilpo_ui::Theme::global_mut(cx).apply_state(&transition.target_state);
+                            shilpo_m3e::Theme::global_mut(cx).apply_state(&transition.target_state);
                             ShellSurfaces::apply_theme_state(cx, &transition.target_state);
                             super::ShellRuntime::emit_theme_signal(
                                 cx,
@@ -290,7 +290,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn theme_init_applies_daemon_state_and_reports_wallpaper() {
         let cx = gpui::TestAppContext::single();
-        cx.update(|cx| shilpo_ui::init_with_source(0xFF006C4C, cx));
+        cx.update(|cx| shilpo_m3e::init_with_source(0xFF006C4C, cx));
 
         let expected = futures_lite::future::block_on(ThemeClient::new());
         let expected_state = expected.current_state();
@@ -302,7 +302,7 @@ mod tests {
         let wallpaper = cx.update(init);
 
         cx.update(|cx| {
-            let theme = shilpo_ui::Theme::global(cx);
+            let theme = shilpo_m3e::Theme::global(cx);
             assert_eq!(theme.source_argb, expected_state.source_argb);
             assert_eq!(theme.scheme_variant, expected_state.scheme_variant);
         });
@@ -323,22 +323,22 @@ mod tests {
     #[test]
     fn test_transition_progress_and_completion() {
         let state1 = DaemonState {
-            theme: shilpo_ui::ThemeState {
+            theme: shilpo_m3e::ThemeState {
                 source_argb: 0xff6750a4,
                 ..Default::default()
             },
             ..Default::default()
         };
         let state2 = DaemonState {
-            theme: shilpo_ui::ThemeState {
+            theme: shilpo_m3e::ThemeState {
                 source_argb: 0xff386a20,
                 ..Default::default()
             },
             ..Default::default()
         };
 
-        let start_colors = shilpo_ui::material_theme(state1.source_argb, false);
-        let target_colors = shilpo_ui::material_theme(state2.source_argb, false);
+        let start_colors = shilpo_m3e::material_theme(state1.source_argb, false);
+        let target_colors = shilpo_m3e::material_theme(state2.source_argb, false);
         let transition =
             ThemeTransition::new(1, 1, 2, start_colors, target_colors, state2.clone(), 300);
 
@@ -366,8 +366,8 @@ mod tests {
     fn test_zero_duration_transition_is_immediate() {
         let state1 = DaemonState::default();
         let state2 = DaemonState::default();
-        let start_colors = shilpo_ui::material_theme(state1.source_argb, false);
-        let target_colors = shilpo_ui::material_theme(state2.source_argb, false);
+        let start_colors = shilpo_m3e::material_theme(state1.source_argb, false);
+        let target_colors = shilpo_m3e::material_theme(state2.source_argb, false);
         let transition = ThemeTransition::new(1, 1, 2, start_colors, target_colors, state2, 0);
 
         let (_, colors, complete) = transition.progress_at(0);

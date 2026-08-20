@@ -77,8 +77,8 @@ exclusivity, placement, and focus rules, creating an unsandboxable escape hatch.
   previously focused application when that application remains available.
 - All surface policy — layer-shell creation, placement, focus, collision, dismissal — remains Linux-specific inside
   `desktop/shilpo` (ADR-0001 principle).
-- Existing `shilpo-ui` presentation primitives (`Card`, `Popover`, `HoverCard`) are reused for card content where
-  applicable; genuinely missing generic primitives are added to `shilpo-ui` with interactive Storybook stories.
+- Existing `shilpo-m3e` presentation primitives (`Card`, `Popover`, `HoverCard`) are reused for card content where
+  applicable; genuinely missing generic primitives are added to `shilpo-m3e` with interactive Storybook stories.
 - The provider contract serves built-ins only. Extension bar menus use a separate declarative adapter with host-measured,
   host-bounded intrinsic sizing rather than raw surface control or direct access to the provider contract.
 - Widget-specific Battery, Workspace, and Running Apps behavior is recorded in the

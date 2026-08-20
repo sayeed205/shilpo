@@ -8,7 +8,7 @@ use gpui::{
     prelude::FluentBuilder, px,
 };
 use shilpo_services::{CompositorSnapshot, WindowInfo, WorkspaceInfo};
-use shilpo_ui::{
+use shilpo_m3e::{
     ActiveTheme, Colorize, FocusTrapElement, Icon, IconName, StyledExt,
     animation::cubic_bezier,
     h_flex,
@@ -711,7 +711,7 @@ impl WorkspaceOverview {
         lifecycle: crate::runtime::shell_surfaces::OverviewLifecycleCallback,
         window: &mut Window,
         cx: &mut App,
-    ) -> Entity<shilpo_ui::Root> {
+    ) -> Entity<shilpo_m3e::Root> {
         let snapshot = ShellSurfaces::compositor_snapshot(cx);
         let reduced_motion = ShellSurfaces::overview_reduced_motion(cx);
         let app_icons = Arc::new(build_app_icon_index(ShellSurfaces::overview_applications(
@@ -893,7 +893,7 @@ impl WorkspaceOverview {
         });
         lifecycle.entity_ready(cx, overview.clone());
         cx.new(|cx| {
-            shilpo_ui::Root::new(overview, window, cx)
+            shilpo_m3e::Root::new(overview, window, cx)
                 .bordered(false)
                 .bg(gpui::transparent_black())
         })

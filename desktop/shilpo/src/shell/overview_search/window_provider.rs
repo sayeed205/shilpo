@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use shilpo_services::{CompositorAdapter, CompositorCommand};
-use shilpo_ui::IconName;
+use shilpo_m3e::IconName;
 
 use super::{
     parser::SearchMode,

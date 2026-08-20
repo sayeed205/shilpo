@@ -7,7 +7,7 @@ use gpui::{
     StyleRefinement, Styled, StyledImage, Window, div, img, px,
 };
 use shilpo_services::{CompositorSnapshot, WindowInfo};
-use shilpo_ui::{ActiveTheme, StyledExt};
+use shilpo_m3e::{ActiveTheme, StyledExt};
 
 use crate::actions::ActionInvocation;
 use crate::bar::widgets::pill_strip::{

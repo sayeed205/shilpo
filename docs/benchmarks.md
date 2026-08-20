@@ -10,9 +10,11 @@ Shilpo uses a dual-engine benchmarking infrastructure:
 
 All benchmark targets live within their owning crates and measure public, production-relevant domain seams without timing fixture construction, process topology, or external services.
 
+`shilpo-theme`'s `theme` benchmark (`theme/resolve_variant`, `theme/generate_palettes`) moved to
+[shilpo-rs/ui](https://github.com/shilpo-rs/ui) along with the crate itself; it's no longer part of this repo's suite.
+
 | Crate | Target | Benchmark Groups | Measured Boundary | Excluded from Timing |
 | :--- | :--- | :--- | :--- | :--- |
-| **`shilpo-theme`** (`core/theme`) | `theme` | `theme/resolve_variant`<br>`theme/generate_palettes` | • HCT chroma analysis & variant resolution<br>• M3 palette generation & token materialization (light/dark pair) | • Fixture seed preparation<br>• Terminal/display formatting |
 | **`shilpo-ext-api`** (`core/ext-api`) | `identity`<br>`view_tree` | `identity/extension_id/valid`<br>`identity/extension_id/invalid`<br>`identity/contribution_id/valid`<br>`identity/contribution_id/invalid`<br>`identity/canonical_id/parse_valid`<br>`identity/canonical_id/parse_invalid`<br>`identity/canonical_id/new`<br>`view_tree/validate_valid`<br>`view_tree/validate_rejection` | • Identifier parsing, domain validation, and canonical composition<br>• `ViewTree::validate` traversal against canonical `ViewLimits` on 1, 64, 256, 1024, and 1025 node trees | • String/tree construction outside timing<br>• Result assertions outside iterations |
 | **`shilpo`** (`desktop/shilpo`) | `config` | `config/deserialize`<br>`config/validate`<br>`config/parse_and_validate`<br>`config/resolve_layered` | • TOML deserialization into `ShellConfig`<br>• Full semantic validation of parsed configuration<br>• Combined parse + validation<br>• `ConfigResolver` initial layered resolution (`config.toml`, `conf.d/*.toml`, `overrides.toml`) | • Temporary directory setup and file writing<br>• OS cache flushing or privileged operations |
 | **`shilpo-ext-runtime`** (`desktop/ext-runtime`) | `wasm` | `wasm/cold_load` | • Component compilation, WIT validation, linker/store setup, limits/fuel initialization, and guest instantiation | • `WasmRuntime` & engine creation<br>• Epoch ticker creation/drop<br>• Secret Service / LMDB / filesystem access<br>• Component unloading (executed outside elapsed time) |
@@ -24,10 +26,6 @@ All benchmark targets live within their owning crates and measure public, produc
 CodSpeed and Criterion track historical trends using fixed, hierarchical identifier paths:
 
 ```text
-theme/
-├── resolve_variant/auto/<low_chroma|medium_chroma|high_chroma>
-└── generate_palettes/m3/<seed>/<variant>
-
 identity/
 ├── extension_id/valid/parse/<short|medium|near_limit>
 ├── extension_id/invalid/parse/<missing_segment|uppercase|invalid_char|leading_dash>
@@ -63,7 +61,7 @@ The `scripts/bench.sh` utility provides a unified interface for developers and C
 # Fast smoke check: compiles and executes every benchmark target once in test mode
 ./scripts/bench.sh smoke
 
-# Run core domain benchmarks (theme, identity, view_tree)
+# Run core domain benchmarks (identity, view_tree)
 ./scripts/bench.sh core
 
 # Run configuration benchmarks
@@ -84,9 +82,6 @@ The `scripts/bench.sh` utility provides a unified interface for developers and C
 You can run individual benchmarks directly with standard `cargo`:
 
 ```bash
-# Theme benchmarks
-cargo bench -p shilpo-theme --bench theme
-
 # Extension API identity and ViewTree benchmarks
 cargo bench -p shilpo-ext-api --bench identity
 cargo bench -p shilpo-ext-api --bench view_tree
@@ -98,7 +93,7 @@ cargo bench -p shilpo --bench config
 cargo bench -p shilpo-ext-runtime --bench wasm
 
 # Run a specific benchmark target in fast test/smoke mode
-cargo bench -p shilpo-theme --bench theme -- --test
+cargo bench -p shilpo-ext-api --bench identity -- --test
 ```
 
 ---

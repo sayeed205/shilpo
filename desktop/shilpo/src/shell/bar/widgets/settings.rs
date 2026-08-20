@@ -2,7 +2,7 @@ use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
     Styled, Window, div, px,
 };
-use shilpo_ui::{ActiveTheme, Icon, IconName};
+use shilpo_m3e::{ActiveTheme, Icon, IconName};
 
 /// Settings trigger button widget for the Shilpo status bar.
 #[derive(IntoElement)]

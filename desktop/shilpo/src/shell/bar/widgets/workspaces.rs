@@ -3,7 +3,7 @@ use gpui::{
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use shilpo_services::{DomainLifecycle, WorkspaceInfo};
-use shilpo_ui::{
+use shilpo_m3e::{
     ActiveTheme, ElementExt as _, Icon, IconName, StyledExt, h_flex, tooltip::Tooltip, v_flex,
 };
 

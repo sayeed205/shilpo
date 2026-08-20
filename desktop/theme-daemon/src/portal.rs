@@ -1,5 +1,5 @@
 use ashpd::desktop::settings::{ColorScheme, Settings};
-use shilpo_ui::theme::ThemeMode;
+use shilpo_m3e::theme::ThemeMode;
 use tokio::sync::watch;
 use tracing::{debug, error, info};
 

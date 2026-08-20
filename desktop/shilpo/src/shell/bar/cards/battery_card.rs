@@ -9,7 +9,7 @@ use shilpo_services::{
     BatteryChargeState, BatteryDevicePayload, BatteryPayload, BatteryTechnology,
     BatteryWarningLevel,
 };
-use shilpo_ui::{ActiveTheme, Icon, IconName, h_flex, v_flex};
+use shilpo_m3e::{ActiveTheme, Icon, IconName, h_flex, v_flex};
 
 use super::{
     model::{CardCapabilities, CardChannel, CardOwnerId, CardSourceId},
@@ -413,7 +413,7 @@ fn render_battery_card(
         .into_any_element()
 }
 
-fn section_label(label: &'static str, theme: &shilpo_ui::Theme) -> AnyElement {
+fn section_label(label: &'static str, theme: &shilpo_m3e::Theme) -> AnyElement {
     div()
         .text_size(px(11.0))
         .font_weight(gpui::FontWeight::BOLD)
@@ -493,7 +493,7 @@ fn physical_detail_rows(
 
 fn render_physical_device_details(
     dev: &BatteryDevicePayload,
-    theme: &shilpo_ui::Theme,
+    theme: &shilpo_m3e::Theme,
     include_health: bool,
 ) -> AnyElement {
     let mut details = v_flex()

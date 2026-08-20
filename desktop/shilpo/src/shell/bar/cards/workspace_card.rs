@@ -8,7 +8,7 @@ use gpui::{
     AnyElement, App, ImageSource, IntoElement, ParentElement, Pixels, Size, Styled, Window, div, px,
 };
 use shilpo_services::{Application, DomainLifecycle, WorkspaceInfo};
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt};
+use shilpo_m3e::{ActiveTheme, Icon, IconName, StyledExt};
 
 use super::{
     model::{CardCapabilities, CardChannel, CardOwnerId, CardSourceId},

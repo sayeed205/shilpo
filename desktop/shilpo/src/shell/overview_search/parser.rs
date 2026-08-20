@@ -1,4 +1,4 @@
-use shilpo_ui::IconName;
+use shilpo_m3e::IconName;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SearchMode {

@@ -299,7 +299,7 @@ mod tests {
     #[gpui::test]
     fn emit_test_notification_command_reaches_notification_domain(cx: &mut gpui::TestAppContext) {
         let tx = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             let tx = ShellRuntime::install_for_test(app);
             ShellRuntime::set_service_hub_for_test(
                 app,

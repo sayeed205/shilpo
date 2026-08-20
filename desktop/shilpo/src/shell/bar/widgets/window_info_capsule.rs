@@ -2,7 +2,7 @@ use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
 };
-use shilpo_ui::{
+use shilpo_m3e::{
     ActiveTheme, Colorize, ContextMenuExt, Icon, IconName, PopupMenuItem, StyledExt, h_flex,
 };
 

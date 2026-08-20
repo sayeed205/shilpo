@@ -83,7 +83,6 @@ jobs:
 
       - name: Build core benchmarks
         run: |
-          timeout 8m cargo codspeed build -p shilpo-theme --bench theme
           timeout 8m cargo codspeed build -p shilpo-ext-api --bench identity --bench view_tree
 
       - name: Run core CodSpeed benchmarks
@@ -91,7 +90,6 @@ jobs:
         with:
           mode: simulation
           run: |
-            timeout 5m cargo codspeed run -p shilpo-theme --bench theme
             timeout 5m cargo codspeed run -p shilpo-ext-api --bench identity --bench view_tree
 
       - name: Verify clean worktree

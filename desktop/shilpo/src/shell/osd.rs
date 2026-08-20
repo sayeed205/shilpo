@@ -2,7 +2,7 @@ use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div,
     prelude::FluentBuilder, px, relative,
 };
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
+use shilpo_m3e::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
 
 use crate::runtime::ShellSurfaces;
 
@@ -39,10 +39,10 @@ impl OsdView {
         kind: OsdKind,
         window: &mut Window,
         cx: &mut App,
-    ) -> (Entity<shilpo_ui::Root>, Entity<Self>) {
+    ) -> (Entity<shilpo_m3e::Root>, Entity<Self>) {
         let view = cx.new(|cx| Self::new(kind, window, cx));
         let root = cx.new(|cx| {
-            shilpo_ui::Root::new(view.clone(), window, cx)
+            shilpo_m3e::Root::new(view.clone(), window, cx)
                 .bordered(false)
                 .bg(cx.theme().transparent)
         });

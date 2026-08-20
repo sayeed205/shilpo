@@ -119,7 +119,7 @@ reading system location (`location:read`), or using the network—require an exp
 grant.
 
 An extension cannot import shell internals or create arbitrary GPUI elements. It returns a small declarative view tree
-that Shilpo renders with `shilpo-ui`, preserving theme, accessibility, layout, and performance rules.
+that Shilpo renders with `shilpo-m3e`, preserving theme, accessibility, layout, and performance rules.
 
 The view protocol also exposes semantic host components for behaviors that need native rendering or animation. For
 example, an extension can return a `loading_indicator` node and the shell renders the Material 3 Expressive loader.

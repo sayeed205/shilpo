@@ -3,7 +3,7 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 use gpui::{
     Animation, AnimationExt as _, App, ElementId, IntoElement, Pixels, Styled, Window, div, px,
 };
-use shilpo_ui::ActiveTheme;
+use shilpo_m3e::ActiveTheme;
 
 pub const PILL_SLOT_SIZE: f32 = 26.;
 pub const PILL_ACTIVE_MARGIN: f32 = 2.;

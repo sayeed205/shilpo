@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use shilpo_domain::MailboxError;
-use shilpo_ui::theme::ThemeMode;
+use shilpo_m3e::theme::ThemeMode;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
 

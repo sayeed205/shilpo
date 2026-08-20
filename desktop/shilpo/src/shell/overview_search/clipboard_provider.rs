@@ -4,7 +4,7 @@ use std::{
 };
 
 use shilpo_services::ClipboardItem;
-use shilpo_ui::IconName;
+use shilpo_m3e::IconName;
 use tokio::sync::watch;
 
 use super::{

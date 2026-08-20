@@ -481,7 +481,7 @@ impl ExtensionHost {
                     let client = shilpo_theme_daemon::ThemeClient::new().await;
                     let _ = client.set_custom_seed(argb).await;
                     let _ = client
-                        .set_color_source(shilpo_ui::theme::ColorSource::Custom)
+                        .set_color_source(shilpo_m3e::theme::ColorSource::Custom)
                         .await;
                 });
             }

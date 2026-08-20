@@ -7,7 +7,7 @@ use std::{
 
 use shilpo_ext_api::{CanonicalId, ExtensionId};
 use shilpo_ext_runtime::{HostError, RuntimeBudget};
-use shilpo_ui::IconName;
+use shilpo_m3e::IconName;
 
 use super::{
     parser::SearchMode,

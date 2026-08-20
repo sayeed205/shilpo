@@ -1334,7 +1334,7 @@ mod tests {
     #[gpui::test]
     fn test_event_driven_domain_update_without_advancing_timer(cx: &mut gpui::TestAppContext) {
         let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_event_test(app)
         });
 
@@ -1372,7 +1372,7 @@ mod tests {
     #[gpui::test]
     fn test_stale_and_equal_domain_version_rejected(cx: &mut gpui::TestAppContext) {
         let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_event_test(app)
         });
 
@@ -1452,7 +1452,7 @@ mod tests {
     #[gpui::test]
     fn test_burst_coalescing_multiple_streams(cx: &mut gpui::TestAppContext) {
         let (device_tx, notif_tx, cmd_tx, _cfg_tx) = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_event_test(app)
         });
 
@@ -1514,7 +1514,7 @@ mod tests {
     #[gpui::test]
     fn test_lagged_broadcast_resync(cx: &mut gpui::TestAppContext) {
         let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_event_test(app)
         });
 
@@ -1569,7 +1569,7 @@ mod tests {
     #[gpui::test]
     fn test_shutdown_cancels_event_loop_and_stops_publishing(cx: &mut gpui::TestAppContext) {
         let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_event_test(app)
         });
 
@@ -1645,7 +1645,7 @@ mod tests {
     #[gpui::test]
     fn test_degraded_projection_and_recovery(cx: &mut gpui::TestAppContext) {
         let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_event_test(app)
         });
 
@@ -1755,7 +1755,7 @@ mod tests {
     #[gpui::test]
     fn test_end_to_end_delivery_through_device_client(cx: &mut gpui::TestAppContext) {
         let (client, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_event_test_with_client(app)
         });
 
@@ -1859,7 +1859,7 @@ mod tests {
     #[gpui::test]
     fn test_multi_domain_versions_advance_independently(cx: &mut gpui::TestAppContext) {
         let (device_tx, _notif_tx, _cmd_tx, _cfg_tx) = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_event_test(app)
         });
 

@@ -2,7 +2,7 @@ use gpui::{
     App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     StatefulInteractiveElement as _, Styled, Window, div, px,
 };
-use shilpo_ui::{ActiveTheme, Icon, IconName};
+use shilpo_m3e::{ActiveTheme, Icon, IconName};
 
 pub fn get_caffeine_icon(active: bool) -> IconName {
     if active {

@@ -9,7 +9,7 @@ use image::DynamicImage;
 use image::imageops::FilterType;
 use mcu_material_color::{Hct, QuantizerCelebi, Score};
 use serde::{Deserialize, Serialize};
-use shilpo_ui::theme::{
+use shilpo_m3e::theme::{
     ColorSource, SchemeVariant, ThemeCommand, ThemeMode, ThemeState, generate_m3_palettes,
     materialize_seed_with_variant, reduce, resolve_variant,
 };
@@ -124,7 +124,7 @@ impl DaemonState {
 
 impl Default for DaemonState {
     fn default() -> Self {
-        Self::new(shilpo_ui::theme::state::DEFAULT_TIMESTAMP)
+        Self::new(shilpo_m3e::theme::state::DEFAULT_TIMESTAMP)
     }
 }
 
@@ -144,8 +144,8 @@ impl std::ops::DerefMut for DaemonState {
 /// A command handled by the theme daemon.
 ///
 /// Pure core transitions are carried as [`DaemonCommand::Theme`] and forwarded
-/// unchanged to `shilpo_ui::theme::reduce`; wallpaper and portal concerns stay at
-/// this (daemon) layer, never leaking into `core/theme`.
+/// unchanged to `shilpo_m3e::theme::reduce`; wallpaper and portal concerns stay at
+/// this (daemon) layer, never leaking into `shilpo-theme`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonCommand {
     Theme(ThemeCommand),
@@ -824,7 +824,7 @@ struct ApplyOutcome {
 /// This is the daemon-side seam: it decides state transitions and which mode (if
 /// any) the desktop adapter must be told about, without touching D-Bus, files, or
 /// subprocesses, so every command's logic is testable without system mocks. Core
-/// transitions are delegated to `shilpo_ui::theme::reduce`; wallpaper and portal
+/// transitions are delegated to `shilpo_m3e::theme::reduce`; wallpaper and portal
 /// concerns are handled here, at the daemon layer (ADR-0002).
 fn apply_command(
     state: &mut DaemonState,
@@ -940,11 +940,11 @@ struct ChangeSnapshot {
     selected_mode: ThemeMode,
     resolved_mode: ThemeMode,
     color_source: ColorSource,
-    scheme_variant: shilpo_ui::theme::SchemeVariant,
+    scheme_variant: shilpo_m3e::theme::SchemeVariant,
     source_argb: u32,
     wallpaper_path: Option<PathBuf>,
     wallpaper_seed: Option<u32>,
-    wallpaper_detected_variant: shilpo_ui::theme::SchemeVariant,
+    wallpaper_detected_variant: shilpo_m3e::theme::SchemeVariant,
     wallpaper_dir: PathBuf,
 }
 
@@ -998,10 +998,10 @@ fn expand_tilde(path: &Path) -> PathBuf {
 fn initial_state(
     persisted: Option<DaemonState>,
     configured_wp_dir: Option<&Path>,
-    configured_variant: Option<shilpo_ui::theme::SchemeVariant>,
+    configured_variant: Option<shilpo_m3e::theme::SchemeVariant>,
 ) -> DaemonState {
     let mut state = persisted.unwrap_or_default();
-    if state.theme.updated_at == shilpo_ui::theme::state::DEFAULT_TIMESTAMP {
+    if state.theme.updated_at == shilpo_m3e::theme::state::DEFAULT_TIMESTAMP {
         let now = chrono::Utc::now().to_rfc3339();
         state.theme.updated_at = now.clone();
         state.theme.palette_generated_at = now;
@@ -1175,7 +1175,7 @@ mod tests {
         let state = initial_state(None, None, None);
         assert_ne!(
             state.theme.updated_at,
-            shilpo_ui::theme::state::DEFAULT_TIMESTAMP
+            shilpo_m3e::theme::state::DEFAULT_TIMESTAMP
         );
         assert_eq!(state.theme.updated_at, state.theme.palette_generated_at);
     }
@@ -1525,14 +1525,14 @@ mod tests {
         let outcome = apply(
             &mut state,
             DaemonCommand::Theme(ThemeCommand::SetSchemeVariant(
-                shilpo_ui::theme::SchemeVariant::Expressive,
+                shilpo_m3e::theme::SchemeVariant::Expressive,
             )),
         )
         .unwrap();
 
         assert_eq!(
             state.theme.scheme_variant,
-            shilpo_ui::theme::SchemeVariant::Expressive
+            shilpo_m3e::theme::SchemeVariant::Expressive
         );
         assert_eq!(state.theme.revision, revision + 1);
         assert!(outcome.change_kind.variant);

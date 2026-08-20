@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use shilpo_ui::IconName;
+use shilpo_m3e::IconName;
 
 use super::{
     parser::SearchMode,

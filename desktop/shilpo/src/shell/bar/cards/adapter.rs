@@ -1242,7 +1242,7 @@ mod tests {
 
     fn setup(cx: &mut TestAppContext) {
         cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_test(app);
             for id in ["battery", "test-battery", "test-workspaces"] {
                 let owner = CardOwnerId::new(id);

@@ -5,8 +5,8 @@ use gpui::{
     ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
     StyleRefinement, Styled, StyledImage as _, Window, div, img, prelude::FluentBuilder as _, px,
 };
-use shilpo_ui::progress::ProgressCircle;
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
+use shilpo_m3e::progress::ProgressCircle;
+use shilpo_m3e::{ActiveTheme, Icon, IconName, StyledExt, h_flex, v_flex};
 
 const MAX_ARTWORK_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CACHED_ARTWORKS: usize = 32;
@@ -387,7 +387,7 @@ impl RenderOnce for MediaControl {
                                 } else {
                                     let p = (delta - 0.25) / 0.75;
                                     let ease =
-                                        shilpo_ui::animation::cubic_bezier(0.25, 0.1, 0.25, 1.0)(p);
+                                        shilpo_m3e::animation::cubic_bezier(0.25, 0.1, 0.25, 1.0)(p);
                                     ease * scroll_dist
                                 };
                                 this.ml(px(-shift))

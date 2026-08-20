@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn test_atomic_persistence_and_permissions() {
         let state = DaemonState {
-            theme: shilpo_ui::theme::ThemeState {
+            theme: shilpo_m3e::theme::ThemeState {
                 revision: 42,
                 ..Default::default()
             },

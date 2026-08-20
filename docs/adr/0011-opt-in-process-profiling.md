@@ -7,7 +7,7 @@
 
 ## Context
 
-Performance profiling across Shilpo's multi-process architecture (shell daemon, settings app, extension host, device daemon, theme daemon) requires high-resolution tracing without introducing continuous memory overhead or write I/O in production. Cross-platform crates (`core/theme`, `core/ext-api`, `shilpo-ui`) must remain independent of Linux-specific profiler layers.
+Performance profiling across Shilpo's multi-process architecture (shell daemon, settings app, extension host, device daemon, theme daemon) requires high-resolution tracing without introducing continuous memory overhead or write I/O in production. Cross-platform crates (`shilpo-theme` and `shilpo-m3e` in [shilpo-rs/ui](https://github.com/shilpo-rs/ui), and `core/ext-api` in this repo) must remain independent of Linux-specific profiler layers.
 
 ## Decision
 

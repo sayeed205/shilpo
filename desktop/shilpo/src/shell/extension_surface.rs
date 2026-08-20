@@ -2,7 +2,7 @@ use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div,
 };
 use shilpo_ext_api::CanonicalId;
-use shilpo_ui::ActiveTheme;
+use shilpo_m3e::ActiveTheme;
 
 use crate::{bar::ext_view_adapter::render_ext_view_tree, runtime::ShellRuntime};
 
@@ -20,13 +20,13 @@ impl ExtensionSurfaceView {
         instance_id: Option<String>,
         window: &mut Window,
         cx: &mut App,
-    ) -> Entity<shilpo_ui::Root> {
+    ) -> Entity<shilpo_m3e::Root> {
         let view = cx.new(|_| Self {
             contribution,
             instance_id,
         });
         cx.new(|cx| {
-            shilpo_ui::Root::new(view, window, cx)
+            shilpo_m3e::Root::new(view, window, cx)
                 .bordered(false)
                 .bg(cx.theme().transparent)
         })

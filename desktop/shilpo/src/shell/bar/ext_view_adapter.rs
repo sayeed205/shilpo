@@ -6,7 +6,7 @@ use shilpo_ext_api::{
     Alignment, CanonicalId, ContainerDirection, Justification, Overflow, SemanticColorToken,
     ViewNode, ViewStyle, ViewTree,
 };
-use shilpo_ui::{
+use shilpo_m3e::{
     ActiveTheme, Icon, Sizable, Size,
     input::{Input, InputEvent, InputState},
     progress::LoadingIndicator,
@@ -696,7 +696,7 @@ mod tests {
         }));
 
         let recorder = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_test(app);
             ShellRuntime::take_test_extension_inputs(app)
         });
@@ -762,7 +762,7 @@ mod tests {
                 contribution: extension_id(),
                 tree,
             });
-            shilpo_ui::Root::new(view, window, cx)
+            shilpo_m3e::Root::new(view, window, cx)
         });
         visual
     }
@@ -770,7 +770,7 @@ mod tests {
     #[gpui::test]
     fn rendered_container_background_dispatches_exactly_once(cx: &mut TestAppContext) {
         let recorder = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_test(app);
             ShellRuntime::take_test_extension_inputs(app)
         });
@@ -788,7 +788,7 @@ mod tests {
     #[gpui::test]
     fn nested_toggle_dispatches_only_its_own_event(cx: &mut TestAppContext) {
         let recorder = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_test(app);
             ShellRuntime::take_test_extension_inputs(app)
         });
@@ -808,7 +808,7 @@ mod tests {
     #[gpui::test]
     fn nested_slider_pointer_input_never_reaches_parent(cx: &mut TestAppContext) {
         let recorder = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_test(app);
             ShellRuntime::take_test_extension_inputs(app)
         });
@@ -842,7 +842,7 @@ mod tests {
     #[gpui::test]
     fn nested_text_input_types_without_dispatching_parent(cx: &mut TestAppContext) {
         let recorder = cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_test(app);
             ShellRuntime::take_test_extension_inputs(app)
         });

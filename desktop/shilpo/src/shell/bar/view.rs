@@ -8,8 +8,8 @@ use gpui::{
 use shilpo_services::{
     AudioInfo, BatteryInfo, BluetoothInfo, MediaInfo, NetworkInfo, Notification,
 };
-use shilpo_ui::ElementExt;
-use shilpo_ui::{ActiveTheme, h_flex, v_flex};
+use shilpo_m3e::ElementExt;
+use shilpo_m3e::{ActiveTheme, h_flex, v_flex};
 
 use super::geometry::HUG_CORNER_RADIUS;
 use crate::bar::cards::{
@@ -52,7 +52,7 @@ pub fn parse_hex_color(hex: &str) -> Option<u32> {
 
 pub fn apply_config_theme(_config: &ShellConfig, _window: Option<&mut Window>, cx: &mut App) {
     if let Some(state) = shilpo_theme_daemon::read_state_snapshot() {
-        shilpo_ui::Theme::global_mut(cx).apply_state(&state);
+        shilpo_m3e::Theme::global_mut(cx).apply_state(&state);
     }
 }
 

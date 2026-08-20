@@ -6,7 +6,7 @@
 #   ./scripts/bench.sh [suite] [extra cargo bench arguments...]
 #
 # Suites:
-#   core    - Theme computation, extension identity, and ViewTree validation benchmarks
+#   core    - Extension identity and ViewTree validation benchmarks
 #   config  - Configuration deserialization, validation, and layered resolution benchmarks
 #   wasm    - Wasm extension cold load and instantiation benchmarks
 #   all     - Runs all benchmark suites (core, config, wasm)
@@ -32,7 +32,7 @@ Usage:
   ./scripts/bench.sh [suite] [extra cargo args...]
 
 Suites:
-  core    Theme computation, extension identity, and ViewTree validation
+  core    Extension identity and ViewTree validation
   config  Configuration deserialization, validation, and layered resolution
   wasm    Wasm extension cold load and instantiation
   all     Run all suites (core, config, wasm)
@@ -55,8 +55,7 @@ case "$SUITE" in
     exit 0
     ;;
   core)
-    printf "=== Running Core Benchmarks (theme, identity, view_tree) ===\n"
-    "${CARGO_CMD[@]}" bench -p shilpo-theme --bench theme "$@"
+    printf "=== Running Core Benchmarks (identity, view_tree) ===\n"
     "${CARGO_CMD[@]}" bench -p shilpo-ext-api --bench identity --bench view_tree "$@"
     ;;
   config)
@@ -69,14 +68,12 @@ case "$SUITE" in
     ;;
   all)
     printf "=== Running All Shilpo Benchmarks ===\n"
-    "${CARGO_CMD[@]}" bench -p shilpo-theme --bench theme "$@"
     "${CARGO_CMD[@]}" bench -p shilpo-ext-api --bench identity --bench view_tree "$@"
     "${CARGO_CMD[@]}" bench -p shilpo --bench config "$@"
     "${CARGO_CMD[@]}" bench -p shilpo-ext-runtime --bench wasm "$@"
     ;;
   smoke)
     printf "=== Running Benchmark Smoke Checks (single-pass execution) ===\n"
-    "${CARGO_CMD[@]}" bench -p shilpo-theme --bench theme -- --test "$@"
     "${CARGO_CMD[@]}" bench -p shilpo-ext-api --bench identity --bench view_tree -- --test "$@"
     "${CARGO_CMD[@]}" bench -p shilpo --bench config -- --test "$@"
     "${CARGO_CMD[@]}" bench -p shilpo-ext-runtime --bench wasm -- --test "$@"

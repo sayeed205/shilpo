@@ -176,7 +176,7 @@ impl CardProvider for ExtensionMenuCardProvider {
 mod tests {
     use gpui::{Context, Render, TestAppContext};
     use shilpo_ext_api::*;
-    use shilpo_ui::ActiveTheme;
+    use shilpo_m3e::ActiveTheme;
 
     use super::*;
     use crate::shell::bar::ext_view_adapter::render_ext_view_tree;
@@ -231,7 +231,7 @@ mod tests {
         }));
         let measured_for_view = measured.clone();
         cx.add_window_view(|_, cx| {
-            shilpo_ui::init(cx);
+            shilpo_m3e::init(cx);
             MeasuredMenu {
                 tree,
                 measured: measured_for_view,
@@ -262,7 +262,7 @@ mod tests {
         let measured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let measurements = measured.clone();
         let (menu, visual) = cx.add_window_view(|_, cx| {
-            shilpo_ui::init(cx);
+            shilpo_m3e::init(cx);
             MeasuredMenu {
                 tree: text_tree("Short", 12.0),
                 measured: measurements,
@@ -286,7 +286,7 @@ mod tests {
         let measured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let measurements = measured.clone();
         let (menu, visual) = cx.add_window_view(|_, cx| {
-            shilpo_ui::init(cx);
+            shilpo_m3e::init(cx);
             MeasuredMenu {
                 tree: ViewTree::new(ViewNode::Text(TextNode {
                     content: "Host-sized label".into(),
@@ -300,7 +300,7 @@ mod tests {
         visual.run_until_parked();
         let initial = measured.lock().unwrap()[0];
 
-        visual.update_global::<shilpo_ui::Theme, _>(|theme, cx| {
+        visual.update_global::<shilpo_m3e::Theme, _>(|theme, cx| {
             theme.font_size = px(28.0);
             cx.refresh_windows();
         });

@@ -67,6 +67,6 @@ widget/provider; use the shared coordinator only for card-surface policy.
   widget actions.
 - Run workspace tests and Clippy with zero code warnings.
 
-Storybook is not used for shell-internal widgets. Add a Storybook story only when the work introduces or modifies a
-genuinely reusable `shilpo-ui` primitive.
+Storybook is not used for shell-internal widgets. Add a Storybook story (in [shilpo-rs/ui](https://github.com/shilpo-rs/ui))
+only when the work introduces or modifies a genuinely reusable `shilpo-m3e` primitive.
 

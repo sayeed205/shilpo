@@ -50,10 +50,6 @@ fn test_stable_benchmark_groups_remain_documented() {
 
     let benchmark_sources = [
         (
-            "core/theme/benches/theme.rs",
-            &["theme/resolve_variant", "theme/generate_palettes"][..],
-        ),
-        (
             "core/ext-api/benches/identity.rs",
             &[
                 "identity/extension_id/valid",

@@ -132,7 +132,7 @@ pub fn run_daemon() {
         .with_quit_mode(gpui::QuitMode::Explicit);
 
     app.run(move |cx| {
-        shilpo_ui::init(cx);
+        shilpo_m3e::init(cx);
         let config_path = std::env::var("HOME")
             .map(|home| std::path::PathBuf::from(home).join(".config/shilpo/config.toml"))
             .unwrap_or_else(|_| std::path::PathBuf::from(".config/shilpo/config.toml"));

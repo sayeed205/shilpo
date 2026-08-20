@@ -6,7 +6,7 @@ Shilpo extensions use:
 
 - a versioned TOML manifest for static metadata, contributions, settings, and permissions;
 - WebAssembly Component Model modules for optional extension logic;
-- a small, declarative view tree rendered by Shilpo with GPUI and `shilpo-ui`;
+- a small, declarative view tree rendered by Shilpo with GPUI and `shilpo-m3e`;
 - host-owned lifecycle, state, scheduling, persistence, diagnostics, and capability enforcement;
 - path-based development extensions and packaged end-user extensions using the same runtime.
 
@@ -61,7 +61,7 @@ The constrained view protocol is intentional. The shell owns layout safety, them
 and rendering performance. Extensions supply state and intent, not raw drawing access.
 
 The protocol supports both basic layout primitives and semantic host-rendered components. A component such as
-`loading_indicator` is expressed by the guest and rendered by the shell with the corresponding `shilpo-ui` component.
+`loading_indicator` is expressed by the guest and rendered by the shell with the corresponding `shilpo-m3e` component.
 Semantic color tokens are resolved against the surface and active theme at render time; guests should request tokens
 such as `on_surface_variant` instead of selecting separate light and dark colors.
 
@@ -107,7 +107,7 @@ The extension ecosystem is split across two dependency-aligned crates:
 - **`shilpo-ext-api`** (`core/ext-api`) is the cross-platform extension contract crate. It owns extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`, `IdError`), manifest parsing and validation, contribution descriptors, settings schema types, shell event and host-effect messages, capability declarations, the declarative view tree and UI event types, versioned schema files, and the provisional WIT source (`wit/extension.wit`). Cross-platform, zero Wasmtime or desktop dependencies.
 - **`shilpo-ext-runtime`** (`desktop/ext-runtime`) is the Linux desktop extension runtime crate. It owns capability authorization, Wasmtime Component Model execution, package catalog and registry management, and the worker process framing and protocol (`shilpo extension-host`). Internal to Linux desktop.
 
-`shilpo-ext-api` does not depend on GPUI, `shilpo-ui`, `shilpo`, or concrete service implementations. Declarative configuration lives inside `shilpo` and depends only on `shilpo-ext-api` for extension-reference validation.
+`shilpo-ext-api` does not depend on GPUI, `shilpo-m3e`, `shilpo`, or concrete service implementations. Declarative configuration lives inside `shilpo` and depends only on `shilpo-ext-api` for extension-reference validation.
 
 ### `ExtensionHost`
 

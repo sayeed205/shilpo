@@ -2,7 +2,7 @@ use gpui::{
     App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
     Styled, Window, div,
 };
-use shilpo_ui::{
+use shilpo_m3e::{
     ActiveTheme, IconName, NavigationRail, NavigationRailHeader, NavigationRailItem,
     NavigationRailMenuButton, Selectable, StyledExt, h_flex, v_flex,
 };
@@ -144,7 +144,7 @@ impl SettingsView {
 
         // 1. Immediately apply current theme state to GPUI Theme
         let current_theme = theme_client.current_state();
-        shilpo_ui::Theme::global_mut(cx).apply_state(&current_theme);
+        shilpo_m3e::Theme::global_mut(cx).apply_state(&current_theme);
 
         // 2. Subscribe to theme updates and notify SettingsView on change
         let mut rx = theme_client.subscribe();
@@ -163,7 +163,7 @@ impl SettingsView {
                     latest = newer.state;
                 }
                 cx.update(|cx: &mut App| {
-                    shilpo_ui::Theme::global_mut(cx).apply_state(&latest);
+                    shilpo_m3e::Theme::global_mut(cx).apply_state(&latest);
                     cx.refresh_windows();
                 });
                 if let Some(this) = this.upgrade() {
@@ -203,7 +203,7 @@ impl SettingsView {
         theme_client: shilpo_theme_daemon::ThemeClient,
         window: &mut Window,
         cx: &mut App,
-    ) -> Entity<shilpo_ui::Root> {
+    ) -> Entity<shilpo_m3e::Root> {
         #[cfg(target_os = "linux")]
         {
             register_desktop_entry();
@@ -212,7 +212,7 @@ impl SettingsView {
 
         let view = cx.new(|cx| Self::new(theme_client, cx));
         cx.new(|cx| {
-            shilpo_ui::Root::new(view, window, cx)
+            shilpo_m3e::Root::new(view, window, cx)
                 .bordered(true)
                 .bg(cx.theme().surface)
         })
@@ -292,7 +292,7 @@ impl Render for SettingsView {
                                     .gap_3()
                                     .items_center()
                                     .child(
-                                        shilpo_ui::Icon::new(active.icon(true))
+                                        shilpo_m3e::Icon::new(active.icon(true))
                                             .size(gpui::px(28.))
                                             .text_color(cx.theme().primary),
                                     )
@@ -333,7 +333,7 @@ impl Render for SettingsView {
                                     .border_color(cx.theme().outline_variant)
                                     .bg(cx.theme().surface_container)
                                     .child(
-                                        shilpo_ui::Icon::new(active.icon(false))
+                                        shilpo_m3e::Icon::new(active.icon(false))
                                             .size(gpui::px(48.))
                                             .text_color(cx.theme().on_surface_variant),
                                     )
@@ -530,9 +530,9 @@ pub async fn run_settings() {
     let app = gpui_platform::application().with_assets(crate::Assets);
 
     app.run(move |cx: &mut App| {
-        shilpo_ui::init(cx);
+        shilpo_m3e::init(cx);
 
-        shilpo_ui::Theme::global_mut(cx).apply_state(&initial_theme_state);
+        shilpo_m3e::Theme::global_mut(cx).apply_state(&initial_theme_state);
 
         cx.activate(true);
 

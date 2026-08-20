@@ -4,7 +4,7 @@ use std::{
 };
 
 use shilpo_services::{AppScanner, Application};
-use shilpo_ui::IconName;
+use shilpo_m3e::IconName;
 
 use super::{
     parser::SearchMode,

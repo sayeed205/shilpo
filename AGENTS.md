@@ -6,10 +6,10 @@ Welcome! This document serves as a guide for AI agents and coding assistants wor
 
 ## 1. Project Architecture Overview
 
-`Shilpo` is a Linux desktop environment ecosystem built on [GPUI](https://github.com/zed-industries/zed), inspired by
-**Material Design 3 (M3 Expressive / Material You)**
-design systems. It includes a cross-platform UI component library (`shilpo-ui`), a Linux desktop shell, a settings app,
-system services, a theme daemon, an extension runtime, and a CLI.
+`Shilpo` is a Linux desktop environment ecosystem built on [GPUI](https://github.com/zed-industries/zed), rendered
+with a UI component library from [shilpo-rs/ui](https://github.com/shilpo-rs/ui) — currently Material Design 3
+(M3 Expressive / Material You), with room for other design systems there in the future. This repo includes the Linux
+desktop shell, a settings app, system services, a theme daemon, an extension runtime, and a CLI.
 
 See `CONTEXT-MAP.md` for the full context map and inter-crate relationships, and `docs/adr/` for architectural decision
 records.
@@ -20,11 +20,12 @@ The workspace is split into two tiers (see [ADR-0001](docs/adr/0001-cross-platfo
 
 #### Cross-Platform (`core/` — eventually published)
 
-- **[`shilpo-ui`](core/ui)**: M3 GPUI component library. Generic, publishable UI primitives.
-- **[`shilpo-theme`](core/theme)**: M3 color math, scheme generation, and theme data types. Pure computation, no I/O.
-- **[`shilpo-macros`](core/macros)**: Procedural macros (`icon_named!`, `#[derive(IntoPlot)]`).
 - **[`shilpo-ext-api`](core/ext-api)**: Extension identity types (`ExtensionId`, `ContributionId`, `CanonicalId`,
   `IdError`), manifest, events, guest host effects, ViewTree, WIT interface, schema files, and validation.
+
+The UI component library (`shilpo-m3e`), theme color math (`shilpo-theme`), and shared macros (`shilpo-macros`) live
+in [shilpo-rs/ui](https://github.com/shilpo-rs/ui), consumed here as a git dependency pinned to an exact revision —
+not as local workspace crates.
 
 #### Linux Desktop (`desktop/` — internal, never published)
 
@@ -41,10 +42,6 @@ The workspace is split into two tiers (see [ADR-0001](docs/adr/0001-cross-platfo
 - **[`shilpo-observability`](desktop/observability)**: Internal process observability — subscriber init, reloadable log
   filter, opt-in Chrome trace profiling.
 
-#### Applications (`apps/`)
-
-- **[`storybook`](apps/storybook)**: Interactive desktop gallery for exploring and testing core UI components.
-
 ---
 
 ## 2. Using the `rtk` Prefix for Command Execution
@@ -59,10 +56,9 @@ with `rtk`**.
 |:---------------------|:-----------------------------------------|:---------------------------------------------|
 | **Linting / Clippy** | `cargo clippy --workspace --all-targets` | `rtk cargo clippy --workspace --all-targets` |
 | **Fast Testing**     | `cargo nextest run --workspace`          | `rtk cargo nextest run --workspace`          |
-| **Standard Testing** | `cargo test -p shilpo-ui --lib`          | `rtk cargo test -p shilpo-ui --lib`          |
+| **Standard Testing** | `cargo test -p shilpo-services --lib`    | `rtk cargo test -p shilpo-services --lib`    |
 | **Code Coverage**    | `cargo llvm-cov --workspace`             | `rtk cargo llvm-cov --workspace`             |
 | **Workspace Build**  | `cargo build --workspace`                | `rtk cargo build --workspace`                |
-| **Storybook App**    | `cargo run -p storybook`                 | `rtk cargo run -p storybook`                 |
 
 ---
 
@@ -79,7 +75,7 @@ with `rtk`**.
 - `cargo-nextest` is the preferred test runner for running tests in parallel.
 - Run unit tests for individual crates using:
   ```bash
-  rtk cargo nextest run -p shilpo-ui
+  rtk cargo nextest run -p shilpo-services
   ```
 
 ### LLVM Coverage (`rtk cargo llvm-cov`)
@@ -105,9 +101,10 @@ with `rtk`**.
     - Implement GPUI traits (`IntoElement`, `RenderOnce`, `Sizable`, `Selectable`, `Disabled`) consistently.
     - Support mouse interaction safety (e.g. `cx.stop_propagation()` on mouse down for draggable titlebars).
 3. **Interactive Documentation**:
-    - When introducing or modifying core UI components in `shilpo-ui` (`core/ui`), add interactive stories in
-      `apps/storybook/src/stories/`. Storybook is strictly reserved for reusable core UI components, not internal
-      desktop shell widgets.
+    - Core UI components (`shilpo-m3e`) and their interactive stories live in
+      [shilpo-rs/ui](https://github.com/shilpo-rs/ui), not this repo. When a change here needs a new or modified
+      generic UI component, make that change there — storybook is strictly reserved for reusable core UI components,
+      not internal desktop shell widgets.
     - **Full Event Handler Wiring**: Ensure all component interactive events (`on_click`, `on_index_change`,
       `on_change`)
       are explicitly wired in Storybook stories using `cx.entity().clone()` / `entity.update(cx, ...)` so all toggles,
@@ -289,11 +286,14 @@ How the engineering skills should consume this repo's domain documentation when 
   `docs/adr/README.md` for the index. There are no per-crate `docs/adr/` directories in this repo; all ADRs live at the
   workspace root regardless of which crate they concern.
 
-Not every crate has a `CONTEXT.md` yet — `core/ui`, `core/macros`, `core/assets`, `desktop/services`,
-`desktop/theme-daemon`, and `apps/storybook` currently don't. If one doesn't exist, **proceed silently**: read
-`CONTEXT-MAP.md`'s own summary of that crate instead, don't flag the gap, and don't suggest creating one upfront. The
-`/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when
-terms or decisions actually get resolved.
+Not every crate has a `CONTEXT.md` yet — `core/assets`, `desktop/services`, and `desktop/theme-daemon` currently don't.
+If one doesn't exist, **proceed silently**: read `CONTEXT-MAP.md`'s own summary of that crate instead, don't flag the
+gap, and don't suggest creating one upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and
+`/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
+
+The UI component library, extensions, and extension SDKs live in separate repositories
+([shilpo-rs/ui](https://github.com/shilpo-rs/ui), [shilpo-rs/extensions](https://github.com/shilpo-rs/extensions),
+[shilpo-rs/sdks](https://github.com/shilpo-rs/sdks)), not under this repo's tree.
 
 #### File structure
 
@@ -302,22 +302,15 @@ terms or decisions actually get resolved.
 ├── CONTEXT-MAP.md                        ← summarizes every context, links to CONTEXT.md where present
 ├── docs/adr/                             ← the only docs/adr/ directory — workspace-wide, not per-crate
 ├── core/
-│   ├── ui/                               (no CONTEXT.md yet)
-│   ├── theme/            CONTEXT.md
-│   ├── macros/                           (no CONTEXT.md yet)
 │   ├── assets/                           (no CONTEXT.md yet)
 │   └── ext-api/          CONTEXT.md
-├── desktop/
-│   ├── shilpo/            CONTEXT.md     ← consolidated Shell + Settings + CLI + config
-│   ├── device/            CONTEXT.md
-│   ├── services/                         (no CONTEXT.md yet)
-│   ├── ext-runtime/       CONTEXT.md
-│   ├── theme-daemon/                     (no CONTEXT.md yet)
-│   └── observability/     CONTEXT.md
-├── sdk/
-│   ├── rust/              CONTEXT.md
-│   └── typescript/        CONTEXT.md
-└── apps/storybook/                       (no CONTEXT.md yet)
+└── desktop/
+    ├── shilpo/            CONTEXT.md     ← consolidated Shell + Settings + CLI + config
+    ├── device/            CONTEXT.md
+    ├── services/                         (no CONTEXT.md yet)
+    ├── ext-runtime/       CONTEXT.md
+    ├── theme-daemon/                     (no CONTEXT.md yet)
+    └── observability/     CONTEXT.md
 ```
 
 #### Use the glossary's vocabulary

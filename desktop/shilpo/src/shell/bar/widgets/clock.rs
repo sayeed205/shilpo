@@ -8,7 +8,7 @@ use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
     Styled, Window, div, px,
 };
-use shilpo_ui::{ActiveTheme, StyledExt};
+use shilpo_m3e::{ActiveTheme, StyledExt};
 
 pub fn format_clock(now: &DateTime<Local>, fmt: Option<&str>) -> String {
     if let Some(formatted) = fmt

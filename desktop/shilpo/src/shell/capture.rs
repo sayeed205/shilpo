@@ -8,7 +8,7 @@ use gpui::{
 };
 use image::RgbaImage;
 use shilpo_services::capture::{CaptureIntent, Region, copy_image_to_clipboard, crop_image};
-use shilpo_ui::ActiveTheme;
+use shilpo_m3e::ActiveTheme;
 
 use crate::config::CaptureConfig;
 
@@ -54,10 +54,10 @@ impl CaptureOverlayView {
         config: CaptureConfig,
         window: &mut Window,
         cx: &mut App,
-    ) -> gpui::Entity<shilpo_ui::Root> {
+    ) -> gpui::Entity<shilpo_m3e::Root> {
         let view = cx.new(|cx| Self::new(frame, intent, config, window, cx));
         cx.new(|cx| {
-            shilpo_ui::Root::new(view, window, cx)
+            shilpo_m3e::Root::new(view, window, cx)
                 .bordered(false)
                 .bg(gpui::transparent_black())
         })

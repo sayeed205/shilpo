@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-use shilpo_ui::theme::SchemeVariant;
+use shilpo_m3e::theme::SchemeVariant;
 
 /// Cache key uniquely identifying an analyzed wallpaper image under a specific scheme variant.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

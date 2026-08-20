@@ -20,7 +20,7 @@ harness = false
 gpui.workspace = true
 gpui_platform.workspace = true
 rust-embed = { version = "8", features = ["interpolate-folder-path", "include-exclude"] }
-shilpo-ui.workspace = true
+shilpo-m3e.workspace = true
 shilpo-device.workspace = true
 shilpo-services.workspace = true
 shilpo-theme-daemon.workspace = true

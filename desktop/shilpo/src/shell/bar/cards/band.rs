@@ -15,7 +15,7 @@ use gpui::{
     Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
     Window, div, prelude::FluentBuilder as _, px,
 };
-use shilpo_ui::ActiveTheme;
+use shilpo_m3e::ActiveTheme;
 
 use super::{
     model::{CardChannel, CardDismissReason, CardRequest, CardSourceId},
@@ -303,7 +303,7 @@ impl CardBandView {
         match self.move_phase {
             MovePhase::Idle => Some(target),
             MovePhase::Moving { from, progress } => {
-                let eased = shilpo_ui::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0)(progress);
+                let eased = shilpo_m3e::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0)(progress);
                 Some(Bounds {
                     origin: Point {
                         x: px(from.origin.x.as_f32()
@@ -360,7 +360,7 @@ impl Focusable for CardBandView {
 impl Render for CardBandView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let raw_progress = self.anim_progress();
-        let progress = shilpo_ui::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0)(raw_progress);
+        let progress = shilpo_m3e::animation::cubic_bezier(0.2, 0.0, 0.0, 1.0)(raw_progress);
         let has_content = self.content.is_some();
         let card_bounds = self.current_card_bounds();
 

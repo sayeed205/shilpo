@@ -7,7 +7,7 @@ use gpui::{
     prelude::FluentBuilder, px,
 };
 use shilpo_services::Notification;
-use shilpo_ui::{
+use shilpo_m3e::{
     ActiveTheme, Colorize, Icon, IconName, StyledExt, animation::cubic_bezier, h_flex, v_flex,
 };
 

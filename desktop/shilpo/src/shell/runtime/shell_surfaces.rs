@@ -352,8 +352,8 @@ pub struct SurfaceSnapshot {
 pub(crate) struct ShutdownWindows {
     pub(crate) bars: HashMap<DisplayId, (WindowHandle<BarView>, BarSpec)>,
     pub(crate) extension_surfaces:
-        HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
-    pub(crate) extension_panel: Option<(WindowHandle<shilpo_ui::Root>, CanonicalId)>,
+        HashMap<String, (WindowHandle<shilpo_m3e::Root>, ExtensionSurfaceSpec)>,
+    pub(crate) extension_panel: Option<(WindowHandle<shilpo_m3e::Root>, CanonicalId)>,
     pub(crate) notification: Option<(
         u64,
         u32,
@@ -361,15 +361,15 @@ pub(crate) struct ShutdownWindows {
     )>,
     pub(crate) polkit: Option<(
         u64,
-        WindowHandle<shilpo_ui::Root>,
+        WindowHandle<shilpo_m3e::Root>,
         Entity<crate::polkit::PolkitDialogView>,
     )>,
     pub(crate) idle_grace: Option<(
         u64,
-        WindowHandle<shilpo_ui::Root>,
+        WindowHandle<shilpo_m3e::Root>,
         Entity<crate::shell::idle::IdleGraceOverlayView>,
     )>,
-    pub(crate) capture: Option<(u64, WindowHandle<shilpo_ui::Root>)>,
+    pub(crate) capture: Option<(u64, WindowHandle<shilpo_m3e::Root>)>,
 }
 
 /// What closed when a shell window was destroyed.
@@ -392,7 +392,7 @@ pub struct ShellSurfaces {
     bars: HashMap<DisplayId, (WindowHandle<BarView>, BarSpec)>,
     last_bar_specs: Vec<(BarGeometry, bool)>,
     bar_state: BarState,
-    overview: Option<WindowHandle<shilpo_ui::Root>>,
+    overview: Option<WindowHandle<shilpo_m3e::Root>>,
     overview_lifecycle: OverviewLifecycle,
     overview_entity: Option<Entity<WorkspaceOverview>>,
     overview_instance: u64,
@@ -409,31 +409,31 @@ pub struct ShellSurfaces {
     prior_window_id: Option<u64>,
     osd: Option<(
         u64,
-        WindowHandle<shilpo_ui::Root>,
+        WindowHandle<shilpo_m3e::Root>,
         Entity<crate::osd::OsdView>,
     )>,
     osd_generation: u64,
     osd_lifecycle: SurfaceLifecycle,
     polkit: Option<(
         u64,
-        WindowHandle<shilpo_ui::Root>,
+        WindowHandle<shilpo_m3e::Root>,
         Entity<crate::polkit::PolkitDialogView>,
     )>,
     polkit_generation: u64,
     polkit_lifecycle: SurfaceLifecycle,
     idle_grace: Option<(
         u64,
-        WindowHandle<shilpo_ui::Root>,
+        WindowHandle<shilpo_m3e::Root>,
         Entity<crate::shell::idle::IdleGraceOverlayView>,
     )>,
     idle_grace_generation: u64,
     idle_grace_lifecycle: SurfaceLifecycle,
     extension_lifecycle: SurfaceLifecycle,
-    capture: Option<(u64, WindowHandle<shilpo_ui::Root>)>,
+    capture: Option<(u64, WindowHandle<shilpo_m3e::Root>)>,
     capture_generation: u64,
     capture_lifecycle: SurfaceLifecycle,
-    extension_surfaces: HashMap<String, (WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)>,
-    extension_panel: Option<(WindowHandle<shilpo_ui::Root>, CanonicalId)>,
+    extension_surfaces: HashMap<String, (WindowHandle<shilpo_m3e::Root>, ExtensionSurfaceSpec)>,
+    extension_panel: Option<(WindowHandle<shilpo_m3e::Root>, CanonicalId)>,
     extension_output_ids: HashSet<DisplayId>,
     readiness: shilpo_services::ReadinessState,
 }
@@ -815,7 +815,7 @@ impl ShellSurfaces {
     pub(crate) fn store_extension_surface(
         &mut self,
         instance_id: String,
-        handle: WindowHandle<shilpo_ui::Root>,
+        handle: WindowHandle<shilpo_m3e::Root>,
         spec: ExtensionSurfaceSpec,
     ) {
         self.extension_surfaces.insert(instance_id, (handle, spec));
@@ -827,7 +827,7 @@ impl ShellSurfaces {
     pub(crate) fn remove_extension_surface(
         &mut self,
         id: &str,
-    ) -> Option<(WindowHandle<shilpo_ui::Root>, ExtensionSurfaceSpec)> {
+    ) -> Option<(WindowHandle<shilpo_m3e::Root>, ExtensionSurfaceSpec)> {
         let removed = self.extension_surfaces.remove(id);
         if self.extension_surfaces.is_empty() {
             self.extension_lifecycle = SurfaceLifecycle::Closed;
@@ -1816,7 +1816,7 @@ impl ShellSurfaces {
                     crate::polkit::PolkitDialogView::new(req_clone, prompt_clone, window, cx)
                 });
                 *view_cell.lock().unwrap() = Some(view.clone());
-                cx.new(|cx| shilpo_ui::Root::new(view, window, cx).bordered(false))
+                cx.new(|cx| shilpo_m3e::Root::new(view, window, cx).bordered(false))
             });
 
             if let Ok(window_handle) = window_result
@@ -1925,7 +1925,7 @@ impl ShellSurfaces {
                     crate::shell::idle::IdleGraceOverlayView::new(grace_gen, fade_ms, window, cx)
                 });
                 *view_cell.lock().unwrap() = Some(view.clone());
-                cx.new(|cx| shilpo_ui::Root::new(view, window, cx).bordered(false))
+                cx.new(|cx| shilpo_m3e::Root::new(view, window, cx).bordered(false))
             });
 
             if let Ok(window_handle) = window_result
@@ -2451,7 +2451,7 @@ mod tests {
     #[gpui::test]
     fn semantic_osd_requests_open_replace_and_close(cx: &mut gpui::TestAppContext) {
         cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_test(app);
             ShellSurfaces::request(
                 app,
@@ -2621,7 +2621,7 @@ mod tests {
     #[gpui::test]
     fn osd_slot_cleared_when_window_externally_closed(cx: &mut gpui::TestAppContext) {
         cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_test(app);
         });
 
@@ -2676,7 +2676,7 @@ mod tests {
         // We cannot easily open a full overview in unit tests, but we can test
         // the struct-level cleanup by inserting a synthetic window handle.
         let raw_handle = cx.add_window(|_, _| LifecycleTestView);
-        let handle: WindowHandle<shilpo_ui::Root> = unsafe { std::mem::transmute(raw_handle) };
+        let handle: WindowHandle<shilpo_m3e::Root> = unsafe { std::mem::transmute(raw_handle) };
 
         let mut manager = ShellSurfaces::new(Arc::new(CompositorSnapshot::default()));
         let instance = manager.next_overview_instance();
@@ -2706,7 +2706,7 @@ mod tests {
     #[gpui::test]
     fn osd_reuse_falls_through_when_window_is_stale(cx: &mut gpui::TestAppContext) {
         cx.update(|app| {
-            shilpo_ui::init(app);
+            shilpo_m3e::init(app);
             ShellRuntime::install_for_test(app);
         });
 

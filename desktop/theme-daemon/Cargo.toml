@@ -5,7 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-shilpo-ui = { workspace = true }
+shilpo-m3e = { workspace = true }
 shilpo-domain = { workspace = true }
 shilpo-observability = { workspace = true }
 

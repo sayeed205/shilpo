@@ -12,8 +12,8 @@ weather extension:
 See [the installation guide](docs/installation.md) for dependency lists, dry-run/update/uninstall commands, and the
 daily-driver cutover checklist.
 
-A modern, high-performance desktop UI component framework built on top of [GPUI](https://github.com/zed-industries/zed),
-featuring Material Design 3 (M3) & Material Expressive design inspirations.
+A modern, high-performance desktop shell built on top of [GPUI](https://github.com/zed-industries/zed), rendered with
+Material Design 3 (M3) & Material Expressive components from [shilpo-rs/ui](https://github.com/shilpo-rs/ui).
 
 ---
 
@@ -21,16 +21,16 @@ featuring Material Design 3 (M3) & Material Expressive design inspirations.
 
 | Crate                     | Description                                                     | Directory                                      |
 |:--------------------------|:----------------------------------------------------------------|:-----------------------------------------------|
-| **`shilpo-ui`**           | Core desktop UI component library for GPUI applications         | [`core/ui`](core/ui)                           |
-| **`shilpo-theme`**        | M3 color math & data types (*cross-platform core*)              | [`core/theme`](core/theme)                     |
-| **`shilpo-macros`**       | Procedural macros for icon generation and plot traits           | [`core/macros`](core/macros)                   |
 | **`shilpo-ext-api`**      | Cross-platform extension contract                               | [`core/ext-api`](core/ext-api)                 |
 | **`shilpo`**              | Consolidated desktop product (Shell, Settings, CLI, Config)     | [`desktop/shilpo`](desktop/shilpo)             |
 | **`shilpo-device`**       | Presentation-neutral device domain protocol & typed DBus client | [`desktop/device`](desktop/device)             |
 | **`shilpo-services`**     | Linux system service integrations & capture domain              | [`desktop/services`](desktop/services)         |
 | **`shilpo-ext-runtime`**  | Wasmtime extension runtime                                      | [`desktop/ext-runtime`](desktop/ext-runtime)   |
 | **`shilpo-theme-daemon`** | Theme DBus daemon & system sync                                 | [`desktop/theme-daemon`](desktop/theme-daemon) |
-| **`storybook`**           | Interactive component gallery application                       | [`apps/storybook`](apps/storybook)             |
+
+The UI component library (`shilpo-m3e`), its color math (`shilpo-theme`), shared macros (`shilpo-macros`), and the
+`storybook` component gallery live in [shilpo-rs/ui](https://github.com/shilpo-rs/ui), consumed here as a git
+dependency pinned to an exact revision (see the root `Cargo.toml`).
 
 ---
 
@@ -39,9 +39,8 @@ featuring Material Design 3 (M3) & Material Expressive design inspirations.
 Shilpo features a sandboxed WebAssembly extension runtime and developer ecosystem. Build custom top bar widgets, dropdown menus, desktop widgets, settings panels, and command palette actions in TypeScript or Rust.
 
 - [**Extension Documentation Hub**](docs/extensions/index.md): Complete authoring guides, API references, and security model.
-- [**TypeScript Showcase**](extensions/example): The single canonical reference extension demonstrating all 10 contribution families.
-- [**Rust Component Reference**](extensions/world-clock): Experimental official WASI Preview 2 component extension.
-- [**Trusted Local Scripts**](extensions/cpu-temp-script): Lightweight, unsandboxed polling bar widget scripts.
+- [**First-party extensions**](https://github.com/shilpo-rs/extensions): the TypeScript showcase, Rust WASI Preview 2 reference, and Trusted Local Script examples.
+- [**Extension SDKs**](https://github.com/shilpo-rs/sdks): official Rust and TypeScript SDKs for authoring extensions.
 
 ---
 
@@ -68,7 +67,7 @@ just lint
 just test
 
 # Run tests for a specific crate
-just test shilpo-ui
+just test shilpo-services
 
 # Run mutating formatting, linting, and workspace tests in sequence
 just check
@@ -134,12 +133,12 @@ cargo nextest run --workspace
 - **Failure Reproduction**: On failure, `proptest` writes the minimized case to a `proptest-regressions/*.txt` file beside the tested source. Keep that file and rerun the same test command; the persisted case runs before newly generated cases. To replay a reported RNG seed directly, use `PROPTEST_RNG_SEED`:
 
 ```bash
-PROPTEST_RNG_SEED="0123456789abcdef..." cargo test -p shilpo-theme
+PROPTEST_RNG_SEED="0123456789abcdef..." cargo test -p shilpo
 ```
 
 ### Benchmarking
 
-Shilpo includes Criterion wall-clock and CodSpeed continuous benchmark suites covering theme generation, extension identities, ViewTree validation, configuration resolution, and Wasm component cold loading.
+Shilpo includes Criterion wall-clock and CodSpeed continuous benchmark suites covering extension identities, ViewTree validation, configuration resolution, and Wasm component cold loading.
 
 Run the benchmarks locally:
 

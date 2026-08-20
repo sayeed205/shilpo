@@ -1,9 +1,6 @@
 [workspace]
 members = [
     # Cross-platform core crates
-    "core/ui",
-    "core/theme",
-    "core/macros",
     "core/ext-api",
     # Linux desktop shell crates
     "desktop/shilpo",
@@ -13,8 +10,6 @@ members = [
     "desktop/theme-daemon",
     "desktop/observability",
     "desktop/domain",
-    # Other
-    "apps/storybook",
 ]
 resolver = "2"
 
@@ -24,9 +19,10 @@ edition = "2024"
 
 [workspace.dependencies]
 shilpo = { path = "desktop/shilpo" }
-shilpo-ui = { path = "core/ui" }
-shilpo-theme = { path = "core/theme" }
-shilpo-macros = { path = "core/macros" }
+# UI design systems, macros, and theme math live in shilpo-rs/ui, not this repo. Pinned by
+# exact rev, never a branch, matching the gpui fork pin below -- bump the rev to pull in
+# changes.
+shilpo-m3e = { git = "https://github.com/shilpo-rs/ui", rev = "b7e1b2377764d934ad5a2baf4f8a0c6400ae00f7" }
 shilpo-ext-api = { path = "core/ext-api" }
 shilpo-domain = { path = "desktop/domain" }
 shilpo-device = { path = "desktop/device" }

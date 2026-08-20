@@ -1,7 +1,7 @@
 use std::{borrow::Cow, fmt, path::PathBuf};
 
 use shilpo_services::{Application, ClipboardItem};
-use shilpo_ui::IconName;
+use shilpo_m3e::IconName;
 
 use super::{parser::SearchMode, sink::SearchSink};
 use crate::actions::ActionDescriptor;

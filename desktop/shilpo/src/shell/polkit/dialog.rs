@@ -3,7 +3,7 @@ use gpui::{
     KeyDownEvent, ParentElement, Render, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 use shilpo_services::{PolkitPromptState, PolkitRequest};
-use shilpo_ui::{
+use shilpo_m3e::{
     ActiveTheme, FocusTrapElement as _, Icon, IconName, StyledExt,
     button::{Button, ButtonVariants as _},
     h_flex,

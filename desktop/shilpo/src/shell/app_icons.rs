@@ -11,7 +11,7 @@ use gpui::{
 };
 use image::{DynamicImage, GenericImageView as _, RgbaImage, imageops::FilterType};
 use shilpo_services::Application;
-use shilpo_ui::StyledExt;
+use shilpo_m3e::StyledExt;
 
 pub(crate) fn app_icon(
     icon_path: Option<PathBuf>,

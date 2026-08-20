@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use shilpo_ui::IconName;
+use shilpo_m3e::IconName;
 
 use super::{
     learning::{NoopSearchLearningStore, SearchLearningStore},

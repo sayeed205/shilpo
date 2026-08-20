@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use futures_lite::stream::StreamExt;
-use shilpo_ui::theme::{ColorSource, ThemeMode};
+use shilpo_m3e::theme::{ColorSource, ThemeMode};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 use zbus::Connection;
@@ -247,7 +247,7 @@ impl ThemeClient {
         }
     }
 
-    pub async fn set_scheme_variant(&self, variant: shilpo_ui::theme::SchemeVariant) -> Result<()> {
+    pub async fn set_scheme_variant(&self, variant: shilpo_m3e::theme::SchemeVariant) -> Result<()> {
         let proxy = self.proxy().await?;
         match proxy.set_scheme_variant(variant.as_str()).await {
             Ok(raw) => self.apply_response(raw),

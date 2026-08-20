@@ -2,7 +2,7 @@ use gpui::{
     App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
     Styled, Window, div, prelude::FluentBuilder, px,
 };
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex};
+use shilpo_m3e::{ActiveTheme, Icon, IconName, StyledExt, h_flex};
 
 /// Module 2: Performance & Media Capsule (CPU %, RAM %, Swap/Disk %, Track).
 #[derive(IntoElement)]

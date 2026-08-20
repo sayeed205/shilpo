@@ -3,7 +3,7 @@ use gpui::{
     Styled, Window, div, px,
 };
 use shilpo_services::AudioInfo;
-use shilpo_ui::{ActiveTheme, Icon, IconName, StyledExt, h_flex};
+use shilpo_m3e::{ActiveTheme, Icon, IconName, StyledExt, h_flex};
 
 /// Audio volume widget for Shilpo status bar.
 #[derive(IntoElement)]

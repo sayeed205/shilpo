@@ -3,12 +3,12 @@ set -euo pipefail
 
 METADATA=$(rtk cargo metadata --no-deps --format-version 1)
 
-# 1. Exact 12 package names in workspace metadata
+# 1. Exact 8 package names in workspace metadata
 PACKAGES=$(echo "$METADATA" | jq -r '.packages[].name' | sort | uniq)
 PACKAGE_COUNT=$(echo "$PACKAGES" | wc -l)
 
-if [ "$PACKAGE_COUNT" -ne 12 ]; then
-  echo "ERROR: Expected 12 workspace packages, found $PACKAGE_COUNT:"
+if [ "$PACKAGE_COUNT" -ne 8 ]; then
+  echo "ERROR: Expected 8 workspace packages, found $PACKAGE_COUNT:"
   echo "$PACKAGES"
   exit 1
 fi
@@ -19,13 +19,9 @@ EXPECTED_PACKAGES=(
   "shilpo-domain"
   "shilpo-ext-api"
   "shilpo-ext-runtime"
-  "shilpo-macros"
   "shilpo-observability"
   "shilpo-services"
-  "shilpo-theme"
   "shilpo-theme-daemon"
-  "shilpo-ui"
-  "storybook"
 )
 
 for pkg in "${EXPECTED_PACKAGES[@]}"; do
@@ -46,7 +42,7 @@ fi
 
 # 3. shilpo-device has no UI or Services dependency
 DEVICE_DEPS=$(echo "$METADATA" | jq -r '.packages[] | select(.name == "shilpo-device") | .dependencies[] | select(.kind == null or .kind == "normal") | .name')
-if echo "$DEVICE_DEPS" | grep -q 'shilpo-services\|shilpo-ui\|shilpo$'; then
+if echo "$DEVICE_DEPS" | grep -q 'shilpo-services\|shilpo-m3e\|shilpo$'; then
   echo "ERROR: shilpo-device depends on UI/Services/Shilpo:"
   echo "$DEVICE_DEPS"
   exit 1
