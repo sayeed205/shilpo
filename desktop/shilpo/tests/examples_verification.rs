@@ -1,13 +1,15 @@
 use std::path::Path;
 
+// Extension content itself moved to shilpo-rs/extensions when extensions/ was
+// extracted out of this repository. These tests exercise this repo's own manifest and
+// script-manifest parsers/validators (shilpo_ext_api, shilpo_ext_runtime) against real,
+// non-synthetic manifests, so a small copy is vendored here rather than dropping the
+// coverage; the extracted repo remains the source of truth for the extensions themselves.
+
 #[test]
 fn showcase_manifest_has_all_ten_contribution_families() {
     let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("extensions/example/extension.toml");
+        .join("tests/fixtures/extensions/example/extension.toml");
 
     let text = std::fs::read_to_string(&manifest_path).expect("read showcase extension.toml");
     let manifest = shilpo_ext_api::ExtensionManifest::from_toml(&text)
@@ -68,11 +70,7 @@ fn showcase_manifest_has_all_ten_contribution_families() {
 #[test]
 fn showcase_settings_schema_is_valid_json() {
     let schema_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("extensions/example/settings.schema.json");
+        .join("tests/fixtures/extensions/example/settings.schema.json");
 
     let text = std::fs::read_to_string(&schema_path).expect("read settings.schema.json");
     let val: serde_json::Value =
@@ -90,11 +88,7 @@ fn showcase_settings_schema_is_valid_json() {
 #[test]
 fn world_clock_manifest_is_valid() {
     let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("extensions/world-clock/extension.toml");
+        .join("tests/fixtures/extensions/world-clock/extension.toml");
 
     let text = std::fs::read_to_string(&manifest_path).expect("read world-clock extension.toml");
     let manifest = shilpo_ext_api::ExtensionManifest::from_toml(&text)
@@ -107,11 +101,7 @@ fn world_clock_manifest_is_valid() {
 #[test]
 fn trusted_local_script_manifest_is_valid() {
     let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("extensions/cpu-temp-script/extension.toml");
+        .join("tests/fixtures/extensions/cpu-temp-script/extension.toml");
 
     let text =
         std::fs::read_to_string(&manifest_path).expect("read cpu-temp-script extension.toml");
@@ -160,10 +150,6 @@ fn documentation_hub_files_exist() {
         "docs/extensions/testing-guide.md",
         "docs/extensions/troubleshooting-and-smoke.md",
         "docs/extensions/coverage-matrix.md",
-        "extensions/example/COVERAGE.md",
-        "extensions/example/README.md",
-        "extensions/world-clock/README.md",
-        "extensions/cpu-temp-script/README.md",
     ];
 
     for rel_path in &required_docs {

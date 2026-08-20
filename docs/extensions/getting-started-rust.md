@@ -114,4 +114,4 @@ shilpo ext pack my-rust-extension
 
 ## Reference Extensions
 
-- **[`extensions/world-clock`](../../extensions/world-clock)**: Reference Rust implementation showcasing widget contributions, settings integration, and event subscriptions.
+- **[`extensions/world-clock`](https://github.com/shilpo-rs/extensions/tree/main/world-clock)**: Reference Rust implementation showcasing widget contributions, settings integration, and event subscriptions.
