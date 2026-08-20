@@ -40,7 +40,44 @@ pub struct ShellConfig {
     #[serde(default)]
     pub idle: IdleConfig,
     #[serde(default)]
+    pub lock: LockConfig,
+    #[serde(default)]
     pub keybindings: Vec<KeybindingConfig>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct LockConfig {
+    /// PAM service name under `/etc/pam.d/` used for the lock screen's authentication.
+    #[serde(default = "default_lock_pam_service")]
+    pub pam_service: String,
+    /// Whether suspend should wait for the session to be locked first.
+    #[serde(default = "default_true")]
+    pub lock_on_suspend: bool,
+    #[serde(default = "default_true")]
+    pub show_clock: bool,
+    /// Seconds of no input after which the typed response is cleared.
+    #[serde(default = "default_lock_clear_input_after_seconds")]
+    pub clear_input_after_seconds: u32,
+}
+
+impl Default for LockConfig {
+    fn default() -> Self {
+        Self {
+            pam_service: default_lock_pam_service(),
+            lock_on_suspend: default_true(),
+            show_clock: default_true(),
+            clear_input_after_seconds: default_lock_clear_input_after_seconds(),
+        }
+    }
+}
+
+fn default_lock_pam_service() -> String {
+    "login".to_string()
+}
+
+fn default_lock_clear_input_after_seconds() -> u32 {
+    10
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -682,6 +719,7 @@ impl Default for ShellConfig {
             capture: CaptureConfig::default(),
             clipboard: ClipboardConfig::default(),
             idle: IdleConfig::default(),
+            lock: LockConfig::default(),
             keybindings: Vec::new(),
         }
     }

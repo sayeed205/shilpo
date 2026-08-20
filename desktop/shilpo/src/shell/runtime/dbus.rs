@@ -187,6 +187,22 @@ impl ShellRuntime {
                     tracing::warn!("service hub unavailable for device quarantine reset");
                 }
             }
+            ShellCommand::Lock => {
+                // The locker is a dedicated process (ADR-0005, #135): a client that dies
+                // while the session is locked may leave it locked permanently, so nothing
+                // that can crash for unrelated reasons (this shell process included)
+                // owns ext-session-lock-v1 directly.
+                match std::env::current_exe() {
+                    Ok(exe) => {
+                        if let Err(error) = std::process::Command::new(exe).arg("lock").spawn() {
+                            tracing::warn!(%error, "failed to spawn shilpo lock");
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to resolve current executable for lock");
+                    }
+                }
+            }
         }
         Self::publish_status(cx);
     }

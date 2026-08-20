@@ -1,5 +1,6 @@
 pub mod applications;
 pub mod audio;
+pub mod auth;
 pub mod bluetooth;
 pub mod brightness;
 pub mod caffeine;

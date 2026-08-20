@@ -146,6 +146,7 @@ async fn test_introspection_exact_contract() {
                 ],
             ),
             ("NextWallpaper", &[]),
+            ("Lock", &[]),
             (
                 "ForgetSearchResult",
                 &[(Some("canonical_id"), "s", Some("in"))],

@@ -397,6 +397,10 @@ impl ShellRuntime {
                 grace_seconds: session.active_config.idle.grace_seconds,
             });
 
+        if session.active_config.lock.lock_on_suspend {
+            spawn_prepare_for_sleep_lock_watch();
+        }
+
         cx.set_global(Self {
             dbus_service,
             _compositor_broker: compositor_broker,
@@ -1212,6 +1216,53 @@ impl ShellRuntime {
         );
         (std::sync::Arc::new(device_client), notif_tx, tx, config_tx)
     }
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.login1.Manager",
+    default_service = "org.freedesktop.login1",
+    default_path = "/org/freedesktop/login1"
+)]
+trait LoginManagerSleepSignal {
+    #[zbus(signal)]
+    fn prepare_for_sleep(&self, start: bool) -> zbus::Result<()>;
+}
+
+/// Watches logind's `PrepareForSleep` signal and spawns the `shilpo lock` process before
+/// the system suspends. This is a best-effort head start, not a hard guarantee the
+/// session is locked before suspend completes: it does not hold a logind delay inhibitor,
+/// since that requires the locker to report back that its surfaces are committed (no such
+/// channel exists yet). Suspend triggered by `IdleAction::LockAndSuspend` gets a similar
+/// head start independently, in `shilpo-services`' idle action sink.
+fn spawn_prepare_for_sleep_lock_watch() {
+    tokio::spawn(async move {
+        let Ok(conn) = zbus::Connection::system().await else {
+            tracing::warn!("system D-Bus unavailable; lock-on-suspend watch disabled");
+            return;
+        };
+        let Ok(proxy) = LoginManagerSleepSignalProxy::new(&conn).await else {
+            tracing::warn!("failed to build logind Manager proxy for lock-on-suspend watch");
+            return;
+        };
+        let Ok(mut stream) = proxy.receive_prepare_for_sleep().await else {
+            tracing::warn!("failed to subscribe to PrepareForSleep for lock-on-suspend watch");
+            return;
+        };
+
+        use futures_lite::StreamExt;
+        while let Some(signal) = stream.next().await {
+            let Ok(args) = signal.args() else { continue };
+            if !args.start {
+                continue;
+            }
+            let Ok(exe) = std::env::current_exe() else {
+                continue;
+            };
+            if let Err(error) = std::process::Command::new(exe).arg("lock").spawn() {
+                tracing::warn!(%error, "failed to spawn shilpo lock before suspend");
+            }
+        }
+    });
 }
 
 #[cfg(test)]

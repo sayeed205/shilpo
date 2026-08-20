@@ -28,6 +28,7 @@ pub fn classify_diagnostic(diagnostic: &ConfigDiagnostic) -> RecoveryScope {
         || path == "capture.default_selection"
         || path == "clipboard.history_limit"
         || path == "idle.grace_seconds"
+        || path == "lock.clear_input_after_seconds"
     {
         return RecoveryScope::RejectValue;
     }
@@ -56,6 +57,9 @@ pub fn classify_diagnostic(diagnostic: &ConfigDiagnostic) -> RecoveryScope {
         return RecoveryScope::RetainPreviousComponent;
     }
     if path.starts_with("idle.") {
+        return RecoveryScope::RetainPreviousComponent;
+    }
+    if path.starts_with("lock.") {
         return RecoveryScope::RetainPreviousComponent;
     }
     RecoveryScope::RejectCandidate
@@ -120,6 +124,10 @@ pub fn apply_scoped_recovery(
                     "idle.grace_seconds" => {
                         candidate.idle.grace_seconds = fallback_config.idle.grace_seconds;
                     }
+                    "lock.clear_input_after_seconds" => {
+                        candidate.lock.clear_input_after_seconds =
+                            fallback_config.lock.clear_input_after_seconds;
+                    }
                     _ => {}
                 }
                 restore_provenance_path(provenance, fallback_provenance, path);
@@ -153,6 +161,9 @@ pub fn apply_scoped_recovery(
                     }
                     "idle" => {
                         candidate.idle = fallback_config.idle.clone();
+                    }
+                    "lock" => {
+                        candidate.lock = fallback_config.lock.clone();
                     }
                     _ => {}
                 }

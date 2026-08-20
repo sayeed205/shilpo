@@ -106,6 +106,15 @@
         }
       }
     },
+    "lock": {
+      "$ref": "#/$defs/LockConfig",
+      "default": {
+        "pam_service": "login",
+        "lock_on_suspend": true,
+        "show_clock": true,
+        "clear_input_after_seconds": 10
+      }
+    },
     "keybindings": {
       "type": "array",
       "items": {
@@ -700,6 +709,33 @@
           "additionalProperties": false
         }
       ]
+    },
+    "LockConfig": {
+      "type": "object",
+      "properties": {
+        "pam_service": {
+          "description": "PAM service name under `/etc/pam.d/` used for the lock screen's authentication.",
+          "type": "string",
+          "default": "login"
+        },
+        "lock_on_suspend": {
+          "description": "Whether suspend should wait for the session to be locked first.",
+          "type": "boolean",
+          "default": true
+        },
+        "show_clock": {
+          "type": "boolean",
+          "default": true
+        },
+        "clear_input_after_seconds": {
+          "description": "Seconds of no input after which the typed response is cleared.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 10
+        }
+      },
+      "additionalProperties": false
     },
     "KeybindingConfig": {
       "type": "object",

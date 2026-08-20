@@ -39,6 +39,8 @@ pub enum Commands {
     DeviceDaemon,
     /// Theme synchronization daemon (systemd/DBus activated process role)
     ThemeDaemon,
+    /// Session lock screen (dedicated GPUI process role; owns ext-session-lock-v1 and PAM)
+    Lock,
     /// Shell daemon lifecycle, status, and telemetry
     Shell {
         #[command(subcommand)]

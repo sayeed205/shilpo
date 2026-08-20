@@ -128,14 +128,25 @@ impl SystemIdleActionSink {
     }
 }
 
+/// Spawns the dedicated `shilpo lock` process role. See ADR-0005 and issue #135 for why
+/// locking is a separate process rather than something this in-process action sink can do
+/// itself: a client that dies while the session is locked may leave it locked
+/// permanently, so nothing this crate does directly touches `ext-session-lock-v1`.
+fn spawn_lock_process() -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    Command::new(exe).arg("lock").spawn()?;
+    Ok(())
+}
+
 impl IdleActionSink for SystemIdleActionSink {
     fn has_handler_for(&self, action: &IdleAction) -> bool {
         match action {
             IdleAction::None
+            | IdleAction::Lock
             | IdleAction::Suspend
             | IdleAction::LockAndSuspend
             | IdleAction::Command { .. } => true,
-            IdleAction::Lock | IdleAction::ScreenOff | IdleAction::ScreenOn => false,
+            IdleAction::ScreenOff | IdleAction::ScreenOn => false,
         }
     }
 
@@ -147,7 +158,12 @@ impl IdleActionSink for SystemIdleActionSink {
     ) -> ActionExecutionOutcome {
         match action {
             IdleAction::None => ActionExecutionOutcome::Executed,
-            IdleAction::Lock => ActionExecutionOutcome::Unsupported,
+            IdleAction::Lock => match spawn_lock_process() {
+                Ok(()) => ActionExecutionOutcome::Executed,
+                Err(err) => {
+                    ActionExecutionOutcome::Failed(format!("failed to spawn shilpo lock: {err}"))
+                }
+            },
             IdleAction::ScreenOff => ActionExecutionOutcome::Unsupported,
             IdleAction::ScreenOn => ActionExecutionOutcome::Unsupported,
             IdleAction::Command { command } => {
@@ -157,21 +173,30 @@ impl IdleActionSink for SystemIdleActionSink {
                 ActionExecutionOutcome::Executed
             }
             IdleAction::Suspend | IdleAction::LockAndSuspend => {
-                if lock_before_suspend || matches!(action, IdleAction::LockAndSuspend) {
-                    if self.has_handler_for(&IdleAction::Lock) {
-                        // In future #135, execute lock handler
-                    } else {
-                        tracing::warn!(
-                            behavior = %behavior_name,
-                            "lock handler not registered; proceeding with suspend without prior lock"
-                        );
-                    }
+                let should_lock =
+                    lock_before_suspend || matches!(action, IdleAction::LockAndSuspend);
+                if should_lock && let Err(err) = spawn_lock_process() {
+                    tracing::warn!(
+                        behavior = %behavior_name,
+                        %err,
+                        "failed to spawn lock process before suspend; proceeding without prior lock"
+                    );
                 }
 
                 // Call systemd-logind Suspend(false)
                 let conn = self.system_conn.clone();
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     handle.spawn(async move {
+                        if should_lock {
+                            // Give the locker a moment to acquire the session lock and
+                            // render before suspend freezes the process. This is a
+                            // best-effort head start, not a guarantee: the authoritative
+                            // "wait for locked before suspend" path is the
+                            // PrepareForSleep + delay-inhibitor watch, which covers
+                            // suspend triggered from any source, not just this action.
+                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        }
+
                         let system_conn = match conn {
                             Some(c) => c,
                             None => match Connection::system().await {
