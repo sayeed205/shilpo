@@ -1330,6 +1330,9 @@ impl ExtensionCatalog {
 }
 
 fn official_sources() -> Vec<RegistrySource> {
+    // shilpo-registry-contract's `test-util` feature (and this override) is only ever
+    // enabled via desktop/ext-runtime's [dev-dependencies] edge, which Cargo only links
+    // for this crate's own test/bench builds — so #[cfg(test)] alone correctly gates it.
     #[cfg(test)]
     {
         if let Ok(guard) = shilpo_registry_contract::TEST_OFFICIAL_ROOT_KEY.read()

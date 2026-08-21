@@ -69,9 +69,17 @@ pub const OFFICIAL_SOURCE_ID: &str = "shilpo";
 pub const OFFICIAL_SOURCE_NAME: &str = "Shilpo Extensions";
 pub const OFFICIAL_SOURCE_URL: &str = "https://extensions.shilpo.org/index.json";
 
+/// Test-only override for [`RegistrySource::is_pinned_official`], simulating a build with
+/// `SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY` compiled in. Gated behind the `test-util` feature,
+/// which must only ever be enabled by a `[dev-dependencies]` edge — never by a normal
+/// dependency — so this override compiles out of every real build, including release
+/// builds of the `shilpo` binary. Without that gate, any code sharing this crate's public
+/// API could call the setter below to forge official trust status at runtime.
+#[cfg(feature = "test-util")]
 #[doc(hidden)]
 pub static TEST_OFFICIAL_ROOT_KEY: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 
+#[cfg(feature = "test-util")]
 #[doc(hidden)]
 pub fn set_test_official_root_key(key: Option<String>) {
     let mut guard = TEST_OFFICIAL_ROOT_KEY.write().unwrap();
@@ -93,6 +101,7 @@ pub struct RegistrySource {
 
 impl RegistrySource {
     pub fn is_pinned_official(&self) -> bool {
+        #[cfg(feature = "test-util")]
         if let Ok(guard) = TEST_OFFICIAL_ROOT_KEY.read()
             && let Some(key) = guard.as_ref()
         {

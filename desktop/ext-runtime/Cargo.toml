@@ -48,3 +48,7 @@ wat.workspace = true
 criterion = { workspace = true }
 proptest.workspace = true
 tempfile.workspace = true
+# Re-declares the workspace dependency with test-util enabled, so the official-source
+# test override is only ever compiled into test builds of this crate, never a normal
+# (release) build — see core/registry-contract/Cargo.toml.
+shilpo-registry-contract = { workspace = true, features = ["test-util"] }
