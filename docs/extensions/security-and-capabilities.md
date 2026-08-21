@@ -43,3 +43,18 @@ Extensions must declare the exact, minimal set of capabilities required for thei
 
 - **No Startup Disruption**: Notifications, clipboard modifications, and wallpaper changes must only occur in direct response to user interaction (e.g. clicking a menu action), never on startup or activation.
 - **Transparent Prompting**: When an extension requests privileged capabilities (e.g. network hosts, filesystem paths), the Shilpo shell presents a clear authorization modal to the user before granting access.
+
+---
+
+## 4. Extension Trust & Provenance Model
+
+Shilpo derives extension trust states at verification time and surfaces them transparently to users:
+
+| Trust State | Criteria & Verification |
+| :--- | :--- |
+| **Official** | Built and served by a registry source whose Ed25519 root public key is compiled into the Shilpo binary (`source.is_pinned_official()`), **and** the signed release carries the official signal (`release.official`) authorised by CI based on canonical author identity (`Sayeed Ahmed<sayeed205@gmail.com>`) and maintainer namespace ownership. |
+| **Verified Publisher** | Served with a cryptographically verified publisher signature matching a registry with an established publisher key. |
+| **Signed Third-Party** | Authenticated by a valid Ed25519 publisher signature but from an independent or non-official repository. |
+| **Unverified** | Local unpacked or direct-installed packages without signature or registry provenance. Runs under strict manual permission approval. |
+
+User-configured sources cannot claim official trust; configuring `official = true` on custom sources is strictly ignored and rejected during registration. Author entries in `extension.toml` are parsed and validated as strict mailbox identities (`Display Name <local@domain>`).

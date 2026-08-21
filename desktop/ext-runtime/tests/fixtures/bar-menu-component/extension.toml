@@ -3,7 +3,7 @@ id = "org.shilpo.bar-menu-fixture"
 name = "Bar Menu Fixture"
 version = "0.1.0"
 description = "Bar menu component fixture"
-authors = ["Shilpo Contributors"]
+authors = ["Shilpo Contributors <contributors@shilpo.org>"]
 license = "MIT"
 min_shilpo_version = "0.1.0"
 

@@ -68,6 +68,7 @@ Controls are classified from production paths, not from test doubles or document
 | CTL-13 | HTTP DNS/private-network egress policy | Partially enforced | URL syntax is checked at `desktop/ext-runtime/src/effects.rs:10-45`, but DNS rebinding/private ranges are not filtered |
 | CTL-14 | Per-extension action/notification rate limit | Absent | No production limiter was found in the authorization/dispatch path |
 | CTL-15 | Source-pinned installation provenance, source ID reservation, and cross-source update/conflict isolation | Enforced | `desktop/ext-runtime/src/catalog.rs:670-687,767-880,1104-1215,1434-1485` |
+| CTL-16 | Per-extension official trust requiring build-time pinned source root key AND signed release official signal | Enforced | `core/registry-contract/src/lib.rs:77-93,136-155`, `core/ext-api/src/manifest.rs:490-545`, `desktop/ext-runtime/src/catalog.rs:1607-1615` |
 
 ## Threat analysis
 
@@ -99,6 +100,14 @@ publisher continuity; higher versions published by other sources are rejected as
 sources offering the same `ExtensionId` flags a conflict rather than silently selecting the highest version. Registry
 source registration refuses duplicate source IDs to preserve cached verified indexes, and explicit source switching resets
 grants and purges credentials when publisher keys differ.
+
+To prevent third-party or community extensions hosted in the single unified registry repo (`shilpo-rs/extensions`) from
+inheriting official status, official trust is enforced per-extension (CTL-16). `trust_for_release()` strictly requires
+`source.is_pinned_official() && release.official`. `source.is_pinned_official()` verifies against the Ed25519 root public key
+compiled into the Shilpo binary (`SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY`), ignoring user-writable `official: bool` config.
+The `release.official` signal is signed into release metadata, authorized only when manifest authors match the canonical
+identity (`OFFICIAL_AUTHOR = "Sayeed Ahmed<sayeed205@gmail.com>"`) and namespace ownership in `owners.toml`. Manifest authors
+are strictly validated as mailbox-form identities (`Display Name <local@domain>`) at parse time.
 
 ### Secrets and state
 
@@ -140,6 +149,7 @@ or notification effects.
 | EXT-SEC-006 | Trusted-script PATH/environment and source permissions rely on local trust (XB-07) | `desktop/ext-runtime/src/script/runner.rs:160-209`; `desktop/ext-runtime/src/script/manifest.rs:81-179` | Explicit unsandboxed model, canonical bundle paths, process cleanup; user-controlled source can run arbitrary OS code | Low | Low/High | High | Accept/document; harden UX if needed | S | Keep separate from WASM capability policy |
 | EXT-SEC-007 | Guest memory may retain secret copies until reuse (XB-02) | `desktop/ext-runtime/src/wasm.rs:566-600` and WIT list transfer | Wasmtime memory cap and process isolation; ABI copies cannot be completely erased by host | Low | Low/Medium | Medium | Accept/document | M | Revisit only with an ABI-compatible memory-lifetime design |
 | EXT-SEC-008 | Malicious registry/publisher takeover via higher-version shadowing or cross-source update spoofing | `desktop/ext-runtime/src/catalog.rs:670-687,767-880,1104-1215,1434-1485` | Source-pinned receipts, source ID uniqueness, discovery collision detection, and zero-trust grant/secret resets on publisher switch (CTL-15) | Low | High | High | Mitigate (Enforced) | S | Preserves single global ExtensionId while isolating provenance |
+| EXT-SEC-009 | Third-party extension claiming official trust status on unified or custom registry | `core/registry-contract/src/lib.rs:77-93`, `desktop/ext-runtime/src/catalog.rs:1607-1615` | Per-extension official trust signal requiring build-time compiled root key AND signed release official signal, with mailbox-form author validation (CTL-16) | Low | High | High | Mitigate (Enforced) | S | Decouples registry transport from individual extension trust |
 
 ## At-rest decisions
 

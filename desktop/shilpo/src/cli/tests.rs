@@ -804,7 +804,7 @@ fn test_cli_ext_build_adapter_success_and_json_envelope() {
         version = "0.1.0"
         api_version = "0.1.0"
         min_shilpo_version = "0.1.0"
-        authors = ["Test"]
+        authors = ["Test <test@example.com>"]
         license = "MIT"
 
         [library]
