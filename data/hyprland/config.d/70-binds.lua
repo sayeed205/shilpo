@@ -67,18 +67,18 @@ hl.bind(mod .. " + Equal", hl.dsp.layout("colresize +0.1"))
 hl.bind(mod .. " + BracketLeft", hl.dsp.layout("consume_or_expel prev"))
 hl.bind(mod .. " + BracketRight", hl.dsp.layout("consume_or_expel next"))
 hl.bind(mod .. " + C", hl.dsp.layout("fit_into_view")) -- center the focused column
-hl.bind(mod .. " + Ctrl + BracketLeft", hl.dsp.layout("swapcol l"))
-hl.bind(mod .. " + Ctrl + BracketRight", hl.dsp.layout("swapcol r"))
+hl.bind(mod .. " + CTRL + BracketLeft", hl.dsp.layout("swapcol l"))
+hl.bind(mod .. " + CTRL + BracketRight", hl.dsp.layout("swapcol r"))
 
 -- Multi-monitor
-hl.bind(mod .. " + Ctrl + left", hl.dsp.focus({ monitor = "l" }))
-hl.bind(mod .. " + Ctrl + right", hl.dsp.focus({ monitor = "r" }))
-hl.bind(mod .. " + Ctrl + up", hl.dsp.focus({ monitor = "u" }))
-hl.bind(mod .. " + Ctrl + down", hl.dsp.focus({ monitor = "d" }))
-hl.bind(mod .. " + Ctrl + SHIFT + left", hl.dsp.window.move({ monitor = "l" }))
-hl.bind(mod .. " + Ctrl + SHIFT + right", hl.dsp.window.move({ monitor = "r" }))
-hl.bind(mod .. " + Ctrl + SHIFT + up", hl.dsp.window.move({ monitor = "u" }))
-hl.bind(mod .. " + Ctrl + SHIFT + down", hl.dsp.window.move({ monitor = "d" }))
+hl.bind(mod .. " + CTRL + left", hl.dsp.focus({ monitor = "l" }))
+hl.bind(mod .. " + CTRL + right", hl.dsp.focus({ monitor = "r" }))
+hl.bind(mod .. " + CTRL + up", hl.dsp.focus({ monitor = "u" }))
+hl.bind(mod .. " + CTRL + down", hl.dsp.focus({ monitor = "d" }))
+hl.bind(mod .. " + CTRL + SHIFT + left", hl.dsp.window.move({ monitor = "l" }))
+hl.bind(mod .. " + CTRL + SHIFT + right", hl.dsp.window.move({ monitor = "r" }))
+hl.bind(mod .. " + CTRL + SHIFT + up", hl.dsp.window.move({ monitor = "u" }))
+hl.bind(mod .. " + CTRL + SHIFT + down", hl.dsp.window.move({ monitor = "d" }))
 
 -- Workspace navigation
 for i = 1, 9 do
