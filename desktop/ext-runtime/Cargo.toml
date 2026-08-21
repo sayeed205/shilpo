@@ -6,8 +6,8 @@ publish.workspace = true
 build = "build.rs"
 
 [[example]]
-name = "generate_distribution_schemas"
-path = "examples/generate_distribution_schemas.rs"
+name = "generate_script_manifest_schema"
+path = "examples/generate_script_manifest_schema.rs"
 
 [[bench]]
 name = "wasm"

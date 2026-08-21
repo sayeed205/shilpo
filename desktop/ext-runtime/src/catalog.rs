@@ -12,12 +12,13 @@ use serde::{Deserialize, Serialize};
 use shilpo_ext_api::{Capability, ExtensionId, ExtensionManifest, SUPPORTED_API_VERSION};
 use shilpo_registry_contract::ContractError;
 pub use shilpo_registry_contract::{
-    KeyRotationDelegation, OFFICIAL_SOURCE_ID, OFFICIAL_SOURCE_NAME, OFFICIAL_SOURCE_URL,
-    PackageSignature, REGISTRY_SCHEMA_VERSION, RegistryIndex, RegistryRelease, RegistrySource,
-    ReleaseChannel, SignedRegistryIndex, capabilities_hash, decode_key_pair, generate_signing_key,
-    hash_bytes, hash_file, package_signature_path, package_signing_message, public_key_fingerprint,
-    release_signing_payload, rotation_message, sign_package, sign_registry_index, sign_release,
-    validate_source, verify_registry_index, verify_release_signature, verify_signature,
+    KeyRotationDelegation, OFFICIAL_ROOT_PUBLIC_KEY, OFFICIAL_SOURCE_ID, OFFICIAL_SOURCE_NAME,
+    OFFICIAL_SOURCE_URL, PackageSignature, REGISTRY_SCHEMA_VERSION, RegistryIndex, RegistryRelease,
+    RegistrySource, ReleaseChannel, SignedRegistryIndex, capabilities_hash, decode_key_pair,
+    generate_signing_key, hash_bytes, hash_file, package_signature_path, package_signing_message,
+    public_key_fingerprint, release_signing_payload, rotation_message, sign_package,
+    sign_registry_index, sign_release, validate_source, verify_registry_index,
+    verify_release_signature, verify_signature,
 };
 use tar::Archive;
 
@@ -1365,18 +1366,19 @@ fn official_sources() -> Vec<RegistrySource> {
             }];
         }
     }
-    option_env!("SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY").map_or_else(Vec::new, |root_public_key| {
-        vec![RegistrySource {
-            id: OFFICIAL_SOURCE_ID.into(),
-            name: OFFICIAL_SOURCE_NAME.into(),
-            index_url: option_env!("SHILPO_OFFICIAL_EXTENSIONS_INDEX_URL")
-                .unwrap_or(OFFICIAL_SOURCE_URL)
-                .into(),
-            root_public_key: root_public_key.into(),
-            official: true,
-            enabled: true,
-        }]
-    })
+    let root_public_key = option_env!("SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY")
+        .filter(|k| !k.trim().is_empty())
+        .unwrap_or(OFFICIAL_ROOT_PUBLIC_KEY);
+    vec![RegistrySource {
+        id: OFFICIAL_SOURCE_ID.into(),
+        name: OFFICIAL_SOURCE_NAME.into(),
+        index_url: option_env!("SHILPO_OFFICIAL_EXTENSIONS_INDEX_URL")
+            .unwrap_or(OFFICIAL_SOURCE_URL)
+            .into(),
+        root_public_key: root_public_key.into(),
+        official: true,
+        enabled: true,
+    }]
 }
 
 enum PackageProvenance {
@@ -2827,9 +2829,13 @@ kind = "notifications:show"
             .unwrap();
 
         let initial_sources = catalog.sources().unwrap();
-        assert_eq!(initial_sources.len(), 1);
-        assert_eq!(initial_sources[0].name, "Community One");
-        assert_eq!(initial_sources[0].root_public_key, reg_1_pub);
+        assert_eq!(initial_sources.len(), 2);
+        let comm_source = initial_sources
+            .iter()
+            .find(|s| s.id == "community")
+            .unwrap();
+        assert_eq!(comm_source.name, "Community One");
+        assert_eq!(comm_source.root_public_key, reg_1_pub);
 
         let duplicate_result = catalog.add_source(RegistrySource {
             id: "community".into(),
@@ -2846,13 +2852,11 @@ kind = "notifications:show"
         ));
 
         let sources_after = catalog.sources().unwrap();
-        assert_eq!(sources_after.len(), 1);
-        assert_eq!(sources_after[0].name, "Community One");
-        assert_eq!(sources_after[0].root_public_key, reg_1_pub);
-        assert_eq!(
-            sources_after[0].index_url,
-            "https://community1.org/index.json"
-        );
+        assert_eq!(sources_after.len(), 2);
+        let comm_after = sources_after.iter().find(|s| s.id == "community").unwrap();
+        assert_eq!(comm_after.name, "Community One");
+        assert_eq!(comm_after.root_public_key, reg_1_pub);
+        assert_eq!(comm_after.index_url, "https://community1.org/index.json");
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -3624,5 +3628,18 @@ authors = ["{OFFICIAL_AUTHOR}"]
         assert!(catalog.active_packages().unwrap().is_empty());
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn official_sources_returns_compiled_constants_by_default() {
+        let sources = official_sources();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].id, OFFICIAL_SOURCE_ID);
+        assert_eq!(sources[0].name, OFFICIAL_SOURCE_NAME);
+        assert_eq!(sources[0].index_url, OFFICIAL_SOURCE_URL);
+        assert_eq!(sources[0].root_public_key, OFFICIAL_ROOT_PUBLIC_KEY);
+        assert!(sources[0].official);
+        assert!(sources[0].enabled);
+        assert!(sources[0].is_pinned_official());
     }
 }
