@@ -70,22 +70,14 @@ pub const OFFICIAL_SOURCE_NAME: &str = "Shilpo Extensions";
 pub const OFFICIAL_SOURCE_URL: &str =
     "https://raw.githubusercontent.com/shilpo-rs/extensions/main/index.json";
 
-/// The default compiled-in Ed25519 root public key for the official Shilpo extension registry.
+/// The compiled-in Ed25519 root public key for the official Shilpo extension registry.
 /// Can be overridden at compile time via `SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY`.
 ///
-/// PLACEHOLDER — not a real key. No production signing keypair exists yet: that happens when
-/// a maintainer runs `scripts/setup-signing-keys-wizard.sh` in `shilpo-rs/extensions` (see #104),
-/// which generates the real Ed25519 keypair and stores the private half as a protected GitHub
-/// Actions environment secret. Once that has happened, replace this constant with the real
-/// public half printed by the wizard — a public key is not a secret, so it belongs here
-/// verbatim, matching ADR-0018 decision 6.
-///
-/// Left as an all-zero value deliberately: it decodes as a valid base64 Ed25519 public key
-/// (so signature verification code paths still type-check and run), but it cannot correspond
-/// to any real private key, so it fails safe — a source pinned to this default will simply
-/// never verify a real signed index, rather than silently trusting a plausible-looking but
-/// unaccountable key.
-pub const OFFICIAL_ROOT_PUBLIC_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+/// This is the public half of `INDEX_SIGNING_KEY`, the private key held as a protected
+/// GitHub Actions environment secret (`production`) in `shilpo-rs/extensions`, generated
+/// via `shilpo ext keygen`. A public key is not a secret, so it belongs here verbatim,
+/// matching ADR-0018 decision 6.
+pub const OFFICIAL_ROOT_PUBLIC_KEY: &str = "j8Xk5rdfxsNG95pHDdChPrGnAG0NAPBBxAxUopOdA0w=";
 
 /// Test-only override for [`RegistrySource::is_pinned_official`], simulating a build with
 /// `SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY` compiled in. Gated behind the `test-util` feature,

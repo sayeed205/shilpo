@@ -110,11 +110,10 @@ The `release.official` signal is signed into release metadata, authorized only w
 identity (`OFFICIAL_AUTHOR = "Sayeed Ahmed<sayeed205@gmail.com>"`) and namespace ownership in `owners.toml`. Manifest authors
 are strictly validated as mailbox-form identities (`Display Name <local@domain>`) at parse time.
 
-`OFFICIAL_ROOT_PUBLIC_KEY` currently holds a placeholder (all-zero) value: no production signing keypair has been
-generated yet, since that requires a maintainer to run `scripts/setup-signing-keys-wizard.sh` in `shilpo-rs/extensions`
-(#104). The placeholder decodes as a valid key so the verification code path still runs, but cannot match any real
-signature, so the default official source fails closed rather than silently trusting an unaccountable key. This
-constant must be updated to the real public key once the wizard has been run.
+`OFFICIAL_ROOT_PUBLIC_KEY` is the real production index-signing public key, generated via
+`shilpo ext keygen`. Its private half (`INDEX_SIGNING_KEY`) and the separate
+`PACKAGE_SIGNING_KEY` are held only as protected `production`-environment secrets in
+`shilpo-rs/extensions`, never on disk or in this repository.
 
 ### Secrets and state
 
