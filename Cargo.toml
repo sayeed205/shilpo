@@ -2,6 +2,7 @@
 members = [
     # Cross-platform core crates
     "core/ext-api",
+    "core/registry-contract",
     # Linux desktop shell crates
     "desktop/shilpo",
     "desktop/device",
@@ -24,6 +25,7 @@ shilpo = { path = "desktop/shilpo" }
 # changes.
 shilpo-m3e = { git = "https://github.com/shilpo-rs/ui", rev = "b7e1b2377764d934ad5a2baf4f8a0c6400ae00f7" }
 shilpo-ext-api = { path = "core/ext-api" }
+shilpo-registry-contract = { path = "core/registry-contract" }
 shilpo-domain = { path = "desktop/domain" }
 shilpo-device = { path = "desktop/device" }
 shilpo-services = { path = "desktop/services" }

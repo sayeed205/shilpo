@@ -235,6 +235,39 @@
           "required": [
             "kind"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "secrets"
+            },
+            "purposes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SecretPurpose"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "purposes"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "search:provide"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
         }
       ]
     },
@@ -248,7 +281,8 @@
         "network_changed",
         "media_changed",
         "power_changed",
-        "timer_fired"
+        "timer_fired",
+        "workspace_changed"
       ]
     },
     "ExtensionId": {
@@ -415,6 +449,9 @@
         "beta",
         "development"
       ]
+    },
+    "SecretPurpose": {
+      "type": "string"
     },
     "WallpaperSource": {
       "type": "string",

@@ -1,20 +1,24 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use flate2::read::GzDecoder;
-use ring::rand::SystemRandom;
-use ring::signature::{self, Ed25519KeyPair, KeyPair};
 use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use shilpo_ext_api::{Capability, ExtensionId, ExtensionManifest, SUPPORTED_API_VERSION};
+use shilpo_registry_contract::ContractError;
+pub use shilpo_registry_contract::{
+    KeyRotationDelegation, PackageSignature, REGISTRY_SCHEMA_VERSION, RegistryIndex,
+    RegistryRelease, RegistrySource, ReleaseChannel, SignedRegistryIndex, capabilities_hash,
+    decode_key_pair, generate_signing_key, hash_bytes, hash_file, package_signature_path,
+    package_signing_message, public_key_fingerprint, release_signing_payload, rotation_message,
+    sign_package, sign_registry_index, sign_release, validate_source, verify_registry_index,
+    verify_release_signature, verify_signature,
+};
 use tar::Archive;
 
 use crate::cli::ExtensionCli;
@@ -22,7 +26,6 @@ use crate::cli::ExtensionCli;
 const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_INDEX_BYTES: usize = 8 * 1024 * 1024;
 const RECEIPT_SCHEMA_VERSION: u32 = 1;
-const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_SHILPO_VERSION: &str = "0.1.0";
 const OFFICIAL_SOURCE_ID: &str = "shilpo";
 const OFFICIAL_SOURCE_NAME: &str = "Shilpo Extensions";
@@ -139,15 +142,6 @@ impl fmt::Display for TrustState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ReleaseChannel {
-    #[default]
-    Stable,
-    Beta,
-    Development,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct InstallationReceipt {
@@ -203,101 +197,11 @@ impl StoredGrants {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PackageSignature {
-    pub schema_version: u32,
-    pub publisher: String,
-    pub public_key: String,
-    pub package_hash: String,
-    pub signature: String,
-    #[serde(default)]
-    pub key_rotation: Option<KeyRotationDelegation>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct KeyRotationDelegation {
-    pub previous_public_key: String,
-    pub next_public_key: String,
-    pub signature: String,
-    #[serde(default)]
-    pub authorized_by_registry: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct RegistrySource {
-    pub id: String,
-    pub name: String,
-    pub index_url: String,
-    pub root_public_key: String,
-    #[serde(default)]
-    pub official: bool,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct StoredSources {
     #[serde(default)]
     source: Vec<RegistrySource>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct RegistryIndex {
-    pub schema_version: u32,
-    pub source_id: String,
-    pub generated_at: String,
-    #[serde(default)]
-    pub releases: Vec<RegistryRelease>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct SignedRegistryIndex {
-    pub index: RegistryIndex,
-    pub signature: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct RegistryRelease {
-    pub id: ExtensionId,
-    pub name: String,
-    pub description: Option<String>,
-    pub publisher: String,
-    #[schemars(with = "String")]
-    pub version: Version,
-    #[schemars(with = "String")]
-    pub api_version: Version,
-    #[schemars(with = "String")]
-    pub min_shilpo_version: Version,
-    pub channel: ReleaseChannel,
-    pub package_url: String,
-    pub package_hash: String,
-    pub publisher_public_key: String,
-    pub publisher_signature: String,
-    pub capabilities_hash: String,
-    #[serde(default)]
-    pub capabilities: Vec<Capability>,
-    pub published_at: String,
-    #[serde(default)]
-    pub yanked: bool,
-    #[serde(default)]
-    pub verified_publisher: bool,
-    #[serde(default)]
-    pub open_source: bool,
-    #[serde(default)]
-    pub data_only: bool,
-    #[serde(default)]
-    pub key_rotation: Option<KeyRotationDelegation>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -375,6 +279,16 @@ impl fmt::Display for CatalogError {
 }
 
 impl std::error::Error for CatalogError {}
+
+impl From<ContractError> for CatalogError {
+    fn from(error: ContractError) -> Self {
+        match error {
+            ContractError::Io(message) => Self::Io(message),
+            ContractError::InvalidSignature(message) => Self::InvalidSignature(message),
+            ContractError::InvalidRegistry(message) => Self::InvalidRegistry(message),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ExtensionCatalog {
@@ -1487,192 +1401,6 @@ fn verify_manifest_against_release(
     Ok(())
 }
 
-fn verify_registry_index(
-    source: &RegistrySource,
-    signed: &SignedRegistryIndex,
-) -> Result<(), CatalogError> {
-    if signed.index.schema_version != REGISTRY_SCHEMA_VERSION || signed.index.source_id != source.id
-    {
-        return Err(CatalogError::InvalidRegistry(
-            "index schema or source identity mismatch".into(),
-        ));
-    }
-    let payload = serde_json::to_vec(&signed.index)
-        .map_err(|error| CatalogError::InvalidRegistry(error.to_string()))?;
-    verify_signature(&source.root_public_key, &payload, &signed.signature)
-        .map_err(|error| CatalogError::InvalidRegistry(error.to_string()))?;
-    for release in &signed.index.releases {
-        verify_release_signature(release)
-            .map_err(|error| CatalogError::InvalidRegistry(error.to_string()))?;
-        if let Some(rotation) = &release.key_rotation {
-            if rotation.next_public_key != release.publisher_public_key {
-                return Err(CatalogError::InvalidRegistry(format!(
-                    "key rotation for '{}' does not end at the release key",
-                    release.id
-                )));
-            }
-            if !rotation.authorized_by_registry {
-                verify_signature(
-                    &rotation.previous_public_key,
-                    rotation_message(&rotation.next_public_key).as_bytes(),
-                    &rotation.signature,
-                )
-                .map_err(|error| CatalogError::InvalidRegistry(error.to_string()))?;
-            }
-        }
-        if capabilities_hash(&release.capabilities)? != release.capabilities_hash {
-            return Err(CatalogError::InvalidRegistry(format!(
-                "capability hash mismatch for '{}' {}",
-                release.id, release.version
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn verify_release_signature(release: &RegistryRelease) -> Result<(), CatalogError> {
-    let payload = release_signing_payload(release)?;
-    verify_signature(
-        &release.publisher_public_key,
-        &payload,
-        &release.publisher_signature,
-    )
-}
-
-fn release_signing_payload(release: &RegistryRelease) -> Result<Vec<u8>, CatalogError> {
-    let mut unsigned = release.clone();
-    unsigned.publisher_signature.clear();
-    serde_json::to_vec(&unsigned).map_err(|error| CatalogError::InvalidRegistry(error.to_string()))
-}
-
-fn capabilities_hash(capabilities: &[Capability]) -> Result<String, CatalogError> {
-    let bytes = serde_json::to_vec(capabilities)
-        .map_err(|error| CatalogError::InvalidRegistry(error.to_string()))?;
-    Ok(hash_bytes(&bytes))
-}
-
-pub fn package_signature_path(package: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.sig.json", package.display()))
-}
-
-pub fn generate_signing_key() -> Result<(String, String), CatalogError> {
-    let document = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new())
-        .map_err(|_| CatalogError::InvalidSignature("failed to generate Ed25519 key".into()))?;
-    let pair = Ed25519KeyPair::from_pkcs8(document.as_ref())
-        .map_err(|_| CatalogError::InvalidSignature("generated key is invalid".into()))?;
-    Ok((
-        BASE64.encode(document.as_ref()),
-        BASE64.encode(pair.public_key().as_ref()),
-    ))
-}
-
-pub fn sign_package(
-    package: &Path,
-    publisher: &str,
-    private_key: &str,
-) -> Result<PathBuf, CatalogError> {
-    if publisher.trim().is_empty() {
-        return Err(CatalogError::InvalidSignature(
-            "publisher cannot be empty".into(),
-        ));
-    }
-    let package_hash = hash_file(package)?;
-    let pair = decode_key_pair(private_key)?;
-    let signature = pair.sign(package_signing_message(publisher, &package_hash).as_bytes());
-    let sidecar = PackageSignature {
-        schema_version: 1,
-        publisher: publisher.to_owned(),
-        public_key: BASE64.encode(pair.public_key().as_ref()),
-        package_hash,
-        signature: BASE64.encode(signature.as_ref()),
-        key_rotation: None,
-    };
-    let path = package_signature_path(package);
-    let bytes = serde_json::to_vec_pretty(&sidecar)
-        .map_err(|error| CatalogError::InvalidSignature(error.to_string()))?;
-    write_atomic(&path, &bytes)?;
-    Ok(path)
-}
-
-pub fn sign_release(release: &mut RegistryRelease, private_key: &str) -> Result<(), CatalogError> {
-    let pair = decode_key_pair(private_key)?;
-    release.publisher_public_key = BASE64.encode(pair.public_key().as_ref());
-    release.capabilities_hash = capabilities_hash(&release.capabilities)?;
-    release.publisher_signature.clear();
-    let payload = release_signing_payload(release)?;
-    release.publisher_signature = BASE64.encode(pair.sign(&payload).as_ref());
-    Ok(())
-}
-
-pub fn sign_registry_index(
-    index: RegistryIndex,
-    private_key: &str,
-) -> Result<SignedRegistryIndex, CatalogError> {
-    let pair = decode_key_pair(private_key)?;
-    let payload = serde_json::to_vec(&index)
-        .map_err(|error| CatalogError::InvalidRegistry(error.to_string()))?;
-    Ok(SignedRegistryIndex {
-        index,
-        signature: BASE64.encode(pair.sign(&payload).as_ref()),
-    })
-}
-
-fn decode_key_pair(private_key: &str) -> Result<Ed25519KeyPair, CatalogError> {
-    let bytes = BASE64
-        .decode(private_key.trim())
-        .map_err(|error| CatalogError::InvalidSignature(error.to_string()))?;
-    Ed25519KeyPair::from_pkcs8(&bytes)
-        .map_err(|_| CatalogError::InvalidSignature("invalid Ed25519 private key".into()))
-}
-
-fn verify_signature(
-    public_key: &str,
-    message: &[u8],
-    encoded_signature: &str,
-) -> Result<(), CatalogError> {
-    let key = BASE64
-        .decode(public_key)
-        .map_err(|error| CatalogError::InvalidSignature(error.to_string()))?;
-    let signature = BASE64
-        .decode(encoded_signature)
-        .map_err(|error| CatalogError::InvalidSignature(error.to_string()))?;
-    signature::UnparsedPublicKey::new(&signature::ED25519, key)
-        .verify(message, &signature)
-        .map_err(|_| CatalogError::InvalidSignature("Ed25519 verification failed".into()))
-}
-
-fn public_key_fingerprint(public_key: &str) -> Result<String, CatalogError> {
-    let bytes = BASE64
-        .decode(public_key)
-        .map_err(|error| CatalogError::InvalidSignature(error.to_string()))?;
-    Ok(hash_bytes(&bytes))
-}
-
-fn package_signing_message(publisher: &str, package_hash: &str) -> String {
-    format!("shilpo-package-v1\n{publisher}\n{package_hash}")
-}
-
-fn rotation_message(next_public_key: &str) -> String {
-    format!("shilpo-key-rotation-v1\n{next_public_key}")
-}
-
-fn validate_source(source: &RegistrySource) -> Result<(), CatalogError> {
-    if source.id.is_empty()
-        || !source
-            .id
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        || source.name.trim().is_empty()
-        || source.index_url.trim().is_empty()
-    {
-        return Err(CatalogError::InvalidRegistry(
-            "source ID, name, or URL is invalid".into(),
-        ));
-    }
-    public_key_fingerprint(&source.root_public_key)?;
-    Ok(())
-}
-
 fn extract_package(package: &Path, destination: &Path) -> Result<(), CatalogError> {
     let file = File::open(package).map_err(|error| io_error(package, error))?;
     let decoder = GzDecoder::new(file);
@@ -1865,26 +1593,6 @@ fn read_limited(path: &Path, max_bytes: u64) -> Result<Vec<u8>, CatalogError> {
     fs::read(path).map_err(|error| io_error(path, error))
 }
 
-fn hash_file(path: &Path) -> Result<String, CatalogError> {
-    let mut file = File::open(path).map_err(|error| io_error(path, error))?;
-    let mut digest = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(|error| io_error(path, error))?;
-        if count == 0 {
-            break;
-        }
-        digest.update(&buffer[..count]);
-    }
-    Ok(format!("sha256:{}", hex::encode(digest.finalize())))
-}
-
-fn hash_bytes(bytes: &[u8]) -> String {
-    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
-}
-
 fn io_error(path: &Path, error: std::io::Error) -> CatalogError {
     CatalogError::Io(format!("{}: {error}", path.display()))
 }
@@ -1911,8 +1619,11 @@ fn unique_suffix() -> String {
 mod tests {
     use std::fs;
 
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64;
     use flate2::Compression;
     use flate2::write::GzEncoder;
+
     use tar::{Builder, Header};
 
     use super::*;
