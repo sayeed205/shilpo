@@ -12,12 +12,12 @@ use serde::{Deserialize, Serialize};
 use shilpo_ext_api::{Capability, ExtensionId, ExtensionManifest, SUPPORTED_API_VERSION};
 use shilpo_registry_contract::ContractError;
 pub use shilpo_registry_contract::{
-    KeyRotationDelegation, PackageSignature, REGISTRY_SCHEMA_VERSION, RegistryIndex,
-    RegistryRelease, RegistrySource, ReleaseChannel, SignedRegistryIndex, capabilities_hash,
-    decode_key_pair, generate_signing_key, hash_bytes, hash_file, package_signature_path,
-    package_signing_message, public_key_fingerprint, release_signing_payload, rotation_message,
-    sign_package, sign_registry_index, sign_release, validate_source, verify_registry_index,
-    verify_release_signature, verify_signature,
+    KeyRotationDelegation, OFFICIAL_SOURCE_ID, OFFICIAL_SOURCE_NAME, OFFICIAL_SOURCE_URL,
+    PackageSignature, REGISTRY_SCHEMA_VERSION, RegistryIndex, RegistryRelease, RegistrySource,
+    ReleaseChannel, SignedRegistryIndex, capabilities_hash, decode_key_pair, generate_signing_key,
+    hash_bytes, hash_file, package_signature_path, package_signing_message, public_key_fingerprint,
+    release_signing_payload, rotation_message, sign_package, sign_registry_index, sign_release,
+    validate_source, verify_registry_index, verify_release_signature, verify_signature,
 };
 use tar::Archive;
 
@@ -27,9 +27,6 @@ const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_INDEX_BYTES: usize = 8 * 1024 * 1024;
 const RECEIPT_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_SHILPO_VERSION: &str = "0.1.0";
-const OFFICIAL_SOURCE_ID: &str = "shilpo";
-const OFFICIAL_SOURCE_NAME: &str = "Shilpo Extensions";
-const OFFICIAL_SOURCE_URL: &str = "https://extensions.shilpo.org/index.json";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogPaths {
@@ -668,7 +665,7 @@ impl ExtensionCatalog {
     }
 
     pub fn add_source(&self, source: RegistrySource) -> Result<(), CatalogError> {
-        if source.official {
+        if source.official || source.is_pinned_official() {
             return Err(CatalogError::InvalidRegistry(
                 "official trust is reserved for Shilpo's build-time registry root".into(),
             ));
@@ -689,7 +686,7 @@ impl ExtensionCatalog {
     pub fn remove_source(&self, source_id: &str) -> Result<(), CatalogError> {
         let mut sources = self.sources()?;
         let before = sources.len();
-        sources.retain(|source| source.id != source_id || source.official);
+        sources.retain(|source| source.id != source_id || source.is_pinned_official());
         if before == sources.len() {
             return Err(CatalogError::NotFound(source_id.to_owned()));
         }
@@ -1232,7 +1229,7 @@ impl ExtensionCatalog {
             StoredSources::default()
         };
         for registry in &stored.source {
-            if registry.official {
+            if registry.official || registry.is_pinned_official() {
                 return Err(CatalogError::InvalidRegistry(
                     "configured sources cannot claim official trust".into(),
                 ));
@@ -1248,7 +1245,7 @@ impl ExtensionCatalog {
         let source = toml::to_string_pretty(&StoredSources {
             source: sources
                 .iter()
-                .filter(|source| !source.official)
+                .filter(|source| !source.is_pinned_official())
                 .cloned()
                 .collect(),
         })
@@ -1333,6 +1330,26 @@ impl ExtensionCatalog {
 }
 
 fn official_sources() -> Vec<RegistrySource> {
+    // shilpo-registry-contract's `test-util` feature (and this override) is only ever
+    // enabled via desktop/ext-runtime's [dev-dependencies] edge, which Cargo only links
+    // for this crate's own test/bench builds — so #[cfg(test)] alone correctly gates it.
+    #[cfg(test)]
+    {
+        if let Ok(guard) = shilpo_registry_contract::TEST_OFFICIAL_ROOT_KEY.read()
+            && let Some(root_public_key) = guard.as_ref()
+        {
+            return vec![RegistrySource {
+                id: OFFICIAL_SOURCE_ID.into(),
+                name: OFFICIAL_SOURCE_NAME.into(),
+                index_url: option_env!("SHILPO_OFFICIAL_EXTENSIONS_INDEX_URL")
+                    .unwrap_or(OFFICIAL_SOURCE_URL)
+                    .into(),
+                root_public_key: root_public_key.clone(),
+                official: true,
+                enabled: true,
+            }];
+        }
+    }
     option_env!("SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY").map_or_else(Vec::new, |root_public_key| {
         vec![RegistrySource {
             id: OFFICIAL_SOURCE_ID.into(),
@@ -1605,7 +1622,7 @@ fn has_publisher_conflict(candidates: &[CatalogExtension]) -> bool {
 }
 
 fn trust_for_release(source: &RegistrySource, release: &RegistryRelease) -> TrustState {
-    if source.official {
+    if source.is_pinned_official() && release.official {
         TrustState::Official
     } else if release.verified_publisher {
         TrustState::VerifiedPublisher
@@ -1853,7 +1870,7 @@ mod tests {
     use base64::engine::general_purpose::STANDARD as BASE64;
     use flate2::Compression;
     use flate2::write::GzEncoder;
-    use shilpo_ext_api::SecretPurpose;
+    use shilpo_ext_api::{OFFICIAL_AUTHOR, SecretPurpose};
     use tar::{Builder, Header};
 
     use super::*;
@@ -1873,14 +1890,18 @@ mod tests {
     }
 
     fn package(root: &Path, version: &str, capabilities: &str) -> PathBuf {
-        let source = root.join(format!("source-{version}"));
-        let output = root.join(format!("dist-{version}"));
+        package_with_id(root, "io.github.shilpo.catalog-test", version, capabilities)
+    }
+
+    fn package_with_id(root: &Path, id: &str, version: &str, capabilities: &str) -> PathBuf {
+        let source = root.join(format!("source-{id}-{version}"));
+        let output = root.join(format!("dist-{id}-{version}"));
         fs::create_dir_all(&source).unwrap();
         fs::write(
             source.join("extension.toml"),
             format!(
                 r#"
-id = "io.github.shilpo.catalog-test"
+id = "{id}"
 name = "Catalog Test"
 version = "{version}"
 {capabilities}
@@ -2062,6 +2083,7 @@ kind = "notifications:show"
             capabilities: Vec::new(),
             published_at: "2026-07-26T11:00:00Z".into(),
             yanked: false,
+            official: false,
             verified_publisher: true,
             open_source: true,
             data_only: true,
@@ -2085,6 +2107,7 @@ kind = "notifications:show"
             capabilities: Vec::new(),
             published_at: "2026-07-26T12:00:00Z".into(),
             yanked: false,
+            official: false,
             verified_publisher: true,
             open_source: true,
             data_only: true,
@@ -2301,6 +2324,7 @@ kind = "notifications:show"
             capabilities: Vec::new(),
             published_at: "2026-07-26T12:00:00Z".into(),
             yanked: false,
+            official: false,
             verified_publisher: true,
             open_source: true,
             data_only: true,
@@ -2390,6 +2414,7 @@ kind = "notifications:show"
             capabilities: Vec::new(),
             published_at: "2026-07-26T12:00:00Z".into(),
             yanked: false,
+            official: false,
             verified_publisher: true,
             open_source: true,
             data_only: true,
@@ -2445,6 +2470,7 @@ kind = "notifications:show"
             capabilities: Vec::new(),
             published_at: "2026-07-27T12:00:00Z".into(),
             yanked: false,
+            official: false,
             verified_publisher: true,
             open_source: true,
             data_only: true,
@@ -2522,6 +2548,7 @@ kind = "notifications:show"
             capabilities: vec![Capability::NotificationsShow],
             published_at: "2026-07-26T12:00:00Z".into(),
             yanked: false,
+            official: false,
             verified_publisher: true,
             open_source: true,
             data_only: true,
@@ -2628,6 +2655,7 @@ kind = "notifications:show"
             capabilities: Vec::new(),
             published_at: "2026-07-26T12:00:00Z".into(),
             yanked: false,
+            official: false,
             verified_publisher: true,
             open_source: true,
             data_only: true,
@@ -2677,6 +2705,7 @@ kind = "notifications:show"
             capabilities: Vec::new(),
             published_at: "2026-07-27T12:00:00Z".into(),
             yanked: false,
+            official: false,
             verified_publisher: true,
             open_source: true,
             data_only: true,
@@ -2803,6 +2832,7 @@ kind = "notifications:show"
             capabilities: vec![Capability::NotificationsShow],
             published_at: "2026-07-26T12:00:00Z".into(),
             yanked: false,
+            official: false,
             verified_publisher: true,
             open_source: true,
             data_only: true,
@@ -2874,6 +2904,7 @@ kind = "notifications:show"
             capabilities: vec![Capability::NotificationsShow],
             published_at: "2026-07-27T12:00:00Z".into(),
             yanked: false,
+            official: false,
             verified_publisher: true,
             open_source: true,
             data_only: true,
@@ -2975,6 +3006,7 @@ kind = "notifications:show"
             capabilities: vec![Capability::NotificationsShow],
             published_at: "2026-07-26T12:00:00Z".into(),
             yanked: false,
+            official: false,
             verified_publisher: true,
             open_source: true,
             data_only: true,
@@ -3044,6 +3076,7 @@ kind = "notifications:show"
             capabilities: vec![Capability::NotificationsShow],
             published_at: "2026-07-27T12:00:00Z".into(),
             yanked: false,
+            official: false,
             verified_publisher: true,
             open_source: true,
             data_only: true,
@@ -3131,6 +3164,316 @@ kind = "notifications:show"
             catalog.receipt(&first.id).unwrap().active.version,
             Version::parse("1.0.0").unwrap()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn custom_source_declaring_official_and_serving_official_release_does_not_get_official_trust() {
+        let root = test_root("custom-source-official-denied");
+        let catalog = catalog(&root);
+        let (pub_private, pub_public) = generate_signing_key().unwrap();
+        let (reg_private, reg_public) = generate_signing_key().unwrap();
+
+        let pkg = package_with_id(&root, "io.github.attacker.fake-official", "1.0.0", "");
+        sign_package(&pkg, "Attacker", &pub_private).unwrap();
+
+        let mut release = RegistryRelease {
+            id: ExtensionId::new("io.github.attacker.fake-official").unwrap(),
+            name: "Fake Official".into(),
+            description: Some("Claiming to be official".into()),
+            publisher: "Attacker".into(),
+            version: Version::parse("1.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg.display().to_string(),
+            package_hash: hash_file(&pkg).unwrap(),
+            publisher_public_key: pub_public,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: Vec::new(),
+            published_at: "2026-07-26T12:00:00Z".into(),
+            yanked: false,
+            official: true,
+            verified_publisher: false,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut release, &pub_private).unwrap();
+
+        let custom_source = RegistrySource {
+            id: "custom-source".into(),
+            name: "Custom Source".into(),
+            index_url: root.join("custom.json").display().to_string(),
+            root_public_key: reg_public.clone(),
+            official: true,
+            enabled: true,
+        };
+
+        assert!(!custom_source.is_pinned_official());
+        assert_eq!(
+            trust_for_release(&custom_source, &release),
+            TrustState::SignedThirdParty
+        );
+
+        assert!(matches!(
+            catalog.add_source(custom_source.clone()),
+            Err(CatalogError::InvalidRegistry(_))
+        ));
+
+        let mut non_official_source = custom_source;
+        non_official_source.official = false;
+        catalog.add_source(non_official_source).unwrap();
+
+        let signed_index = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "custom-source".into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![release],
+            },
+            &reg_private,
+        )
+        .unwrap();
+        catalog
+            .store_index_bytes("custom-source", &serde_json::to_vec(&signed_index).unwrap())
+            .unwrap();
+
+        let snapshot = catalog.snapshot();
+        assert_eq!(snapshot.discover.len(), 1);
+        assert_eq!(snapshot.discover[0].trust, TrustState::SignedThirdParty);
+
+        let installed = catalog
+            .install_from_catalog(&ExtensionId::new("io.github.attacker.fake-official").unwrap())
+            .unwrap();
+        assert_eq!(installed.active.trust, TrustState::SignedThirdParty);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn community_contributor_putting_official_author_string_in_manifest_does_not_get_official_status()
+     {
+        let root = test_root("community-official-author-impersonation");
+        let catalog = catalog(&root);
+        let (pub_private, pub_public) = generate_signing_key().unwrap();
+        let (reg_private, reg_public) = generate_signing_key().unwrap();
+
+        let source = root.join("source-spoofed");
+        let output = root.join("dist-spoofed");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("extension.toml"),
+            format!(
+                r#"
+id = "io.github.community.spoofed"
+name = "Spoofed Extension"
+version = "1.0.0"
+authors = ["{OFFICIAL_AUTHOR}"]
+"#
+            ),
+        )
+        .unwrap();
+        let pkg = ExtensionCli::pack(&source, &output).artifact.unwrap();
+        sign_package(&pkg, "Community Contributor", &pub_private).unwrap();
+
+        let local_receipt = catalog.install_local(&pkg).unwrap();
+        assert_eq!(local_receipt.active.trust, TrustState::SignedThirdParty);
+
+        let mut release = RegistryRelease {
+            id: ExtensionId::new("io.github.community.spoofed").unwrap(),
+            name: "Spoofed Extension".into(),
+            description: Some("Community submission".into()),
+            publisher: "Community Contributor".into(),
+            version: Version::parse("1.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg.display().to_string(),
+            package_hash: hash_file(&pkg).unwrap(),
+            publisher_public_key: pub_public,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: Vec::new(),
+            published_at: "2026-07-26T12:00:00Z".into(),
+            yanked: false,
+            official: false,
+            verified_publisher: false,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut release, &pub_private).unwrap();
+        let signed_index = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "community".into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![release],
+            },
+            &reg_private,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "community".into(),
+                name: "Community".into(),
+                index_url: root.join("community.json").display().to_string(),
+                root_public_key: reg_public,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        catalog
+            .store_index_bytes("community", &serde_json::to_vec(&signed_index).unwrap())
+            .unwrap();
+
+        let snapshot = catalog.snapshot();
+        let found = snapshot
+            .discover
+            .iter()
+            .find(|ext| ext.release.id.as_str() == "io.github.community.spoofed")
+            .unwrap();
+        assert_eq!(found.trust, TrustState::SignedThirdParty);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unofficial_extension_served_from_pinned_official_source_reports_as_third_party() {
+        let root = test_root("official-source-unofficial-release");
+        let (pub_private, pub_public) = generate_signing_key().unwrap();
+        let (official_private, official_public) = generate_signing_key().unwrap();
+
+        shilpo_registry_contract::set_test_official_root_key(Some(official_public.clone()));
+
+        let catalog = catalog(&root);
+        let pkg = package(&root, "1.0.0", "");
+        sign_package(&pkg, "CommunityDev", &pub_private).unwrap();
+
+        let mut release = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("Community extension on official index".into()),
+            publisher: "CommunityDev".into(),
+            version: Version::parse("1.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg.display().to_string(),
+            package_hash: hash_file(&pkg).unwrap(),
+            publisher_public_key: pub_public,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: Vec::new(),
+            published_at: "2026-07-26T12:00:00Z".into(),
+            yanked: false,
+            official: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut release, &pub_private).unwrap();
+
+        let signed_index = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: OFFICIAL_SOURCE_ID.into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![release],
+            },
+            &official_private,
+        )
+        .unwrap();
+
+        catalog
+            .store_index_bytes(
+                OFFICIAL_SOURCE_ID,
+                &serde_json::to_vec(&signed_index).unwrap(),
+            )
+            .unwrap();
+
+        let snapshot = catalog.snapshot();
+        assert_eq!(snapshot.discover.len(), 1);
+        assert_eq!(snapshot.discover[0].trust, TrustState::VerifiedPublisher);
+
+        let installed = catalog
+            .install_from_catalog(&ExtensionId::new("io.github.shilpo.catalog-test").unwrap())
+            .unwrap();
+        assert_eq!(installed.active.trust, TrustState::VerifiedPublisher);
+
+        shilpo_registry_contract::set_test_official_root_key(None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn official_extension_served_from_pinned_official_source_with_official_flag_gets_official_trust()
+     {
+        let root = test_root("official-source-official-release");
+        let (pub_private, pub_public) = generate_signing_key().unwrap();
+        let (official_private, official_public) = generate_signing_key().unwrap();
+
+        shilpo_registry_contract::set_test_official_root_key(Some(official_public.clone()));
+
+        let catalog = catalog(&root);
+        let pkg = package(&root, "1.0.0", "");
+        sign_package(&pkg, "Sayeed Ahmed", &pub_private).unwrap();
+
+        let mut release = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("First-party official extension".into()),
+            publisher: "Sayeed Ahmed".into(),
+            version: Version::parse("1.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg.display().to_string(),
+            package_hash: hash_file(&pkg).unwrap(),
+            publisher_public_key: pub_public,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: Vec::new(),
+            published_at: "2026-07-26T12:00:00Z".into(),
+            yanked: false,
+            official: true,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut release, &pub_private).unwrap();
+
+        let signed_index = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: OFFICIAL_SOURCE_ID.into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![release],
+            },
+            &official_private,
+        )
+        .unwrap();
+
+        catalog
+            .store_index_bytes(
+                OFFICIAL_SOURCE_ID,
+                &serde_json::to_vec(&signed_index).unwrap(),
+            )
+            .unwrap();
+
+        let snapshot = catalog.snapshot();
+        assert_eq!(snapshot.discover.len(), 1);
+        assert_eq!(snapshot.discover[0].trust, TrustState::Official);
+
+        let installed = catalog
+            .install_from_catalog(&ExtensionId::new("io.github.shilpo.catalog-test").unwrap())
+            .unwrap();
+        assert_eq!(installed.active.trust, TrustState::Official);
+
+        shilpo_registry_contract::set_test_official_root_key(None);
         fs::remove_dir_all(root).unwrap();
     }
 }

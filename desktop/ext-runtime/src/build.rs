@@ -1316,7 +1316,7 @@ mod tests {
             version = "0.1.0"
             api_version = "0.1.0"
             min_shilpo_version = "0.1.0"
-            authors = ["Shilpo Contributors"]
+            authors = ["Shilpo Contributors <contributors@shilpo.org>"]
             license = "MIT"
 
             [library]

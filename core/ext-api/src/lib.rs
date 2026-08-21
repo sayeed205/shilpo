@@ -22,11 +22,11 @@ pub use id::{CanonicalId, ContributionId, ExtensionId, IdError};
 pub use manifest::{
     ActionContribution, BackgroundTaskContribution, BarMenuContribution, BarWidgetContribution,
     Capability, CapabilityKind, Contributions, DesktopWidgetContribution, ExtensionManifest,
-    LibraryConfig, ManifestError, SUPPORTED_API_VERSION, SUPPORTED_SCHEMA_VERSION,
+    LibraryConfig, ManifestError, OFFICIAL_AUTHOR, SUPPORTED_API_VERSION, SUPPORTED_SCHEMA_VERSION,
     SearchProviderContribution, SearchProviderMode, SecretPurpose, SecretRef,
     SettingsPageContribution, SidePanelContribution, Subscription, WallpaperMode,
     WallpaperProviderContribution, WallpaperTargetKind, valid_virtual_path_pattern,
-    wildcard_matches,
+    validate_author, wildcard_matches,
 };
 pub use view::{
     Alignment, BadgeNode, ButtonNode, ContainerDirection, ContainerNode, IconButtonNode, IconNode,

@@ -391,6 +391,10 @@
         "name": {
           "type": "string"
         },
+        "official": {
+          "type": "boolean",
+          "default": false
+        },
         "open_source": {
           "type": "boolean",
           "default": false

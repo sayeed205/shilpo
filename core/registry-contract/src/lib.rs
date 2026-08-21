@@ -65,6 +65,27 @@ pub struct KeyRotationDelegation {
     pub authorized_by_registry: bool,
 }
 
+pub const OFFICIAL_SOURCE_ID: &str = "shilpo";
+pub const OFFICIAL_SOURCE_NAME: &str = "Shilpo Extensions";
+pub const OFFICIAL_SOURCE_URL: &str = "https://extensions.shilpo.org/index.json";
+
+/// Test-only override for [`RegistrySource::is_pinned_official`], simulating a build with
+/// `SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY` compiled in. Gated behind the `test-util` feature,
+/// which must only ever be enabled by a `[dev-dependencies]` edge — never by a normal
+/// dependency — so this override compiles out of every real build, including release
+/// builds of the `shilpo` binary. Without that gate, any code sharing this crate's public
+/// API could call the setter below to forge official trust status at runtime.
+#[cfg(feature = "test-util")]
+#[doc(hidden)]
+pub static TEST_OFFICIAL_ROOT_KEY: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+#[cfg(feature = "test-util")]
+#[doc(hidden)]
+pub fn set_test_official_root_key(key: Option<String>) {
+    let mut guard = TEST_OFFICIAL_ROOT_KEY.write().unwrap();
+    *guard = key;
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RegistrySource {
@@ -76,6 +97,20 @@ pub struct RegistrySource {
     pub official: bool,
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+impl RegistrySource {
+    pub fn is_pinned_official(&self) -> bool {
+        #[cfg(feature = "test-util")]
+        if let Ok(guard) = TEST_OFFICIAL_ROOT_KEY.read()
+            && let Some(key) = guard.as_ref()
+        {
+            return self.id == OFFICIAL_SOURCE_ID && self.root_public_key == *key;
+        }
+        option_env!("SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY")
+            .filter(|k| !k.trim().is_empty())
+            .is_some_and(|key| self.id == OFFICIAL_SOURCE_ID && self.root_public_key == key)
+    }
 }
 
 fn default_true() -> bool {
@@ -123,6 +158,8 @@ pub struct RegistryRelease {
     pub published_at: String,
     #[serde(default)]
     pub yanked: bool,
+    #[serde(default)]
+    pub official: bool,
     #[serde(default)]
     pub verified_publisher: bool,
     #[serde(default)]

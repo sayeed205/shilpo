@@ -38,6 +38,8 @@ impl fmt::Display for ManifestError {
 
 impl std::error::Error for ManifestError {}
 
+pub const OFFICIAL_AUTHOR: &str = "Sayeed Ahmed<sayeed205@gmail.com>";
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ExtensionManifest {
@@ -488,6 +490,71 @@ pub fn validate_shortcut_spec(spec: &str) -> Result<String, String> {
     }
 }
 
+pub fn validate_author(author: &str) -> Result<(), ManifestError> {
+    let trimmed = author.trim();
+    if trimmed.is_empty() {
+        return Err(ManifestError::Validation(
+            "author entry cannot be empty".into(),
+        ));
+    }
+    if !trimmed.ends_with('>')
+        || trimmed.matches('<').count() != 1
+        || trimmed.matches('>').count() != 1
+    {
+        return Err(ManifestError::Validation(format!(
+            "author '{author}' must be in mailbox format 'Display Name <local@domain>'"
+        )));
+    }
+    let Some(open_idx) = trimmed.rfind('<') else {
+        return Err(ManifestError::Validation(format!(
+            "author '{author}' must be in mailbox format 'Display Name <local@domain>'"
+        )));
+    };
+    let name = trimmed[..open_idx].trim();
+    if name.is_empty() {
+        return Err(ManifestError::Validation(format!(
+            "author '{author}' is missing display name"
+        )));
+    }
+    let email = trimmed[open_idx + 1..trimmed.len() - 1].trim();
+    if email.is_empty() {
+        return Err(ManifestError::Validation(format!(
+            "author '{author}' has empty email address"
+        )));
+    }
+    if email.contains(char::is_whitespace) {
+        return Err(ManifestError::Validation(format!(
+            "author '{author}' email address cannot contain whitespace"
+        )));
+    }
+    let Some((local, domain)) = email.split_once('@') else {
+        return Err(ManifestError::Validation(format!(
+            "author '{author}' email address is missing '@'"
+        )));
+    };
+    if local.is_empty() || domain.is_empty() {
+        return Err(ManifestError::Validation(format!(
+            "author '{author}' email address must have both local and domain parts"
+        )));
+    }
+    if local.contains('@') || domain.contains('@') {
+        return Err(ManifestError::Validation(format!(
+            "author '{author}' email address cannot contain multiple '@'"
+        )));
+    }
+    if !domain.contains('.')
+        || domain.starts_with('.')
+        || domain.ends_with('.')
+        || domain.contains("..")
+        || domain.split('.').any(|part| part.is_empty())
+    {
+        return Err(ManifestError::Validation(format!(
+            "author '{author}' email domain is invalid"
+        )));
+    }
+    Ok(())
+}
+
 impl ExtensionManifest {
     pub fn from_toml(source: &str) -> Result<Self, ManifestError> {
         let manifest: Self =
@@ -501,6 +568,9 @@ impl ExtensionManifest {
             return Err(ManifestError::Validation(
                 "the extension name cannot be empty".into(),
             ));
+        }
+        for author in &self.authors {
+            validate_author(author)?;
         }
         if self.schema_version != SUPPORTED_SCHEMA_VERSION {
             return Err(ManifestError::Validation(format!(
@@ -1264,5 +1334,80 @@ mod tests {
             err.to_string().contains("duplicate contribution ID"),
             "Error should reject cross-kind duplicate ID: {err}"
         );
+    }
+
+    #[test]
+    fn test_official_author_constant_is_valid() {
+        assert_eq!(OFFICIAL_AUTHOR, "Sayeed Ahmed<sayeed205@gmail.com>");
+        validate_author(OFFICIAL_AUTHOR).expect("OFFICIAL_AUTHOR must be valid mailbox format");
+    }
+
+    #[test]
+    fn test_valid_author_entries_accepted() {
+        let valid_authors = [
+            "Sayeed Ahmed<sayeed205@gmail.com>",
+            "Sayeed Ahmed <sayeed205@gmail.com>",
+            "Alice Smith <alice@example.com>",
+            "Bob <bob.vance@refrigeration.co.uk>",
+            "Shilpo Contributors <contributors@shilpo.org>",
+        ];
+        for author in valid_authors {
+            validate_author(author)
+                .unwrap_or_else(|e| panic!("expected '{author}' to be valid: {e}"));
+        }
+
+        let toml = r#"
+            id = "org.shilpo.weather"
+            name = "Weather App"
+            version = "1.0.0"
+            authors = ["Sayeed Ahmed<sayeed205@gmail.com>", "Alice <alice@example.com>"]
+        "#;
+        let manifest = ExtensionManifest::from_toml(toml).unwrap();
+        assert_eq!(manifest.authors.len(), 2);
+    }
+
+    #[test]
+    fn test_malformed_author_entries_rejected_at_parse_time() {
+        let malformed_authors = [
+            "",
+            "   ",
+            "Sayeed Ahmed",
+            "<sayeed205@gmail.com>",
+            " <sayeed205@gmail.com>",
+            "Sayeed Ahmed <>",
+            "Sayeed Ahmed <notanemail>",
+            "Sayeed Ahmed <user@>",
+            "Sayeed Ahmed <@domain.com>",
+            "Sayeed Ahmed <user@domain>",
+            "Sayeed Ahmed <user@domain..com>",
+            "Sayeed Ahmed <user@.domain.com>",
+            "Sayeed Ahmed <user@domain.com.>",
+            "Sayeed Ahmed <user @domain.com>",
+            "Sayeed <Ahmed> <sayeed205@gmail.com>",
+            "Sayeed Ahmed <sayeed205@gmail.com> trailing",
+            "Sayeed Ahmed <sayeed205@gmail.com",
+            "Sayeed Ahmed sayeed205@gmail.com>",
+        ];
+        for author in malformed_authors {
+            assert!(
+                validate_author(author).is_err(),
+                "expected '{author}' to be rejected"
+            );
+
+            let toml = format!(
+                r#"
+                id = "org.shilpo.weather"
+                name = "Weather App"
+                version = "1.0.0"
+                authors = [{:?}]
+                "#,
+                author
+            );
+            let err = ExtensionManifest::from_toml(&toml).unwrap_err();
+            assert!(
+                matches!(err, ManifestError::Validation(_)),
+                "expected Validation error for author '{author}', got {err:?}"
+            );
+        }
     }
 }

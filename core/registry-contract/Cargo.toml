@@ -8,6 +8,13 @@ publish.workspace = true
 name = "generate_distribution_schemas"
 path = "examples/generate_distribution_schemas.rs"
 
+[features]
+# Exposes a process-global override for is_pinned_official(), letting tests simulate
+# a build with SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY compiled in without an actual
+# release build. Must never be enabled by a normal (non-dev) dependency edge, since
+# it would let any code in the same process forge official trust at runtime.
+test-util = []
+
 [dependencies]
 base64.workspace = true
 hex.workspace = true
