@@ -1,7 +1,9 @@
 [Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Description=Shilpo Polkit Authentication Agent
-PartOf=niri.service
-After=niri.service
+PartOf=shilpo-session.target
+After=shilpo-session.target
 
 [Service]
 ExecStart=@POLKIT_AGENT@
@@ -9,4 +11,4 @@ Restart=on-failure
 RestartSec=2s
 
 [Install]
-WantedBy=niri.service
+WantedBy=shilpo-session.target

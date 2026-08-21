@@ -1,5 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // 50 — Processes spawned at login
 // ─────────────────────────────────────────────────────────────────────────────
-// Note: Shilpo services (shilpo-shell, shilpo-themed, shilpo-wallpaper, etc.)
-// are managed by systemd user services via niri.service.wants.
+// Shilpo's own daemons and session helpers (shilpo-shell, shilpo-themed,
+// shilpo-wallpaper, etc.) are systemd user units grouped under
+// shilpo-session.target — starting that one target here pulls in all of them,
+// with systemd handling crash restart/rate-limiting. See data/systemd/user/.
+spawn-at-startup "systemctl" "--user" "start" "shilpo-session.target"

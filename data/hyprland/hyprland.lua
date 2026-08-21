@@ -2,9 +2,9 @@
 -- Hyprland deprecated the classic hyprland.conf keyfile format in 0.55 in favor of this
 -- native Lua config (the `hl` global API). See https://wiki.hypr.land/Configuring/Start/
 --
--- @SHILPO_BIN@ and @POLKIT_AGENT@ are resolved to absolute paths by `shilpo setup` at
--- staging time: exec_cmd does not reliably inherit the shell PATH shilpo was installed
--- into (e.g. ~/.local/bin).
+-- @SHILPO_BIN@ is resolved to an absolute path by `shilpo setup` at staging time:
+-- exec_cmd does not reliably inherit the shell PATH shilpo was installed into
+-- (e.g. ~/.local/bin).
 
 ------------------
 ---- MONITORS ----
@@ -28,15 +28,11 @@ hl.env("XDG_SESSION_TYPE", "wayland")
 ---- AUTOSTART ----
 -------------------
 
+-- Shilpo's own daemons and session helpers are systemd user units grouped under
+-- shilpo-session.target — starting that one target here pulls in all of them, with
+-- systemd handling crash restart/rate-limiting. See data/systemd/user/.
 hl.on("hyprland.start", function()
-    hl.exec_cmd("@SHILPO_BIN@ daemon")
-    hl.exec_cmd("@SHILPO_BIN@ theme-daemon")
-    hl.exec_cmd("@SHILPO_BIN@ device-daemon")
-    hl.exec_cmd("awww-daemon")
-    hl.exec_cmd("swayidle -w -C ~/.config/swayidle/config")
-    hl.exec_cmd("nm-applet --indicator")
-    hl.exec_cmd("gnome-keyring-daemon --foreground --components=secrets,ssh")
-    hl.exec_cmd("@POLKIT_AGENT@")
+    hl.exec_cmd("systemctl --user start shilpo-session.target")
 end)
 
 -----------------------

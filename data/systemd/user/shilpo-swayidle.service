@@ -1,7 +1,9 @@
 [Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Description=Shilpo Idle Management Daemon (swayidle)
-PartOf=niri.service
-After=niri.service
+PartOf=shilpo-session.target
+After=shilpo-session.target
 
 [Service]
 ExecStart=/usr/bin/swayidle -w -C %h/.config/swayidle/config
@@ -9,4 +11,4 @@ Restart=on-failure
 RestartSec=2s
 
 [Install]
-WantedBy=niri.service
+WantedBy=shilpo-session.target

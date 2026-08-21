@@ -108,17 +108,13 @@ fn stage_niri() -> Result<(), String> {
 fn stage_hyprland() -> Result<(), String> {
     let config_home = config_home();
     let bin = current_bin_path()?;
-    let polkit_agent = super::polkit_agent_path();
 
     println!("Staging Hyprland configuration...");
     let hypr_dir = config_home.join("hypr");
     write_embedded_rendered(
         "hyprland/hyprland.lua",
         &hypr_dir.join("hyprland.lua"),
-        &[
-            ("@SHILPO_BIN@", bin.as_str()),
-            ("@POLKIT_AGENT@", polkit_agent),
-        ],
+        &[("@SHILPO_BIN@", bin.as_str())],
     )?;
 
     // User-owned extension point: never overwrite it once it exists.

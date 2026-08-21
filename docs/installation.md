@@ -35,9 +35,12 @@ An interactive wizard that turns a bare `shilpo` install into a working desktop 
 3. Stages Shilpo's recommended configuration for the chosen compositor — Niri gets `~/.config/niri/`; Hyprland gets
    `~/.config/hypr/hyprland.lua` (Hyprland deprecated its classic `.conf` format in 0.55 in favor of native Lua
    config) — plus the shared Kitty/Fish/Starship/Swaylock/Swayidle/Shilpo configuration and default wallpaper.
-4. Wires up the session: Niri gets the Shilpo-owned systemd user units (autostarted via `niri.service.wants`);
-   Hyprland's staged config starts them itself via `exec-once`. Both get NetworkManager/Bluetooth enabled, SDDM enabled
-   if no display manager is already configured, and the login shell switched to Fish.
+4. Wires up the session: all of Shilpo's daemons and helpers are systemd user units grouped under
+   `shilpo-session.target`, wants-linked so `systemctl --user daemon-reload` picks them up. Each compositor's own
+   staged config starts that one target with a single `systemctl --user start shilpo-session.target` call — this is
+   what makes crash recovery and `journalctl`/`systemctl status` observability work the same way regardless of
+   compositor, instead of depending on niri's own systemd-session integration. Also enables NetworkManager/Bluetooth,
+   SDDM if no display manager is already configured, and switches the login shell to Fish.
 
 It ends by offering to reboot. Run it again any time to re-apply or re-check your configuration. A user-owned
 extension point is preserved on repeat runs: `niri/config.d/90-user-extra.kdl` for Niri,

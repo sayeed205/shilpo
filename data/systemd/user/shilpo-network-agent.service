@@ -1,7 +1,9 @@
 [Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Description=Shilpo NetworkManager Secret Agent
-PartOf=niri.service
-After=niri.service NetworkManager.service
+PartOf=shilpo-session.target
+After=shilpo-session.target NetworkManager.service
 
 [Service]
 ExecStart=/usr/bin/nm-applet --indicator
@@ -9,4 +11,4 @@ Restart=on-failure
 RestartSec=2s
 
 [Install]
-WantedBy=niri.service
+WantedBy=shilpo-session.target

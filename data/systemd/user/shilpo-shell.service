@@ -1,8 +1,10 @@
 [Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Description=Shilpo Desktop Shell
 Documentation=man:shilpo(1) https://github.com/shilpo-rs/shilpo
-PartOf=niri.service
-After=niri.service
+PartOf=shilpo-session.target
+After=shilpo-session.target
 
 [Service]
 Type=dbus
@@ -13,7 +15,6 @@ Restart=always
 RestartSec=2s
 KillSignal=SIGTERM
 TimeoutStopSec=5s
-Environment=XDG_CURRENT_DESKTOP=niri
 
 [Install]
-WantedBy=niri.service
+WantedBy=shilpo-session.target

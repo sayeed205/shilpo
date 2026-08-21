@@ -1,7 +1,9 @@
 [Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Description=Shilpo Desktop First-Login Doctor Verification
-PartOf=niri.service
-After=niri.service shilpo-shell.service shilpo-themed.service shilpo-device-daemon.service
+PartOf=shilpo-session.target
+After=shilpo-session.target shilpo-shell.service shilpo-themed.service shilpo-device-daemon.service
 ConditionPathExists=!@FIRST_LOGIN_MARKER@
 
 [Service]
@@ -10,4 +12,4 @@ ExecStart=/usr/bin/shilpo doctor --first-login
 RemainAfterExit=yes
 
 [Install]
-WantedBy=niri.service
+WantedBy=shilpo-session.target

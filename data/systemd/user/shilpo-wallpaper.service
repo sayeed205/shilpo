@@ -1,7 +1,9 @@
 [Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Description=Shilpo Wallpaper Daemon (awww)
-PartOf=niri.service
-After=niri.service
+PartOf=shilpo-session.target
+After=shilpo-session.target
 
 [Service]
 ExecStart=/usr/bin/awww-daemon
@@ -9,4 +11,4 @@ Restart=on-failure
 RestartSec=1s
 
 [Install]
-WantedBy=niri.service
+WantedBy=shilpo-session.target

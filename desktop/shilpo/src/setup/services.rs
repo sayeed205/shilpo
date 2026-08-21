@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use super::SetupAssets;
-use super::compositor::Compositor;
 use super::privilege::{is_on_path, run_privileged};
+
+const TARGET: &str = "shilpo-session.target";
 
 const UNITS: &[&str] = &[
     "shilpo-shell.service",
@@ -22,13 +23,8 @@ const UNITS: &[&str] = &[
 
 const DISPLAY_MANAGERS: &[&str] = &["sddm", "gdm", "lightdm", "ly"];
 
-pub fn wire_up_session(compositor: Compositor) -> Result<(), String> {
-    // Niri autostarts these through systemd user units (PartOf=niri.service). Hyprland's
-    // staged config spawns them itself via exec-once, so installing the same units here
-    // would start everything twice.
-    if compositor == Compositor::Niri {
-        install_units()?;
-    }
+pub fn wire_up_session() -> Result<(), String> {
+    install_units()?;
     enable_network_and_bluetooth()?;
     enable_display_manager_if_none();
     set_login_shell_to_fish();
@@ -62,6 +58,11 @@ fn install_units() -> Result<(), String> {
     let polkit_agent = super::polkit_agent_path();
 
     println!("Installing Shilpo systemd user units...");
+    let target_raw = SetupAssets::get(&format!("systemd/user/{TARGET}"))
+        .ok_or_else(|| format!("missing embedded unit {TARGET}"))?;
+    fs::write(unit_dir.join(TARGET), target_raw.data.as_ref())
+        .map_err(|e| format!("could not write {TARGET}: {e}"))?;
+
     for name in UNITS {
         let rel = format!("systemd/user/{name}");
         let raw = SetupAssets::get(&rel).ok_or_else(|| format!("missing embedded unit {rel}"))?;
@@ -74,33 +75,35 @@ fn install_units() -> Result<(), String> {
         fs::write(unit_dir.join(name), text).map_err(|e| format!("could not write {name}: {e}"))?;
     }
 
-    // Wants-link every unit into the Niri session target directly, rather than going
-    // through `systemctl --user enable`: setup commonly runs from a bare TTY right after
-    // install, before any user systemd manager/session bus exists to talk to.
-    let wants_dir = unit_dir.join("niri.service.wants");
+    // Wants-link every unit into shilpo-session.target directly, rather than going through
+    // `systemctl --user enable`: setup commonly runs from a bare TTY right after install,
+    // before any user systemd manager/session bus exists to talk to. Each compositor's own
+    // config starts shilpo-session.target itself at session start (see
+    // data/niri/config.d/50-startup.kdl, data/hyprland/hyprland.lua), which is what makes
+    // this wiring compositor-agnostic instead of depending on niri's own systemd-session
+    // integration.
+    let wants_dir = unit_dir.join(format!("{TARGET}.wants"));
     fs::create_dir_all(&wants_dir)
         .map_err(|e| format!("could not create {}: {e}", wants_dir.display()))?;
     for name in UNITS {
         let link = wants_dir.join(name);
         if !link.exists() {
             symlink(unit_dir.join(name), &link)
-                .map_err(|e| format!("could not link {name} into niri.service.wants: {e}"))?;
+                .map_err(|e| format!("could not link {name} into {TARGET}.wants: {e}"))?;
         }
     }
 
     // Best-effort: only meaningful (and only possible) inside an already-running user
-    // session; a fresh login picks these units up through niri.service.wants regardless.
-    if env::var_os("WAYLAND_DISPLAY").is_some() || env::var_os("NIRI_SOCKET").is_some() {
+    // session; a fresh login picks these units up through shilpo-session.target regardless.
+    if env::var_os("WAYLAND_DISPLAY").is_some() {
         let _ = Command::new("systemctl")
             .args(["--user", "daemon-reload"])
             .status();
-        for name in UNITS {
-            let status = Command::new("systemctl")
-                .args(["--user", "start", name])
-                .status();
-            if !matches!(status, Ok(s) if s.success()) {
-                eprintln!("warning: could not start user unit {name} in the active session");
-            }
+        let status = Command::new("systemctl")
+            .args(["--user", "start", TARGET])
+            .status();
+        if !matches!(status, Ok(s) if s.success()) {
+            eprintln!("warning: could not start {TARGET} in the active session");
         }
     }
 

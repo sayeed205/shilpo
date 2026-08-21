@@ -1,0 +1,9 @@
+[Unit]
+Description=Shilpo Desktop Session
+Documentation=man:shilpo(1) https://github.com/shilpo-rs/shilpo
+
+# No [Install] section: this target is never enabled or pulled in automatically.
+# Each supported compositor's own config starts it explicitly at session start
+# (`systemctl --user start shilpo-session.target`), which is what makes Shilpo's
+# session wiring compositor-agnostic instead of depending on niri's own
+# systemd-session integration.

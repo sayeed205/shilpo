@@ -1,6 +1,9 @@
 [Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=3
+PartOf=shilpo-session.target
 Description=Shilpo device integration daemon
-After=graphical-session.target
+After=shilpo-session.target
 
 [Service]
 Type=dbus
@@ -10,4 +13,4 @@ Restart=on-failure
 RestartSec=2
 
 [Install]
-WantedBy=default.target
+WantedBy=shilpo-session.target

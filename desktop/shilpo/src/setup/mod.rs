@@ -6,6 +6,15 @@
 //! compositor, install its packages, stage its recommended configuration, install GPU
 //! drivers, and wire up the session. All embedded config content is baked into the binary
 //! via `SetupAssets` so this works without a source checkout on disk.
+//!
+//! Session startup/crash-recovery is systemd user units for every compositor, not just
+//! Niri: all of Shilpo's daemons and helpers are grouped under `shilpo-session.target`
+//! (`data/systemd/user/shilpo-session.target`), and each compositor's own staged config
+//! starts that one target with a single `systemctl --user start shilpo-session.target`
+//! call rather than spawning processes itself. That keeps the trigger compositor-native
+//! (works anywhere, no dependency on niri's own systemd-session integration) while getting
+//! `Restart=`/`StartLimitBurst=` crash recovery and `journalctl`/`systemctl status`
+//! observability for free instead of reimplementing supervision in Rust.
 
 mod compositor;
 mod distro;
@@ -26,9 +35,8 @@ use distro::Distro;
 #[folder = "../../data"]
 pub(crate) struct SetupAssets;
 
-/// Shared by `stage` (exec-once/spawn lines) and `services` (systemd unit `ExecStart`):
-/// resolves whichever agent is actually present, since the exact path/package name varies
-/// across distros and desktops.
+/// Used by `services` for `shilpo-polkit-agent.service`'s `ExecStart`: resolves whichever
+/// agent is actually present, since the exact path/package name varies across distros.
 pub(crate) fn polkit_agent_path() -> &'static str {
     for candidate in [
         "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1",
@@ -99,7 +107,7 @@ pub fn run() -> Result<(), String> {
 
     if apply {
         stage::stage_configs(compositor)?;
-        services::wire_up_session(compositor)?;
+        services::wire_up_session()?;
         println!("\nConfiguration applied.");
     } else {
         println!("\nSkipped applying configuration; nothing was changed.");
