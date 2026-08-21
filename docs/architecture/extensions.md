@@ -259,15 +259,17 @@ Extension trust comes from verified package provenance, not from its ID or a fie
 `extension.toml`. A manifest cannot declare itself official or verified. Shilpo assigns one of these host-owned trust
 states after checking the installation source and package signature:
 
-| Trust state          | Meaning                                                            |
-|----------------------|--------------------------------------------------------------------|
-| `official`           | Signed by a Shilpo-controlled publisher key                        |
-| `verified-publisher` | Signed by a publisher identity verified by a trusted registry      |
-| `signed-third-party` | Signature is valid, but the publisher has no registry verification |
-| `unverified`         | Local or remote package without a trusted publisher identity       |
+| Trust state          | Meaning                                                                              |
+|----------------------|--------------------------------------------------------------------------------------|
+| `official`           | From a source whose key is compiled into Shilpo, **and** the release carries the official signal |
+| `verified-publisher` | Signed by a publisher identity verified by a trusted registry                        |
+| `signed-third-party` | Signature is valid, but the publisher has no registry verification                   |
+| `unverified`         | Local or remote package without a trusted publisher identity                         |
 
-Official extensions may conventionally use an `org.shilpo.*` ID, but the namespace alone never grants the official trust
-state. Official and third-party extensions use the same WASM sandbox, resource limits, effect validation, and capability
+`official` requires both conditions independently. A user-added source declaring itself official in its own
+configuration never qualifies, because the first condition is a key built into the binary rather than a field in
+source configuration. Official extensions may conventionally use an `org.shilpo.*` ID, but the namespace alone never
+grants the official trust state. See [ADR-0018](../adr/0018-extension-registry-distribution.md). Official and third-party extensions use the same WASM sandbox, resource limits, effect validation, and capability
 review. Official status does not grant implicit permissions.
 
 Shilpo persists a host-owned installation receipt separately from immutable package files. The receipt records at least:
@@ -279,7 +281,9 @@ selected_channel = "stable"
 
 [active]
 version = "1.3.0"
-source = "registry:https://extensions.shilpo.org/index.json"
+source_id = "shilpo"
+source_index_url = "<index-url>"
+source_key = "<base64-ed25519-public-key>"
 publisher = "alice"
 publisher_key = "sha256:<fingerprint>"
 publisher_public_key = "<base64-ed25519-public-key>"
@@ -291,6 +295,12 @@ installed_at_unix_seconds = 1785067200
 
 `previous` and `pending` use the same complete provenance shape. This ensures rollback restores the matching digest,
 source, publisher identity, trust, and channel rather than only changing a version string.
+
+The receipt pins the **source** an extension was installed from, alongside the source key in effect at install time and
+the package signer. Only that source may offer updates for it: another source publishing the same extension ID at a
+higher version is surfaced as a conflict and can neither shadow nor update the installed extension. Moving an extension
+to a different source is an explicit operation and does not carry grants or secrets across publishers. See
+[ADR-0018](../adr/0018-extension-registry-distribution.md).
 
 An update must preserve the extension ID and publisher-key continuity. Publisher key rotation requires a delegation
 signed by the previous key or by a trusted registry root. A package with the same ID but an unrelated publisher key is a

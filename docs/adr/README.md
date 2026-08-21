@@ -31,6 +31,7 @@ New ADR: copy [`TEMPLATE.md`](TEMPLATE.md), pick the next unused number, add a r
 | [0015](0015-niri-opt-in-shortcut-include.md)              | Extension Keyboard Shortcuts & Opt-In Niri KDL Projection               | Accepted |
 | [0016](0016-wit-extension-contract.md)                    | Canonical WIT Extension Contract and Process Execution Removal          | Accepted |
 | [0017](0017-compositor-support-scope-and-backend-tiers.md) | Compositor Support Scope, Abstraction Boundary, and Backend Tiers       | Accepted |
+| [0018](0018-extension-registry-distribution.md)           | Extension Registry Distribution and Publication Trust                    | Accepted |
 
 ## Chains
 
@@ -41,3 +42,4 @@ Some ADRs build directly on an earlier one; read them in order for full context:
 - **Shell control plane**: 0012 (D-Bus control plane) → 0013 (debug interface added to the same bus object)
 - **Theme**: 0002 (crate split) → 0014 (animated transitions, built on the split)
 - **Extension host**: 0005 (process roles, defines the extension-host child) → 0016 (WIT contract for that child)
+- **Extension distribution**: 0016 (WIT contract and the trusted-script exclusion) → 0018 (registry, publication trust, and installation provenance)
