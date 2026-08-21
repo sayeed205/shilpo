@@ -164,6 +164,10 @@ pub struct InstallationReceipt {
 pub struct InstalledVersionReceipt {
     pub version: Version,
     pub source: String,
+    #[serde(default)]
+    pub source_id: Option<String>,
+    #[serde(default)]
+    pub source_key: Option<String>,
     pub publisher: Option<String>,
     pub publisher_key: Option<String>,
     pub publisher_public_key: Option<String>,
@@ -671,11 +675,13 @@ impl ExtensionCatalog {
         }
         validate_source(&source)?;
         let mut sources = self.sources()?;
-        if let Some(existing) = sources.iter_mut().find(|item| item.id == source.id) {
-            *existing = source;
-        } else {
-            sources.push(source);
+        if sources.iter().any(|item| item.id == source.id) {
+            return Err(CatalogError::InvalidRegistry(format!(
+                "source ID '{}' is already configured",
+                source.id
+            )));
         }
+        sources.push(source);
         sources.sort_by(|left, right| left.id.cmp(&right.id));
         self.save_sources(&sources)
     }
@@ -758,10 +764,135 @@ impl ExtensionCatalog {
         })
     }
 
+    pub fn switch_source(
+        &self,
+        extension_id: &ExtensionId,
+        target_source_id: &str,
+    ) -> Result<InstallationReceipt, CatalogError> {
+        self.switch_source_with_policies(
+            extension_id,
+            target_source_id,
+            SecretPolicy::Delete,
+            None,
+            Instant::now() + Duration::from_secs(30),
+        )
+    }
+
+    pub fn switch_source_with_secrets_policy(
+        &self,
+        extension_id: &ExtensionId,
+        target_source_id: &str,
+        secret_policy: SecretPolicy,
+        broker: Option<&dyn crate::secrets::SecretBroker>,
+    ) -> Result<InstallationReceipt, CatalogError> {
+        self.switch_source_with_policies(
+            extension_id,
+            target_source_id,
+            secret_policy,
+            broker,
+            Instant::now() + Duration::from_secs(30),
+        )
+    }
+
+    pub fn switch_source_with_policies(
+        &self,
+        extension_id: &ExtensionId,
+        target_source_id: &str,
+        secret_policy: SecretPolicy,
+        broker: Option<&dyn crate::secrets::SecretBroker>,
+        deadline: Instant,
+    ) -> Result<InstallationReceipt, CatalogError> {
+        let current_receipt = self.receipt(extension_id)?;
+        let sources = self.sources()?;
+        let target_source = sources
+            .into_iter()
+            .find(|source| source.id == target_source_id && source.enabled)
+            .ok_or_else(|| {
+                CatalogError::NotFound(format!("source '{target_source_id}' not found or disabled"))
+            })?;
+        let index = self.load_verified_index(&target_source)?.ok_or_else(|| {
+            CatalogError::NotFound(format!(
+                "index for source '{target_source_id}' not found; run refresh first"
+            ))
+        })?;
+        let mut candidates = index
+            .index
+            .releases
+            .into_iter()
+            .filter(|release| {
+                release.id == *extension_id
+                    && release.channel == current_receipt.selected_channel
+                    && !release.yanked
+                    && release.min_shilpo_version <= self.shilpo_version
+                    && release.api_version
+                        == Version::parse(SUPPORTED_API_VERSION)
+                            .expect("supported API version is valid")
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| right.version.cmp(&left.version));
+        let release = candidates.into_iter().next().ok_or_else(|| {
+            CatalogError::NotFound(format!(
+                "no compatible release for '{extension_id}' in source '{target_source_id}'"
+            ))
+        })?;
+
+        let trust = trust_for_release(&target_source, &release);
+        let target_fingerprint = public_key_fingerprint(&release.publisher_public_key)?;
+        let publisher_changed =
+            current_receipt.active.publisher_key.as_deref() != Some(&target_fingerprint);
+
+        let target_catalog_ext = CatalogExtension {
+            release,
+            source: target_source,
+            trust,
+            publisher_conflict: false,
+        };
+
+        let package = fetch_to_staging(
+            &target_catalog_ext.release.package_url,
+            &self.paths.staging_dir(),
+            MAX_PACKAGE_BYTES,
+        )?;
+
+        let result = self.install_package_internal(
+            &package,
+            PackageProvenance::Registry(Box::new(target_catalog_ext)),
+            true,
+        );
+        let _ = fs::remove_file(package);
+
+        // Secrets and grants must only be reset once the switch has actually succeeded —
+        // install_package_internal has already verified the package hash, provenance
+        // signature, manifest, and runtime activation by the time it returns Ok. Doing
+        // this before that point would destroy a working extension's secrets on a merely
+        // attempted (and failed) switch. The grants reset itself lives inside
+        // install_package_internal, gated on the same `publisher_changed` condition, since
+        // it needs the freshly-parsed manifest id; only secret deletion needs to happen
+        // out here.
+        if result.is_ok()
+            && publisher_changed
+            && secret_policy == SecretPolicy::Delete
+            && let Some(broker) = broker
+        {
+            let _ = broker.delete_all(extension_id, deadline);
+        }
+
+        result
+    }
+
     fn install_package(
         &self,
         package: &Path,
         provenance: PackageProvenance,
+    ) -> Result<InstallationReceipt, CatalogError> {
+        self.install_package_internal(package, provenance, false)
+    }
+
+    fn install_package_internal(
+        &self,
+        package: &Path,
+        provenance: PackageProvenance,
+        is_explicit_source_switch: bool,
     ) -> Result<InstallationReceipt, CatalogError> {
         let metadata = fs::metadata(package).map_err(|error| io_error(package, error))?;
         if !metadata.is_file() || metadata.len() > MAX_PACKAGE_BYTES {
@@ -799,20 +930,33 @@ impl ExtensionCatalog {
                 verify_manifest_against_release(&manifest, expected)?;
             }
             let previous_receipt = self.receipt(&manifest.id).ok();
-            verify_publisher_continuity(previous_receipt.as_ref(), &verified)?;
+            if !is_explicit_source_switch {
+                verify_provenance_continuity(previous_receipt.as_ref(), &verified)?;
+            }
             let target = self.package_dir(&manifest.id, &manifest.version);
             if target.exists() {
-                let existing_hash = previous_receipt
-                    .as_ref()
-                    .filter(|receipt| receipt.active.version == manifest.version)
-                    .map(|receipt| receipt.active.package_hash.as_str());
-                if existing_hash != Some(package_hash.as_str()) {
-                    return Err(CatalogError::InvalidPackage(format!(
-                        "{} {} is immutable and already exists",
-                        manifest.id, manifest.version
-                    )));
+                if is_explicit_source_switch {
+                    let _ = make_tree_writable(&target);
+                    let _ = fs::remove_dir_all(&target);
+                    let parent = target
+                        .parent()
+                        .expect("version directory always has a parent");
+                    fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
+                    mark_files_read_only(&stage)?;
+                    fs::rename(&stage, &target).map_err(|error| io_error(&target, error))?;
+                } else {
+                    let existing_hash = previous_receipt
+                        .as_ref()
+                        .filter(|receipt| receipt.active.version == manifest.version)
+                        .map(|receipt| receipt.active.package_hash.as_str());
+                    if existing_hash != Some(package_hash.as_str()) {
+                        return Err(CatalogError::InvalidPackage(format!(
+                            "{} {} is immutable and already exists",
+                            manifest.id, manifest.version
+                        )));
+                    }
+                    fs::remove_dir_all(&stage).map_err(|error| io_error(&stage, error))?;
                 }
-                fs::remove_dir_all(&stage).map_err(|error| io_error(&stage, error))?;
             } else {
                 let parent = target
                     .parent()
@@ -823,7 +967,16 @@ impl ExtensionCatalog {
             }
 
             let mut grants = self.load_grants(&manifest.id)?;
+            let publisher_changed = previous_receipt.as_ref().is_some_and(|r| {
+                r.active.publisher_key.as_deref() != verified.publisher_key.as_deref()
+            });
+            if is_explicit_source_switch && publisher_changed {
+                grants = StoredGrants::disabled(manifest.id.clone());
+                self.save_grants(&grants)?;
+            }
+
             let capability_expansion = previous_receipt.is_some()
+                && !publisher_changed
                 && manifest
                     .capabilities
                     .iter()
@@ -832,6 +985,8 @@ impl ExtensionCatalog {
             let installed_version = InstalledVersionReceipt {
                 version: manifest.version.clone(),
                 source: verified.source,
+                source_id: verified.source_id,
+                source_key: verified.source_key,
                 publisher: verified.publisher,
                 publisher_key: verified.publisher_key,
                 publisher_public_key: verified.publisher_public_key,
@@ -850,7 +1005,12 @@ impl ExtensionCatalog {
                 last_update_failure: None,
                 rollback_active: false,
             });
-            if receipt.active.version != manifest.version {
+            if is_explicit_source_switch && publisher_changed {
+                receipt.previous = None;
+                receipt.pending = None;
+                receipt.active = installed_version;
+                receipt.rollback_active = false;
+            } else if receipt.active.version != manifest.version {
                 if capability_expansion {
                     receipt.pending = Some(installed_version);
                 } else {
@@ -948,7 +1108,11 @@ impl ExtensionCatalog {
         }
         let mut releases = Vec::new();
         for (_, mut candidates) in grouped {
-            let conflict = has_publisher_conflict(&candidates);
+            let sources = candidates
+                .iter()
+                .map(|candidate| &candidate.source.id)
+                .collect::<BTreeSet<_>>();
+            let conflict = sources.len() > 1 || has_publisher_conflict(&candidates);
             for candidate in &mut candidates {
                 candidate.publisher_conflict = conflict;
             }
@@ -1005,6 +1169,7 @@ impl ExtensionCatalog {
                 let installed_yanked = candidates.iter().any(|candidate| {
                     candidate.release.version == receipt.active.version
                         && candidate.release.yanked
+                        && source_matches(receipt, candidate)
                         && publisher_matches(receipt, candidate)
                 });
                 let newer = candidates
@@ -1019,6 +1184,7 @@ impl ExtensionCatalog {
                             && candidate.release.api_version
                                 == Version::parse(SUPPORTED_API_VERSION)
                                     .expect("supported API version is valid")
+                            && source_matches(receipt, candidate)
                             && publisher_matches(receipt, candidate)
                     })
                     .map(|candidate| (**candidate).clone())
@@ -1037,10 +1203,9 @@ impl ExtensionCatalog {
                     UpdateState::Yanked
                 } else if candidate.is_some() {
                     UpdateState::Available
-                } else if newer
-                    .iter()
-                    .any(|candidate| !publisher_matches(receipt, candidate))
-                {
+                } else if newer.iter().any(|candidate| {
+                    !source_matches(receipt, candidate) || !publisher_matches(receipt, candidate)
+                }) {
                     UpdateState::PublisherConflict
                 } else if !newer.is_empty() {
                     UpdateState::Incompatible
@@ -1190,6 +1355,8 @@ enum PackageProvenance {
 
 struct VerifiedProvenance {
     source: String,
+    source_id: Option<String>,
+    source_key: Option<String>,
     publisher: Option<String>,
     publisher_key: Option<String>,
     publisher_public_key: Option<String>,
@@ -1220,6 +1387,8 @@ impl PackageProvenance {
                 let fingerprint = public_key_fingerprint(&release.publisher_public_key)?;
                 Ok(VerifiedProvenance {
                     source: format!("registry:{}", candidate.source.id),
+                    source_id: Some(candidate.source.id.clone()),
+                    source_key: Some(candidate.source.root_public_key.clone()),
                     publisher: Some(release.publisher.clone()),
                     publisher_key: Some(fingerprint),
                     publisher_public_key: Some(release.publisher_public_key.clone()),
@@ -1241,6 +1410,8 @@ fn verify_direct_provenance(
     let Some(package_signature) = signature else {
         return Ok(VerifiedProvenance {
             source,
+            source_id: None,
+            source_key: None,
             publisher: None,
             publisher_key: None,
             publisher_public_key: None,
@@ -1267,6 +1438,8 @@ fn verify_direct_provenance(
     let fingerprint = public_key_fingerprint(&package_signature.public_key)?;
     Ok(VerifiedProvenance {
         source,
+        source_id: None,
+        source_key: None,
         publisher: Some(package_signature.publisher),
         publisher_key: Some(fingerprint),
         publisher_public_key: Some(package_signature.public_key),
@@ -1275,6 +1448,63 @@ fn verify_direct_provenance(
         key_rotation: package_signature.key_rotation,
         expected_release: None,
     })
+}
+
+fn verify_provenance_continuity(
+    receipt: Option<&InstallationReceipt>,
+    verified: &VerifiedProvenance,
+) -> Result<(), CatalogError> {
+    let Some(receipt) = receipt else {
+        return Ok(());
+    };
+    if let Some(installed_source_id) = pinned_source_id(receipt) {
+        let incoming_source_id = verified.source_id.as_deref();
+        if incoming_source_id != Some(installed_source_id) {
+            return Err(CatalogError::PublisherConflict(format!(
+                "'{}' is pinned to source '{}', cannot install from '{}'",
+                receipt.id,
+                installed_source_id,
+                incoming_source_id.unwrap_or("non-registry")
+            )));
+        }
+        if let Some(installed_source_key) = &receipt.active.source_key
+            && verified.source_key.as_deref() != Some(installed_source_key.as_str())
+        {
+            return Err(CatalogError::PublisherConflict(format!(
+                "'{}' source root public key has changed",
+                receipt.id
+            )));
+        }
+    } else if verified.source_id.is_some() {
+        return Err(CatalogError::PublisherConflict(format!(
+            "'{}' was installed locally/directly, cannot update from registry without explicit source switch",
+            receipt.id
+        )));
+    }
+    verify_publisher_continuity(Some(receipt), verified)
+}
+
+fn pinned_source_id(receipt: &InstallationReceipt) -> Option<&str> {
+    if let Some(id) = &receipt.active.source_id {
+        Some(id.as_str())
+    } else {
+        receipt.active.source.strip_prefix("registry:")
+    }
+}
+
+fn source_matches(receipt: &InstallationReceipt, candidate: &CatalogExtension) -> bool {
+    let Some(source_id) = pinned_source_id(receipt) else {
+        return false;
+    };
+    if source_id != candidate.source.id {
+        return false;
+    }
+    if let Some(source_key) = &receipt.active.source_key
+        && source_key != &candidate.source.root_public_key
+    {
+        return false;
+    }
+    true
 }
 
 fn verify_publisher_continuity(
@@ -1623,10 +1853,11 @@ mod tests {
     use base64::engine::general_purpose::STANDARD as BASE64;
     use flate2::Compression;
     use flate2::write::GzEncoder;
-
+    use shilpo_ext_api::SecretPurpose;
     use tar::{Builder, Header};
 
     use super::*;
+    use crate::secrets::SecretBroker;
 
     fn test_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("shilpo-catalog-{name}-{}", unique_suffix()));
@@ -1813,10 +2044,32 @@ kind = "notifications:show"
         let (registry_private, registry_public) = generate_signing_key().unwrap();
         let first_package = package(&root, "1.0.0", "");
         sign_package(&first_package, "Alice", &publisher_private).unwrap();
-        let installed = catalog.install_local(&first_package).unwrap();
         let second_package = package(&root, "2.0.0", "");
+        let mut first_release = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("A registry fixture".into()),
+            publisher: "Alice".into(),
+            version: Version::parse("1.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: first_package.display().to_string(),
+            package_hash: hash_file(&first_package).unwrap(),
+            publisher_public_key: publisher_public.clone(),
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: Vec::new(),
+            published_at: "2026-07-26T11:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut first_release, &publisher_private).unwrap();
         let mut release = RegistryRelease {
-            id: installed.id.clone(),
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
             name: "Catalog Test".into(),
             description: Some("A registry fixture".into()),
             publisher: "Alice".into(),
@@ -1838,12 +2091,12 @@ kind = "notifications:show"
             key_rotation: None,
         };
         sign_release(&mut release, &publisher_private).unwrap();
-        let signed = sign_registry_index(
+        let initial_signed = sign_registry_index(
             RegistryIndex {
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "community".into(),
-                generated_at: "2026-07-26T12:00:00Z".into(),
-                releases: vec![release],
+                generated_at: "2026-07-26T11:00:00Z".into(),
+                releases: vec![first_release],
             },
             &registry_private,
         )
@@ -1858,6 +2111,25 @@ kind = "notifications:show"
                 enabled: true,
             })
             .unwrap();
+        catalog
+            .store_index_bytes("community", &serde_json::to_vec(&initial_signed).unwrap())
+            .unwrap();
+        let installed = catalog
+            .install_from_catalog(&ExtensionId::new("io.github.shilpo.catalog-test").unwrap())
+            .unwrap();
+        assert_eq!(installed.active.version, Version::parse("1.0.0").unwrap());
+        assert_eq!(installed.active.source_id.as_deref(), Some("community"));
+
+        let signed = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "community".into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![signed_release_clone(&release, &publisher_private)],
+            },
+            &registry_private,
+        )
+        .unwrap();
         let bytes = serde_json::to_vec_pretty(&signed).unwrap();
         catalog.store_index_bytes("community", &bytes).unwrap();
         let snapshot = catalog.snapshot();
@@ -1994,6 +2266,844 @@ kind = "notifications:show"
         let collision = catalog.snapshot();
         assert!(collision.discover[0].publisher_conflict);
         assert_eq!(collision.updates[0].state, UpdateState::PublisherConflict);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn signed_release_clone(release: &RegistryRelease, key: &str) -> RegistryRelease {
+        let mut clone = release.clone();
+        sign_release(&mut clone, key).unwrap();
+        clone
+    }
+
+    #[test]
+    fn install_receipts_pin_source_id_source_key_and_package_signer() {
+        let root = test_root("receipt-pinning");
+        let catalog = catalog(&root);
+        let (publisher_private, publisher_public) = generate_signing_key().unwrap();
+        let (registry_private, registry_public) = generate_signing_key().unwrap();
+        let first_package = package(&root, "1.0.0", "");
+        sign_package(&first_package, "Alice", &publisher_private).unwrap();
+
+        let mut release = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("A registry fixture".into()),
+            publisher: "Alice".into(),
+            version: Version::parse("1.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: first_package.display().to_string(),
+            package_hash: hash_file(&first_package).unwrap(),
+            publisher_public_key: publisher_public.clone(),
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: Vec::new(),
+            published_at: "2026-07-26T12:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut release, &publisher_private).unwrap();
+        let signed = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "community".into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![release],
+            },
+            &registry_private,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "community".into(),
+                name: "Community".into(),
+                index_url: root.join("index.json").display().to_string(),
+                root_public_key: registry_public.clone(),
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        let bytes = serde_json::to_vec_pretty(&signed).unwrap();
+        catalog.store_index_bytes("community", &bytes).unwrap();
+
+        let receipt = catalog
+            .install_from_catalog(&ExtensionId::new("io.github.shilpo.catalog-test").unwrap())
+            .unwrap();
+        assert_eq!(receipt.active.source, "registry:community");
+        assert_eq!(receipt.active.source_id.as_deref(), Some("community"));
+        assert_eq!(
+            receipt.active.source_key.as_deref(),
+            Some(registry_public.as_str())
+        );
+        assert_eq!(receipt.active.publisher.as_deref(), Some("Alice"));
+        assert_eq!(
+            receipt.active.publisher_key.as_deref(),
+            Some(public_key_fingerprint(&publisher_public).unwrap().as_str())
+        );
+        assert_eq!(
+            receipt.active.publisher_public_key.as_deref(),
+            Some(publisher_public.as_str())
+        );
+
+        let on_disk = catalog.receipt(&receipt.id).unwrap();
+        assert_eq!(on_disk.active.source_id.as_deref(), Some("community"));
+        assert_eq!(
+            on_disk.active.source_key.as_deref(),
+            Some(registry_public.as_str())
+        );
+        assert_eq!(
+            on_disk.active.publisher_key.as_deref(),
+            Some(public_key_fingerprint(&publisher_public).unwrap().as_str())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extension_offered_by_second_source_at_higher_version_does_not_appear_as_update() {
+        let root = test_root("cross-source-update");
+        let catalog = catalog(&root);
+        let (pub_a_priv, pub_a_pub) = generate_signing_key().unwrap();
+        let (reg_a_priv, reg_a_pub) = generate_signing_key().unwrap();
+        let (pub_b_priv, pub_b_pub) = generate_signing_key().unwrap();
+        let (reg_b_priv, reg_b_pub) = generate_signing_key().unwrap();
+
+        let pkg_v1 = package(&root, "1.0.0", "");
+        sign_package(&pkg_v1, "Alice", &pub_a_priv).unwrap();
+        let mut rel_v1 = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("Source A release".into()),
+            publisher: "Alice".into(),
+            version: Version::parse("1.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg_v1.display().to_string(),
+            package_hash: hash_file(&pkg_v1).unwrap(),
+            publisher_public_key: pub_a_pub,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: Vec::new(),
+            published_at: "2026-07-26T12:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut rel_v1, &pub_a_priv).unwrap();
+        let index_a = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "source-a".into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![rel_v1],
+            },
+            &reg_a_priv,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "source-a".into(),
+                name: "Source A".into(),
+                index_url: root.join("source-a.json").display().to_string(),
+                root_public_key: reg_a_pub,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        catalog
+            .store_index_bytes("source-a", &serde_json::to_vec(&index_a).unwrap())
+            .unwrap();
+
+        let installed = catalog
+            .install_from_catalog(&ExtensionId::new("io.github.shilpo.catalog-test").unwrap())
+            .unwrap();
+        assert_eq!(installed.active.version, Version::parse("1.0.0").unwrap());
+        assert_eq!(installed.active.source_id.as_deref(), Some("source-a"));
+
+        let pkg_v2 = package(&root, "2.0.0", "");
+        sign_package(&pkg_v2, "Bob", &pub_b_priv).unwrap();
+        let mut rel_v2 = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("Source B release".into()),
+            publisher: "Bob".into(),
+            version: Version::parse("2.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg_v2.display().to_string(),
+            package_hash: hash_file(&pkg_v2).unwrap(),
+            publisher_public_key: pub_b_pub,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: Vec::new(),
+            published_at: "2026-07-27T12:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut rel_v2, &pub_b_priv).unwrap();
+        let index_b = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "source-b".into(),
+                generated_at: "2026-07-27T12:00:00Z".into(),
+                releases: vec![rel_v2],
+            },
+            &reg_b_priv,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "source-b".into(),
+                name: "Source B".into(),
+                index_url: root.join("source-b.json").display().to_string(),
+                root_public_key: reg_b_pub,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        catalog
+            .store_index_bytes("source-b", &serde_json::to_vec(&index_b).unwrap())
+            .unwrap();
+
+        let snapshot = catalog.snapshot();
+        assert_eq!(snapshot.updates.len(), 1);
+        assert_eq!(snapshot.updates[0].state, UpdateState::PublisherConflict);
+        assert!(snapshot.updates[0].available.is_none());
+
+        assert!(catalog.install_from_catalog(&installed.id).is_err());
+        assert_eq!(
+            catalog.receipt(&installed.id).unwrap().active.version,
+            Version::parse("1.0.0").unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn second_source_cannot_replace_or_shadow_installed_extension_package_grants_or_secrets() {
+        let root = test_root("shadow-defense");
+        let catalog = catalog(&root);
+        let (pub_a_priv, pub_a_pub) = generate_signing_key().unwrap();
+        let (reg_a_priv, reg_a_pub) = generate_signing_key().unwrap();
+        let (pub_b_priv, _) = generate_signing_key().unwrap();
+
+        let pkg_v1 = package(
+            &root,
+            "1.0.0",
+            r#"
+[[capabilities]]
+kind = "notifications:show"
+"#,
+        );
+        sign_package(&pkg_v1, "Alice", &pub_a_priv).unwrap();
+        let mut rel_v1 = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("Legit release".into()),
+            publisher: "Alice".into(),
+            version: Version::parse("1.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg_v1.display().to_string(),
+            package_hash: hash_file(&pkg_v1).unwrap(),
+            publisher_public_key: pub_a_pub,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: vec![Capability::NotificationsShow],
+            published_at: "2026-07-26T12:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut rel_v1, &pub_a_priv).unwrap();
+        let index_a = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "trusted-source".into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![rel_v1],
+            },
+            &reg_a_priv,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "trusted-source".into(),
+                name: "Trusted Source".into(),
+                index_url: root.join("trusted.json").display().to_string(),
+                root_public_key: reg_a_pub,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        catalog
+            .store_index_bytes("trusted-source", &serde_json::to_vec(&index_a).unwrap())
+            .unwrap();
+
+        let installed = catalog
+            .install_from_catalog(&ExtensionId::new("io.github.shilpo.catalog-test").unwrap())
+            .unwrap();
+        catalog
+            .approve_capabilities(&installed.id, vec![Capability::NotificationsShow])
+            .unwrap();
+        catalog.set_enabled(&installed.id, true).unwrap();
+
+        let broker = crate::secrets::FakeSecretBroker::new();
+        let purpose = SecretPurpose::parse("auth-token").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let secret_ref = broker
+            .set(&installed.id, &purpose, b"alice-secret-token", deadline)
+            .unwrap();
+
+        let pkg_v2 = package(&root, "2.0.0", "");
+        sign_package(&pkg_v2, "Mallory", &pub_b_priv).unwrap();
+
+        assert!(matches!(
+            catalog.install_local(&pkg_v2),
+            Err(CatalogError::PublisherConflict(_))
+        ));
+
+        let receipt_after = catalog.receipt(&installed.id).unwrap();
+        assert_eq!(
+            receipt_after.active.version,
+            Version::parse("1.0.0").unwrap()
+        );
+        assert_eq!(
+            receipt_after.active.source_id.as_deref(),
+            Some("trusted-source")
+        );
+
+        let grants = catalog.load_grants(&installed.id).unwrap();
+        assert!(grants.enabled);
+        assert_eq!(
+            grants.granted_capabilities,
+            vec![Capability::NotificationsShow]
+        );
+
+        let secret = broker
+            .read(&installed.id, &purpose, &secret_ref, deadline)
+            .unwrap();
+        assert_eq!(secret.as_deref(), Some(&b"alice-secret-token"[..]));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn same_id_offered_by_two_sources_is_reported_as_conflict_and_not_silently_resolved() {
+        let root = test_root("discover-conflict");
+        let catalog = catalog(&root);
+        let (pub_a_priv, pub_a_pub) = generate_signing_key().unwrap();
+        let (reg_a_priv, reg_a_pub) = generate_signing_key().unwrap();
+        let (pub_b_priv, pub_b_pub) = generate_signing_key().unwrap();
+        let (reg_b_priv, reg_b_pub) = generate_signing_key().unwrap();
+
+        let pkg_a = package(&root, "1.0.0", "");
+        sign_package(&pkg_a, "Alice", &pub_a_priv).unwrap();
+        let mut rel_a = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test A".into(),
+            description: Some("From source A".into()),
+            publisher: "Alice".into(),
+            version: Version::parse("1.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg_a.display().to_string(),
+            package_hash: hash_file(&pkg_a).unwrap(),
+            publisher_public_key: pub_a_pub,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: Vec::new(),
+            published_at: "2026-07-26T12:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut rel_a, &pub_a_priv).unwrap();
+        let index_a = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "source-a".into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![rel_a],
+            },
+            &reg_a_priv,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "source-a".into(),
+                name: "Source A".into(),
+                index_url: root.join("source-a.json").display().to_string(),
+                root_public_key: reg_a_pub,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        catalog
+            .store_index_bytes("source-a", &serde_json::to_vec(&index_a).unwrap())
+            .unwrap();
+
+        let pkg_b = package(&root, "2.0.0", "");
+        sign_package(&pkg_b, "Bob", &pub_b_priv).unwrap();
+        let mut rel_b = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test B".into(),
+            description: Some("From source B".into()),
+            publisher: "Bob".into(),
+            version: Version::parse("2.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg_b.display().to_string(),
+            package_hash: hash_file(&pkg_b).unwrap(),
+            publisher_public_key: pub_b_pub,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: Vec::new(),
+            published_at: "2026-07-27T12:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut rel_b, &pub_b_priv).unwrap();
+        let index_b = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "source-b".into(),
+                generated_at: "2026-07-27T12:00:00Z".into(),
+                releases: vec![rel_b],
+            },
+            &reg_b_priv,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "source-b".into(),
+                name: "Source B".into(),
+                index_url: root.join("source-b.json").display().to_string(),
+                root_public_key: reg_b_pub,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        catalog
+            .store_index_bytes("source-b", &serde_json::to_vec(&index_b).unwrap())
+            .unwrap();
+
+        let snapshot = catalog.snapshot();
+        assert_eq!(snapshot.discover.len(), 1);
+        assert!(snapshot.discover[0].publisher_conflict);
+
+        assert!(matches!(
+            catalog
+                .install_from_catalog(&ExtensionId::new("io.github.shilpo.catalog-test").unwrap()),
+            Err(CatalogError::NotFound(_))
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adding_source_with_existing_id_fails_and_leaves_original_intact() {
+        let root = test_root("source-reservation");
+        let catalog = catalog(&root);
+        let (_, reg_1_pub) = generate_signing_key().unwrap();
+        let (_, reg_2_pub) = generate_signing_key().unwrap();
+
+        catalog
+            .add_source(RegistrySource {
+                id: "community".into(),
+                name: "Community One".into(),
+                index_url: "https://community1.org/index.json".into(),
+                root_public_key: reg_1_pub.clone(),
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+
+        let initial_sources = catalog.sources().unwrap();
+        assert_eq!(initial_sources.len(), 1);
+        assert_eq!(initial_sources[0].name, "Community One");
+        assert_eq!(initial_sources[0].root_public_key, reg_1_pub);
+
+        let duplicate_result = catalog.add_source(RegistrySource {
+            id: "community".into(),
+            name: "Community Two".into(),
+            index_url: "https://community2.org/index.json".into(),
+            root_public_key: reg_2_pub,
+            official: false,
+            enabled: true,
+        });
+
+        assert!(matches!(
+            duplicate_result,
+            Err(CatalogError::InvalidRegistry(_))
+        ));
+
+        let sources_after = catalog.sources().unwrap();
+        assert_eq!(sources_after.len(), 1);
+        assert_eq!(sources_after[0].name, "Community One");
+        assert_eq!(sources_after[0].root_public_key, reg_1_pub);
+        assert_eq!(
+            sources_after[0].index_url,
+            "https://community1.org/index.json"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_switching_is_explicit_and_does_not_carry_grants_across_publishers() {
+        let root = test_root("source-switch");
+        let catalog = catalog(&root);
+        let (pub_a_priv, pub_a_pub) = generate_signing_key().unwrap();
+        let (reg_a_priv, reg_a_pub) = generate_signing_key().unwrap();
+        let (pub_b_priv, pub_b_pub) = generate_signing_key().unwrap();
+        let (reg_b_priv, reg_b_pub) = generate_signing_key().unwrap();
+
+        let pkg_a = package(
+            &root,
+            "1.0.0",
+            r#"
+[[capabilities]]
+kind = "notifications:show"
+"#,
+        );
+        sign_package(&pkg_a, "Alice", &pub_a_priv).unwrap();
+        let mut rel_a = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("Source A".into()),
+            publisher: "Alice".into(),
+            version: Version::parse("1.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg_a.display().to_string(),
+            package_hash: hash_file(&pkg_a).unwrap(),
+            publisher_public_key: pub_a_pub,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: vec![Capability::NotificationsShow],
+            published_at: "2026-07-26T12:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut rel_a, &pub_a_priv).unwrap();
+        let index_a = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "source-a".into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![rel_a],
+            },
+            &reg_a_priv,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "source-a".into(),
+                name: "Source A".into(),
+                index_url: root.join("source-a.json").display().to_string(),
+                root_public_key: reg_a_pub,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        catalog
+            .store_index_bytes("source-a", &serde_json::to_vec(&index_a).unwrap())
+            .unwrap();
+
+        let installed = catalog
+            .install_from_catalog(&ExtensionId::new("io.github.shilpo.catalog-test").unwrap())
+            .unwrap();
+        catalog
+            .approve_capabilities(&installed.id, vec![Capability::NotificationsShow])
+            .unwrap();
+        catalog.set_enabled(&installed.id, true).unwrap();
+
+        let broker = crate::secrets::FakeSecretBroker::new();
+        let purpose = SecretPurpose::parse("auth-token").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let secret_ref = broker
+            .set(&installed.id, &purpose, b"alice-secret", deadline)
+            .unwrap();
+
+        let pkg_b = package(
+            &root,
+            "2.0.0",
+            r#"
+[[capabilities]]
+kind = "notifications:show"
+"#,
+        );
+        sign_package(&pkg_b, "Bob", &pub_b_priv).unwrap();
+        let mut rel_b = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("Source B".into()),
+            publisher: "Bob".into(),
+            version: Version::parse("2.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg_b.display().to_string(),
+            package_hash: hash_file(&pkg_b).unwrap(),
+            publisher_public_key: pub_b_pub.clone(),
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: vec![Capability::NotificationsShow],
+            published_at: "2026-07-27T12:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut rel_b, &pub_b_priv).unwrap();
+        let index_b = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "source-b".into(),
+                generated_at: "2026-07-27T12:00:00Z".into(),
+                releases: vec![rel_b],
+            },
+            &reg_b_priv,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "source-b".into(),
+                name: "Source B".into(),
+                index_url: root.join("source-b.json").display().to_string(),
+                root_public_key: reg_b_pub.clone(),
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        catalog
+            .store_index_bytes("source-b", &serde_json::to_vec(&index_b).unwrap())
+            .unwrap();
+
+        let switched = catalog
+            .switch_source_with_secrets_policy(
+                &installed.id,
+                "source-b",
+                SecretPolicy::Delete,
+                Some(&broker),
+            )
+            .unwrap();
+
+        assert_eq!(switched.active.version, Version::parse("2.0.0").unwrap());
+        assert_eq!(switched.active.source_id.as_deref(), Some("source-b"));
+        assert_eq!(
+            switched.active.source_key.as_deref(),
+            Some(reg_b_pub.as_str())
+        );
+        assert_eq!(switched.active.publisher.as_deref(), Some("Bob"));
+        assert_eq!(
+            switched.active.publisher_public_key.as_deref(),
+            Some(pub_b_pub.as_str())
+        );
+        assert!(switched.previous.is_none());
+
+        let grants_after = catalog.load_grants(&installed.id).unwrap();
+        assert!(!grants_after.enabled);
+        assert!(grants_after.granted_capabilities.is_empty());
+
+        assert_eq!(
+            broker
+                .read(&installed.id, &purpose, &secret_ref, deadline)
+                .unwrap(),
+            None
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_source_switch_leaves_secrets_grants_and_receipt_untouched() {
+        let root = test_root("source-switch-failure");
+        let catalog = catalog(&root);
+        let (pub_a_priv, pub_a_pub) = generate_signing_key().unwrap();
+        let (reg_a_priv, reg_a_pub) = generate_signing_key().unwrap();
+        let (pub_b_priv, pub_b_pub) = generate_signing_key().unwrap();
+        let (reg_b_priv, reg_b_pub) = generate_signing_key().unwrap();
+
+        let pkg_a = package(
+            &root,
+            "1.0.0",
+            r#"
+[[capabilities]]
+kind = "notifications:show"
+"#,
+        );
+        sign_package(&pkg_a, "Alice", &pub_a_priv).unwrap();
+        let mut rel_a = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("Source A".into()),
+            publisher: "Alice".into(),
+            version: Version::parse("1.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg_a.display().to_string(),
+            package_hash: hash_file(&pkg_a).unwrap(),
+            publisher_public_key: pub_a_pub,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: vec![Capability::NotificationsShow],
+            published_at: "2026-07-26T12:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut rel_a, &pub_a_priv).unwrap();
+        let index_a = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "source-a".into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![rel_a],
+            },
+            &reg_a_priv,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "source-a".into(),
+                name: "Source A".into(),
+                index_url: root.join("source-a.json").display().to_string(),
+                root_public_key: reg_a_pub,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        catalog
+            .store_index_bytes("source-a", &serde_json::to_vec(&index_a).unwrap())
+            .unwrap();
+
+        let installed = catalog
+            .install_from_catalog(&ExtensionId::new("io.github.shilpo.catalog-test").unwrap())
+            .unwrap();
+        catalog
+            .approve_capabilities(&installed.id, vec![Capability::NotificationsShow])
+            .unwrap();
+        catalog.set_enabled(&installed.id, true).unwrap();
+
+        let broker = crate::secrets::FakeSecretBroker::new();
+        let purpose = SecretPurpose::parse("auth-token").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let secret_ref = broker
+            .set(&installed.id, &purpose, b"alice-secret", deadline)
+            .unwrap();
+
+        // Source B's release declares a package_hash that does not match the bytes at
+        // its package_url. install_package_internal must reject this once it actually
+        // hashes the fetched package, well after the switch has already committed to
+        // a different publisher.
+        let pkg_b = package(&root, "2.0.0", "");
+        sign_package(&pkg_b, "Bob", &pub_b_priv).unwrap();
+        let mut rel_b = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("Source B".into()),
+            publisher: "Bob".into(),
+            version: Version::parse("2.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg_b.display().to_string(),
+            package_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .into(),
+            publisher_public_key: pub_b_pub,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: vec![Capability::NotificationsShow],
+            published_at: "2026-07-27T12:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut rel_b, &pub_b_priv).unwrap();
+        let index_b = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "source-b".into(),
+                generated_at: "2026-07-27T12:00:00Z".into(),
+                releases: vec![rel_b],
+            },
+            &reg_b_priv,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "source-b".into(),
+                name: "Source B".into(),
+                index_url: root.join("source-b.json").display().to_string(),
+                root_public_key: reg_b_pub,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        catalog
+            .store_index_bytes("source-b", &serde_json::to_vec(&index_b).unwrap())
+            .unwrap();
+
+        let switch_result = catalog.switch_source_with_secrets_policy(
+            &installed.id,
+            "source-b",
+            SecretPolicy::Delete,
+            Some(&broker),
+        );
+        assert!(switch_result.is_err());
+
+        let receipt_after = catalog.receipt(&installed.id).unwrap();
+        assert_eq!(
+            receipt_after.active.version,
+            Version::parse("1.0.0").unwrap()
+        );
+        assert_eq!(receipt_after.active.source_id.as_deref(), Some("source-a"));
+
+        let grants_after = catalog.load_grants(&installed.id).unwrap();
+        assert!(grants_after.enabled);
+        assert_eq!(
+            grants_after.granted_capabilities,
+            vec![Capability::NotificationsShow]
+        );
+
+        assert_eq!(
+            broker
+                .read(&installed.id, &purpose, &secret_ref, deadline)
+                .unwrap()
+                .as_deref(),
+            Some(&b"alice-secret"[..])
+        );
+
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -432,6 +432,28 @@ impl ExtensionCli {
         }
     }
 
+    pub fn switch_source(
+        id: &ExtensionId,
+        source_id: &str,
+        catalog: &ExtensionCatalog,
+    ) -> ExtensionCliResult {
+        match catalog.switch_source(id, source_id) {
+            Ok(receipt) => ExtensionCliResult {
+                success: true,
+                extension_id: Some(id.to_string()),
+                artifact: None,
+                diagnostics: vec![format!(
+                    "switched '{}' to source '{}' (version {})",
+                    receipt.id, source_id, receipt.active.version
+                )],
+            },
+            Err(error) => ExtensionCliResult::failure(
+                Some(id.to_string()),
+                vec![format!("error[switch_source.failed]: {error}")],
+            ),
+        }
+    }
+
     pub fn list(dev_paths: &[PathBuf]) -> Vec<ExtensionCliResult> {
         dev_paths.iter().map(|path| Self::check(path)).collect()
     }
@@ -535,6 +557,19 @@ fn run_source_command(
                 .map_err(|error| error.to_string())?;
             Ok(format!("verified and cached source '{id}'"))
         }
+        "switch" => {
+            let id_str = args.get(2).ok_or_else(|| {
+                "source switch requires <extension-id> <target-source-id>".to_owned()
+            })?;
+            let target_source_id = args.get(3).ok_or_else(|| {
+                "source switch requires <extension-id> <target-source-id>".to_owned()
+            })?;
+            let id = ExtensionId::new(id_str).map_err(|err| err.to_string())?;
+            catalog
+                .switch_source(&id, target_source_id)
+                .map_err(|error| error.to_string())?;
+            Ok(format!("switched '{id}' to source '{target_source_id}'"))
+        }
         _ => Err(format!("unknown source action '{action}'")),
     }
 }
@@ -542,7 +577,7 @@ fn run_source_command(
 pub fn source_command(args: &[String], catalog: &ExtensionCatalog) -> Result<String, String> {
     let action = args
         .first()
-        .ok_or_else(|| "source requires add, remove, or sync".to_owned())?;
+        .ok_or_else(|| "source requires add, remove, sync, or switch".to_owned())?;
     let mut legacy_args = Vec::with_capacity(args.len() + 1);
     legacy_args.push("source".to_owned());
     legacy_args.extend(args.iter().cloned());

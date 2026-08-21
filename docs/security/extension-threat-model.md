@@ -67,6 +67,7 @@ Controls are classified from production paths, not from test doubles or document
 | CTL-12 | Host secret buffers are wiped on drop | Absent | `desktop/ext-runtime/src/secrets.rs:300-325` returns `Vec<u8>` |
 | CTL-13 | HTTP DNS/private-network egress policy | Partially enforced | URL syntax is checked at `desktop/ext-runtime/src/effects.rs:10-45`, but DNS rebinding/private ranges are not filtered |
 | CTL-14 | Per-extension action/notification rate limit | Absent | No production limiter was found in the authorization/dispatch path |
+| CTL-15 | Source-pinned installation provenance, source ID reservation, and cross-source update/conflict isolation | Enforced | `desktop/ext-runtime/src/catalog.rs:670-687,767-880,1104-1215,1434-1485` |
 
 ## Threat analysis
 
@@ -90,6 +91,14 @@ residual property of the ABI, not equivalent to host buffer handling.
 risks are bounded memory pressure, malformed JSON, generation confusion, and restart/cleanup behavior. Package
 signature, publisher continuity, archive traversal, rollback, partial update, and capability-expansion paths require
 continued regression coverage; supply-chain process and auditing belong to #121.
+
+Against a malicious registry or publisher attempting cross-source takeover or shadowing, Shilpo enforces source-pinned
+installation provenance (CTL-15). Each installation receipt pins the `source_id`, the source root public key, and the
+package signer fingerprint. `resolve_updates()` only considers releases matching both the pinned source identity and
+publisher continuity; higher versions published by other sources are rejected as publisher conflicts. Discovering multiple
+sources offering the same `ExtensionId` flags a conflict rather than silently selecting the highest version. Registry
+source registration refuses duplicate source IDs to preserve cached verified indexes, and explicit source switching resets
+grants and purges credentials when publisher keys differ.
 
 ### Secrets and state
 
@@ -122,7 +131,7 @@ or notification effects.
 ## Risk register
 
 | ID | Risk and boundary | Evidence | Existing mitigation / residual exposure | Likelihood | Impact | Confidence | Treatment | Effort | Dependencies |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | EXT-SEC-001 | HTTP response buffering can exhaust Shell memory (XB-06) | `desktop/shilpo/src/shell/extension_http.rs:41-61` | 15-second timeout and no redirects; body has no byte bound | Medium | High | High | Mitigate | S | Add bounded streaming before broader HTTP policy work |
 | EXT-SEC-002 | Host secret copies are not wipe-on-drop (XB-04) | `desktop/ext-runtime/src/secrets.rs:300-325`; `desktop/ext-runtime/src/wasm.rs:566-600` | Secret Service isolation and redacted handles; `Vec<u8>` copies remain until reuse | Low | High | High | Mitigate | S/M | Define ownership points before adding a dependency |
 | EXT-SEC-003 | DNS rebinding/private-address HTTP reachability (XB-06) | `desktop/ext-runtime/src/effects.rs:10-45`; `desktop/shilpo/src/shell/extension_http.rs:4-38` | HTTPS, GET, host/path grants, and no redirects; DNS/private ranges are not filtered | Low/Medium | High | Medium | Investigate then mitigate | M | Must preserve legitimate public API access and test resolution safely |
@@ -130,6 +139,7 @@ or notification effects.
 | EXT-SEC-005 | Missing per-extension action/notification rate limit (XB-02/XB-06) | Authorization path `desktop/ext-runtime/src/adapter.rs:611-665`; dispatch callers in `desktop/shilpo/src/shell/runtime/extension_host.rs:411-571` | Fuel/hostcall byte limits and circuit breaker; burst volume can still affect UX | Medium | Low/Medium | Medium | Mitigate | M | Define user-visible diagnostic and queue/drop semantics |
 | EXT-SEC-006 | Trusted-script PATH/environment and source permissions rely on local trust (XB-07) | `desktop/ext-runtime/src/script/runner.rs:160-209`; `desktop/ext-runtime/src/script/manifest.rs:81-179` | Explicit unsandboxed model, canonical bundle paths, process cleanup; user-controlled source can run arbitrary OS code | Low | Low/High | High | Accept/document; harden UX if needed | S | Keep separate from WASM capability policy |
 | EXT-SEC-007 | Guest memory may retain secret copies until reuse (XB-02) | `desktop/ext-runtime/src/wasm.rs:566-600` and WIT list transfer | Wasmtime memory cap and process isolation; ABI copies cannot be completely erased by host | Low | Low/Medium | Medium | Accept/document | M | Revisit only with an ABI-compatible memory-lifetime design |
+| EXT-SEC-008 | Malicious registry/publisher takeover via higher-version shadowing or cross-source update spoofing | `desktop/ext-runtime/src/catalog.rs:670-687,767-880,1104-1215,1434-1485` | Source-pinned receipts, source ID uniqueness, discovery collision detection, and zero-trust grant/secret resets on publisher switch (CTL-15) | Low | High | High | Mitigate (Enforced) | S | Preserves single global ExtensionId while isolating provenance |
 
 ## At-rest decisions
 
