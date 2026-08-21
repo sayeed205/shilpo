@@ -67,7 +67,12 @@ pub struct KeyRotationDelegation {
 
 pub const OFFICIAL_SOURCE_ID: &str = "shilpo";
 pub const OFFICIAL_SOURCE_NAME: &str = "Shilpo Extensions";
-pub const OFFICIAL_SOURCE_URL: &str = "https://extensions.shilpo.org/index.json";
+pub const OFFICIAL_SOURCE_URL: &str =
+    "https://raw.githubusercontent.com/shilpo-rs/extensions/main/index.json";
+
+/// The default compiled-in Ed25519 root public key for the official Shilpo extension registry.
+/// Can be overridden at compile time via `SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY`.
+pub const OFFICIAL_ROOT_PUBLIC_KEY: &str = "XvCflG0g2Vd40sQcI0Fq8qVjWk0R5W7z1A4L5h+N8y8=";
 
 /// Test-only override for [`RegistrySource::is_pinned_official`], simulating a build with
 /// `SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY` compiled in. Gated behind the `test-util` feature,
@@ -107,9 +112,10 @@ impl RegistrySource {
         {
             return self.id == OFFICIAL_SOURCE_ID && self.root_public_key == *key;
         }
-        option_env!("SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY")
+        let expected_key = option_env!("SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY")
             .filter(|k| !k.trim().is_empty())
-            .is_some_and(|key| self.id == OFFICIAL_SOURCE_ID && self.root_public_key == key)
+            .unwrap_or(OFFICIAL_ROOT_PUBLIC_KEY);
+        self.id == OFFICIAL_SOURCE_ID && self.root_public_key == expected_key
     }
 }
 
@@ -417,4 +423,53 @@ fn unique_suffix() -> String {
             .unwrap_or_default()
             .as_nanos()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_official_constants_and_pinning() {
+        let official = RegistrySource {
+            id: OFFICIAL_SOURCE_ID.into(),
+            name: OFFICIAL_SOURCE_NAME.into(),
+            index_url: OFFICIAL_SOURCE_URL.into(),
+            root_public_key: OFFICIAL_ROOT_PUBLIC_KEY.into(),
+            official: true,
+            enabled: true,
+        };
+        assert!(official.is_pinned_official());
+
+        let fake_key = RegistrySource {
+            id: OFFICIAL_SOURCE_ID.into(),
+            name: OFFICIAL_SOURCE_NAME.into(),
+            index_url: OFFICIAL_SOURCE_URL.into(),
+            root_public_key: "fake-public-key".into(),
+            official: true,
+            enabled: true,
+        };
+        assert!(!fake_key.is_pinned_official());
+
+        let fake_id = RegistrySource {
+            id: "community".into(),
+            name: "Community".into(),
+            index_url: "https://example.com/index.json".into(),
+            root_public_key: OFFICIAL_ROOT_PUBLIC_KEY.into(),
+            official: true,
+            enabled: true,
+        };
+        assert!(!fake_id.is_pinned_official());
+    }
+
+    #[test]
+    fn test_signing_and_verification() {
+        let (private_key, public_key) = generate_signing_key().unwrap();
+        let message = b"hello world";
+        let pair = decode_key_pair(&private_key).unwrap();
+        let signature = BASE64.encode(pair.sign(message).as_ref());
+
+        assert!(verify_signature(&public_key, message, &signature).is_ok());
+        assert!(verify_signature(&public_key, b"different message", &signature).is_err());
+    }
 }

@@ -105,7 +105,7 @@ grants and purges credentials when publisher keys differ.
 To prevent third-party or community extensions hosted in the single unified registry repo (`shilpo-rs/extensions`) from
 inheriting official status, official trust is enforced per-extension (CTL-16). `trust_for_release()` strictly requires
 `source.is_pinned_official() && release.official`. `source.is_pinned_official()` verifies against the Ed25519 root public key
-compiled into the Shilpo binary (`SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY`), ignoring user-writable `official: bool` config.
+compiled into the Shilpo binary (`OFFICIAL_ROOT_PUBLIC_KEY` with optional `SHILPO_OFFICIAL_EXTENSIONS_ROOT_KEY` override), ignoring user-writable `official: bool` config.
 The `release.official` signal is signed into release metadata, authorized only when manifest authors match the canonical
 identity (`OFFICIAL_AUTHOR = "Sayeed Ahmed<sayeed205@gmail.com>"`) and namespace ownership in `owners.toml`. Manifest authors
 are strictly validated as mailbox-form identities (`Display Name <local@domain>`) at parse time.

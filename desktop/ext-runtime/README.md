@@ -391,8 +391,10 @@ Regenerate the checked-in manifest schema after changing contract types:
 ```bash
 cargo run -p shilpo-ext-api --example generate_schema -- \
   core/ext-api/schema/extension-v1.schema.json
-cargo run -p shilpo-ext-runtime --example generate_distribution_schemas -- \
+cargo run -p shilpo-ext-runtime --example generate_script_manifest_schema -- \
   desktop/ext-runtime/schema
+cargo run -p shilpo-registry-contract --example generate_distribution_schemas -- \
+  core/registry-contract/schema
 ```
 
 The generated distribution schemas define the package-signature sidecar and signed registry-index envelope consumed by
