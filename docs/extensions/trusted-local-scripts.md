@@ -75,4 +75,4 @@ On each execution or stream line, the script writes a newline-delimited JSON rec
 
 ## 4. Reference Implementation
 
-See [`extensions/cpu-temp-script`](https://github.com/shilpo-rs/extensions/tree/main/cpu-temp-script) for a complete working example.
+See [`local-scripts/cpu-temp-script`](https://github.com/shilpo-rs/extensions/tree/main/local-scripts/cpu-temp-script) for a complete working example.

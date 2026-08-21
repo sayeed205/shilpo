@@ -48,7 +48,7 @@ Shilpo provides two distinct extension models:
 
 - **[`extensions/example`](https://github.com/shilpo-rs/extensions/tree/main/example)**: The single canonical TypeScript showcase demonstrating all 10 contribution families, least-privilege capabilities, and hermetic testing.
 - **[`extensions/world-clock`](https://github.com/shilpo-rs/extensions/tree/main/world-clock)**: Experimental official Rust WASI Preview 2 component extension.
-- **[`extensions/cpu-temp-script`](https://github.com/shilpo-rs/extensions/tree/main/cpu-temp-script)**: Reference Trusted Local Script demonstrating a polling CPU temperature bar widget.
+- **[`local-scripts/cpu-temp-script`](https://github.com/shilpo-rs/extensions/tree/main/local-scripts/cpu-temp-script)**: Reference Trusted Local Script demonstrating a polling CPU temperature bar widget.
 
 ---
 
