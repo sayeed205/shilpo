@@ -1,5 +1,9 @@
 # Installing Shilpo
 
+`./setup install` and `shilpo setup` are local build/dev tools, not a polished end-user installer yet — real
+distribution is planned via distro packaging (AUR, etc.), where package installation is declared as a dependency
+instead of scripted here.
+
 ## 1. Build and install the binary
 
 ```bash
@@ -7,15 +11,13 @@
 ```
 
 This builds `shilpo` in release mode (`cargo build --locked --release -p shilpo`) and installs the binary to
-`~/.local/bin/shilpo` (or `/usr/local/bin/shilpo` when run as root). Pass `--prefix DIR` to install elsewhere.
+`~/.local/bin/shilpo` (or `/usr/local/bin/shilpo` when run as root). Pass `--prefix DIR` to install elsewhere. Assumes
+the Rust toolchain and GPUI's build dependencies are already present on your machine.
 
 ```text
 ./setup install [--prefix DIR]
 ./setup uninstall [--prefix DIR]
 ```
-
-`./setup uninstall` removes the installed binary only. Distro packages (AUR, etc.) are planned separately; until then
-this is the only way to get the `shilpo` command onto your machine.
 
 ## 2. Configure your session
 
@@ -23,10 +25,20 @@ this is the only way to get the `shilpo` command onto your machine.
 shilpo setup
 ```
 
-An interactive, Arch Linux-only wizard that turns a bare `shilpo` install into a working desktop session: choose a
-compositor (Niri today; others are listed as coming soon), stage its recommended Shilpo configuration, detect and
-install GPU drivers, wire up the Shilpo-owned systemd user units, and enable NetworkManager/Bluetooth. It ends by
-offering to reboot. Run it again any time to re-apply or re-check your configuration.
+An interactive wizard that turns a bare `shilpo` install into a working desktop session:
 
-It does not install compositor/desktop packages (Niri, Kitty, Fish, PipeWire, etc.) — those are expected to already be
-present (either installed manually today, or via a future AUR package's dependencies).
+1. Detects the distro. On Arch Linux, you're asked which compositor to configure (**Niri** or **Hyprland** today; Sway
+   is listed as coming soon). On an unrecognized distro, it instead detects an already-running Niri/Hyprland session
+   and configures for that, skipping package installation.
+2. On Arch, installs the desktop packages that compositor needs (bootstrapping `paru` if missing) and detects/installs
+   GPU drivers (Intel/AMD/NVIDIA Turing-or-newer).
+3. Stages Shilpo's recommended configuration for the chosen compositor — Niri gets `~/.config/niri/`; Hyprland gets
+   `~/.config/hypr/hyprland.lua` (Hyprland deprecated its classic `.conf` format in 0.55 in favor of native Lua
+   config) — plus the shared Kitty/Fish/Starship/Swaylock/Swayidle/Shilpo configuration and default wallpaper.
+4. Wires up the session: Niri gets the Shilpo-owned systemd user units (autostarted via `niri.service.wants`);
+   Hyprland's staged config starts them itself via `exec-once`. Both get NetworkManager/Bluetooth enabled, SDDM enabled
+   if no display manager is already configured, and the login shell switched to Fish.
+
+It ends by offering to reboot. Run it again any time to re-apply or re-check your configuration. A user-owned
+extension point is preserved on repeat runs: `niri/config.d/90-user-extra.kdl` for Niri,
+`hypr/shilpo-user-extra.lua` for Hyprland.

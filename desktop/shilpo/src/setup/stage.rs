@@ -8,7 +8,9 @@ use super::compositor::Compositor;
 pub fn stage_configs(compositor: Compositor) -> Result<(), String> {
     match compositor {
         Compositor::Niri => stage_niri(),
-    }
+        Compositor::Hyprland => stage_hyprland(),
+    }?;
+    stage_common()
 }
 
 fn config_home() -> PathBuf {
@@ -99,6 +101,37 @@ fn stage_niri() -> Result<(), String> {
     if !user_extra.exists() {
         write_embedded("niri/config.d/90-user-extra.kdl", &user_extra)?;
     }
+
+    Ok(())
+}
+
+fn stage_hyprland() -> Result<(), String> {
+    let config_home = config_home();
+    let bin = current_bin_path()?;
+    let polkit_agent = super::polkit_agent_path();
+
+    println!("Staging Hyprland configuration...");
+    let hypr_dir = config_home.join("hypr");
+    write_embedded_rendered(
+        "hyprland/hyprland.lua",
+        &hypr_dir.join("hyprland.lua"),
+        &[
+            ("@SHILPO_BIN@", bin.as_str()),
+            ("@POLKIT_AGENT@", polkit_agent),
+        ],
+    )?;
+
+    // User-owned extension point: never overwrite it once it exists.
+    let user_extra = hypr_dir.join("shilpo-user-extra.lua");
+    if !user_extra.exists() {
+        write_embedded("hyprland/shilpo-user-extra.lua", &user_extra)?;
+    }
+
+    Ok(())
+}
+
+fn stage_common() -> Result<(), String> {
+    let config_home = config_home();
 
     println!("Staging Kitty, Fish, Starship, Swaylock, Swayidle, Shilpo configuration...");
     write_embedded("kitty/kitty.conf", &config_home.join("kitty/kitty.conf"))?;

@@ -1,0 +1,1 @@
+-- Your own Hyprland additions. `shilpo setup` never overwrites this file once it exists.

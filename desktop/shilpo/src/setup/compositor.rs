@@ -3,13 +3,47 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compositor {
     Niri,
+    Hyprland,
 }
 
 impl fmt::Display for Compositor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Compositor::Niri => write!(f, "Niri"),
+            Compositor::Hyprland => write!(f, "Hyprland"),
         }
+    }
+}
+
+impl Compositor {
+    /// Packages needed beyond the common desktop set (see `packages::COMMON_PACKAGES`).
+    pub fn extra_packages(&self) -> &'static [&'static str] {
+        match self {
+            Compositor::Niri => &["niri"],
+            Compositor::Hyprland => &["hyprland", "xdg-desktop-portal-hyprland"],
+        }
+    }
+
+    /// Detects an already-running session via each compositor's own IPC socket env var,
+    /// falling back to `XDG_CURRENT_DESKTOP`. Used when the distro is unrecognized and
+    /// there's no package manager to drive an interactive choice against.
+    pub fn detect_running() -> Option<Compositor> {
+        if std::env::var_os("NIRI_SOCKET").is_some() {
+            return Some(Compositor::Niri);
+        }
+        if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
+            return Some(Compositor::Hyprland);
+        }
+        let xdg = std::env::var("XDG_CURRENT_DESKTOP")
+            .unwrap_or_default()
+            .to_lowercase();
+        if xdg.contains("niri") {
+            return Some(Compositor::Niri);
+        }
+        if xdg.contains("hyprland") {
+            return Some(Compositor::Hyprland);
+        }
+        None
     }
 }
 
@@ -17,7 +51,7 @@ impl fmt::Display for Compositor {
 /// re-prompt instead of proceeding — there is no config to stage for them yet.
 const OPTIONS: &[(&str, Option<Compositor>)] = &[
     ("Niri (recommended)", Some(Compositor::Niri)),
-    ("Hyprland (coming soon)", None),
+    ("Hyprland", Some(Compositor::Hyprland)),
     ("Sway (coming soon)", None),
 ];
 
@@ -36,7 +70,7 @@ pub fn choose() -> Result<Compositor, String> {
             None => {
                 let name = OPTIONS[index].0.trim_end_matches(" (coming soon)");
                 println!(
-                    "{name} isn't supported yet — Niri is the only compositor Shilpo can configure right now.\n"
+                    "{name} isn't supported yet — Niri and Hyprland are the compositors Shilpo can configure right now.\n"
                 );
             }
         }

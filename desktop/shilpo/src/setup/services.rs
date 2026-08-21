@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use super::SetupAssets;
+use super::compositor::Compositor;
 use super::privilege::{is_on_path, run_privileged};
 
 const UNITS: &[&str] = &[
@@ -21,8 +22,13 @@ const UNITS: &[&str] = &[
 
 const DISPLAY_MANAGERS: &[&str] = &["sddm", "gdm", "lightdm", "ly"];
 
-pub fn wire_up_session() -> Result<(), String> {
-    install_units()?;
+pub fn wire_up_session(compositor: Compositor) -> Result<(), String> {
+    // Niri autostarts these through systemd user units (PartOf=niri.service). Hyprland's
+    // staged config spawns them itself via exec-once, so installing the same units here
+    // would start everything twice.
+    if compositor == Compositor::Niri {
+        install_units()?;
+    }
     enable_network_and_bluetooth()?;
     enable_display_manager_if_none();
     set_login_shell_to_fish();
@@ -42,18 +48,6 @@ fn state_dir() -> PathBuf {
         .join("shilpo")
 }
 
-fn polkit_agent_path() -> &'static str {
-    for candidate in [
-        "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1",
-        "/usr/libexec/polkit-gnome-authentication-agent-1",
-    ] {
-        if Path::new(candidate).is_file() {
-            return candidate;
-        }
-    }
-    "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1"
-}
-
 fn install_units() -> Result<(), String> {
     let bin = env::current_exe()
         .map_err(|e| format!("could not resolve current executable path: {e}"))?
@@ -65,7 +59,7 @@ fn install_units() -> Result<(), String> {
         .map_err(|e| format!("could not create {}: {e}", unit_dir.display()))?;
 
     let marker = state_dir().join("first-login-completed");
-    let polkit_agent = polkit_agent_path();
+    let polkit_agent = super::polkit_agent_path();
 
     println!("Installing Shilpo systemd user units...");
     for name in UNITS {
