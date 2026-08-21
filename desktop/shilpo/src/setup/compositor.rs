@@ -24,6 +24,17 @@ impl Compositor {
         }
     }
 
+    /// The actual executable name to check for on `PATH` before staging config/units for
+    /// this compositor — package installation can be declined or fail without aborting the
+    /// rest of `shilpo setup`, which would otherwise silently configure a session that can
+    /// never actually start.
+    pub fn binary_name(&self) -> &'static str {
+        match self {
+            Compositor::Niri => "niri",
+            Compositor::Hyprland => "Hyprland",
+        }
+    }
+
     /// Detects an already-running session via each compositor's own IPC socket env var,
     /// falling back to `XDG_CURRENT_DESKTOP`. Used when the distro is unrecognized and
     /// there's no package manager to drive an interactive choice against.

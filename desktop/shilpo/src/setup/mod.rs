@@ -80,6 +80,15 @@ pub fn run() -> Result<(), String> {
         }
     }
 
+    if !privilege::is_on_path(compositor.binary_name()) {
+        return Err(format!(
+            "{compositor}'s `{}` executable is not on PATH — it wasn't installed (declined, or \
+             package installation failed/was skipped). Install {compositor} yourself, then \
+             re-run shilpo setup; nothing was staged.",
+            compositor.binary_name()
+        ));
+    }
+
     let apply = dialoguer::Confirm::new()
         .with_prompt(format!(
             "Apply Shilpo's recommended {compositor} configuration now?"
