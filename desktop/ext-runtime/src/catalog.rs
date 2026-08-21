@@ -14,10 +14,11 @@ use shilpo_registry_contract::ContractError;
 pub use shilpo_registry_contract::{
     KeyRotationDelegation, OFFICIAL_ROOT_PUBLIC_KEY, OFFICIAL_SOURCE_ID, OFFICIAL_SOURCE_NAME,
     OFFICIAL_SOURCE_URL, PackageSignature, REGISTRY_SCHEMA_VERSION, RegistryIndex, RegistryRelease,
-    RegistrySource, ReleaseChannel, SignedRegistryIndex, capabilities_hash, decode_key_pair,
-    generate_signing_key, hash_bytes, hash_file, package_signature_path, package_signing_message,
-    public_key_fingerprint, release_signing_payload, rotation_message, sign_package,
-    sign_registry_index, sign_release, validate_source, verify_registry_index,
+    RegistrySource, ReleaseChannel, STALE_INDEX_WARNING_DAYS, SignedRegistryIndex,
+    capabilities_hash, decode_key_pair, generate_signing_key, hash_bytes, hash_file,
+    package_signature_path, package_signing_message, public_key_fingerprint,
+    release_signing_payload, rotation_message, sign_package, sign_registry_index, sign_release,
+    stale_index_warning, validate_source, verify_index_ordering, verify_registry_index,
     verify_release_signature, verify_signature,
 };
 use tar::Archive;
@@ -706,14 +707,21 @@ impl ExtensionCatalog {
             match fetch_bytes(&source.index_url, MAX_INDEX_BYTES as u64)
                 .and_then(|bytes| self.store_verified_index(&source, &bytes))
             {
-                Ok(()) => diagnostics.push(format!("refreshed source '{}'", source.id)),
+                Ok(warning) => {
+                    diagnostics.push(format!("refreshed source '{}'", source.id));
+                    diagnostics.extend(warning);
+                }
                 Err(error) => diagnostics.push(format!("source '{}': {error}", source.id)),
             }
         }
         Ok(diagnostics)
     }
 
-    pub fn store_index_bytes(&self, source_id: &str, bytes: &[u8]) -> Result<(), CatalogError> {
+    pub fn store_index_bytes(
+        &self,
+        source_id: &str,
+        bytes: &[u8],
+    ) -> Result<Option<String>, CatalogError> {
         let source = self
             .sources()?
             .into_iter()
@@ -1291,11 +1299,14 @@ impl ExtensionCatalog {
         self.save_receipt(&receipt)
     }
 
+    /// Verifies, orders, and persists a freshly fetched signed index. Returns a staleness
+    /// warning string when `generated_at` is old (never a rejection — see
+    /// `stale_index_warning`), so callers can surface it without treating it as a failure.
     fn store_verified_index(
         &self,
         source: &RegistrySource,
         bytes: &[u8],
-    ) -> Result<(), CatalogError> {
+    ) -> Result<Option<String>, CatalogError> {
         if bytes.len() > MAX_INDEX_BYTES {
             return Err(CatalogError::InvalidRegistry(
                 "registry index exceeds 8 MiB".into(),
@@ -1304,7 +1315,15 @@ impl ExtensionCatalog {
         let index: SignedRegistryIndex = serde_json::from_slice(bytes)
             .map_err(|error| CatalogError::InvalidRegistry(error.to_string()))?;
         verify_registry_index(source, &index)?;
-        write_atomic(&self.index_path(&source.id), bytes)
+        // Reject a rollback/replay of an index older than (or divergent at the same counter
+        // from) whatever this source already had cached — a stale-but-validly-signed index
+        // is otherwise indistinguishable from a current one, and would silently defeat a
+        // real yank.
+        let previous = self.load_verified_index(source)?;
+        verify_index_ordering(previous.as_ref(), &index)?;
+        let warning = stale_index_warning(&source.id, &index.index.generated_at);
+        write_atomic(&self.index_path(&source.id), bytes)?;
+        Ok(warning)
     }
 
     fn load_verified_index(
@@ -2181,6 +2200,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "community".into(),
                 generated_at: "2026-07-26T11:00:00Z".into(),
+                counter: 0,
                 releases: vec![first_release],
             },
             &registry_private,
@@ -2210,6 +2230,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "community".into(),
                 generated_at: "2026-07-26T12:00:00Z".into(),
+                counter: 1,
                 releases: vec![signed_release_clone(&release, &publisher_private)],
             },
             &registry_private,
@@ -2238,6 +2259,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "community".into(),
                 generated_at: "2026-07-26T13:00:00Z".into(),
+                counter: 2,
                 releases: vec![yanked],
             },
             &registry_private,
@@ -2257,6 +2279,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "community".into(),
                 generated_at: "2026-07-26T14:00:00Z".into(),
+                counter: 3,
                 releases: vec![signed.index.releases[0].clone(), incompatible],
             },
             &registry_private,
@@ -2282,6 +2305,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "community".into(),
                 generated_at: "2026-07-26T15:00:00Z".into(),
+                counter: 4,
                 releases: vec![signed.index.releases[0].clone(), beta],
             },
             &registry_private,
@@ -2307,9 +2331,12 @@ kind = "notifications:show"
         catalog
             .set_channel(&installed.id, ReleaseChannel::Stable)
             .unwrap();
-        catalog.store_index_bytes("community", &bytes).unwrap();
 
-        let mut tampered: SignedRegistryIndex = serde_json::from_slice(&bytes).unwrap();
+        // Tamper the most recently published (highest-counter) index rather than replaying
+        // the old counter-1 `bytes` snapshot from earlier — replaying it is exactly the
+        // rollback verify_index_ordering now rejects, and isn't what this step means to test.
+        let channel_bytes = serde_json::to_vec(&channel_index).unwrap();
+        let mut tampered: SignedRegistryIndex = serde_json::from_slice(&channel_bytes).unwrap();
         tampered.index.generated_at = "tampered".into();
         assert!(
             catalog
@@ -2330,6 +2357,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "other".into(),
                 generated_at: "2026-07-27T12:00:00Z".into(),
+                counter: 5,
                 releases: vec![conflicting_release],
             },
             &other_registry_private,
@@ -2398,6 +2426,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "community".into(),
                 generated_at: "2026-07-26T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![release],
             },
             &registry_private,
@@ -2488,6 +2517,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "source-a".into(),
                 generated_at: "2026-07-26T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![rel_v1],
             },
             &reg_a_priv,
@@ -2544,6 +2574,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "source-b".into(),
                 generated_at: "2026-07-27T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![rel_v2],
             },
             &reg_b_priv,
@@ -2622,6 +2653,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "trusted-source".into(),
                 generated_at: "2026-07-26T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![rel_v1],
             },
             &reg_a_priv,
@@ -2729,6 +2761,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "source-a".into(),
                 generated_at: "2026-07-26T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![rel_a],
             },
             &reg_a_priv,
@@ -2779,6 +2812,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "source-b".into(),
                 generated_at: "2026-07-27T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![rel_b],
             },
             &reg_b_priv,
@@ -2908,6 +2942,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "source-a".into(),
                 generated_at: "2026-07-26T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![rel_a],
             },
             &reg_a_priv,
@@ -2980,6 +3015,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "source-b".into(),
                 generated_at: "2026-07-27T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![rel_b],
             },
             &reg_b_priv,
@@ -3082,6 +3118,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "source-a".into(),
                 generated_at: "2026-07-26T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![rel_a],
             },
             &reg_a_priv,
@@ -3152,6 +3189,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "source-b".into(),
                 generated_at: "2026-07-27T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![rel_b],
             },
             &reg_b_priv,
@@ -3295,6 +3333,7 @@ kind = "notifications:show"
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "custom-source".into(),
                 generated_at: "2026-07-26T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![release],
             },
             &reg_private,
@@ -3374,6 +3413,7 @@ authors = ["{OFFICIAL_AUTHOR}"]
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "community".into(),
                 generated_at: "2026-07-26T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![release],
             },
             &reg_private,
@@ -3446,6 +3486,7 @@ authors = ["{OFFICIAL_AUTHOR}"]
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: OFFICIAL_SOURCE_ID.into(),
                 generated_at: "2026-07-26T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![release],
             },
             &official_private,
@@ -3515,6 +3556,7 @@ authors = ["{OFFICIAL_AUTHOR}"]
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: OFFICIAL_SOURCE_ID.into(),
                 generated_at: "2026-07-26T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![release],
             },
             &official_private,
@@ -3581,6 +3623,7 @@ authors = ["{OFFICIAL_AUTHOR}"]
                 schema_version: REGISTRY_SCHEMA_VERSION,
                 source_id: "community".into(),
                 generated_at: "2026-07-26T12:00:00Z".into(),
+                counter: 0,
                 releases: vec![release],
             },
             &reg_private,
@@ -3641,5 +3684,226 @@ authors = ["{OFFICIAL_AUTHOR}"]
         assert!(sources[0].official);
         assert!(sources[0].enabled);
         assert!(sources[0].is_pinned_official());
+    }
+
+    /// A minimal signed index with no releases, for tests that only exercise index-level
+    /// ordering/staleness rather than release content.
+    fn minimal_signed_index(
+        source_id: &str,
+        counter: u64,
+        generated_at: &str,
+        private_key: &str,
+    ) -> SignedRegistryIndex {
+        sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: source_id.into(),
+                generated_at: generated_at.into(),
+                counter,
+                releases: Vec::new(),
+            },
+            private_key,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn lower_counter_index_is_rejected_as_replay() {
+        let root = test_root("replay-lower-counter");
+        let catalog = catalog(&root);
+        let (registry_private, registry_public) = generate_signing_key().unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "community".into(),
+                name: "Community".into(),
+                index_url: root.join("index.json").display().to_string(),
+                root_public_key: registry_public,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+
+        let newer = minimal_signed_index("community", 5, "2026-08-01T00:00:00Z", &registry_private);
+        catalog
+            .store_index_bytes("community", &serde_json::to_vec(&newer).unwrap())
+            .unwrap();
+
+        let older = minimal_signed_index("community", 3, "2026-07-01T00:00:00Z", &registry_private);
+        let result = catalog.store_index_bytes("community", &serde_json::to_vec(&older).unwrap());
+        assert!(
+            matches!(result, Err(CatalogError::InvalidRegistry(_))),
+            "expected a lower counter to be rejected, got {result:?}"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn equal_counter_identical_payload_is_accepted_as_no_op() {
+        let root = test_root("replay-same-counter-same-payload");
+        let catalog = catalog(&root);
+        let (registry_private, registry_public) = generate_signing_key().unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "community".into(),
+                name: "Community".into(),
+                index_url: root.join("index.json").display().to_string(),
+                root_public_key: registry_public,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+
+        let index = minimal_signed_index("community", 5, "2026-08-01T00:00:00Z", &registry_private);
+        let bytes = serde_json::to_vec(&index).unwrap();
+        catalog.store_index_bytes("community", &bytes).unwrap();
+        // Re-publishing the exact same bytes at the same counter must succeed — it's the
+        // legitimate idempotent case (e.g. a retried publish, or a client that refreshes and
+        // gets served the same index again), not tampering.
+        catalog
+            .store_index_bytes("community", &bytes)
+            .expect("identical re-publish at the same counter must be a no-op, not an error");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn equal_counter_different_payload_is_rejected() {
+        let root = test_root("replay-same-counter-different-payload");
+        let catalog = catalog(&root);
+        let (registry_private, registry_public) = generate_signing_key().unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "community".into(),
+                name: "Community".into(),
+                index_url: root.join("index.json").display().to_string(),
+                root_public_key: registry_public,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+
+        let first = minimal_signed_index("community", 5, "2026-08-01T00:00:00Z", &registry_private);
+        catalog
+            .store_index_bytes("community", &serde_json::to_vec(&first).unwrap())
+            .unwrap();
+
+        // Same counter, but generated_at (and therefore the whole signed payload) differs —
+        // the counter alone can't mean two different things.
+        let conflicting =
+            minimal_signed_index("community", 5, "2026-08-02T00:00:00Z", &registry_private);
+        let result =
+            catalog.store_index_bytes("community", &serde_json::to_vec(&conflicting).unwrap());
+        assert!(
+            matches!(result, Err(CatalogError::InvalidRegistry(_))),
+            "expected a same-counter-different-payload index to be rejected, got {result:?}"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn higher_counter_index_is_accepted() {
+        let root = test_root("replay-higher-counter");
+        let catalog = catalog(&root);
+        let (registry_private, registry_public) = generate_signing_key().unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "community".into(),
+                name: "Community".into(),
+                index_url: root.join("index.json").display().to_string(),
+                root_public_key: registry_public,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+
+        let first = minimal_signed_index("community", 5, "2026-08-01T00:00:00Z", &registry_private);
+        catalog
+            .store_index_bytes("community", &serde_json::to_vec(&first).unwrap())
+            .unwrap();
+        let next = minimal_signed_index("community", 6, "2026-08-02T00:00:00Z", &registry_private);
+        catalog
+            .store_index_bytes("community", &serde_json::to_vec(&next).unwrap())
+            .expect("a higher counter must be accepted");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_generated_at_warns_but_does_not_reject() {
+        let root = test_root("stale-index-warns");
+        let catalog = catalog(&root);
+        let (registry_private, registry_public) = generate_signing_key().unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "community".into(),
+                name: "Community".into(),
+                index_url: root.join("index.json").display().to_string(),
+                root_public_key: registry_public,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+
+        // Well past STALE_INDEX_WARNING_DAYS, but otherwise a perfectly valid, first-ever
+        // index for this source — must be accepted, only warned about.
+        let stale = minimal_signed_index("community", 0, "2020-01-01T00:00:00Z", &registry_private);
+        let warning = catalog
+            .store_index_bytes("community", &serde_json::to_vec(&stale).unwrap())
+            .expect("a stale but validly ordered index must still be accepted");
+        assert!(
+            warning.is_some_and(|message| message.contains("community")),
+            "expected a staleness warning naming the source"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_key_is_pinned_at_add_time_and_a_different_key_is_rejected() {
+        let root = test_root("source-key-pinning");
+        let catalog = catalog(&root);
+        let (pinned_private, pinned_public) = generate_signing_key().unwrap();
+        let (attacker_private, _attacker_public) = generate_signing_key().unwrap();
+
+        catalog
+            .add_source(RegistrySource {
+                id: "community".into(),
+                name: "Community".into(),
+                index_url: root.join("index.json").display().to_string(),
+                root_public_key: pinned_public.clone(),
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+
+        // A refresh with the pinned key succeeds.
+        let genuine = minimal_signed_index("community", 0, "2026-08-01T00:00:00Z", &pinned_private);
+        catalog
+            .store_index_bytes("community", &serde_json::to_vec(&genuine).unwrap())
+            .expect("the source's own pinned key must verify");
+
+        // A later index signed with a *different* key — as if the source's key changed, or
+        // someone else is trying to impersonate it — must be rejected. The client only ever
+        // trusts the key recorded at add_source time; there is no path for a fetch to
+        // silently update it.
+        let impersonated =
+            minimal_signed_index("community", 1, "2026-08-02T00:00:00Z", &attacker_private);
+        let result =
+            catalog.store_index_bytes("community", &serde_json::to_vec(&impersonated).unwrap());
+        assert!(
+            matches!(result, Err(CatalogError::InvalidSignature(_))),
+            "expected a differently-keyed index to fail signature verification, got {result:?}"
+        );
+
+        // The pinned key is untouched: a subsequent refresh with the original key still works.
+        let still_genuine =
+            minimal_signed_index("community", 1, "2026-08-02T00:00:00Z", &pinned_private);
+        catalog
+            .store_index_bytes("community", &serde_json::to_vec(&still_genuine).unwrap())
+            .expect("the pinned key must remain valid after a rejected impersonation attempt");
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

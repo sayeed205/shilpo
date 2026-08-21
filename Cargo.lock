@@ -7717,6 +7717,7 @@ name = "shilpo-registry-contract"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "chrono",
  "hex",
  "ring",
  "schemars",

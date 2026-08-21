@@ -134,6 +134,12 @@ pub struct RegistryIndex {
     pub schema_version: u32,
     pub source_id: String,
     pub generated_at: String,
+    /// Monotonically increasing per source. The publisher increments this on every signed
+    /// index it produces. `#[serde(default)]` so indexes published before this field existed
+    /// deserialize as counter 0 rather than failing — they are the oldest thing any client
+    /// could have cached, so treating them as the baseline is correct.
+    #[serde(default)]
+    pub counter: u64,
     #[serde(default)]
     pub releases: Vec<RegistryRelease>,
 }
@@ -319,8 +325,14 @@ pub fn verify_registry_index(
     }
     let payload = serde_json::to_vec(&signed.index)
         .map_err(|error| ContractError::InvalidRegistry(error.to_string()))?;
-    verify_signature(&source.root_public_key, &payload, &signed.signature)
-        .map_err(|error| ContractError::InvalidRegistry(error.to_string()))?;
+    verify_signature(&source.root_public_key, &payload, &signed.signature).map_err(|_| {
+        ContractError::InvalidSignature(format!(
+            "index for source '{}' does not verify against its pinned key — the index may be \
+             tampered, or the source's signing key changed; if you trust this is a deliberate \
+             key change, remove and re-add the source to accept the new key",
+            source.id
+        ))
+    })?;
     for release in &signed.index.releases {
         verify_release_signature(release)
             .map_err(|error| ContractError::InvalidRegistry(error.to_string()))?;
@@ -348,6 +360,68 @@ pub fn verify_registry_index(
         }
     }
     Ok(())
+}
+
+/// A signed index that already verified (see [`verify_registry_index`]) is also checked
+/// against whatever the client already had cached for that source, so a validly-signed but
+/// stale index can't silently replace a newer one the client has already seen. `previous` is
+/// `None` on first fetch for a source — anything is accepted as the baseline then.
+///
+/// | previous counter vs new | outcome |
+/// |---|---|
+/// | none cached yet | accept |
+/// | new < previous | reject — rollback/replay |
+/// | new == previous, identical payload | accept, no-op |
+/// | new == previous, different payload | reject — same counter can't mean two different things |
+/// | new > previous | accept |
+pub fn verify_index_ordering(
+    previous: Option<&SignedRegistryIndex>,
+    new: &SignedRegistryIndex,
+) -> Result<(), ContractError> {
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    match new.index.counter.cmp(&previous.index.counter) {
+        std::cmp::Ordering::Less => Err(ContractError::InvalidRegistry(format!(
+            "index for source '{}' has counter {} — an index with counter {} was already seen; \
+             refusing an older or replayed index",
+            new.index.source_id, new.index.counter, previous.index.counter
+        ))),
+        std::cmp::Ordering::Equal if new.index != previous.index => {
+            Err(ContractError::InvalidRegistry(format!(
+                "index for source '{}' repeats counter {} with different content — the source is \
+                 either misbehaving or under attack",
+                new.index.source_id, new.index.counter
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// A generated_at older than this many days only produces a warning, never a rejection — a
+/// legitimate static registry can go quiet for a long time without that being an attack. See
+/// `verify_index_ordering` for the actual anti-replay mechanism, which does reject.
+pub const STALE_INDEX_WARNING_DAYS: i64 = 180;
+
+/// Returns a warning string if `generated_at` is older than [`STALE_INDEX_WARNING_DAYS`], or
+/// if it fails to parse at all (itself worth surfacing, though not a rejection). `None` means
+/// the index is fresh enough that nothing needs to be said.
+pub fn stale_index_warning(source_id: &str, generated_at: &str) -> Option<String> {
+    match chrono::DateTime::parse_from_rfc3339(generated_at) {
+        Ok(timestamp) => {
+            let age = chrono::Utc::now().signed_duration_since(timestamp);
+            (age.num_days() > STALE_INDEX_WARNING_DAYS).then(|| {
+                format!(
+                    "index for source '{source_id}' was generated {} days ago — the source may \
+                     be unmaintained or abandoned, not necessarily compromised",
+                    age.num_days()
+                )
+            })
+        }
+        Err(_) => Some(format!(
+            "index for source '{source_id}' has an unparseable generated_at value '{generated_at}'"
+        )),
+    }
 }
 
 pub fn validate_source(source: &RegistrySource) -> Result<(), ContractError> {
