@@ -24,10 +24,8 @@ pub use build::{
 pub use catalog::{
     CURRENT_SHILPO_VERSION, CatalogError, CatalogExtension, CatalogPaths, ExtensionCatalog,
     ExtensionCatalogSnapshot, ExtensionUpdate as CatalogExtensionUpdate, InstallationReceipt,
-    InstalledExtension, InstalledVersionReceipt, PackageSignature, RegistryIndex, RegistryRelease,
-    RegistrySource, ReleaseChannel, SecretPolicy, SignedRegistryIndex, StoredGrants, TrustState,
-    UpdateState, default_extension_config_dir, default_extension_data_dir, generate_signing_key,
-    package_signature_path, sign_package, sign_registry_index, sign_release,
+    InstalledExtension, InstalledVersionReceipt, SecretPolicy, StoredGrants, TrustState,
+    UpdateState, default_extension_config_dir, default_extension_data_dir,
 };
 pub use circuit_breaker::{
     CircuitBreaker, CircuitBreakerPolicy, CircuitNotice, CircuitNoticeKind, CircuitStateKind,
@@ -54,6 +52,14 @@ pub use scaffold::{
     synchronize_capabilities_and_subscriptions, validate_target_path,
 };
 pub use secrets::{FakeSecretBroker, Oo7SecretBroker, SecretBroker, SecretBrokerError};
+pub use shilpo_registry_contract::{
+    KeyRotationDelegation, PackageSignature, REGISTRY_SCHEMA_VERSION, RegistryIndex,
+    RegistryRelease, RegistrySource, ReleaseChannel, SignedRegistryIndex, capabilities_hash,
+    generate_signing_key, hash_bytes, hash_file, package_signature_path, package_signing_message,
+    public_key_fingerprint, release_signing_payload, rotation_message, sign_package,
+    sign_registry_index, sign_release, validate_source, verify_registry_index,
+    verify_release_signature, verify_signature,
+};
 pub use state::{
     FakeStateStore, HeedStateStore, StateMutation, StatePolicy, StateSnapshot, StateStore,
     StateStoreError, StateValue,
