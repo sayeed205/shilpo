@@ -885,6 +885,21 @@ impl ExtensionCatalog {
         self.install_package_internal(package, provenance, false)
     }
 
+    /// Internal installation and validation pipeline for extension packages (.shilpo-ext archives).
+    ///
+    /// # Registry & Package Eligibility Predicate
+    /// Only sandboxed WebAssembly extensions adhering to the canonical `shilpo:extension` WIT
+    /// contract are eligible for installation through registry or package paths.
+    ///
+    /// Specifically, the unpacked package must satisfy:
+    /// 1. Contains a valid `extension.toml` manifest that parses into `ExtensionManifest` (rejecting
+    ///    unknown fields or tables like `[runtime]`).
+    /// 2. Passes `ExtensionCli::check()` inspection.
+    /// 3. Instantiates successfully under Wasmtime via `probe_runtime()`.
+    ///
+    /// Trusted local scripts (`ScriptManifest` containing `[runtime].executable`) run unsandboxed with
+    /// local user OS authority and have NO registry distribution or `.shilpo-ext` package installation path.
+    /// Any script-shaped bundle is rejected fail-closed during manifest inspection or runtime probing.
     fn install_package_internal(
         &self,
         package: &Path,
@@ -1864,7 +1879,7 @@ fn unique_suffix() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::fs::{self, File};
 
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD as BASE64;
@@ -1910,6 +1925,51 @@ version = "{version}"
         )
         .unwrap();
         ExtensionCli::pack(&source, &output).artifact.unwrap()
+    }
+
+    fn script_package(root: &Path, id: &str, version: &str) -> PathBuf {
+        let source = root.join(format!("script-source-{id}-{version}"));
+        let output = root.join(format!("script-dist-{id}-{version}"));
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("extension.toml"),
+            format!(
+                r#"
+schema_version = 1
+id = "{id}"
+name = "CPU Temperature Script"
+version = "{version}"
+authors = ["Alice <alice@example.com>"]
+
+[runtime]
+mode = "poll"
+executable = "cpu-temp.sh"
+args = []
+interval_ms = 5000
+timeout_ms = 1000
+
+[[contributions.bar_widgets]]
+id = "cpu-temp"
+name = "CPU Temperature"
+description = "Polls and displays current CPU temperature"
+"#
+            ),
+        )
+        .unwrap();
+        fs::write(
+            source.join("cpu-temp.sh"),
+            "#!/bin/sh\nprintf '%s' '{\"schema_version\":1,\"contribution\":\"cpu-temp\",\"kind\":\"text\",\"text\":\"48C\"}'\n",
+        )
+        .unwrap();
+
+        fs::create_dir_all(&output).unwrap();
+        let archive_path = output.join(format!("{id}-{version}.shilpo-ext"));
+        let file = File::create(&archive_path).unwrap();
+        let enc = GzEncoder::new(file, Compression::default());
+        let mut tar = Builder::new(enc);
+        tar.append_dir_all(".", &source).unwrap();
+        tar.into_inner().unwrap().finish().unwrap();
+        archive_path
     }
 
     #[test]
@@ -3474,6 +3534,95 @@ authors = ["{OFFICIAL_AUTHOR}"]
         assert_eq!(installed.active.trust, TrustState::Official);
 
         shilpo_registry_contract::set_test_official_root_key(None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn install_from_catalog_rejects_script_shaped_bundle_from_registry() {
+        let root = test_root("reject-script-bundle");
+        let catalog = catalog(&root);
+        let (pub_private, pub_public) = generate_signing_key().unwrap();
+        let (reg_private, reg_public) = generate_signing_key().unwrap();
+
+        let script_pkg = script_package(&root, "local.script.cpu-temp", "0.1.0");
+        sign_package(&script_pkg, "Alice", &pub_private).unwrap();
+
+        let mut release = RegistryRelease {
+            id: ExtensionId::new("local.script.cpu-temp").unwrap(),
+            name: "CPU Temperature Script".into(),
+            description: Some("Script bundle disguised as WASM release".into()),
+            publisher: "Alice".into(),
+            version: Version::parse("0.1.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: script_pkg.display().to_string(),
+            package_hash: hash_file(&script_pkg).unwrap(),
+            publisher_public_key: pub_public,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: Vec::new(),
+            published_at: "2026-07-26T12:00:00Z".into(),
+            yanked: false,
+            official: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: false,
+            key_rotation: None,
+        };
+        sign_release(&mut release, &pub_private).unwrap();
+
+        let signed_index = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "community".into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![release],
+            },
+            &reg_private,
+        )
+        .unwrap();
+
+        catalog
+            .add_source(RegistrySource {
+                id: "community".into(),
+                name: "Community".into(),
+                index_url: root.join("community.json").display().to_string(),
+                root_public_key: reg_public,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+
+        catalog
+            .store_index_bytes("community", &serde_json::to_vec(&signed_index).unwrap())
+            .unwrap();
+
+        // 1. install_from_catalog must reject the script bundle
+        let err = catalog
+            .install_from_catalog(&ExtensionId::new("local.script.cpu-temp").unwrap())
+            .unwrap_err();
+
+        assert!(
+            matches!(err, CatalogError::InvalidPackage(_)),
+            "expected InvalidPackage, got {err:?}"
+        );
+
+        // 2. Local install of script bundle must also be rejected
+        let local_err = catalog.install_local(&script_pkg).unwrap_err();
+        assert!(
+            matches!(local_err, CatalogError::InvalidPackage(_)),
+            "expected InvalidPackage for local install, got {local_err:?}"
+        );
+
+        // 3. Ensure no receipt or active package was created
+        assert!(
+            catalog
+                .receipt(&ExtensionId::new("local.script.cpu-temp").unwrap())
+                .is_err()
+        );
+        assert!(catalog.active_packages().unwrap().is_empty());
+
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -69,6 +69,7 @@ Controls are classified from production paths, not from test doubles or document
 | CTL-14 | Per-extension action/notification rate limit | Absent | No production limiter was found in the authorization/dispatch path |
 | CTL-15 | Source-pinned installation provenance, source ID reservation, and cross-source update/conflict isolation | Enforced | `desktop/ext-runtime/src/catalog.rs:670-687,767-880,1104-1215,1434-1485` |
 | CTL-16 | Per-extension official trust requiring build-time pinned source root key AND signed release official signal | Enforced | `core/registry-contract/src/lib.rs:77-93,136-155`, `core/ext-api/src/manifest.rs:490-545`, `desktop/ext-runtime/src/catalog.rs:1607-1615` |
+| CTL-17 | Rejection of non-WASM / trusted local script bundles from registry and package installation paths | Enforced | `desktop/ext-runtime/src/catalog.rs:908-928`; `desktop/ext-runtime/src/lint.rs:356-365`; `desktop/ext-runtime/src/wasm.rs:180-240` |
 
 ## Threat analysis
 
@@ -130,6 +131,16 @@ bounded stderr, read-only ViewTree validation, and circuit-breaker behavior are 
 The remaining trust questions are source-directory ownership/permissions, executable resolution and inherited
 environment, process-tree edge cases, diagnostic sanitization, and whether the UI warning is sufficiently explicit.
 
+Trusted local scripts have **no registry distribution path**. They are strictly local-only configurations located directly
+by the user under `$XDG_CONFIG_HOME/shilpo/scripts/<bundle>/manifest.toml`. The official registry repository (`shilpo-rs/extensions`)
+maintains reference scripts in `local-scripts/` strictly outside the scanned `extensions/*` root; the registry generator errors
+on any non-WASM or ineligible directory (#104). As client-side defense in depth (CTL-17), `install_from_catalog()` and
+`install_package_internal()` unpack candidate packages in staging and validate them strictly as WASM extensions via
+`ExtensionCli::check()` (`ExtensionManifest` denies unknown tables such as `[runtime]`) and `probe_runtime()` (verifies
+Wasmtime component instantiation). Any script-shaped bundle arriving through registry or package paths is rejected immediately
+without executing or granting permissions. Any future distribution channel for trusted local scripts must remain entirely
+distinct from the WASM extension registry and require an explicit, visibly stricter install flow.
+
 ### Diagnostics and denial of service
 
 `SecretRef` formatting is structurally redacted, but all logs, errors, worker frames, HTTP response events, script stderr,
@@ -140,7 +151,7 @@ or notification effects.
 ## Risk register
 
 | ID | Risk and boundary | Evidence | Existing mitigation / residual exposure | Likelihood | Impact | Confidence | Treatment | Effort | Dependencies |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | EXT-SEC-001 | HTTP response buffering can exhaust Shell memory (XB-06) | `desktop/shilpo/src/shell/extension_http.rs:41-61` | 15-second timeout and no redirects; body has no byte bound | Medium | High | High | Mitigate | S | Add bounded streaming before broader HTTP policy work |
 | EXT-SEC-002 | Host secret copies are not wipe-on-drop (XB-04) | `desktop/ext-runtime/src/secrets.rs:300-325`; `desktop/ext-runtime/src/wasm.rs:566-600` | Secret Service isolation and redacted handles; `Vec<u8>` copies remain until reuse | Low | High | High | Mitigate | S/M | Define ownership points before adding a dependency |
 | EXT-SEC-003 | DNS rebinding/private-address HTTP reachability (XB-06) | `desktop/ext-runtime/src/effects.rs:10-45`; `desktop/shilpo/src/shell/extension_http.rs:4-38` | HTTPS, GET, host/path grants, and no redirects; DNS/private ranges are not filtered | Low/Medium | High | Medium | Investigate then mitigate | M | Must preserve legitimate public API access and test resolution safely |
@@ -150,6 +161,7 @@ or notification effects.
 | EXT-SEC-007 | Guest memory may retain secret copies until reuse (XB-02) | `desktop/ext-runtime/src/wasm.rs:566-600` and WIT list transfer | Wasmtime memory cap and process isolation; ABI copies cannot be completely erased by host | Low | Low/Medium | Medium | Accept/document | M | Revisit only with an ABI-compatible memory-lifetime design |
 | EXT-SEC-008 | Malicious registry/publisher takeover via higher-version shadowing or cross-source update spoofing | `desktop/ext-runtime/src/catalog.rs:670-687,767-880,1104-1215,1434-1485` | Source-pinned receipts, source ID uniqueness, discovery collision detection, and zero-trust grant/secret resets on publisher switch (CTL-15) | Low | High | High | Mitigate (Enforced) | S | Preserves single global ExtensionId while isolating provenance |
 | EXT-SEC-009 | Third-party extension claiming official trust status on unified or custom registry | `core/registry-contract/src/lib.rs:77-93`, `desktop/ext-runtime/src/catalog.rs:1607-1615` | Per-extension official trust signal requiring build-time compiled root key AND signed release official signal, with mailbox-form author validation (CTL-16) | Low | High | High | Mitigate (Enforced) | S | Decouples registry transport from individual extension trust |
+| EXT-SEC-010 | Unsandboxed script bundle distributed or installed through WASM extension registry/package path | `desktop/ext-runtime/src/catalog.rs:908-928`; `desktop/ext-runtime/src/lint.rs:356-365` | Registry source layout separation (`local-scripts/`), generator-side WASM eligibility enforcement (#104), and client-side manifest/probe verification in `install_from_catalog` (CTL-17) | Low | High | High | Mitigate (Enforced) | S | Ensures unsandboxed scripts cannot ride one-click WASM install path |
 
 ## At-rest decisions
 
