@@ -854,20 +854,29 @@ impl ExtensionCatalog {
             MAX_PACKAGE_BYTES,
         )?;
 
-        if publisher_changed {
-            if let (SecretPolicy::Delete, Some(broker)) = (secret_policy, broker) {
-                let _ = broker.delete_all(extension_id, deadline);
-            }
-            let reset_grants = StoredGrants::disabled(extension_id.clone());
-            let _ = self.save_grants(&reset_grants);
-        }
-
         let result = self.install_package_internal(
             &package,
             PackageProvenance::Registry(Box::new(target_catalog_ext)),
             true,
         );
         let _ = fs::remove_file(package);
+
+        // Secrets and grants must only be reset once the switch has actually succeeded —
+        // install_package_internal has already verified the package hash, provenance
+        // signature, manifest, and runtime activation by the time it returns Ok. Doing
+        // this before that point would destroy a working extension's secrets on a merely
+        // attempted (and failed) switch. The grants reset itself lives inside
+        // install_package_internal, gated on the same `publisher_changed` condition, since
+        // it needs the freshly-parsed manifest id; only secret deletion needs to happen
+        // out here.
+        if result.is_ok()
+            && publisher_changed
+            && secret_policy == SecretPolicy::Delete
+            && let Some(broker) = broker
+        {
+            let _ = broker.delete_all(extension_id, deadline);
+        }
+
         result
     }
 
@@ -2926,6 +2935,173 @@ kind = "notifications:show"
                 .read(&installed.id, &purpose, &secret_ref, deadline)
                 .unwrap(),
             None
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_source_switch_leaves_secrets_grants_and_receipt_untouched() {
+        let root = test_root("source-switch-failure");
+        let catalog = catalog(&root);
+        let (pub_a_priv, pub_a_pub) = generate_signing_key().unwrap();
+        let (reg_a_priv, reg_a_pub) = generate_signing_key().unwrap();
+        let (pub_b_priv, pub_b_pub) = generate_signing_key().unwrap();
+        let (reg_b_priv, reg_b_pub) = generate_signing_key().unwrap();
+
+        let pkg_a = package(
+            &root,
+            "1.0.0",
+            r#"
+[[capabilities]]
+kind = "notifications:show"
+"#,
+        );
+        sign_package(&pkg_a, "Alice", &pub_a_priv).unwrap();
+        let mut rel_a = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("Source A".into()),
+            publisher: "Alice".into(),
+            version: Version::parse("1.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg_a.display().to_string(),
+            package_hash: hash_file(&pkg_a).unwrap(),
+            publisher_public_key: pub_a_pub,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: vec![Capability::NotificationsShow],
+            published_at: "2026-07-26T12:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut rel_a, &pub_a_priv).unwrap();
+        let index_a = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "source-a".into(),
+                generated_at: "2026-07-26T12:00:00Z".into(),
+                releases: vec![rel_a],
+            },
+            &reg_a_priv,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "source-a".into(),
+                name: "Source A".into(),
+                index_url: root.join("source-a.json").display().to_string(),
+                root_public_key: reg_a_pub,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        catalog
+            .store_index_bytes("source-a", &serde_json::to_vec(&index_a).unwrap())
+            .unwrap();
+
+        let installed = catalog
+            .install_from_catalog(&ExtensionId::new("io.github.shilpo.catalog-test").unwrap())
+            .unwrap();
+        catalog
+            .approve_capabilities(&installed.id, vec![Capability::NotificationsShow])
+            .unwrap();
+        catalog.set_enabled(&installed.id, true).unwrap();
+
+        let broker = crate::secrets::FakeSecretBroker::new();
+        let purpose = SecretPurpose::parse("auth-token").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let secret_ref = broker
+            .set(&installed.id, &purpose, b"alice-secret", deadline)
+            .unwrap();
+
+        // Source B's release declares a package_hash that does not match the bytes at
+        // its package_url. install_package_internal must reject this once it actually
+        // hashes the fetched package, well after the switch has already committed to
+        // a different publisher.
+        let pkg_b = package(&root, "2.0.0", "");
+        sign_package(&pkg_b, "Bob", &pub_b_priv).unwrap();
+        let mut rel_b = RegistryRelease {
+            id: ExtensionId::new("io.github.shilpo.catalog-test").unwrap(),
+            name: "Catalog Test".into(),
+            description: Some("Source B".into()),
+            publisher: "Bob".into(),
+            version: Version::parse("2.0.0").unwrap(),
+            api_version: Version::parse(SUPPORTED_API_VERSION).unwrap(),
+            min_shilpo_version: Version::parse(CURRENT_SHILPO_VERSION).unwrap(),
+            channel: ReleaseChannel::Stable,
+            package_url: pkg_b.display().to_string(),
+            package_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .into(),
+            publisher_public_key: pub_b_pub,
+            publisher_signature: String::new(),
+            capabilities_hash: String::new(),
+            capabilities: vec![Capability::NotificationsShow],
+            published_at: "2026-07-27T12:00:00Z".into(),
+            yanked: false,
+            verified_publisher: true,
+            open_source: true,
+            data_only: true,
+            key_rotation: None,
+        };
+        sign_release(&mut rel_b, &pub_b_priv).unwrap();
+        let index_b = sign_registry_index(
+            RegistryIndex {
+                schema_version: REGISTRY_SCHEMA_VERSION,
+                source_id: "source-b".into(),
+                generated_at: "2026-07-27T12:00:00Z".into(),
+                releases: vec![rel_b],
+            },
+            &reg_b_priv,
+        )
+        .unwrap();
+        catalog
+            .add_source(RegistrySource {
+                id: "source-b".into(),
+                name: "Source B".into(),
+                index_url: root.join("source-b.json").display().to_string(),
+                root_public_key: reg_b_pub,
+                official: false,
+                enabled: true,
+            })
+            .unwrap();
+        catalog
+            .store_index_bytes("source-b", &serde_json::to_vec(&index_b).unwrap())
+            .unwrap();
+
+        let switch_result = catalog.switch_source_with_secrets_policy(
+            &installed.id,
+            "source-b",
+            SecretPolicy::Delete,
+            Some(&broker),
+        );
+        assert!(switch_result.is_err());
+
+        let receipt_after = catalog.receipt(&installed.id).unwrap();
+        assert_eq!(
+            receipt_after.active.version,
+            Version::parse("1.0.0").unwrap()
+        );
+        assert_eq!(receipt_after.active.source_id.as_deref(), Some("source-a"));
+
+        let grants_after = catalog.load_grants(&installed.id).unwrap();
+        assert!(grants_after.enabled);
+        assert_eq!(
+            grants_after.granted_capabilities,
+            vec![Capability::NotificationsShow]
+        );
+
+        assert_eq!(
+            broker
+                .read(&installed.id, &purpose, &secret_ref, deadline)
+                .unwrap()
+                .as_deref(),
+            Some(&b"alice-secret"[..])
         );
 
         fs::remove_dir_all(root).unwrap();
