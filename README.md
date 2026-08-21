@@ -2,15 +2,13 @@
 
 ## Install from source
 
-Shilpo includes an automated source installer for its system dependencies, release binaries, user services, and bundled
-weather extension:
+Shilpo includes a small installer that builds the release binary and installs it to your `PATH`:
 
 ```bash
 ./setup install
 ```
 
-See [the installation guide](docs/installation.md) for dependency lists, dry-run/update/uninstall commands, and the
-daily-driver cutover checklist.
+See [the installation guide](docs/installation.md) for prefix and uninstall options.
 
 A modern, high-performance desktop shell built on top of [GPUI](https://github.com/zed-industries/zed), rendered with
 Material Design 3 (M3) & Material Expressive components from [shilpo-rs/ui](https://github.com/shilpo-rs/ui).
