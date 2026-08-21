@@ -113,6 +113,9 @@ pub enum Commands {
         #[command(subcommand)]
         command: BrightnessCommands,
     },
+    /// Interactive post-install setup: choose a compositor, stage its config, install GPU
+    /// drivers, and wire up the session (Arch Linux only)
+    Setup,
 }
 
 #[derive(Subcommand, Debug, Clone, Copy, PartialEq, Eq)]

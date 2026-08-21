@@ -30,6 +30,7 @@ shilpo-observability.workspace = true
 
 clap = { version = "4", features = ["derive", "env"] }
 anyhow.workspace = true
+dialoguer.workspace = true
 libc.workspace = true
 zbus.workspace = true
 zvariant.workspace = true

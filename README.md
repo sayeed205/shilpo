@@ -6,9 +6,12 @@ Shilpo includes a small installer that builds the release binary and installs it
 
 ```bash
 ./setup install
+shilpo setup
 ```
 
-See [the installation guide](docs/installation.md) for prefix and uninstall options.
+`./setup install` builds and installs the binary. `shilpo setup` is an interactive, Arch Linux-only wizard that
+configures your session (compositor, GPU drivers, systemd units) and ends by offering to reboot. See
+[the installation guide](docs/installation.md) for details.
 
 A modern, high-performance desktop shell built on top of [GPUI](https://github.com/zed-industries/zed), rendered with
 Material Design 3 (M3) & Material Expressive components from [shilpo-rs/ui](https://github.com/shilpo-rs/ui).

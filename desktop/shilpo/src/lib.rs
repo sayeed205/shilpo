@@ -3,6 +3,7 @@ pub mod cli;
 pub mod config;
 pub mod lock;
 pub mod settings;
+pub mod setup;
 pub mod shell;
 
 pub use assets::Assets;

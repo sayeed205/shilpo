@@ -684,6 +684,13 @@ async fn main() {
                 }
             }
         },
+        Commands::Setup => match shilpo::setup::run() {
+            Ok(()) => std::process::exit(EXIT_SUCCESS),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(EXIT_FAILURE);
+            }
+        },
         Commands::Doctor {
             fix,
             first_login,
