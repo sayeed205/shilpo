@@ -105,17 +105,34 @@ fn stage_niri() -> Result<(), String> {
     Ok(())
 }
 
+const HYPRLAND_CONFIG_D: &[&str] = &[
+    "10-input-and-cursor.lua",
+    "20-layout-and-overview.lua",
+    "30-window-rules.lua",
+    "40-environment.lua",
+    "50-startup.lua",
+    "60-animations.lua",
+    "70-binds.lua",
+    "80-layer-rules.lua",
+];
+
 fn stage_hyprland() -> Result<(), String> {
     let config_home = config_home();
     let bin = current_bin_path()?;
+    let bin_replacement = [("@SHILPO_BIN@", bin.as_str())];
 
     println!("Staging Hyprland configuration...");
     let hypr_dir = config_home.join("hypr");
-    write_embedded_rendered(
-        "hyprland/hyprland.lua",
-        &hypr_dir.join("hyprland.lua"),
-        &[("@SHILPO_BIN@", bin.as_str())],
-    )?;
+    write_embedded("hyprland/hyprland.lua", &hypr_dir.join("hyprland.lua"))?;
+
+    let config_d_dir = hypr_dir.join("config.d");
+    for name in HYPRLAND_CONFIG_D {
+        write_embedded_rendered(
+            &format!("hyprland/config.d/{name}"),
+            &config_d_dir.join(name),
+            &bin_replacement,
+        )?;
+    }
 
     // User-owned extension point: never overwrite it once it exists.
     let user_extra = hypr_dir.join("shilpo-user-extra.lua");

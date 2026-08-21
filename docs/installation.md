@@ -32,9 +32,11 @@ An interactive wizard that turns a bare `shilpo` install into a working desktop 
    and configures for that, skipping package installation.
 2. On Arch, installs the desktop packages that compositor needs (bootstrapping `paru` if missing) and detects/installs
    GPU drivers (Intel/AMD/NVIDIA Turing-or-newer).
-3. Stages Shilpo's recommended configuration for the chosen compositor — Niri gets `~/.config/niri/`; Hyprland gets
-   `~/.config/hypr/hyprland.lua` (Hyprland deprecated its classic `.conf` format in 0.55 in favor of native Lua
-   config) — plus the shared Kitty/Fish/Starship/Swaylock/Swayidle/Shilpo configuration and default wallpaper.
+3. Stages Shilpo's recommended configuration for the chosen compositor, both split into a numbered `config.d/`
+   (mirroring each other's categories — input/cursor, layout, window rules, environment, startup, animations, binds,
+   layer rules): Niri gets `~/.config/niri/config.d/*.kdl`; Hyprland gets `~/.config/hypr/config.d/*.lua` (Hyprland
+   deprecated its classic `.conf` format in 0.55 in favor of native Lua config). Plus the shared
+   Kitty/Fish/Starship/Swaylock/Swayidle/Shilpo configuration and default wallpaper.
 4. Wires up the session: all of Shilpo's daemons and helpers are systemd user units grouped under
    `shilpo-session.target`, wants-linked so `systemctl --user daemon-reload` picks them up. Each compositor's own
    staged config starts that one target with a single `systemctl --user start shilpo-session.target` call — this is

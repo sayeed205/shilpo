@@ -1,0 +1,8 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 80 — Layer rules
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Niri's layer-rule (config.d/80-layer-rules.kdl) places the wallpaper surface within
+-- Niri's own backdrop concept. Hyprland has no equivalent notion -- layer-shell surfaces
+-- are ordered purely by their own layer (background/bottom/top/overlay), so there's
+-- nothing to configure here today. Real layer_rule tuning (see hl.layer_rule in the
+-- Hyprland Lua API) can be added here once a concrete need comes up.
