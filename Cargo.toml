@@ -68,7 +68,6 @@ reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "c15662
     "socks",
     "stream",
 ], package = "zed-reqwest", version = "0.12.15-zed" }
-reqwest_client = { git = "https://github.com/zed-industries/zed" }
 gpui_web = { git = "https://github.com/zed-industries/zed" }
 sum-tree = { version = "0.2", package = "zed-sum-tree" }
 
@@ -155,9 +154,6 @@ codegen-units = 16
 debug = "limited"
 split-debuginfo = "unpacked"
 
-[build]
-rustflags = ["-Z", "threads=4"]
-
 [profile.dev.package]
 resvg = { opt-level = 3 }
 rustybuzz = { opt-level = 3 }
@@ -167,11 +163,9 @@ smol = { opt-level = 3 }
 gpui = { opt-level = 3 }
 gpui_platform = { opt-level = 3 }
 gpui_macros = { opt-level = 3 }
-tree-sitter = { opt-level = 3 }
 sum_tree = { opt-level = 3 }
 ropey = { opt-level = 3 }
 lsp-types = { opt-level = 3 }
-reqwest_client = { opt-level = 3 }
 markdown = { opt-level = 3 }
 xml5ever = { opt-level = 3 }
 wasmtime = { opt-level = 3 }
@@ -200,4 +194,3 @@ gpui = { git = "https://github.com/sayeed205/zed", rev = "9e336ac", version = "=
 gpui_platform = { git = "https://github.com/sayeed205/zed", rev = "9e336ac", version = "=0.1.0" }
 gpui_macros = { git = "https://github.com/sayeed205/zed", rev = "9e336ac", version = "=0.1.0" }
 gpui_web = { git = "https://github.com/sayeed205/zed", rev = "9e336ac", version = "=0.1.0" }
-reqwest_client = { git = "https://github.com/sayeed205/zed", rev = "9e336ac", version = "=0.1.0" }
