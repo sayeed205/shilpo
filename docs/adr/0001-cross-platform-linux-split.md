@@ -17,7 +17,9 @@ belong in this repository at all.
 Cross-platform code and the Linux-only desktop shell are kept separate:
 
 - **`core/`** in this repo — cross-platform crates that are specifically about this repo's own extension contract:
-  `shilpo-ext-api`.
+  `shilpo-ext-api`, and the extension registry wire contract (index, release, and signature types) that the registry's
+  index generator must consume without pulling in the Linux host runtime — see
+  [ADR-0018](0018-extension-registry-distribution.md).
 - **The UI component library, its theme/color math, and shared macros live in a separate repository**,
   [shilpo-rs/ui](https://github.com/shilpo-rs/ui) (`shilpo-m3e`, `shilpo-theme`, `shilpo-macros`), consumed here as a
   git dependency pinned to an exact revision — not a local workspace member. Unlike `core/ext-api`, this code has no
@@ -33,12 +35,16 @@ Cross-platform code and the Linux-only desktop shell are kept separate:
 
 ### 2. Publication boundary
 
-- **Core Tier** (`core/` → crates.io): `shilpo-ext-api`.
+- **Core Tier** (`core/` → crates.io): `shilpo-ext-api` and the extension registry wire contract.
 - **UI Tier**: `shilpo-m3e`, `shilpo-theme`, `shilpo-macros` (crates.io), maintained in
   [shilpo-rs/ui](https://github.com/shilpo-rs/ui) rather than under `core/` in this one.
 - **SDK Tier**: `shilpo-ext-sdk` (crates.io) and `@shilpo/ext-sdk` (JSR), maintained in
   [shilpo-rs/sdks](https://github.com/shilpo-rs/sdks). They target `core/ext-api`'s WIT contract at a pinned revision
   instead of a live path dependency.
+- **Registry Tier**: [shilpo-rs/extensions](https://github.com/shilpo-rs/extensions) is the extension registry. It holds
+  extension source, builds and signs artifacts in CI, and publishes the signed index. It is a distribution repository
+  rather than a published crate, and consumes the Core Tier wire contract at a pinned revision. See
+  [ADR-0018](0018-extension-registry-distribution.md).
 
 Icon assets are plain data in `core/assets/icons/`; applications bring their own asset-source implementation. All
 `desktop/` crates are internal to the Shilpo desktop environment and are never published.
