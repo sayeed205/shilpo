@@ -1,14 +1,27 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 70 — Key bindings
 -- ─────────────────────────────────────────────────────────────────────────────
--- Mirrors data/niri/config.d/70-binds.kdl. Dispatchers without a confirmed native `hl.dsp`
--- equivalent fall back to `hyprctl dispatch`, which is stable across Hyprland versions.
+-- Mirrors data/niri/config.d/70-binds.kdl, with the column-based ones (swapcol,
+-- colresize, consume_or_expel, ...) ported from that same file's Niri "scrolling-tiler"
+-- semantics onto Hyprland's scrolling layout (20-layout-and-overview.lua) via the
+-- `hl.dsp.layout(msg)` messages documented at
+-- https://wiki.hypr.land/Configuring/Layouts/Scrolling-Layout/#layout-messages -- these
+-- have no niri equivalent to fall back to, so a few niri-only concepts (focus/move
+-- column first/last, switch-focus-between-floating-and-tiling, keyboard-shortcuts-inhibit)
+-- are left unbound rather than approximated with something that isn't actually equivalent.
 
 local mod = "SUPER"
 
 -- Session & compositor
-hl.bind(mod .. " + SHIFT + E", hl.dsp.exec_cmd("hyprctl dispatch exit"))
-hl.bind(mod .. " + SHIFT + O", hl.dsp.exec_cmd("hyprctl dispatch dpms off"))
+hl.bind(mod .. " + SHIFT + E", hl.dsp.exit())
+-- DPMS must not be dispatched synchronously from a bind (undefined behavior per
+-- https://wiki.hypr.land/Configuring/Basics/Dispatchers/#dispatchers) -- deferred via a
+-- one-shot timer, exactly as the wiki's own workaround shows.
+hl.bind(mod .. " + SHIFT + O", function()
+    hl.timer(function()
+        hl.dispatch(hl.dsp.dpms({ action = "off" }))
+    end, { timeout = 500, type = "oneshot" })
+end)
 
 -- Shilpo shell overlays & controls
 hl.bind(mod .. " + SPACE", hl.dsp.exec_cmd("@SHILPO_BIN@ overview toggle"))
@@ -23,8 +36,8 @@ hl.bind("SUPER + E", hl.dsp.exec_cmd("nautilus"))
 
 -- Window management
 hl.bind(mod .. " + Q", hl.dsp.window.close())
-hl.bind(mod .. " + D", hl.dsp.exec_cmd("hyprctl dispatch fullscreen 1"))
-hl.bind(mod .. " + F", hl.dsp.exec_cmd("hyprctl dispatch fullscreen 0"))
+hl.bind(mod .. " + D", hl.dsp.window.fullscreen({ mode = "maximized" }))
+hl.bind(mod .. " + F", hl.dsp.window.fullscreen({ mode = "fullscreen", layout_aware = true }))
 hl.bind(mod .. " + A", hl.dsp.window.float({ action = "toggle" }))
 
 -- Focus movement
@@ -38,14 +51,34 @@ hl.bind(mod .. " + K", hl.dsp.focus({ direction = "up" }))
 hl.bind(mod .. " + L", hl.dsp.focus({ direction = "right" }))
 
 -- Window movement
-hl.bind(mod .. " + SHIFT + left", hl.dsp.exec_cmd("hyprctl dispatch movewindow l"))
-hl.bind(mod .. " + SHIFT + down", hl.dsp.exec_cmd("hyprctl dispatch movewindow d"))
-hl.bind(mod .. " + SHIFT + up", hl.dsp.exec_cmd("hyprctl dispatch movewindow u"))
-hl.bind(mod .. " + SHIFT + right", hl.dsp.exec_cmd("hyprctl dispatch movewindow r"))
-hl.bind(mod .. " + SHIFT + H", hl.dsp.exec_cmd("hyprctl dispatch movewindow l"))
-hl.bind(mod .. " + SHIFT + J", hl.dsp.exec_cmd("hyprctl dispatch movewindow d"))
-hl.bind(mod .. " + SHIFT + K", hl.dsp.exec_cmd("hyprctl dispatch movewindow u"))
-hl.bind(mod .. " + SHIFT + L", hl.dsp.exec_cmd("hyprctl dispatch movewindow r"))
+hl.bind(mod .. " + SHIFT + left", hl.dsp.window.move({ direction = "l" }))
+hl.bind(mod .. " + SHIFT + down", hl.dsp.window.move({ direction = "d" }))
+hl.bind(mod .. " + SHIFT + up", hl.dsp.window.move({ direction = "u" }))
+hl.bind(mod .. " + SHIFT + right", hl.dsp.window.move({ direction = "r" }))
+hl.bind(mod .. " + SHIFT + H", hl.dsp.window.move({ direction = "l" }))
+hl.bind(mod .. " + SHIFT + J", hl.dsp.window.move({ direction = "d" }))
+hl.bind(mod .. " + SHIFT + K", hl.dsp.window.move({ direction = "u" }))
+hl.bind(mod .. " + SHIFT + L", hl.dsp.window.move({ direction = "r" }))
+
+-- Column layout (scrolling-tiler model, matching niri's column bindings)
+hl.bind(mod .. " + R", hl.dsp.layout("colresize +conf")) -- cycle preset column widths
+hl.bind(mod .. " + Minus", hl.dsp.layout("colresize -0.1"))
+hl.bind(mod .. " + Equal", hl.dsp.layout("colresize +0.1"))
+hl.bind(mod .. " + BracketLeft", hl.dsp.layout("consume_or_expel prev"))
+hl.bind(mod .. " + BracketRight", hl.dsp.layout("consume_or_expel next"))
+hl.bind(mod .. " + C", hl.dsp.layout("fit_into_view")) -- center the focused column
+hl.bind(mod .. " + Ctrl + BracketLeft", hl.dsp.layout("swapcol l"))
+hl.bind(mod .. " + Ctrl + BracketRight", hl.dsp.layout("swapcol r"))
+
+-- Multi-monitor
+hl.bind(mod .. " + Ctrl + left", hl.dsp.focus({ monitor = "l" }))
+hl.bind(mod .. " + Ctrl + right", hl.dsp.focus({ monitor = "r" }))
+hl.bind(mod .. " + Ctrl + up", hl.dsp.focus({ monitor = "u" }))
+hl.bind(mod .. " + Ctrl + down", hl.dsp.focus({ monitor = "d" }))
+hl.bind(mod .. " + Ctrl + SHIFT + left", hl.dsp.window.move({ monitor = "l" }))
+hl.bind(mod .. " + Ctrl + SHIFT + right", hl.dsp.window.move({ monitor = "r" }))
+hl.bind(mod .. " + Ctrl + SHIFT + up", hl.dsp.window.move({ monitor = "u" }))
+hl.bind(mod .. " + Ctrl + SHIFT + down", hl.dsp.window.move({ monitor = "d" }))
 
 -- Workspace navigation
 for i = 1, 9 do
@@ -62,6 +95,13 @@ hl.bind(mod .. " + SHIFT + page_down", hl.dsp.window.move({ workspace = "e+1" })
 hl.bind(mod .. " + SHIFT + page_up", hl.dsp.window.move({ workspace = "e-1" }))
 hl.bind(mod .. " + SHIFT + U", hl.dsp.window.move({ workspace = "e+1" }))
 hl.bind(mod .. " + SHIFT + I", hl.dsp.window.move({ workspace = "e-1" }))
+
+-- Mouse wheel workspace navigation
+hl.bind(mod .. " + mouse_down", hl.dsp.focus({ workspace = "e+1" }))
+hl.bind(mod .. " + mouse_up", hl.dsp.focus({ workspace = "e-1" }))
+
+-- Alt-Tab window cycling
+hl.bind("ALT + Tab", hl.dsp.window.cycle_next())
 
 -- Media & hardware keys (locked = usable while the session is locked)
 hl.bind("XF86AudioRaiseVolume", hl.dsp.exec_cmd("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"), { locked = true, repeating = true })

@@ -11595,8 +11595,3 @@ dependencies = [
  "syn 3.0.3",
  "winnow 1.0.4",
 ]
-
-[[patch.unused]]
-name = "reqwest_client"
-version = "0.1.0"
-source = "git+https://github.com/sayeed205/zed?rev=9e336ac#9e336ac3a75155438c1f6dd99a5bec1b69bc6d99"
