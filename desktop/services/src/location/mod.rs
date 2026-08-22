@@ -224,10 +224,30 @@ async fn fetch_geoclue_async() -> Result<LocationInfo, String> {
         .await
         .map_err(|e| format!("Failed to start GeoClue client: {e}"))?;
 
-    let location_path = client_proxy
+    let mut location_path = client_proxy
         .location()
         .await
         .map_err(|e| format!("Failed to obtain GeoClue location path: {e}"))?;
+
+    // A cold client has no fix yet right after `start()` -- GeoClue leaves `location` at
+    // the root path until its location provider (a WiFi scan, an IP lookup) resolves, which
+    // can take several seconds. Poll for the path to populate instead of immediately building
+    // a proxy for a location object that does not exist yet, which is what caused every cold
+    // GeoClue start to fail outright. Polling rather than watching the property-changed signal
+    // because this proxy is built with `CacheProperties::No`, and zbus's changed-signal stream
+    // relies on the property cache to deliver updates -- with caching off it ends immediately.
+    let mut attempts = 0;
+    while location_path.as_str() == "/" && attempts < 30 {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        location_path = client_proxy
+            .location()
+            .await
+            .map_err(|e| format!("Failed to obtain GeoClue location path: {e}"))?;
+        attempts += 1;
+    }
+    if location_path.as_str() == "/" {
+        return Err("GeoClue did not produce a location fix in time".into());
+    }
 
     let location_proxy = GeoClueLocationProxy::builder(&connection)
         .path(location_path)

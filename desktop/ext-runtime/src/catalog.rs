@@ -19,7 +19,7 @@ pub use shilpo_registry_contract::{
     package_signature_path, package_signing_message, public_key_fingerprint,
     release_signing_payload, rotation_message, sign_package, sign_registry_index, sign_release,
     stale_index_warning, validate_source, verify_index_ordering, verify_registry_index,
-    verify_release_signature, verify_signature,
+    verify_registry_index_bytes, verify_release_signature, verify_signature,
 };
 use tar::Archive;
 
@@ -1312,9 +1312,7 @@ impl ExtensionCatalog {
                 "registry index exceeds 8 MiB".into(),
             ));
         }
-        let index: SignedRegistryIndex = serde_json::from_slice(bytes)
-            .map_err(|error| CatalogError::InvalidRegistry(error.to_string()))?;
-        verify_registry_index(source, &index)?;
+        let index = verify_registry_index_bytes(source, bytes)?;
         // Reject a rollback/replay of an index older than (or divergent at the same counter
         // from) whatever this source already had cached — a stale-but-validly-signed index
         // is otherwise indistinguishable from a current one, and would silently defeat a
@@ -1335,9 +1333,7 @@ impl ExtensionCatalog {
             return Ok(None);
         }
         let bytes = fs::read(&path).map_err(|error| io_error(&path, error))?;
-        let index: SignedRegistryIndex = serde_json::from_slice(&bytes)
-            .map_err(|error| CatalogError::InvalidRegistry(error.to_string()))?;
-        verify_registry_index(source, &index)?;
+        let index = verify_registry_index_bytes(source, &bytes)?;
         Ok(Some(index))
     }
 
@@ -2236,7 +2232,7 @@ kind = "notifications:show"
             &registry_private,
         )
         .unwrap();
-        let bytes = serde_json::to_vec_pretty(&signed).unwrap();
+        let bytes = serde_json::to_vec(&signed).unwrap();
         catalog.store_index_bytes("community", &bytes).unwrap();
         let snapshot = catalog.snapshot();
         assert_eq!(snapshot.discover.len(), 1);
@@ -2442,7 +2438,7 @@ kind = "notifications:show"
                 enabled: true,
             })
             .unwrap();
-        let bytes = serde_json::to_vec_pretty(&signed).unwrap();
+        let bytes = serde_json::to_vec(&signed).unwrap();
         catalog.store_index_bytes("community", &bytes).unwrap();
 
         let receipt = catalog

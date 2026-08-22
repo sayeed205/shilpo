@@ -325,15 +325,65 @@ pub fn verify_registry_index(
     }
     let payload = serde_json::to_vec(&signed.index)
         .map_err(|error| ContractError::InvalidRegistry(error.to_string()))?;
-    verify_signature(&source.root_public_key, &payload, &signed.signature).map_err(|_| {
-        ContractError::InvalidSignature(format!(
-            "index for source '{}' does not verify against its pinned key — the index may be \
-             tampered, or the source's signing key changed; if you trust this is a deliberate \
-             key change, remove and re-add the source to accept the new key",
-            source.id
-        ))
-    })?;
-    for release in &signed.index.releases {
+    verify_signature(&source.root_public_key, &payload, &signed.signature)
+        .map_err(|_| index_signature_error(&source.id))?;
+    verify_releases(&signed.index.releases)
+}
+
+/// Verifies a signed index straight from the bytes it was fetched as (network response or
+/// cached file), without going through [`SignedRegistryIndex`]'s typed round-trip first.
+///
+/// [`verify_registry_index`] re-serializes the *parsed* index to reconstruct what it checks
+/// the signature against. That reconstruction is only byte-identical to what was actually
+/// signed as long as `RegistryIndex`'s fields never change -- add a field (even one that's
+/// `#[serde(default)]`, like `counter` was), and every index signed before that field existed
+/// fails verification retroactively, because the reconstructed JSON now includes a key the
+/// original signer never saw. Verifying against the exact bytes the signer produced, located
+/// via `RawValue` rather than re-derived through a struct, is immune to that class of schema
+/// evolution by construction.
+pub fn verify_registry_index_bytes(
+    source: &RegistrySource,
+    bytes: &[u8],
+) -> Result<SignedRegistryIndex, ContractError> {
+    #[derive(Deserialize)]
+    struct RawEnvelope<'a> {
+        #[serde(borrow)]
+        index: &'a serde_json::value::RawValue,
+        signature: String,
+    }
+
+    let envelope: RawEnvelope = serde_json::from_slice(bytes)
+        .map_err(|error| ContractError::InvalidRegistry(error.to_string()))?;
+    let index: RegistryIndex = serde_json::from_str(envelope.index.get())
+        .map_err(|error| ContractError::InvalidRegistry(error.to_string()))?;
+    if index.schema_version != REGISTRY_SCHEMA_VERSION || index.source_id != source.id {
+        return Err(ContractError::InvalidRegistry(
+            "index schema or source identity mismatch".into(),
+        ));
+    }
+    verify_signature(
+        &source.root_public_key,
+        envelope.index.get().as_bytes(),
+        &envelope.signature,
+    )
+    .map_err(|_| index_signature_error(&source.id))?;
+    verify_releases(&index.releases)?;
+    Ok(SignedRegistryIndex {
+        index,
+        signature: envelope.signature,
+    })
+}
+
+fn index_signature_error(source_id: &str) -> ContractError {
+    ContractError::InvalidSignature(format!(
+        "index for source '{source_id}' does not verify against its pinned key — the index may \
+         be tampered, or the source's signing key changed; if you trust this is a deliberate key \
+         change, remove and re-add the source to accept the new key"
+    ))
+}
+
+fn verify_releases(releases: &[RegistryRelease]) -> Result<(), ContractError> {
+    for release in releases {
         verify_release_signature(release)
             .map_err(|error| ContractError::InvalidRegistry(error.to_string()))?;
         if let Some(rotation) = &release.key_rotation {

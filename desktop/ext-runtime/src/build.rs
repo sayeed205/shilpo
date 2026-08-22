@@ -1049,7 +1049,19 @@ fn build_rust(
     }
 
     let mut cmd = ProcessCommand::new("cargo");
-    cmd = cmd.arg("component").arg("build");
+    // Every artifact-discovery path below looks under `target/wasm32-wasip2/...`
+    // specifically, but `cargo component build` picks its own default target when
+    // none is given, and that default is not the same across cargo-component
+    // versions -- newer releases have defaulted to wasm32-wasip1 instead of
+    // wasm32-wasip2. Left implicit, a build can succeed while silently landing at
+    // a path nothing here ever looks at, so a stale, possibly much older artifact
+    // (or none at all) keeps getting loaded no matter how many times the source
+    // changes. Pin the target explicitly so the two agree unconditionally.
+    cmd = cmd
+        .arg("component")
+        .arg("build")
+        .arg("--target")
+        .arg("wasm32-wasip2");
     if release {
         cmd = cmd.arg("--release");
     }
@@ -1971,7 +1983,10 @@ mod tests {
             .iter()
             .find(|c| c.program == "cargo" && c.args.contains(&"build".to_string()))
             .expect("cargo component build should be invoked");
-        assert_eq!(build_cmd.args, vec!["component", "build"]);
+        assert_eq!(
+            build_cmd.args,
+            vec!["component", "build", "--target", "wasm32-wasip2"]
+        );
         assert_eq!(build_cmd.cwd, Some(dir.to_path_buf()));
     }
 
@@ -2001,7 +2016,16 @@ mod tests {
             .iter()
             .find(|c| c.program == "cargo" && c.args.contains(&"build".to_string()))
             .expect("cargo component build --release should be invoked");
-        assert_eq!(build_cmd.args, vec!["component", "build", "--release"]);
+        assert_eq!(
+            build_cmd.args,
+            vec![
+                "component",
+                "build",
+                "--target",
+                "wasm32-wasip2",
+                "--release"
+            ]
+        );
     }
 
     #[test]

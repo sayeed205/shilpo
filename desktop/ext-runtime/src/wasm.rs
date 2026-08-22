@@ -1090,7 +1090,7 @@ impl WasmRuntime {
                 Some(instance) => instance,
                 None => return,
             };
-            let wit_event = convert_event_to_wit(&event);
+            let wit_event = convert_event_to_wit(extension_id, &event);
             match instance
                 .extension
                 .call_on_event(&mut instance.store, &wit_event)
@@ -1395,7 +1395,7 @@ impl ExtensionRuntime for WasmRuntime {
         let instance = self.instance_mut(extension_id)?;
         Self::prepare_call(instance, budget)?;
         instance.store.data_mut().operations.clear();
-        let wit_event = convert_event_to_wit(event);
+        let wit_event = convert_event_to_wit(extension_id, event);
         let result = instance
             .extension
             .call_on_event(&mut instance.store, &wit_event)
@@ -2211,15 +2211,21 @@ mod secret_host_tests {
     fn test_bar_menu_event_wit_conversion_all_reasons() {
         use shilpo_ext_api::BarMenuCloseReason;
 
+        let extension_id = ExtensionId::new("org.shilpo.weather").unwrap();
         let opened = shilpo_ext_api::ExtensionEvent::BarMenuOpened {
             contribution_id: "org.shilpo.weather/weather-menu".into(),
             instance_id: "bar:0:center:0".into(),
         };
-        let wit_opened = convert_event_to_wit(&opened);
+        let wit_opened = convert_event_to_wit(&extension_id, &opened);
         assert!(matches!(
             wit_opened,
             self::shilpo::extension::events::ExtensionEvent::BarMenuOpened(_)
         ));
+        let self::shilpo::extension::events::ExtensionEvent::BarMenuOpened(payload) = &wit_opened
+        else {
+            unreachable!()
+        };
+        assert_eq!(payload.contribution_id, "weather-menu");
 
         let reasons = [
             BarMenuCloseReason::SourceToggle,
@@ -2238,16 +2244,40 @@ mod secret_host_tests {
                 instance_id: "bar:0:center:0".into(),
                 reason,
             };
-            let wit_closed = convert_event_to_wit(&closed);
+            let wit_closed = convert_event_to_wit(&extension_id, &closed);
             assert!(matches!(
                 wit_closed,
                 self::shilpo::extension::events::ExtensionEvent::BarMenuClosed(_)
             ));
+            let self::shilpo::extension::events::ExtensionEvent::BarMenuClosed(payload) =
+                &wit_closed
+            else {
+                unreachable!()
+            };
+            assert_eq!(payload.contribution_id, "weather-menu");
         }
     }
 }
 
-fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::ExtensionEvent {
+/// Strips the `extension_id/` prefix from a canonical contribution id before handing it to
+/// the guest. Host-side event routing (`ExtensionSession::dispatch`) needs the full canonical
+/// string to determine which extension owns an event, but the guest already knows its own
+/// identity and only ever compares against the bare contribution id it declared in its
+/// manifest (mirroring `HostContract::render_view`, which passes `canonical.contribution_id`
+/// rather than the full canonical string into the guest's `view` export). `extension_id` here
+/// is always the target this event was routed to, so the prefix is guaranteed to match.
+fn strip_extension_prefix(extension_id: &ExtensionId, contribution_id: &str) -> String {
+    contribution_id
+        .strip_prefix(extension_id.as_str())
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(contribution_id)
+        .to_string()
+}
+
+fn convert_event_to_wit(
+    extension_id: &ExtensionId,
+    event: &ApiEvent,
+) -> self::shilpo::extension::events::ExtensionEvent {
     use self::shilpo::extension::events as wit_events;
     match event {
         ApiEvent::ShellStarted => wit_events::ExtensionEvent::ShellStarted,
@@ -2296,7 +2326,7 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
             width,
             height,
         } => wit_events::ExtensionEvent::ContributionMounted(wit_events::MountedEvent {
-            contribution_id: contribution_id.clone(),
+            contribution_id: strip_extension_prefix(extension_id, contribution_id),
             instance_id: instance_id.clone(),
             width: *width,
             height: *height,
@@ -2305,7 +2335,7 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
             contribution_id,
             instance_id,
         } => wit_events::ExtensionEvent::ContributionUnmounted(wit_events::UnmountedEvent {
-            contribution_id: contribution_id.clone(),
+            contribution_id: strip_extension_prefix(extension_id, contribution_id),
             instance_id: instance_id.clone(),
         }),
         ApiEvent::ContributionResized {
@@ -2314,7 +2344,7 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
             width,
             height,
         } => wit_events::ExtensionEvent::ContributionResized(wit_events::ResizedEvent {
-            contribution_id: contribution_id.clone(),
+            contribution_id: strip_extension_prefix(extension_id, contribution_id),
             instance_id: instance_id.clone(),
             width: *width,
             height: *height,
@@ -2324,7 +2354,7 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
             instance_id,
             settings,
         } => wit_events::ExtensionEvent::ContributionSettingsChanged(wit_events::SettingsEvent {
-            contribution_id: contribution_id.clone(),
+            contribution_id: strip_extension_prefix(extension_id, contribution_id),
             instance_id: instance_id.clone(),
             settings: data_value_from_json(settings),
         }),
@@ -2332,7 +2362,7 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
             contribution_id,
             instance_id,
         } => wit_events::ExtensionEvent::BarMenuOpened(wit_events::BarMenuOpenedPayload {
-            contribution_id: contribution_id.clone(),
+            contribution_id: strip_extension_prefix(extension_id, contribution_id),
             instance_id: instance_id.clone(),
         }),
         ApiEvent::BarMenuClosed {
@@ -2340,7 +2370,7 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
             instance_id,
             reason,
         } => wit_events::ExtensionEvent::BarMenuClosed(wit_events::BarMenuClosedPayload {
-            contribution_id: contribution_id.clone(),
+            contribution_id: strip_extension_prefix(extension_id, contribution_id),
             instance_id: instance_id.clone(),
             reason: match reason {
                 shilpo_ext_api::BarMenuCloseReason::SourceToggle => {
@@ -2378,7 +2408,7 @@ fn convert_event_to_wit(event: &ApiEvent) -> self::shilpo::extension::events::Ex
             event_id,
             value,
         } => wit_events::ExtensionEvent::Input(wit_events::InputEvent {
-            contribution_id: contribution_id.clone(),
+            contribution_id: strip_extension_prefix(extension_id, contribution_id),
             instance_id: instance_id.clone(),
             event_id: event_id.clone(),
             value: value.as_ref().map(data_value_from_json),

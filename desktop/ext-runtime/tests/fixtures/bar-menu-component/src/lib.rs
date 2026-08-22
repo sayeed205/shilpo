@@ -21,11 +21,11 @@ impl Guest for BarMenuFixture {
     fn on_event(event: events::ExtensionEvent) -> Result<(), types::Error> {
         match event {
             events::ExtensionEvent::BarMenuOpened(payload) => {
-                assert_eq!(payload.contribution_id, "io.example.fixture/menu");
+                assert_eq!(payload.contribution_id, "menu");
                 assert_eq!(payload.instance_id, "bar:display-1:fixture");
             }
             events::ExtensionEvent::BarMenuClosed(payload) => {
-                assert_eq!(payload.contribution_id, "io.example.fixture/menu");
+                assert_eq!(payload.contribution_id, "menu");
                 assert_eq!(payload.instance_id, "bar:display-1:fixture");
                 let expected = [
                     events::BarMenuCloseReason::SourceToggle,

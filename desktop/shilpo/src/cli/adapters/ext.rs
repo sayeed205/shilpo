@@ -763,23 +763,16 @@ impl ExtAdapter {
         }
 
         // Step 2: D-Bus connection & StartDevSession
-        let rt = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => rt,
-            Err(e) => {
-                return ExtOpResult {
-                    success: false,
-                    data: serde_json::json!({ "error": format!("tokio runtime error: {e}") }),
-                    human_message: format!("Error creating runtime: {e}"),
-                    warnings: Vec::new(),
-                    exit_code: 1,
-                };
-            }
-        };
-
-        let result = rt.block_on(async {
+        //
+        // `dev()` is called synchronously from within `main`'s own multi-threaded Tokio
+        // runtime (see `#[tokio::main] async fn main()`), so building and blocking on a
+        // second, independent runtime here panics with "Cannot start a runtime from within
+        // a runtime". `block_in_place` is the standard escape hatch for a long-running
+        // blocking call made from inside an already-running multi-threaded runtime: it
+        // hands this worker thread's other queued work to the remaining workers for the
+        // duration of the (effectively unbounded, file-watching) loop below.
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
             let conn = match zbus::Connection::session().await {
                 Ok(c) => c,
                 Err(e) => {
@@ -1085,7 +1078,8 @@ impl ExtAdapter {
                 }
             }
 
-            Ok(())
+                Ok(())
+            })
         });
 
         match result {

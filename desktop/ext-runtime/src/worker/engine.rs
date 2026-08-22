@@ -203,13 +203,21 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
         changes
     }
 
+    /// Re-renders whatever contribution(s) an event may have changed. Events scoped to a single
+    /// contribution (`Input`, `BarMenuOpened`, `BarMenuClosed`) only refresh that one. Every other
+    /// event -- including `HttpResponse` and `LocationResponse`, which carry no `contribution_id`
+    /// at all because they answer an extension-wide async request rather than target a specific
+    /// widget -- refreshes every contribution the extension owns. Without this, an extension whose
+    /// view depends on the outcome of an async host operation (a location lookup, an HTTP fetch, a
+    /// periodic `TimerFired` refresh) updates its internal state correctly but the bar never learns
+    /// to re-render it, leaving the widget stuck on its initial view forever.
     fn refresh_event_views(
         &mut self,
         event: &ExtensionEvent,
         extension_id: &ExtensionId,
         changes: &mut ExtensionChanges,
     ) {
-        let contribution_id = match event {
+        match event {
             ExtensionEvent::Input {
                 contribution_id, ..
             }
@@ -218,18 +226,33 @@ impl<R: ExtensionRuntime> ExtensionSession<R> {
             }
             | ExtensionEvent::BarMenuClosed {
                 contribution_id, ..
-            } => contribution_id,
-            _ => return,
-        };
-        let Ok(canonical) = contribution_id.parse::<CanonicalId>() else {
-            return;
-        };
-        if &canonical.extension_id != extension_id {
-            return;
+            } => {
+                let Ok(canonical) = contribution_id.parse::<CanonicalId>() else {
+                    return;
+                };
+                if &canonical.extension_id != extension_id {
+                    return;
+                }
+                self.refresh_view(&canonical, changes);
+            }
+            _ => {
+                let owned: Vec<CanonicalId> = self
+                    .views
+                    .keys()
+                    .filter(|canonical| &canonical.extension_id == extension_id)
+                    .cloned()
+                    .collect();
+                for canonical in owned {
+                    self.refresh_view(&canonical, changes);
+                }
+            }
         }
-        if let Ok(Some(view)) = self.host.render_view(&canonical) {
+    }
+
+    fn refresh_view(&mut self, canonical: &CanonicalId, changes: &mut ExtensionChanges) {
+        if let Ok(Some(view)) = self.host.render_view(canonical) {
             self.views.insert(canonical.clone(), view);
-            changes.invalidated_views.push(canonical);
+            changes.invalidated_views.push(canonical.clone());
         }
     }
 
@@ -607,6 +630,12 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                 && let Some(instance) = self.session.instances.get(&key)
             {
                 let event = ExtensionEvent::ContributionUnmounted {
+                    // Full canonical string ("extension_id/contribution_id"): `ExtensionSession::dispatch`
+                    // parses this field as a `CanonicalId` to resolve which extension owns the
+                    // event, so it must stay qualified here. The WASM guest is handed only the
+                    // bare contribution id later, at the actual host-to-guest boundary in
+                    // `convert_event_to_wit`, which strips the prefix once the target extension
+                    // is already known.
                     contribution_id: instance.contribution.to_string(),
                     instance_id: Some(instance.id.clone()),
                 };
@@ -626,6 +655,7 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                 if settings_changed {
                     existing.settings = instance.settings.clone();
                 }
+                // Full canonical string -- see the comment on the unmount event above.
                 let contribution_str = instance.contribution.to_string();
                 let instance_id = instance.id.clone();
                 let width = instance.width;
@@ -649,13 +679,29 @@ impl<R: ExtensionRuntime> ExtensionEngine<R> {
                     changes.merge(self.session.dispatch(&event));
                 }
             } else {
+                // Full canonical string -- see the comment on the unmount event above.
+                let contribution_str = instance.contribution.to_string();
+                let instance_id = instance.id.clone();
                 let event = ExtensionEvent::ContributionMounted {
-                    contribution_id: instance.contribution.to_string(),
-                    instance_id: Some(instance.id.clone()),
+                    contribution_id: contribution_str.clone(),
+                    instance_id: Some(instance_id.clone()),
                     width: instance.width,
                     height: instance.height,
                 };
                 changes.merge(self.session.dispatch(&event));
+                // A freshly mounted contribution has never seen its own settings before,
+                // so this is unconditionally "new" from the extension's point of view --
+                // without this, an extension whose refresh logic only reacts to
+                // `ContributionSettingsChanged` (matching how the settings-changed event
+                // is documented and how existing extensions are written) never gets its
+                // persisted settings until something *changes* them again later, and
+                // starts out permanently stuck showing nothing but its no-data fallback.
+                let settings_event = ExtensionEvent::ContributionSettingsChanged {
+                    contribution_id: contribution_str,
+                    instance_id: Some(instance_id),
+                    settings: instance.settings,
+                };
+                changes.merge(self.session.dispatch(&settings_event));
             }
         }
 
