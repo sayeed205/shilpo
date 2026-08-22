@@ -334,24 +334,36 @@ pub fn parse_active_window_json(json: &str) -> Result<Option<u64>, serde_json::E
 }
 
 /// Encodes a `CompositorCommand` into a Hyprland dispatcher command string.
+/// Encodes a command for Hyprland's raw `.socket.sock` `dispatch` request. Since Hyprland
+/// 0.55's move to Lua config, the compositor wraps whatever follows `dispatch ` into
+/// `hl.dispatch(<that text>)` and evaluates it as Lua -- the old bare hyprlang dispatcher
+/// strings (`dispatch focuswindow address:...`) are no longer valid syntax and are rejected
+/// ("')' expected near 'address'"). Each form below was verified directly against a live
+/// 0.56.2 instance over the raw socket before landing here.
 pub fn encode_hyprland_command(cmd: &CompositorCommand) -> Result<String, RejectionReason> {
     match cmd {
-        CompositorCommand::FocusWorkspace(id) => Ok(format!("dispatch workspace {id}")),
+        CompositorCommand::FocusWorkspace(id) => {
+            Ok(format!("dispatch hl.dsp.focus({{workspace = {id}}})"))
+        }
         CompositorCommand::FocusWindow(id) => Ok(format!(
-            "dispatch focuswindow address:{}",
+            "dispatch hl.dsp.focus({{window = \"address:{}\"}})",
             format_hex_address(*id)
         )),
-        CompositorCommand::FocusPreviousWindow => Ok("dispatch focuscurrentorlast".to_string()),
+        CompositorCommand::FocusPreviousWindow => {
+            Ok("dispatch hl.dsp.focus({last = true})".to_string())
+        }
         CompositorCommand::CloseWindow(id) => Ok(format!(
-            "dispatch closewindow address:{}",
+            "dispatch hl.dsp.window.close({{window = \"address:{}\"}})",
             format_hex_address(*id)
         )),
-        CompositorCommand::CreateWorkspace => Ok("dispatch workspace empty".to_string()),
+        CompositorCommand::CreateWorkspace => {
+            Ok("dispatch hl.dsp.focus({workspace = \"empty\"})".to_string())
+        }
         CompositorCommand::MoveWindowToWorkspace {
             window_id,
             workspace_id,
         } => Ok(format!(
-            "dispatch movetoworkspacesilent {workspace_id},address:{}",
+            "dispatch hl.dsp.window.move({{workspace = {workspace_id}, follow = false, window = \"address:{}\"}})",
             format_hex_address(*window_id)
         )),
     }
@@ -433,7 +445,12 @@ pub fn build_hyprland_snapshot(
             let ws_id = ws.id as u64;
             let is_active = active_monitors_workspaces.contains(&ws.id);
             let is_focused = focused_workspace_id == Some(ws_id);
-            let active_window_id = parse_hex_address(&ws.last_window);
+            // Hyprland reports "0x0" as the sentinel for "this workspace has no last
+            // window", not a real address -- parse_hex_address alone can't tell the
+            // difference (0x0 parses fine as address 0), so an empty workspace was being
+            // read as occupied by whatever treated `active_window_id` as an occupancy
+            // check (e.g. the trailing-empty-workspace synthesis below).
+            let active_window_id = parse_hex_address(&ws.last_window).filter(|&addr| addr != 0);
 
             standard_workspaces.push(WorkspaceInfo {
                 id: ws_id,
@@ -467,6 +484,31 @@ pub fn build_hyprland_snapshot(
     }
     standard_workspaces.sort_by_key(|w| w.id);
     special_workspaces.sort_by_key(|w| w.id);
+
+    // Unlike Niri's dynamic workspaces (which always keep one trailing empty workspace to
+    // scroll/click into), Hyprland only reports workspaces that have been visited or have
+    // windows. The bar's workspace pill renders exactly one dot per entry here, so without
+    // this there is no dot for the next empty workspace to click -- Super+N still works
+    // (Hyprland auto-creates a numbered workspace on focus) but clicking does not, since
+    // there's nothing to click. Mirror Niri's convention by appending one synthetic empty
+    // workspace, unless an empty one is already listed (e.g. the focused workspace has no
+    // windows).
+    if standard_workspaces
+        .iter()
+        .all(|w| w.active_window_id.is_some())
+    {
+        let next_id = standard_workspaces.iter().map(|w| w.id).max().unwrap_or(0) + 1;
+        standard_workspaces.push(WorkspaceInfo {
+            id: next_id,
+            name: None,
+            idx: next_id as u32,
+            is_active: false,
+            is_focused: false,
+            is_urgent: false,
+            output_name: focused_output.clone(),
+            active_window_id: None,
+        });
+    }
 
     // 3. Windows
     let mut windows: Vec<WindowInfo> = Vec::new();
@@ -562,8 +604,9 @@ pub fn query_hyprland_socket(socket_path: &Path, query: &str) -> Result<String> 
     stream.set_read_timeout(Some(Duration::from_millis(500)))?;
     stream.set_write_timeout(Some(Duration::from_millis(500)))?;
 
+    // Hyprland's `j/...` query commands reject a trailing newline outright ("unknown
+    // request") -- unlike `dispatch ...` commands, which tolerate it fine.
     stream.write_all(query.as_bytes())?;
-    stream.write_all(b"\n")?;
     stream.shutdown(std::net::Shutdown::Write)?;
 
     let mut response = String::new();
@@ -933,6 +976,7 @@ fn run_hyprland_listener(
                 let err_msg =
                     "HYPRLAND_INSTANCE_SIGNATURE is not set or socket directory does not exist"
                         .to_string();
+                tracing::error!(%err_msg, "hyprland supervisor start failed");
                 let now_ms = time_source.now_ms();
                 record_supervisor_failure(
                     &supervisor,
@@ -957,6 +1001,7 @@ fn run_hyprland_listener(
                 Ok(state) => state,
                 Err(err) => {
                     let err_msg = format!("Failed to query initial Hyprland state: {err}");
+                    tracing::error!(%err_msg, "hyprland supervisor start failed");
                     let now_ms = time_source.now_ms();
                     record_supervisor_failure(
                         &supervisor,
@@ -976,6 +1021,7 @@ fn run_hyprland_listener(
             Ok(s) => s,
             Err(err) => {
                 let err_msg = format!("Failed to connect to Hyprland event socket: {err}");
+                tracing::error!(%err_msg, "hyprland supervisor start failed");
                 let now_ms = time_source.now_ms();
                 record_supervisor_failure(
                     &supervisor,
@@ -1018,6 +1064,7 @@ fn run_hyprland_listener(
         }
 
         let mut urgent_windows: HashSet<u64> = HashSet::new();
+        let mut current_active_addr = active_window;
 
         // Publish initial ready snapshot
         revision = revision.saturating_add(1);
@@ -1064,25 +1111,33 @@ fn run_hyprland_listener(
 
                     apply_urgent_event(&mut urgent_windows, &event);
 
-                    // Check if event requires refreshing snapshot state
-                    let needs_refresh = matches!(
-                        event,
+                    // Check if event requires refreshing snapshot state. Hyprland co-emits
+                    // activewindowv2/windowtitlev2 whenever the focused window's title text
+                    // changes, not just on a real focus change (observed at 5/sec from a
+                    // terminal with an animated title) -- treating every title update as
+                    // needing a full clients/workspaces/monitors requery pegged a CPU core.
+                    // Only refresh on ActiveWindowV2 when the address actually changed, and
+                    // never refresh on a bare title change.
+                    let needs_refresh = match &event {
                         HyprlandEvent::WorkspaceV2 { .. }
-                            | HyprlandEvent::OpenWindow { .. }
-                            | HyprlandEvent::CloseWindow { .. }
-                            | HyprlandEvent::ActiveWindowV2 { .. }
-                            | HyprlandEvent::MoveWindowV2 { .. }
-                            | HyprlandEvent::Urgent { .. }
-                            | HyprlandEvent::WindowTitleV2 { .. }
-                            | HyprlandEvent::FocusedMon { .. }
-                            | HyprlandEvent::CreateWorkspaceV2 { .. }
-                            | HyprlandEvent::DestroyWorkspaceV2 { .. }
-                    );
+                        | HyprlandEvent::OpenWindow { .. }
+                        | HyprlandEvent::CloseWindow { .. }
+                        | HyprlandEvent::MoveWindowV2 { .. }
+                        | HyprlandEvent::Urgent { .. }
+                        | HyprlandEvent::FocusedMon { .. }
+                        | HyprlandEvent::CreateWorkspaceV2 { .. }
+                        | HyprlandEvent::DestroyWorkspaceV2 { .. } => true,
+                        HyprlandEvent::ActiveWindowV2 { address } => {
+                            *address != current_active_addr
+                        }
+                        _ => false,
+                    };
 
                     if needs_refresh {
                         if let Ok((new_clients, new_workspaces, new_monitors, new_active)) =
                             fetch_full_hyprland_state(&cmd_socket)
                         {
+                            current_active_addr = new_active;
                             revision = revision.saturating_add(1);
                             let snap = build_hyprland_snapshot(
                                 DomainVersion::new(owner_generation, revision),
@@ -1311,9 +1366,14 @@ mod tests {
             None,
         );
 
-        // Standard workspaces should only have positive IDs
-        assert_eq!(snap.workspaces.len(), 1);
+        // Standard workspaces should only have positive IDs. Workspace 1 is occupied, so a
+        // synthetic empty workspace 2 is appended (mirrors Niri's always-one-trailing-empty
+        // convention -- see build_hyprland_snapshot).
+        assert_eq!(snap.workspaces.len(), 2);
         assert_eq!(snap.workspaces[0].id, 1);
+        assert!(snap.workspaces[0].active_window_id.is_some());
+        assert_eq!(snap.workspaces[1].id, 2);
+        assert!(snap.workspaces[1].active_window_id.is_none());
 
         // Special workspaces should be populated in extras
         match snap.extras {
@@ -1334,23 +1394,23 @@ mod tests {
     fn test_encode_hyprland_commands() {
         assert_eq!(
             encode_hyprland_command(&CompositorCommand::FocusWorkspace(3)).unwrap(),
-            "dispatch workspace 3"
+            "dispatch hl.dsp.focus({workspace = 3})"
         );
         assert_eq!(
             encode_hyprland_command(&CompositorCommand::FocusWindow(0x55f8abcd)).unwrap(),
-            "dispatch focuswindow address:0x55f8abcd"
+            "dispatch hl.dsp.focus({window = \"address:0x55f8abcd\"})"
         );
         assert_eq!(
             encode_hyprland_command(&CompositorCommand::FocusPreviousWindow).unwrap(),
-            "dispatch focuscurrentorlast"
+            "dispatch hl.dsp.focus({last = true})"
         );
         assert_eq!(
             encode_hyprland_command(&CompositorCommand::CloseWindow(0x55f8abcd)).unwrap(),
-            "dispatch closewindow address:0x55f8abcd"
+            "dispatch hl.dsp.window.close({window = \"address:0x55f8abcd\"})"
         );
         assert_eq!(
             encode_hyprland_command(&CompositorCommand::CreateWorkspace).unwrap(),
-            "dispatch workspace empty"
+            "dispatch hl.dsp.focus({workspace = \"empty\"})"
         );
         assert_eq!(
             encode_hyprland_command(&CompositorCommand::MoveWindowToWorkspace {
@@ -1358,7 +1418,7 @@ mod tests {
                 workspace_id: 4,
             })
             .unwrap(),
-            "dispatch movetoworkspacesilent 4,address:0x55f8abcd"
+            "dispatch hl.dsp.window.move({workspace = 4, follow = false, window = \"address:0x55f8abcd\"})"
         );
     }
 

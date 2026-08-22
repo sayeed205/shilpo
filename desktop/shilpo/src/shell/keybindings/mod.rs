@@ -82,7 +82,7 @@ impl NiriShortcutBackend {
         compositor: Option<&str>,
         shortcuts: &[ResolvedShortcut],
     ) -> Result<ProjectionReport, ShortcutBackendError> {
-        if compositor.is_some_and(|name| name != "niri") {
+        if compositor != Some("niri") {
             return Ok(ProjectionReport {
                 status: ProjectionStatus::Unsupported,
                 include_directive: include_directive(),

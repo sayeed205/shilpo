@@ -954,14 +954,14 @@ impl NotificationService {
                                         now_ms,
                                     );
                                 } else {
-                                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                                    smol::Timer::after(std::time::Duration::from_millis(250)).await;
                                 }
                             }
                             SupervisorState::Quarantined => {
                                 *connection_slot.lock().unwrap() = None;
                                 *signal_slot.lock().unwrap() = None;
                                 connection = None;
-                                tokio::time::sleep(std::time::Duration::from_millis(
+                                smol::Timer::after(std::time::Duration::from_millis(
                                     QUARANTINE_IDLE_POLL_MS,
                                 ))
                                 .await;
@@ -972,7 +972,7 @@ impl NotificationService {
                                 connection = None;
                                 let now_ms = time_source.now_ms();
                                 if now_ms < retry_at_ms {
-                                    tokio::time::sleep(std::time::Duration::from_millis(
+                                    smol::Timer::after(std::time::Duration::from_millis(
                                         retry_at_ms - now_ms,
                                     ))
                                     .await;

@@ -36,7 +36,6 @@ hl.bind("SUPER + E", hl.dsp.exec_cmd("nautilus"))
 
 -- Window management
 hl.bind(mod .. " + Q", hl.dsp.window.close())
-hl.bind(mod .. " + D", hl.dsp.window.fullscreen({ mode = "maximized" }))
 hl.bind(mod .. " + F", hl.dsp.window.fullscreen({ mode = "fullscreen", layout_aware = true }))
 hl.bind(mod .. " + A", hl.dsp.window.float({ action = "toggle" }))
 
@@ -60,7 +59,11 @@ hl.bind(mod .. " + SHIFT + J", hl.dsp.window.move({ direction = "d" }))
 hl.bind(mod .. " + SHIFT + K", hl.dsp.window.move({ direction = "u" }))
 hl.bind(mod .. " + SHIFT + L", hl.dsp.window.move({ direction = "r" }))
 
--- Column layout (scrolling-tiler model, matching niri's column bindings)
+local col_width_is_full = false
+hl.bind(mod .. " + D", function()
+    col_width_is_full = not col_width_is_full
+    hl.dispatch(hl.dsp.layout("colresize " .. (col_width_is_full and "1.0" or "0.5")))
+end)
 hl.bind(mod .. " + R", hl.dsp.layout("colresize +conf")) -- cycle preset column widths
 hl.bind(mod .. " + Minus", hl.dsp.layout("colresize -0.1"))
 hl.bind(mod .. " + Equal", hl.dsp.layout("colresize +0.1"))

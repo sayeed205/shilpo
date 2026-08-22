@@ -8,7 +8,7 @@ use gpui::{
 use shilpo_m3e::ElementExt;
 use shilpo_m3e::{ActiveTheme, h_flex, v_flex};
 use shilpo_services::{
-    AudioInfo, BatteryInfo, BluetoothInfo, MediaInfo, NetworkInfo, Notification,
+    Application, AudioInfo, BatteryInfo, BluetoothInfo, MediaInfo, NetworkInfo, Notification,
 };
 
 use super::geometry::HUG_CORNER_RADIUS;
@@ -95,6 +95,9 @@ pub struct BarView {
     extension_instance_prefix: Option<String>,
     display_id: Option<gpui::DisplayId>,
     output_name: Option<String>,
+
+    app_icons_cache: Arc<std::collections::HashMap<String, std::path::PathBuf>>,
+    app_icons_cache_apps: Vec<Application>,
 }
 
 impl BarView {
@@ -137,6 +140,8 @@ impl BarView {
             extension_instance_prefix: None,
             display_id: None,
             output_name: None,
+            app_icons_cache: Arc::new(std::collections::HashMap::new()),
+            app_icons_cache_apps: Vec::new(),
         }
     }
 
@@ -187,6 +192,22 @@ impl BarView {
         });
 
         let mut view = Self::new_with_commands(config, service_commands);
+
+        // The device daemon publishes its initial snapshot for each domain once, right
+        // after connecting -- it does not repeat it. If that broadcast lands before this
+        // bar window exists (a real race: the daemon round-trip is fast, bar construction
+        // is not), `view.network` is stuck at `NetworkInfo::default()` forever, since
+        // nothing about the network needs to change again to trigger another update.
+        // Hydrate from whatever the service hub already has cached so a bar created after
+        // the fact still reflects the current state instead of a stale "off" default.
+        if cx.has_global::<ShellRuntime>()
+            && let Some(hub) = cx.global::<ShellRuntime>().service_hub()
+        {
+            let state = hub.domain_state(shilpo_services::DeviceDomain::Network);
+            if let shilpo_services::DomainPayload::Network(ref payload) = state.payload {
+                view.network = service_worker::network_info(payload.clone());
+            }
+        }
 
         let _datetime_task = Some(cx.spawn(async move |this, cx| {
             loop {
@@ -456,7 +477,7 @@ impl BarView {
 
 impl BarView {
     fn build_section(
-        &self,
+        &mut self,
         section_name: &str,
         widget_names: &[BarWidget],
         side: bool,
@@ -505,9 +526,19 @@ impl BarView {
                 }
                 BarWidget::Builtin(BuiltinBarWidget::RunningApps) => {
                     let snapshot = ShellSurfaces::compositor_snapshot(cx);
-                    let app_icons = std::sync::Arc::new(crate::app_icons::build_app_icon_index(
-                        ShellSurfaces::overview_applications(cx),
-                    ));
+                    // build_app_icon_index does a full icon-theme scan; this method runs on
+                    // every render (i.e. every compositor frame callback), so rebuilding it
+                    // unconditionally here pegged a CPU core doing tens of thousands of
+                    // statx() calls per second. Only rebuild when the running app list
+                    // actually changed.
+                    let applications = ShellSurfaces::overview_applications(cx);
+                    if self.app_icons_cache_apps != applications {
+                        self.app_icons_cache = std::sync::Arc::new(
+                            crate::app_icons::build_app_icon_index(applications.clone()),
+                        );
+                        self.app_icons_cache_apps = applications;
+                    }
+                    let app_icons = self.app_icons_cache.clone();
                     let reduced_motion = ShellSurfaces::overview_reduced_motion(cx);
                     let is_vertical = matches!(
                         self.config.bar.position,
@@ -583,6 +614,7 @@ impl BarView {
                             BatteryIndicator::new(
                                 format!("battery_{section_name}_{index}"),
                                 self.battery.clone(),
+                                self.display_id,
                             )
                             .into_any_element(),
                         );

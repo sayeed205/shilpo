@@ -69,14 +69,20 @@ impl BatteryVisualState {
 pub(crate) struct BatteryIndicator {
     id: ElementId,
     info: BatteryInfo,
+    display_id: Option<gpui::DisplayId>,
     style: StyleRefinement,
 }
 
 impl BatteryIndicator {
-    pub(crate) fn new(id: impl Into<ElementId>, info: BatteryInfo) -> Self {
+    pub(crate) fn new(
+        id: impl Into<ElementId>,
+        info: BatteryInfo,
+        display_id: Option<gpui::DisplayId>,
+    ) -> Self {
         Self {
             id: id.into(),
             info,
+            display_id,
             style: StyleRefinement::default(),
         }
     }
@@ -215,9 +221,13 @@ impl RenderOnce for BatteryIndicator {
             .bg(nub_color);
 
         let source_prepaint = source.clone();
+        let display_id = self.display_id;
         h_flex()
-            .on_children_prepainted(move |child_bounds, window, cx| {
-                let Some(display_id) = window.display(cx).map(|display| display.id()) else {
+            .on_children_prepainted(move |child_bounds, _window, cx| {
+                // Layer-shell bar windows don't reliably expose their output through
+                // `Window::display` (see WorkspacesWidget) -- use the display id the
+                // owning BarView already knows instead of querying it here.
+                let Some(display_id) = display_id else {
                     return;
                 };
                 let Some(bounds) = child_bounds

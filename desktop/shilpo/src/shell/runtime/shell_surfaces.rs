@@ -484,17 +484,16 @@ impl ShellSurfaces {
     }
 
     pub(crate) fn open_capture(cx: &mut App, intent: CaptureIntent) {
+        // A second press of the screenshot shortcut while a selection overlay is already open
+        // means "I changed my mind" -- cancel it, the same as pressing Escape, instead of
+        // capturing a fresh frame (which briefly stacked a second overlay on top of the first).
+        if let Some((_, handle)) = cx.global::<ShellRuntime>().shell_surfaces().capture {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            return;
+        }
         Self::close_overview(cx);
         Self::close_overview_competitors(cx);
         Self::capture_prior_focus(cx);
-        if let Some((_, handle)) = cx
-            .global_mut::<ShellRuntime>()
-            .shell_surfaces_mut()
-            .capture
-            .take()
-        {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
-        }
         let generation = {
             let surfaces = cx.global_mut::<ShellRuntime>().shell_surfaces_mut();
             surfaces.capture_generation = surfaces.capture_generation.wrapping_add(1);
@@ -515,13 +514,43 @@ impl ShellSurfaces {
                 return;
             }
         };
+        // Without an explicit `window_bounds`, GPUI falls back to `default_bounds`, which
+        // cascades from whatever window is currently active (offsetting by 25px) instead of
+        // sizing to the output. On a single press that under-sizes the overlay (skips the real
+        // output size entirely); on a double press it cascades off the still-closing previous
+        // overlay, producing a visible offset "duplicate". Pin it to the corrected, scale-aware
+        // output bounds (see `output_bounds`) so it always covers the full screen exactly once.
+        let (display_bounds, display_id) = match cx.primary_display() {
+            Some(display) => {
+                let snapshot = Self::compositor_snapshot(cx);
+                let output_name = Self::output_name_for_display(&*display, &snapshot.outputs);
+                let bounds = Self::output_bounds(
+                    output_name.as_deref(),
+                    &snapshot.outputs,
+                    display.bounds(),
+                );
+                (bounds, Some(display.id()))
+            }
+            None => (
+                Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.))),
+                None,
+            ),
+        };
         let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(display_bounds)),
+            display_id,
             window_background: WindowBackgroundAppearance::Transparent,
             kind: WindowKind::LayerShell(LayerShellOptions {
                 namespace: "capture-overlay".to_string(),
                 layer: Layer::Overlay,
                 anchor: Anchor::all(),
                 keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                // Anchoring all four edges makes the compositor stretch the surface to fill
+                // the space *outside* other layers' exclusive zones -- the bar reserves a
+                // strip along its edge, so without this the frozen frame left that strip
+                // uncovered and the live bar showed through underneath. -1 tells the
+                // compositor to ignore other surfaces' exclusive zones and cover the output.
+                exclusive_zone: Some(px(-1.0)),
                 ..Default::default()
             }),
             ..Default::default()
@@ -1031,6 +1060,44 @@ impl ShellSurfaces {
             .or_else(|| display_uuid.map(|uuid| uuid.to_string()))
     }
 
+    /// Bounds sourced from Hyprland's own monitor data instead of `display.bounds()`/GPUI's
+    /// own scale detection: GPUI's Wayland backend does not appear to support fractional
+    /// `wl_output` scale (e.g. 1.5), and falls back to the nearest integer (2), reporting a
+    /// logical size half the true one on a 1.5x output (a 1920px-wide output came back as
+    /// 960px). `CompositorOutput.logical_size`/`logical_position` are actually physical
+    /// (unscaled) Hyprland monitor coordinates, so the true logical bounds are those divided
+    /// by the compositor's real reported scale.
+    ///
+    /// This intentionally does not also return a scale for `BarGeometry::calculate_with_scale`:
+    /// that scale multiplies `config.height`/`margin` to convert already-physical bounds into
+    /// the same unit space (see `reconciliation_scale_factor_adjustment`), but the bounds
+    /// returned here are already in that corrected space -- multiplying again double-scaled
+    /// the bar's thickness, which showed up as an oversized gap between the bar and windows.
+    fn output_bounds(
+        output_name: Option<&str>,
+        compositor_outputs: &[CompositorOutput],
+        fallback_bounds: Bounds<Pixels>,
+    ) -> Bounds<Pixels> {
+        let Some(output) = output_name.and_then(|name| {
+            compositor_outputs
+                .iter()
+                .find(|candidate| candidate.name == name)
+        }) else {
+            return fallback_bounds;
+        };
+        let scale = output.scale.max(0.1) as f32;
+        Bounds::new(
+            point(
+                px(output.logical_position.0 as f32 / scale),
+                px(output.logical_position.1 as f32 / scale),
+            ),
+            size(
+                px(output.logical_size.0 as f32 / scale),
+                px(output.logical_size.1 as f32 / scale),
+            ),
+        )
+    }
+
     pub fn sync_displays(cx: &mut App) {
         if !cx.has_global::<ShellRuntime>() {
             return;
@@ -1046,10 +1113,15 @@ impl ShellSurfaces {
                 let display_id = display.id();
                 let output_name = Self::output_name_for_display(&*display, &snapshot.outputs);
                 let is_primary = index == 0;
+                let bounds = Self::output_bounds(
+                    output_name.as_deref(),
+                    &snapshot.outputs,
+                    display.bounds(),
+                );
 
                 OutputDescriptor {
                     display_id,
-                    bounds: display.bounds(),
+                    bounds,
                     name: output_name,
                     is_primary,
                     scale: None,
@@ -1135,10 +1207,15 @@ impl ShellSurfaces {
                 let display_id = display.id();
                 let output_name = Self::output_name_for_display(&*display, &snapshot.outputs);
                 let is_primary = index == 0;
+                let bounds = Self::output_bounds(
+                    output_name.as_deref(),
+                    &snapshot.outputs,
+                    display.bounds(),
+                );
 
                 OutputDescriptor {
                     display_id,
-                    bounds: display.bounds(),
+                    bounds,
                     name: output_name,
                     is_primary,
                     scale: None,

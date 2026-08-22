@@ -11,6 +11,10 @@ hl.config({
             natural_scroll = true,
         },
     },
+
+    cursor = {
+        no_warps = true,
+    },
 })
 
 hl.env("XCURSOR_THEME", "capitaine-cursors")

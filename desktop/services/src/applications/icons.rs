@@ -6,15 +6,35 @@ use std::{
 static ICON_CACHE: std::sync::LazyLock<Mutex<std::collections::HashMap<String, Option<PathBuf>>>> =
     std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
+// `freedesktop_icons::default_theme_gtk()` shells out to `gsettings get
+// org.gnome.desktop.interface icon-theme`, spawning a subprocess. Caching it avoids doing
+// that once per icon lookup -- a full rescan of even a modest number of apps otherwise
+// spawns one subprocess per app just to re-read the same theme name.
+static THEME_CACHE: std::sync::LazyLock<Mutex<Option<Option<String>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+
 // Prefer a vector source. If a theme only provides bitmaps, start with enough
 // pixels to downsample cleanly on common HiDPI output scales.
 const APP_ICON_SOURCE_SIZE: u16 = 48;
 
-/// Clears the in-memory icon-name cache.
+/// Clears the in-memory icon-name and theme-name caches.
 pub fn clear_icon_cache() {
     if let Ok(mut cache) = ICON_CACHE.lock() {
         cache.clear();
     }
+    if let Ok(mut theme) = THEME_CACHE.lock() {
+        *theme = None;
+    }
+}
+
+fn cached_theme_gtk() -> Option<String> {
+    let mut cache = THEME_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(theme) = cache.as_ref() {
+        return theme.clone();
+    }
+    let theme = freedesktop_icons::default_theme_gtk();
+    *cache = Some(theme.clone());
+    theme
 }
 
 /// Resolve an application icon using the freedesktop icon-theme specification.
@@ -69,7 +89,7 @@ fn lookup_icon_depth(name: &str, depth: usize) -> Option<PathBuf> {
         search_names.push("org.freedesktop.impl.portal.desktop.niri".to_string());
     }
 
-    let theme = freedesktop_icons::default_theme_gtk();
+    let theme = cached_theme_gtk();
     let mut resolved = None;
 
     for s_name in &search_names {
@@ -103,6 +123,7 @@ fn lookup_icon_depth(name: &str, depth: usize) -> Option<PathBuf> {
     }
 
     if resolved.is_none()
+        && !super::in_list_applications()
         && let Ok(apps) = super::list_applications()
     {
         let search_clean = clean_name.to_lowercase().replace(' ', "-");

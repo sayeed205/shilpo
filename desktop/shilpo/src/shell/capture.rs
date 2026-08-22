@@ -7,7 +7,7 @@ use gpui::{
     MouseUpEvent, ObjectFit, ParentElement, Render, Styled, StyledImage, Window, div, img, px,
 };
 use image::RgbaImage;
-use shilpo_m3e::ActiveTheme;
+use shilpo_m3e::{ActiveTheme, StyledExt};
 use shilpo_services::capture::{CaptureIntent, Region, copy_image_to_clipboard, crop_image};
 
 use crate::config::CaptureConfig;
@@ -125,7 +125,8 @@ impl CaptureOverlayView {
 
 impl Render for CaptureOverlayView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let selection = self.selection;
+        let selection = self.selection.filter(|region| !region.is_empty());
+        let (frame_w, frame_h) = (self.frame.width() as f32, self.frame.height() as f32);
         let frame = div()
             .absolute()
             .inset_0()
@@ -141,18 +142,73 @@ impl Render for CaptureOverlayView {
         let shade = div()
             .absolute()
             .inset_0()
-            .bg(cx.theme().scrim.opacity(0.38));
-        let selection_box = selection.map(|region| {
+            .bg(cx.theme().scrim.opacity(0.55));
+
+        // Spotlight: the selected region shows the frozen frame at full brightness (an
+        // undimmed cutout through the shade above), matching the selection look most
+        // screenshot tools use, instead of just a faint tint over an already-dark region.
+        let spotlight = selection.map(|region| {
             div()
                 .absolute()
                 .left(px(region.x as f32))
                 .top(px(region.y as f32))
                 .w(px(region.width as f32))
                 .h(px(region.height as f32))
+                .overflow_hidden()
                 .border_2()
                 .border_color(cx.theme().primary)
-                .bg(cx.theme().primary.opacity(0.08))
+                .shadow_lg()
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(-(region.x as f32)))
+                        .top(px(-(region.y as f32)))
+                        .w(px(frame_w))
+                        .h(px(frame_h))
+                        .child(
+                            img(self.frame_source.clone())
+                                .w(px(frame_w))
+                                .h(px(frame_h))
+                                .object_fit(ObjectFit::Fill),
+                        ),
+                )
         });
+
+        let dimension_label = selection.map(|region| {
+            div()
+                .absolute()
+                .left(px(region.x as f32))
+                .top(px((region.y + region.height as i32).max(0) as f32 + 8.0))
+                .rounded_md()
+                .bg(cx.theme().surface_container_highest.opacity(0.9))
+                .text_color(cx.theme().on_surface)
+                .text_xs()
+                .font_bold()
+                .px_2()
+                .py_0p5()
+                .child(format!("{} × {}", region.width, region.height))
+        });
+
+        let hint = selection.is_none().then(|| {
+            div()
+                .absolute()
+                .top(px(24.))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .rounded_full()
+                        .bg(cx.theme().surface_container_highest.opacity(0.9))
+                        .text_color(cx.theme().on_surface)
+                        .text_sm()
+                        .px_3()
+                        .py_1()
+                        .child("Click and drag to select a region · Esc to cancel"),
+                )
+        });
+
         div()
             .size_full()
             .cursor_crosshair()
@@ -168,7 +224,9 @@ impl Render for CaptureOverlayView {
             .track_focus(&self.focus_handle)
             .child(frame)
             .child(shade)
-            .children(selection_box)
+            .children(spotlight)
+            .children(dimension_label)
+            .children(hint)
     }
 }
 

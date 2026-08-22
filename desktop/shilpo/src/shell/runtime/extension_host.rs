@@ -410,13 +410,15 @@ impl ExtensionHost {
             .reconcile_keybindings(&user_bindings, &extension_shortcuts);
 
         let backend = crate::shell::keybindings::NiriShortcutBackend::new();
-        let compositor = std::env::var("SHILPO_COMPOSITOR").ok();
-        match backend.sync_for_compositor(compositor.as_deref(), &report.resolved) {
+        let compositor = shilpo_services::compositor::detect::detect();
+        match backend.sync_for_compositor(Some(compositor.as_str()), &report.resolved) {
             Ok(projection) => {
                 for diagnostic in projection.diagnostics {
                     tracing::warn!(%diagnostic, "shortcut projection diagnostic");
                 }
-                tracing::info!(include = %projection.include_directive, "Niri shortcut include required");
+                if projection.status != crate::shell::keybindings::ProjectionStatus::Unsupported {
+                    tracing::info!(include = %projection.include_directive, "Niri shortcut include required");
+                }
             }
             Err(error) => tracing::error!(
                 ?error,

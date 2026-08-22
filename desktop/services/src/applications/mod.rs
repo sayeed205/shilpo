@@ -446,6 +446,11 @@ impl AppScanner {
         match notify::RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
                 if let Ok(event) = res
+                    // Content-change events only: without this, rescanning opens every
+                    // .desktop file, each open is itself an Access(Open) event on a
+                    // watched path, and the callback fires again -- an unbounded
+                    // self-sustaining feedback loop that pegged a CPU core.
+                    && (event.kind.is_create() || event.kind.is_modify() || event.kind.is_remove())
                     && event
                         .paths
                         .iter()
@@ -576,7 +581,28 @@ impl AppScanner {
     }
 }
 
+thread_local! {
+    // `parse_desktop_file` resolves each app's icon via `icons::lookup_icon`, which itself
+    // falls back to calling `list_applications()` when a direct theme lookup fails (to check
+    // whether the requested name matches some other app's name/stem/icon hint instead). Left
+    // unguarded, that turned every icon-lookup miss during a scan into a full second scan --
+    // quadratic in the number of installed apps, and the actual cause of the shell pegging a
+    // CPU core indefinitely on a system with 144 .desktop files.
+    static IN_LIST_APPLICATIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn in_list_applications() -> bool {
+    IN_LIST_APPLICATIONS.with(|flag| flag.get())
+}
+
 pub fn list_applications() -> Result<Vec<Application>> {
+    IN_LIST_APPLICATIONS.with(|flag| flag.set(true));
+    let result = list_applications_uncached();
+    IN_LIST_APPLICATIONS.with(|flag| flag.set(false));
+    result
+}
+
+fn list_applications_uncached() -> Result<Vec<Application>> {
     let mut apps = Vec::new();
     for dir in application_directories() {
         let Ok(entries) = fs::read_dir(dir) else {
