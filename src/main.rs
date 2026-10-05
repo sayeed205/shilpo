@@ -1,4 +1,5 @@
 mod bar;
+mod components;
 mod clock;
 mod floating;
 mod fonts;
@@ -10,6 +11,7 @@ mod overlay;
 mod profile;
 mod screen_mask;
 mod settings;
+mod showcase;
 mod theme;
 mod wallpaper;
 
@@ -55,6 +57,7 @@ fn main() {
         .ipc("utility", overlay::utility::ipc)
         .ipc("control", overlay::control_center::ipc)
         .ipc("settings", settings::ipc)
+        .ipc("showcase", showcase::ipc)
         .ipc("lock", lock_screen::ipc)
         .ipc("wallpaper", wallpaper::picker::ipc)
         .run();
