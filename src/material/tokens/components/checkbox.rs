@@ -1,0 +1,126 @@
+use crate::material::tokens::color_role::ColorRole;
+use crate::material::tokens::shape::Shape;
+use crate::material::tokens::shape::ShapeRole;
+use crate::material::tokens::units::{Dp, Opacity};
+
+/// Token values used by this component.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tokens {
+    pub container_shape: Shape,
+    pub container_size: Dp,
+    pub focus_indicator_color: ColorRole,
+    pub icon_size: Dp,
+    pub selected_container_color: ColorRole,
+    pub selected_disabled_container_color: ColorRole,
+    pub selected_disabled_container_opacity: Opacity,
+    pub selected_disabled_container_outline_width: Dp,
+    pub selected_disabled_icon_color: ColorRole,
+    pub selected_error_container_color: ColorRole,
+    pub selected_error_focus_container_color: ColorRole,
+    pub selected_error_focus_icon_color: ColorRole,
+    pub selected_error_hover_container_color: ColorRole,
+    pub selected_error_hover_icon_color: ColorRole,
+    pub selected_error_icon_color: ColorRole,
+    pub selected_error_pressed_container_color: ColorRole,
+    pub selected_error_pressed_icon_color: ColorRole,
+    pub selected_focus_container_color: ColorRole,
+    pub selected_focus_icon_color: ColorRole,
+    pub selected_focus_outline_width: Dp,
+    pub selected_hover_container_color: ColorRole,
+    pub selected_hover_icon_color: ColorRole,
+    pub selected_hover_outline_width: Dp,
+    pub selected_icon_color: ColorRole,
+    pub selected_outline_width: Dp,
+    pub selected_pressed_container_color: ColorRole,
+    pub selected_pressed_icon_color: ColorRole,
+    pub selected_pressed_outline_width: Dp,
+    pub state_layer_shape: ShapeRole,
+    pub state_layer_size: Dp,
+    pub unselected_disabled_container_opacity: Opacity,
+    pub unselected_disabled_outline_color: ColorRole,
+    pub unselected_disabled_outline_width: Dp,
+    pub unselected_error_focus_outline_color: ColorRole,
+    pub unselected_error_hover_outline_color: ColorRole,
+    pub unselected_error_outline_color: ColorRole,
+    pub unselected_error_pressed_outline_color: ColorRole,
+    pub unselected_focus_outline_color: ColorRole,
+    pub unselected_focus_outline_width: Dp,
+    pub unselected_hover_outline_color: ColorRole,
+    pub unselected_hover_outline_width: Dp,
+    pub unselected_outline_color: ColorRole,
+    pub unselected_outline_width: Dp,
+    pub unselected_pressed_outline_color: ColorRole,
+    pub unselected_pressed_outline_width: Dp,
+}
+
+/// Returns authored token values for this component.
+pub const fn checkbox() -> Tokens {
+    Tokens {
+        container_shape: crate::material::tokens::shape::Shape::Corners(
+            crate::material::tokens::shape::LogicalCorners {
+                top_start: crate::material::tokens::shape::CornerSize::Dp(crate::material::tokens::units::Dp(
+                    f32::from_bits(0x40000000),
+                )),
+                top_end: crate::material::tokens::shape::CornerSize::Dp(crate::material::tokens::units::Dp(
+                    f32::from_bits(0x40000000),
+                )),
+                bottom_end: crate::material::tokens::shape::CornerSize::Dp(crate::material::tokens::units::Dp(
+                    f32::from_bits(0x40000000),
+                )),
+                bottom_start: crate::material::tokens::shape::CornerSize::Dp(crate::material::tokens::units::Dp(
+                    f32::from_bits(0x40000000),
+                )),
+            },
+        ),
+        container_size: crate::material::tokens::units::Dp(f32::from_bits(0x41900000)),
+        focus_indicator_color: crate::material::tokens::color_role::ColorRole::Secondary,
+        icon_size: crate::material::tokens::units::Dp(f32::from_bits(0x41900000)),
+        selected_container_color: crate::material::tokens::color_role::ColorRole::Primary,
+        selected_disabled_container_color: crate::material::tokens::color_role::ColorRole::OnSurface,
+        selected_disabled_container_opacity: crate::material::tokens::units::Opacity(f32::from_bits(
+            0x3EC28F5C,
+        )),
+        selected_disabled_container_outline_width: crate::material::tokens::units::Dp(f32::from_bits(
+            0x00000000,
+        )),
+        selected_disabled_icon_color: crate::material::tokens::color_role::ColorRole::Surface,
+        selected_error_container_color: crate::material::tokens::color_role::ColorRole::Error,
+        selected_error_focus_container_color: crate::material::tokens::color_role::ColorRole::Error,
+        selected_error_focus_icon_color: crate::material::tokens::color_role::ColorRole::OnError,
+        selected_error_hover_container_color: crate::material::tokens::color_role::ColorRole::Error,
+        selected_error_hover_icon_color: crate::material::tokens::color_role::ColorRole::OnError,
+        selected_error_icon_color: crate::material::tokens::color_role::ColorRole::OnError,
+        selected_error_pressed_container_color: crate::material::tokens::color_role::ColorRole::Error,
+        selected_error_pressed_icon_color: crate::material::tokens::color_role::ColorRole::OnError,
+        selected_focus_container_color: crate::material::tokens::color_role::ColorRole::Primary,
+        selected_focus_icon_color: crate::material::tokens::color_role::ColorRole::OnPrimary,
+        selected_focus_outline_width: crate::material::tokens::units::Dp(f32::from_bits(0x00000000)),
+        selected_hover_container_color: crate::material::tokens::color_role::ColorRole::Primary,
+        selected_hover_icon_color: crate::material::tokens::color_role::ColorRole::OnPrimary,
+        selected_hover_outline_width: crate::material::tokens::units::Dp(f32::from_bits(0x00000000)),
+        selected_icon_color: crate::material::tokens::color_role::ColorRole::OnPrimary,
+        selected_outline_width: crate::material::tokens::units::Dp(f32::from_bits(0x00000000)),
+        selected_pressed_container_color: crate::material::tokens::color_role::ColorRole::Primary,
+        selected_pressed_icon_color: crate::material::tokens::color_role::ColorRole::OnPrimary,
+        selected_pressed_outline_width: crate::material::tokens::units::Dp(f32::from_bits(0x00000000)),
+        state_layer_shape: crate::material::tokens::shape::ShapeRole::CornerFull,
+        state_layer_size: crate::material::tokens::units::Dp(f32::from_bits(0x42200000)),
+        unselected_disabled_container_opacity: crate::material::tokens::units::Opacity(f32::from_bits(
+            0x3EC28F5C,
+        )),
+        unselected_disabled_outline_color: crate::material::tokens::color_role::ColorRole::OnSurface,
+        unselected_disabled_outline_width: crate::material::tokens::units::Dp(f32::from_bits(0x40000000)),
+        unselected_error_focus_outline_color: crate::material::tokens::color_role::ColorRole::Error,
+        unselected_error_hover_outline_color: crate::material::tokens::color_role::ColorRole::Error,
+        unselected_error_outline_color: crate::material::tokens::color_role::ColorRole::Error,
+        unselected_error_pressed_outline_color: crate::material::tokens::color_role::ColorRole::Error,
+        unselected_focus_outline_color: crate::material::tokens::color_role::ColorRole::OnSurface,
+        unselected_focus_outline_width: crate::material::tokens::units::Dp(f32::from_bits(0x40000000)),
+        unselected_hover_outline_color: crate::material::tokens::color_role::ColorRole::OnSurface,
+        unselected_hover_outline_width: crate::material::tokens::units::Dp(f32::from_bits(0x40000000)),
+        unselected_outline_color: crate::material::tokens::color_role::ColorRole::OnSurfaceVariant,
+        unselected_outline_width: crate::material::tokens::units::Dp(f32::from_bits(0x40000000)),
+        unselected_pressed_outline_color: crate::material::tokens::color_role::ColorRole::OnSurface,
+        unselected_pressed_outline_width: crate::material::tokens::units::Dp(f32::from_bits(0x40000000)),
+    }
+}

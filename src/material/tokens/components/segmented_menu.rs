@@ -1,0 +1,118 @@
+use crate::material::tokens::color_role::ColorRole;
+use crate::material::tokens::foundation::ElevationRole;
+use crate::material::tokens::shape::ShapeRole;
+use crate::material::tokens::typography::TypeRole;
+use crate::material::tokens::units::Dp;
+
+/// Token values used by this component.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tokens {
+    pub active_container_shape: Dp,
+    pub container_elevation: ElevationRole,
+    pub container_shape: ShapeRole,
+    pub group_container_color: ColorRole,
+    pub group_padding: Dp,
+    pub group_shape: ShapeRole,
+    pub horizontal_container_bottom_space: Dp,
+    pub horizontal_container_top_space: Dp,
+    pub horizontal_icon_only_item_bottom_space: Dp,
+    pub horizontal_icon_only_item_leading_space: Dp,
+    pub horizontal_icon_only_item_selected_shape: ShapeRole,
+    pub horizontal_icon_only_item_top_space: Dp,
+    pub horizontal_icon_only_item_trailing_space: Dp,
+    pub horizontal_icon_only_segmented_gap: Dp,
+    pub horizontal_item_between_space: Dp,
+    pub horizontal_item_bottom_space: Dp,
+    pub horizontal_item_focused_shape: ShapeRole,
+    pub horizontal_item_hovered_shape: ShapeRole,
+    pub horizontal_item_leading_space: Dp,
+    pub horizontal_item_pressed_shape: ShapeRole,
+    pub horizontal_item_selected_focused_shape: ShapeRole,
+    pub horizontal_item_selected_hovered_shape: ShapeRole,
+    pub horizontal_item_selected_pressed_shape: ShapeRole,
+    pub horizontal_item_top_space: Dp,
+    pub horizontal_item_trailing_space: Dp,
+    pub horizontal_segmented_gap: Dp,
+    pub inactive_container_shape: ShapeRole,
+    pub item: Dp,
+    pub item_between_space: Dp,
+    pub item_bottom_space: Dp,
+    pub item_first_child_inner_corner_corner_size: ShapeRole,
+    pub item_first_child_shape: ShapeRole,
+    pub item_focus_indicator_color: ColorRole,
+    pub item_label_text_font: TypeRole,
+    pub item_last_child_inner_corner_corner_size: ShapeRole,
+    pub item_last_child_shape: ShapeRole,
+    pub item_leading_icon_size: Dp,
+    pub item_leading_space: Dp,
+    pub item_selected_shape: ShapeRole,
+    pub item_shape: ShapeRole,
+    pub item_supporting_text_font: TypeRole,
+    pub item_top_space: Dp,
+    pub item_trailing_icon_size: Dp,
+    pub item_trailing_space: Dp,
+    pub item_trailing_supporting_text_font: TypeRole,
+    pub segmented_gap: Dp,
+}
+
+/// Returns authored token values for this component.
+pub const fn segmented_menu() -> Tokens {
+    Tokens {
+        active_container_shape: crate::material::tokens::units::Dp(f32::from_bits(0x41C00000)),
+        container_elevation: crate::material::tokens::foundation::ElevationRole::Level2,
+        container_shape: crate::material::tokens::shape::ShapeRole::CornerLarge,
+        group_container_color: crate::material::tokens::color_role::ColorRole::SurfaceContainerLow,
+        group_padding: crate::material::tokens::units::Dp(f32::from_bits(0x40800000)),
+        group_shape: crate::material::tokens::shape::ShapeRole::CornerSmall,
+        horizontal_container_bottom_space: crate::material::tokens::units::Dp(f32::from_bits(0x41000000)),
+        horizontal_container_top_space: crate::material::tokens::units::Dp(f32::from_bits(0x41000000)),
+        horizontal_icon_only_item_bottom_space: crate::material::tokens::units::Dp(f32::from_bits(
+            0x41800000,
+        )),
+        horizontal_icon_only_item_leading_space: crate::material::tokens::units::Dp(f32::from_bits(
+            0x41800000,
+        )),
+        horizontal_icon_only_item_selected_shape: crate::material::tokens::shape::ShapeRole::CornerFull,
+        horizontal_icon_only_item_top_space: crate::material::tokens::units::Dp(f32::from_bits(
+            0x41800000,
+        )),
+        horizontal_icon_only_item_trailing_space: crate::material::tokens::units::Dp(f32::from_bits(
+            0x41800000,
+        )),
+        horizontal_icon_only_segmented_gap: crate::material::tokens::units::Dp(f32::from_bits(0x40800000)),
+        horizontal_item_between_space: crate::material::tokens::units::Dp(f32::from_bits(0x41400000)),
+        horizontal_item_bottom_space: crate::material::tokens::units::Dp(f32::from_bits(0x40C00000)),
+        horizontal_item_focused_shape: crate::material::tokens::shape::ShapeRole::CornerMedium,
+        horizontal_item_hovered_shape: crate::material::tokens::shape::ShapeRole::CornerMedium,
+        horizontal_item_leading_space: crate::material::tokens::units::Dp(f32::from_bits(0x41400000)),
+        horizontal_item_pressed_shape: crate::material::tokens::shape::ShapeRole::CornerMedium,
+        horizontal_item_selected_focused_shape: crate::material::tokens::shape::ShapeRole::CornerFull,
+        horizontal_item_selected_hovered_shape: crate::material::tokens::shape::ShapeRole::CornerFull,
+        horizontal_item_selected_pressed_shape: crate::material::tokens::shape::ShapeRole::CornerFull,
+        horizontal_item_top_space: crate::material::tokens::units::Dp(f32::from_bits(0x40C00000)),
+        horizontal_item_trailing_space: crate::material::tokens::units::Dp(f32::from_bits(0x41400000)),
+        horizontal_segmented_gap: crate::material::tokens::units::Dp(f32::from_bits(0x40000000)),
+        inactive_container_shape: crate::material::tokens::shape::ShapeRole::CornerSmall,
+        item: crate::material::tokens::units::Dp(f32::from_bits(0x42300000)),
+        item_between_space: crate::material::tokens::units::Dp(f32::from_bits(0x41400000)),
+        item_bottom_space: crate::material::tokens::units::Dp(f32::from_bits(0x41000000)),
+        item_first_child_inner_corner_corner_size:
+            crate::material::tokens::shape::ShapeRole::CornerExtraSmall,
+        item_first_child_shape: crate::material::tokens::shape::ShapeRole::CornerMedium,
+        item_focus_indicator_color: crate::material::tokens::color_role::ColorRole::Secondary,
+        item_label_text_font: crate::material::tokens::typography::TypeRole::BodyLarge,
+        item_last_child_inner_corner_corner_size:
+            crate::material::tokens::shape::ShapeRole::CornerExtraSmall,
+        item_last_child_shape: crate::material::tokens::shape::ShapeRole::CornerMedium,
+        item_leading_icon_size: crate::material::tokens::units::Dp(f32::from_bits(0x41A00000)),
+        item_leading_space: crate::material::tokens::units::Dp(f32::from_bits(0x41800000)),
+        item_selected_shape: crate::material::tokens::shape::ShapeRole::CornerMedium,
+        item_shape: crate::material::tokens::shape::ShapeRole::CornerExtraSmall,
+        item_supporting_text_font: crate::material::tokens::typography::TypeRole::BodyMedium,
+        item_top_space: crate::material::tokens::units::Dp(f32::from_bits(0x41000000)),
+        item_trailing_icon_size: crate::material::tokens::units::Dp(f32::from_bits(0x41A00000)),
+        item_trailing_space: crate::material::tokens::units::Dp(f32::from_bits(0x41800000)),
+        item_trailing_supporting_text_font: crate::material::tokens::typography::TypeRole::LabelSmall,
+        segmented_gap: crate::material::tokens::units::Dp(f32::from_bits(0x40000000)),
+    }
+}
