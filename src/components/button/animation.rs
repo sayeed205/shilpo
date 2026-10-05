@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 use std::time::Instant;
 
-use crate::motion;
+use crate::ui::motion;
 
 // Material 3 Expressive DefaultEffects: damping ratio 1.0, stiffness 1600.
 const STIFFNESS: f32 = 1600.0;

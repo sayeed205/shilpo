@@ -11,8 +11,8 @@ use amane::{
     Service, Shape, Size, Stack, Text, Weight, Widget,
 };
 
-use crate::fonts;
-use crate::theme::{self, Theme};
+use crate::ui::fonts;
+use crate::ui::theme::{self, Theme};
 
 pub use icon::{filled as filled_icon, settings_fill};
 
@@ -42,8 +42,8 @@ impl Interactions {
             event,
             true,
             Instant::now(),
-            crate::motion::speed(),
-            crate::motion::reduced(),
+            crate::ui::motion::speed(),
+            crate::ui::motion::reduced(),
         );
     }
 
@@ -199,8 +199,8 @@ impl Interaction {
     fn ripple_frames(&self) -> Vec<ripple::Frame> {
         self.ripple_frames_at(
             Instant::now(),
-            crate::motion::speed(),
-            crate::motion::reduced(),
+            crate::ui::motion::speed(),
+            crate::ui::motion::reduced(),
         )
     }
 

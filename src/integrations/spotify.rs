@@ -1,5 +1,5 @@
 use super::{hex, home, write};
-use crate::theme::Theme;
+use crate::ui::theme::Theme;
 
 // css variables a spicetify theme reads from the cache folder
 pub fn export(theme: &Theme) {

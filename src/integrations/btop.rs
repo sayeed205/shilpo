@@ -1,5 +1,5 @@
 use super::{config_home, hex, write};
-use crate::theme::Theme;
+use crate::ui::theme::Theme;
 
 // a btop theme file, which btop.conf points at
 pub fn export(theme: &Theme) {

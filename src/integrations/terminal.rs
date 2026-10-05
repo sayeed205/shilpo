@@ -1,7 +1,7 @@
 use amane::Color;
 
 use super::{config_home, hex, write};
-use crate::theme::{self, Theme};
+use crate::ui::theme::{self, Theme};
 
 // the seeds for the colors the shell's theme has no name for
 const YELLOW: Color = Color::rgb(0xf9, 0xe2, 0xaf);

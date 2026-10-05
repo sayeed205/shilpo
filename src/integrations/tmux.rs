@@ -1,5 +1,5 @@
 use super::{config_home, hex, write};
-use crate::theme::Theme;
+use crate::ui::theme::Theme;
 
 // the status line and pane colors, sourced into every running tmux server
 pub fn export(theme: &Theme) {

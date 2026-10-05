@@ -1,6 +1,6 @@
 use amane::{Canvas, Path, Rectangle, Shape};
 
-use crate::theme::{self, Theme};
+use crate::ui::theme::{self, Theme};
 
 use super::{build_button, HEIGHT};
 

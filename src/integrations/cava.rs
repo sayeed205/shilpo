@@ -1,7 +1,7 @@
 use std::fs;
 
 use super::{config_home, hex};
-use crate::theme::Theme;
+use crate::ui::theme::Theme;
 
 // a cava color theme; written in place, since cava watches the file itself
 pub fn export(theme: &Theme) {

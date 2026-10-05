@@ -3,7 +3,7 @@ use std::path::Path;
 use amane::Color;
 
 use super::{config_home, fill, hex, home, write};
-use crate::theme::{self, Theme};
+use crate::ui::theme::{self, Theme};
 
 const TEMPLATE: &str = include_str!("gtk.css");
 

@@ -12,8 +12,8 @@ use std::path::Path;
 
 use amane::{Color, Service};
 
-use crate::settings::Settings;
-use crate::theme::{self, Theme};
+use crate::config::Settings;
+use crate::ui::theme::{self, Theme};
 
 // the settings key and the writer of each program that takes the shell's colors
 const PROGRAMS: [(&str, fn(&Theme)); 7] = [

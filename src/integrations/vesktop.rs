@@ -1,7 +1,7 @@
 use std::fs;
 
 use super::{config_home, fill, hex};
-use crate::theme::Theme;
+use crate::ui::theme::Theme;
 
 const TEMPLATE: &str = include_str!("vesktop.css");
 
