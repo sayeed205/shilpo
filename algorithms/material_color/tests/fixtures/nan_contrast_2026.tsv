@@ -1,0 +1,10 @@
+case_id	variant	effective_spec	platform	mode	contrast_level	source_argb	role	branch	base_tone	background_tone	required_ratio	canonical_tone	canonical_argb
+N001	neutral	2025	phone	light	NaN	0xFF008577	inversePrimary	single	99	4	11	79.3669321659793	0xFFBDC7C4
+N002	neutral	2025	phone	light	NaN	0xFF6750A4	errorDim	tone_delta_pair	14	92	11	18.78795605986243	0xFF5D0C20
+N003	neutral	2025	phone	dark	NaN	0xFFFFFF00	tertiaryDim	tone_delta_pair	98	12	11	85.1253920077967	0xFFD2D9AE
+N004	tonal_spot	2025	phone	light	NaN	0xFFFFFF00	inversePrimary	single	98	4	11	79.3669321659793	0xFFC9C97E
+N005	tonal_spot	2025	phone	dark	NaN	0xFF6750A4	secondaryDim	tone_delta_pair	90	12	11	85.1253920077967	0xFFDAD1EA
+N006	vibrant	2025	phone	light	NaN	0xFFFFFF00	inversePrimary	single	97	4	11	79.3669321659793	0xFFCBCB00
+N007	vibrant	2025	phone	dark	NaN	0xFFFFFF00	primaryDim	tone_delta_pair	97	12	11	85.1253920077967	0xFFDCDC00
+N008	expressive	2025	phone	light	NaN	0xFFFFFF00	inversePrimary	single	97	4	11	79.3669321659793	0xFFCACA55
+N009	expressive	2025	phone	dark	NaN	0xFFFFFF00	primaryDim	tone_delta_pair	96	12	11	85.1253920077967	0xFFDAD983

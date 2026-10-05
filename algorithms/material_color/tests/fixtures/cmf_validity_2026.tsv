@@ -1,0 +1,13 @@
+case_id	constructor	requested_spec	source_form	source_argbs	source_count	platform	mode	contrast	outcome	error_name	effective_spec	primary_palette_hue	tertiary_palette_hue	error_palette_hue	note
+cmf_default_scalar_source	SchemeCmf	default	scalar	0xFF0000FF	1	phone	light	0	accepted	null	2026	282.78817956187277	282.78817956187277	16	The constructor default is 2026.
+cmf_2026_singleton_list	SchemeCmf	2026	list	0xFF0000FF	1	phone	light	0	accepted	null	2026	282.78817956187277	282.78817956187277	16	One-element source list is accepted.
+cmf_2026_distinct_pair	SchemeCmf	2026	list	0xFF0000FF|0xFFFFFF00	2	phone	light	0	accepted	null	2026	282.78817956187277	111.05113959255252	16	First extra source supplies tertiary hue/chroma when distinct.
+cmf_2026_identical_pair	SchemeCmf	2026	list	0xFF0000FF|0xFF0000FF	2	phone	light	0	accepted	null	2026	282.78817956187277	282.78817956187277	16	Equal first two source ARGB values select the source-derived tertiary chroma.
+cmf_2026_three_sources	SchemeCmf	2026	list	0xFF0000FF|0xFFFFFF00|0xFFFF0000	3	phone	light	0	accepted	null	2026	282.78817956187277	111.05113959255252	16	All sources remain on the scheme; palette derivation consults the first extra source.
+cmf_2026_third_source_ignored_for_palette_choice	SchemeCmf	2026	list	0xFF0000FF|0xFF0000FF|0xFFFFFF00	3	phone	light	0	accepted	null	2026	282.78817956187277	282.78817956187277	16	The first extra source equals primary; the later source does not replace it.
+cmf_out_of_domain_contrast_is_not_constructor_rejected	SchemeCmf	2026	scalar	0xFF0000FF	1	phone	light	2	accepted	null	2026	282.78817956187277	282.78817956187277	16	Constructor documents -1..1 but does not validate contrast range.
+cmf_non_2026_spec_rejected	SchemeCmf	2025	scalar	0xFF0000FF	1	phone	light	0	throws	Error	null	null	null	null	Negative guard only; no legacy-spec output matrix is generated.
+cmf_empty_source_list_dereferences_missing_primary	SchemeCmf	2026	list	none	0	phone	light	0	throws	TypeError	null	null	null	null	Source reads sourceColorOrList[0] before DynamicScheme's empty-list validation.
+generic_dynamic_scheme_empty_source_list	DynamicScheme	2026	empty_list	none	0	phone	light	0	throws	Error	null	null	null	null	Base DynamicScheme source validation.
+generic_dynamic_scheme_missing_source	DynamicScheme	2026	missing	none	0	phone	light	0	throws	Error	null	null	null	null	Base DynamicScheme source validation.
+generic_cmf_with_partial_palette_override	DynamicScheme	2026	missing	none	0	phone	light	0	throws	Error	null	null	null	null	CMF needs all six palettes supplied; use SchemeCmf for its canonical defaults.
