@@ -1,4 +1,5 @@
 mod animation;
+mod icon;
 mod ripple;
 
 use std::collections::HashMap;
@@ -13,11 +14,14 @@ use amane::{
 use crate::fonts;
 use crate::theme::{self, Theme};
 
+pub use icon::{filled as filled_icon, settings_fill};
+
 const HEIGHT: f32 = 40.0;
 const MIN_WIDTH: f32 = 58.0;
 const HORIZONTAL_PADDING: f32 = 16.0;
 const REST_RADIUS: f32 = HEIGHT / 2.0;
 const PRESSED_RADIUS: f32 = 8.0;
+const PRESSED_ALPHA: f32 = 0.10;
 
 // One contact state per stable logical button name; the spring stays here between redraws.
 struct Interactions(HashMap<&'static str, Interaction>);
@@ -267,6 +271,38 @@ pub fn filled(
 
     let width = (label_width + HORIZONTAL_PADDING * 2.0).max(MIN_WIDTH);
 
+    let fill = if enabled {
+        theme.accent
+    } else {
+        theme::with_opacity(theme.text, 0.10)
+    };
+
+    build_button(
+        name,
+        theme,
+        enabled,
+        width,
+        HEIGHT,
+        fill,
+        label,
+        0.0,
+        true,
+        on_activate,
+    )
+}
+
+fn build_button(
+    name: &'static str,
+    theme: &Theme,
+    enabled: bool,
+    width: f32,
+    height: f32,
+    fill: Color,
+    content: impl Widget + 'static,
+    hover_layer_alpha: f32,
+    hover_shadow: bool,
+    on_activate: impl Fn() + 'static,
+) -> Rectangle {
     let (radius, hovered, ripples) = if enabled {
         let interactions = Interactions::read();
 
@@ -285,54 +321,66 @@ pub fn filled(
         (REST_RADIUS, false, Vec::new())
     };
 
-    // Material's disabled colors are 10% on-surface and 38% on-surface-variant.
-    let fill = if enabled {
-        theme.accent
-    } else {
-        theme::with_opacity(theme.text, 0.10)
-    };
-
     let mut button = Rectangle::new()
         .width(width)
-        .height(HEIGHT)
+        .height(height)
         .radius(radius)
         .fill(fill)
         .align_child(Center, Center);
 
     if !enabled {
-        return button.child(label);
+        return button.child(content);
     }
 
-    let ripple_shapes = ripples
-        .into_iter()
-        .map(|frame| {
-            Box::new(
-                Circle::new()
-                    .center(frame.center_x, frame.center_y)
-                    .radius(frame.radius)
-                    .fill(theme.on_accent)
-                    .opacity(frame.alpha * 0.1),
-            ) as Box<dyn Shape>
-        })
-        .collect();
-    let canvas = Canvas::new()
-        .width(Parent)
-        .height(Parent)
-        .shapes(ripple_shapes);
     let content = Rectangle::new()
         .width(Parent)
         .height(Parent)
         .fill(Color::TRANSPARENT)
         .align_child(Center, Center)
-        .child(label);
-    let layers = Stack::new(vec![Box::new(content), Box::new(canvas)])
-        .width(Parent)
-        .height(Parent);
+        .child(content);
+    let mut layers: Vec<Box<dyn Widget>> = vec![Box::new(content)];
+
+    if !ripples.is_empty() {
+        let ripple_shapes = ripples
+            .into_iter()
+            .map(|frame| {
+                Box::new(
+                    Circle::new()
+                        .center(frame.center_x, frame.center_y)
+                        .radius(frame.radius)
+                        .fill(theme.on_accent)
+                        .opacity(frame.alpha * PRESSED_ALPHA),
+                ) as Box<dyn Shape>
+            })
+            .collect();
+        layers.push(Box::new(
+            Canvas::new()
+                .width(Parent)
+                .height(Parent)
+                .shapes(ripple_shapes),
+        ));
+    }
+
+    if hovered && hover_layer_alpha > 0.0 {
+        let state_layer = Circle::new()
+            .center(width / 2.0, height / 2.0)
+            .radius(width.hypot(height) / 2.0 + 10.0)
+            .fill(theme.on_accent)
+            .opacity(hover_layer_alpha);
+        layers.push(Box::new(
+            Canvas::new()
+                .width(Parent)
+                .height(Parent)
+                .shapes(vec![Box::new(state_layer)]),
+        ));
+    }
+
+    let layers = Stack::new(layers).width(Parent).height(Parent);
 
     // Amane clips the layered canvas to this rectangle's current, animated corner radius.
     button = button.clip().child(layers);
 
-    if hovered {
+    if hovered && hover_shadow {
         // A hovered filled button rises to Material's one-step hover elevation.
         button = button.shadow(
             amane::Shadow::drop(Color::BLACK)
@@ -346,7 +394,7 @@ pub fn filled(
         .cursor(Cursor::Pointer)
         .on_hover(move |inside| update_contact(name, Event::Hover(inside)))
         .on_drag(move |point| {
-            let inside = point.x >= 0.0 && point.x <= width && point.y >= 0.0 && point.y <= HEIGHT;
+            let inside = point.x >= 0.0 && point.x <= width && point.y >= 0.0 && point.y <= height;
 
             update_contact(
                 name,
@@ -354,7 +402,7 @@ pub fn filled(
                     inside,
                     point,
                     width,
-                    height: HEIGHT,
+                    height,
                 },
             );
         })

@@ -25,16 +25,27 @@ impl Service for Activations {
     fn listen() {}
 }
 
+struct IconActivations(usize);
+
+impl Service for IconActivations {
+    fn new() -> Self {
+        Self(0)
+    }
+
+    fn listen() {}
+}
+
 /// The button playground, opened on demand through `amane ipc call showcase`.
 pub fn view() -> Window {
     let theme = theme::current();
     let activations = Activations::read().0;
+    let icon_activations = IconActivations::read().0;
 
     let body = Column::new(children![
         introduction(&theme),
-        samples(&theme, activations),
+        samples(&theme, activations, icon_activations),
         specifications(&theme),
-        Text::new("Press near an edge to inspect the bounded ripple; hold for the shape change, then release to run the action.")
+        Text::new("Press a button to see its ripple; the gear demo updates its count without opening Settings.")
             .size(12.0)
             .font(fonts::BODY)
             .color(theme.secondary_text),
@@ -114,12 +125,12 @@ fn header(theme: &Theme) -> Row {
 
 fn introduction(theme: &Theme) -> Column {
     Column::new(children![
-        Text::new("Filled button")
+        Text::new("Filled buttons")
             .size(22.0)
             .font(fonts::BODY)
             .weight(Weight::Bold)
             .color(theme.text),
-        Text::new("A confident accent fill, with a softer silhouette while it is held.")
+        Text::new("A filled action and compact icon counterpart, both with an expressive press.")
             .size(13.0)
             .font(fonts::BODY)
             .color(theme.secondary_text),
@@ -127,7 +138,7 @@ fn introduction(theme: &Theme) -> Column {
     .gap(4.0)
 }
 
-fn samples(theme: &Theme, activations: usize) -> Rectangle {
+fn samples(theme: &Theme, activations: usize, icon_activations: usize) -> Rectangle {
     let enabled_label = if activations == 1 {
         String::from("Action ran once")
     } else {
@@ -135,7 +146,7 @@ fn samples(theme: &Theme, activations: usize) -> Rectangle {
     };
 
     let enabled = Column::new(children![
-        Text::new("ENABLED")
+        Text::new("FILLED · ENABLED")
             .size(10.0)
             .font(fonts::BODY)
             .weight(Weight::Bold)
@@ -151,7 +162,7 @@ fn samples(theme: &Theme, activations: usize) -> Rectangle {
     .gap(12.0);
 
     let disabled = Column::new(children![
-        Text::new("DISABLED")
+        Text::new("FILLED · DISABLED")
             .size(10.0)
             .font(fonts::BODY)
             .weight(Weight::Bold)
@@ -170,18 +181,74 @@ fn samples(theme: &Theme, activations: usize) -> Rectangle {
     ])
     .gap(12.0);
 
-    let separator = Rectangle::new()
-        .width(1.0)
-        .height(110.0)
-        .fill(theme::with_opacity(theme.border, 0.65));
+    let icon_enabled_label = if icon_activations == 1 {
+        String::from("Icon action ran once")
+    } else {
+        format!("Icon action ran {icon_activations} times")
+    };
 
-    let examples = Row::new(children![enabled, separator, disabled])
+    let icon_enabled = Column::new(children![
+        Text::new("ICON · ENABLED")
+            .size(10.0)
+            .font(fonts::BODY)
+            .weight(Weight::Bold)
+            .color(theme.muted_text),
+        button::filled_icon(
+            "showcase.icon.enabled",
+            theme,
+            button::settings_fill(),
+            true,
+            || IconActivations::write().0 += 1,
+        ),
+        Text::new(icon_enabled_label)
+            .size(12.0)
+            .font(fonts::BODY)
+            .color(theme.secondary_text),
+    ])
+    .gap(12.0);
+
+    let icon_disabled = Column::new(children![
+        Text::new("ICON · DISABLED")
+            .size(10.0)
+            .font(fonts::BODY)
+            .weight(Weight::Bold)
+            .color(theme.muted_text),
+        button::filled_icon(
+            "showcase.icon.disabled",
+            theme,
+            button::settings_fill(),
+            false,
+            || {},
+        ),
+        Text::new("No input or activation")
+            .size(12.0)
+            .font(fonts::BODY)
+            .color(theme.secondary_text),
+    ])
+    .gap(12.0);
+
+    let separator = || {
+        Rectangle::new()
+            .width(1.0)
+            .height(110.0)
+            .fill(theme::with_opacity(theme.border, 0.65))
+    };
+
+    let examples = Row::new(children![
+        enabled,
+        separator(),
+        disabled,
+        separator(),
+        icon_enabled,
+        separator(),
+        icon_disabled,
+    ])
         .width(Parent)
-        .gap(28.0)
+        .gap(20.0)
         .align(Center);
 
     let heading = Row::new(children![
-        Text::new("THE SPECIMEN")
+        Text::new("FILLED + ICON SPECIMENS")
             .size(11.0)
             .font(fonts::BODY)
             .weight(Weight::Bold)
